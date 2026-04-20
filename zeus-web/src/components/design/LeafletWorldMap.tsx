@@ -48,6 +48,7 @@ const TILE_ATTRIBUTION =
 // theme rework only needs to touch one block.
 const COLOR_AMBER = '#ffb432';
 const COLOR_CYAN = '#00ddff';
+const COLOR_RED = '#ff4466';
 const COLOR_BG_DARK = '#1a1e26';
 const COLOR_TEXT_MUTED = '#a5b4c8';
 
@@ -177,7 +178,7 @@ export function LeafletWorldMap({
   home,
   target,
   beamBearing,
-  beamRangeKm = 5000,
+  beamRangeKm = 10000,
   beamHalfWidthDeg = 15,
   active,
   interactive = false,
@@ -357,9 +358,12 @@ export function LeafletWorldMap({
         const isCentre = offset === 0;
         for (const seg of segments) {
           L.polyline(seg, {
-            color: COLOR_CYAN,
+            // Centre stays cyan (the commanded/computed beam heading); side
+            // lobes switch to red so the +/- span reads as a different thing
+            // at a glance — you can't mistake one of the sides for the heading.
+            color: isCentre ? COLOR_CYAN : COLOR_RED,
             weight: isCentre ? 3 : 2,
-            opacity: isCentre ? 0.75 : 0.35,
+            opacity: isCentre ? 0.75 : 0.55,
             dashArray: '10, 5',
             lineCap: 'round',
           }).addTo(layer);
