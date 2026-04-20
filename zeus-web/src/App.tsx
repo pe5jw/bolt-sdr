@@ -261,23 +261,23 @@ export default function App() {
     <>Panadapter · {(vfoHz / 1e6).toFixed(3)} MHz · {bandLabel}</>
   );
 
+  // Dim/blur the workspace while no radio is connected so the eye lands on
+  // the topbar's Discover Radio panel and QRZ pill. No ConnectPanel inside —
+  // a single mount lives in the topbar (line ~358).
   const disconnectedOverlay = useMemo(() => {
     if (connected) return null;
     return (
       <div
+        aria-hidden
         style={{
           position: 'absolute',
           inset: 0,
           background: 'rgba(0,0,0,0.55)',
           backdropFilter: 'blur(4px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
+          pointerEvents: 'none',
           zIndex: 200,
         }}
-      >
-        <ConnectPanel />
-      </div>
+      />
     );
   }, [connected]);
 
