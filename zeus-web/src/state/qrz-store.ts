@@ -1,0 +1,120 @@
+import { create } from 'zustand';
+import { qrzLogin, qrzLogout, qrzLookup, qrzStatus, type QrzStation, type QrzStatus } from '../api/qrz';
+import { ApiError } from '../api/client';
+
+const USERNAME_STORAGE_KEY = 'zeus.qrz.username';
+
+function readSavedUsername(): string {
+  try {
+    if (typeof localStorage === 'undefined') return '';
+    return localStorage.getItem(USERNAME_STORAGE_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function writeSavedUsername(user: string): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (user) localStorage.setItem(USERNAME_STORAGE_KEY, user);
+    else localStorage.removeItem(USERNAME_STORAGE_KEY);
+  } catch {
+    /* quota / private mode — accept silently */
+  }
+}
+
+export type QrzStoreState = {
+  // Session state mirrored from the backend; null means we haven't checked yet.
+  connected: boolean;
+  hasXmlSubscription: boolean;
+  home: QrzStation | null;
+  // Remembered username (password is never persisted).
+  rememberedUsername: string;
+  // Last lookup result, shown in QrzCard / used to render map target.
+  lastLookup: QrzStation | null;
+  // Transient UI state for async ops.
+  loginInFlight: boolean;
+  lookupInFlight: boolean;
+  loginError: string | null;
+  lookupError: string | null;
+
+  // Actions.
+  refreshStatus: () => Promise<void>;
+  login: (username: string, password: string) => Promise<boolean>;
+  logout: () => Promise<void>;
+  lookup: (callsign: string) => Promise<QrzStation | null>;
+  clearLookup: () => void;
+};
+
+function applyStatus(status: QrzStatus): Partial<QrzStoreState> {
+  return {
+    connected: status.connected,
+    hasXmlSubscription: status.hasXmlSubscription,
+    home: status.home,
+    loginError: status.error,
+  };
+}
+
+export const useQrzStore = create<QrzStoreState>((set) => ({
+  connected: false,
+  hasXmlSubscription: false,
+  home: null,
+  rememberedUsername: readSavedUsername(),
+  lastLookup: null,
+  loginInFlight: false,
+  lookupInFlight: false,
+  loginError: null,
+  lookupError: null,
+
+  refreshStatus: async () => {
+    try {
+      const status = await qrzStatus();
+      set(applyStatus(status));
+    } catch {
+      // Status is a read-only sanity probe; leave state as-is on transient fetch failures.
+    }
+  },
+
+  login: async (username, password) => {
+    set({ loginInFlight: true, loginError: null });
+    try {
+      const status = await qrzLogin(username, password);
+      writeSavedUsername(username);
+      set({ ...applyStatus(status), rememberedUsername: username, loginInFlight: false });
+      return status.connected;
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : String(err);
+      set({ loginInFlight: false, loginError: msg, connected: false, home: null });
+      return false;
+    }
+  },
+
+  logout: async () => {
+    try {
+      await qrzLogout();
+    } finally {
+      set({ connected: false, hasXmlSubscription: false, home: null, lastLookup: null, loginError: null, lookupError: null });
+    }
+  },
+
+  lookup: async (callsign) => {
+    const trimmed = callsign.trim().toUpperCase();
+    if (!trimmed) return null;
+    set({ lookupInFlight: true, lookupError: null });
+    try {
+      const station = await qrzLookup(trimmed);
+      set({ lastLookup: station, lookupInFlight: false });
+      return station;
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : String(err);
+      set({ lookupInFlight: false, lookupError: msg });
+      return null;
+    }
+  },
+
+  clearLookup: () => set({ lastLookup: null, lookupError: null }),
+}));
+
+// Kick off a status probe at module load so reconnected sessions (backend still has
+// a session key from an earlier page) rehydrate without the user having to log in.
+void useQrzStore.getState().refreshStatus();

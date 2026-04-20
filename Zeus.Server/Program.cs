@@ -46,6 +46,11 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<TxMetersService>()
 // the post-gen tone actually reaches the ring (no mic uplink during TUN).
 builder.Services.AddHostedService<TxTuneDriver>();
 
+// QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
+// hung login surfaces quickly in the UI.
+builder.Services.AddHttpClient("Qrz", c => c.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddSingleton<QrzService>();
+
 var app = builder.Build();
 
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
@@ -245,6 +250,48 @@ app.MapPost("/api/rx/zoom", (ZoomSetRequest req, RadioService r) =>
         return Results.BadRequest(new { error = $"zoom level must be in [{SyntheticDspEngine.MinZoomLevel},{SyntheticDspEngine.MaxZoomLevel}]; got {req.Level}" });
     return Results.Ok(r.SetZoom(req.Level));
 });
+
+app.MapGet("/api/qrz/status", (QrzService qrz) => qrz.GetStatus());
+
+app.MapPost("/api/qrz/login", async (QrzLoginRequest req, QrzService qrz, HttpContext ctx) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
+        return Results.BadRequest(new { error = "username and password required" });
+    log.LogInformation("api.qrz.login user={User}", req.Username);
+    try
+    {
+        var status = await qrz.LoginAsync(req.Username, req.Password, ctx.RequestAborted);
+        if (!status.Connected && status.Error != null)
+            return Results.Json(status, statusCode: StatusCodes.Status401Unauthorized);
+        return Results.Ok(status);
+    }
+    catch (HttpRequestException ex)
+    {
+        return Results.Json(new { error = $"QRZ unreachable: {ex.Message}" }, statusCode: StatusCodes.Status502BadGateway);
+    }
+});
+
+app.MapPost("/api/qrz/lookup", async (QrzLookupRequest req, QrzService qrz, HttpContext ctx) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Callsign))
+        return Results.BadRequest(new { error = "callsign required" });
+    try
+    {
+        var station = await qrz.LookupAsync(req.Callsign.Trim().ToUpperInvariant(), ctx.RequestAborted);
+        if (station == null) return Results.NotFound(new { error = $"no QRZ record for {req.Callsign}" });
+        return Results.Ok(station);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+    catch (QrzSubscriptionRequiredException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status402PaymentRequired);
+    }
+});
+
+app.MapPost("/api/qrz/logout", (QrzService qrz) => { qrz.Logout(); return Results.Ok(qrz.GetStatus()); });
 
 app.Map("/ws", async (HttpContext ctx, StreamingHub hub) =>
 {

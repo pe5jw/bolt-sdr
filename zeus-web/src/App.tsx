@@ -33,8 +33,11 @@ import { getAudioClient } from './audio/audio-client';
 import { useMicUplink } from './audio/use-mic-uplink';
 import { fetchState } from './api/client';
 import { useConnectionStore } from './state/connection-store';
+import { useQrzStore } from './state/qrz-store';
 import { useTxStore } from './state/tx-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
+import type { QrzStation } from './api/qrz';
+import type { Contact } from './components/design/data';
 
 // See ../state/connection-store.ts — StateDto is REST-poll only; WS is binary
 // frames. 333 ms poll keeps slow state (atten offset, adc overload) fresh.
@@ -123,7 +126,16 @@ export default function App() {
   const [mapModifier, setMapModifier] = useState(false);
   const [enriching, setEnriching] = useState(false);
   const [lookupKey, setLookupKey] = useState(0);
-  const contact = CONTACTS[callsign.toUpperCase()] ?? null;
+  const [beamOverrideDeg, setBeamOverrideDeg] = useState<number | null>(null);
+  const [beamInputStr, setBeamInputStr] = useState('');
+
+  const qrzHome = useQrzStore((s) => s.home);
+  const qrzLookup = useQrzStore((s) => s.lastLookup);
+  const qrzHasXml = useQrzStore((s) => s.hasXmlSubscription);
+  const qrzActive = !!qrzHome && qrzHasXml;
+  const contact: Contact | null = qrzActive
+    ? qrzStationToContact(qrzLookup, qrzHome)
+    : (CONTACTS[callsign.toUpperCase()] ?? null);
 
   const [wpm, setWpm] = useState(22);
   const nrState = useConnectionStore((s) => s.nr);
@@ -142,7 +154,18 @@ export default function App() {
     setTerminatorActive(true);
     setEnriching(true);
     setLookupKey((k) => k + 1);
-    setTimeout(() => setEnriching(false), 700);
+    setBeamOverrideDeg(null);
+    setBeamInputStr('');
+    const qrz = useQrzStore.getState();
+    if (qrz.connected && qrz.hasXmlSubscription) {
+      // Real QRZ lookup. The store updates lastLookup on success; the enriching
+      // scan animation keeps playing until the promise settles.
+      qrz.lookup(target).finally(() => setEnriching(false));
+    } else {
+      // Design-mock fallback: CONTACTS lookup is synchronous; just run the scan
+      // briefly so the card doesn't pop in without the visual beat.
+      setTimeout(() => setEnriching(false), 700);
+    }
   }, [callsign]);
 
   const disengageTerminator = useCallback(() => {
@@ -209,15 +232,37 @@ export default function App() {
   // --- Tx status chip
   const txChip = moxOn || tunOn ? 'TX' : 'RX';
 
+  // --- Effective home station for the map + bearing math. Real QRZ profile
+  // takes precedence; otherwise the design-mock HOME constant keeps the
+  // disconnected demo looking populated.
+  const effectiveHome = qrzHome && qrzHome.lat != null && qrzHome.lon != null
+    ? { call: qrzHome.callsign, lat: qrzHome.lat, lon: qrzHome.lon, grid: qrzHome.grid ?? '' }
+    : { call: HOME.call, lat: HOME.lat, lon: HOME.lon, grid: HOME.grid };
+
+  const sp = contact ? bearingDeg(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon) : 0;
+  const lp = (sp + 180) % 360;
+  const dist = contact ? distanceKm(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon) : 0;
+
+  function submitBeam(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const trimmed = beamInputStr.trim();
+    if (!trimmed) {
+      setBeamOverrideDeg(null);
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) return;
+    const normalized = ((parsed % 360) + 360) % 360;
+    setBeamOverrideDeg(normalized);
+  }
+
   // --- Hero title
   const heroTitle = terminatorActive && contact ? (() => {
-    const d = distanceKm(HOME.lat, HOME.lon, contact.lat, contact.lon);
-    const b = bearingDeg(HOME.lat, HOME.lon, contact.lat, contact.lon);
     return (
       <>
         Panadapter · World Map ·{' '}
         <span style={{ color: 'var(--accent)' }}>{contact.callsign}</span> ·{' '}
-        {Math.round(d).toLocaleString()} km · brg {b.toFixed(0)}°
+        {Math.round(dist).toLocaleString()} km · brg {sp.toFixed(0)}°
       </>
     );
   })() : (
@@ -366,22 +411,40 @@ export default function App() {
             <span className={`dot ${moxOn || tunOn ? 'tx' : 'on'}`} />
             <span className="title">{heroTitle}</span>
             <span className="spacer" style={{ flex: 1 }} />
-            {terminatorActive && contact && (() => {
-              const b = bearingDeg(HOME.lat, HOME.lon, contact.lat, contact.lon);
-              const lp = (360 - b) % 360;
-              return (
-                <>
-                  <span className="chip mono">
-                    <span className="k">LP</span>
-                    <span className="v">{lp.toFixed(0)}°</span>
-                  </span>
-                  <span className="chip mono">
-                    <span className="k">LOCAL</span>
-                    <span className="v">{contact.local}</span>
-                  </span>
-                </>
-              );
-            })()}
+            {terminatorActive && contact && (
+              <>
+                <span className="chip mono">
+                  <span className="k">SP</span>
+                  <span className="v">{sp.toFixed(0)}°</span>
+                </span>
+                <span className="chip mono">
+                  <span className="k">LP</span>
+                  <span className="v">{lp.toFixed(0)}°</span>
+                </span>
+                <form onSubmit={submitBeam} className="chip mono" style={{ gap: 4 }}>
+                  <span className="k">BEAM</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={beamInputStr}
+                    onChange={(e) => setBeamInputStr(e.target.value)}
+                    placeholder={(beamOverrideDeg ?? sp).toFixed(0)}
+                    style={{
+                      width: 40,
+                      background: 'transparent',
+                      border: '1px solid var(--line)',
+                      color: 'inherit',
+                      fontFamily: 'inherit',
+                      fontSize: 'inherit',
+                      padding: '0 2px',
+                    }}
+                  />
+                  <button type="submit" className="btn sm" style={{ padding: '0 6px' }}>
+                    Go
+                  </button>
+                </form>
+              </>
+            )}
             {terminatorActive && (
               <span
                 className={`chip mono ${mapInteractive ? 'accent' : ''}`}
@@ -401,53 +464,55 @@ export default function App() {
           <div className="panel-body hero-body">
             <div className={`map-layer ${terminatorActive ? 'visible' : ''}`}>
               <LeafletWorldMap
-                home={{ call: HOME.call, lat: HOME.lat, lon: HOME.lon }}
+                home={{ call: effectiveHome.call, lat: effectiveHome.lat, lon: effectiveHome.lon }}
                 target={
                   contact ? { call: contact.callsign, lat: contact.lat, lon: contact.lon } : null
                 }
+                beamBearing={beamOverrideDeg ?? undefined}
                 active={terminatorActive}
                 interactive={mapInteractive}
               />
-              {terminatorActive && contact && (() => {
-                const dist = distanceKm(HOME.lat, HOME.lon, contact.lat, contact.lon);
-                const brg = bearingDeg(HOME.lat, HOME.lon, contact.lat, contact.lon);
-                const lp = (360 - brg) % 360;
-                return (
-                  <div className="map-readout">
-                    <div className="mr-row">
-                      <span className="mr-k">FROM</span>
-                      <span className="mr-v accent">{HOME.call}</span>
-                      <span className="mr-sub">{HOME.grid} · St Louis MO</span>
-                    </div>
-                    <div className="mr-divider" />
-                    <div className="mr-row">
-                      <span className="mr-k">TO</span>
-                      <span className="mr-v tx">{contact.callsign}</span>
-                      <span className="mr-sub">
-                        {contact.grid} · {contact.location}
-                      </span>
-                    </div>
-                    <div className="mr-row">
-                      <span className="mr-k">DIST</span>
-                      <span className="mr-v mono">
-                        {Math.round(dist).toLocaleString()} km
-                      </span>
-                      <span className="mr-sub">
-                        {Math.round(dist * 0.621).toLocaleString()} mi
-                      </span>
-                    </div>
-                    <div className="mr-row">
-                      <span className="mr-k">BRG</span>
-                      <span className="mr-v mono">{brg.toFixed(0)}°</span>
-                      <span className="mr-sub">SP / LP {lp.toFixed(0)}°</span>
-                    </div>
-                    <div className="mr-row">
-                      <span className="mr-k">LOCAL</span>
-                      <span className="mr-v mono">{contact.local}</span>
-                    </div>
+              {terminatorActive && contact && (
+                <div className="map-readout">
+                  <div className="mr-row">
+                    <span className="mr-k">FROM</span>
+                    <span className="mr-v accent">{effectiveHome.call}</span>
+                    <span className="mr-sub">
+                      {effectiveHome.grid || ''}
+                      {qrzHome?.city ? ` · ${qrzHome.city}` : ''}
+                    </span>
                   </div>
-                );
-              })()}
+                  <div className="mr-divider" />
+                  <div className="mr-row">
+                    <span className="mr-k">TO</span>
+                    <span className="mr-v tx">{contact.callsign}</span>
+                    <span className="mr-sub">
+                      {contact.grid} · {contact.location}
+                    </span>
+                  </div>
+                  <div className="mr-row">
+                    <span className="mr-k">DIST</span>
+                    <span className="mr-v mono">
+                      {Math.round(dist).toLocaleString()} km
+                    </span>
+                    <span className="mr-sub">
+                      {Math.round(dist * 0.621).toLocaleString()} mi
+                    </span>
+                  </div>
+                  <div className="mr-row">
+                    <span className="mr-k">BRG</span>
+                    <span className="mr-v mono">{sp.toFixed(0)}°</span>
+                    <span className="mr-sub">SP / LP {lp.toFixed(0)}°</span>
+                  </div>
+                  {beamOverrideDeg != null && (
+                    <div className="mr-row">
+                      <span className="mr-k">BEAM</span>
+                      <span className="mr-v mono">{beamOverrideDeg.toFixed(0)}°</span>
+                      <span className="mr-sub">override</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div
               data-spectrum-stack
@@ -597,4 +662,48 @@ function useDisplayHzPerPixel(): string {
   const v = useDisplayStore((s) => s.hzPerPixel);
   if (!Number.isFinite(v) || v <= 0) return '—';
   return v >= 1 ? `${v.toFixed(1)} Hz` : `${(v * 1000).toFixed(0)} mHz`;
+}
+
+// QRZ XML gives us a sparser record than the design-time Contact type; fill
+// the design-only fields ("local", "rig", "ant", "age"…) with em-dashes so
+// QrzCard still renders without needing a schema change.
+function qrzStationToContact(s: QrzStation | null, home: QrzStation | null): Contact | null {
+  if (!s || s.lat == null || s.lon == null) return null;
+  const bearing = home?.lat != null && home?.lon != null
+    ? bearingDeg(home.lat, home.lon, s.lat, s.lon)
+    : 0;
+  const distance = home?.lat != null && home?.lon != null
+    ? distanceKm(home.lat, home.lon, s.lat, s.lon)
+    : 0;
+  const first = (s.firstName || s.name || '').trim().charAt(0).toUpperCase();
+  const last = (s.name || '').trim().split(/\s+/).pop()?.charAt(0).toUpperCase() ?? '';
+  const initials = (first + last) || s.callsign.slice(0, 2);
+  const location = [s.city, s.state, s.country].filter(Boolean).join(', ') || (s.country ?? '—');
+  return {
+    callsign: s.callsign,
+    name: s.name ?? '—',
+    location,
+    grid: s.grid ?? '—',
+    cq: s.cqZone != null ? String(s.cqZone).padStart(2, '0') : '—',
+    itu: s.ituZone != null ? String(s.ituZone).padStart(2, '0') : '—',
+    latlon: `${Math.abs(s.lat).toFixed(2)}°${s.lat >= 0 ? 'N' : 'S'} / ${Math.abs(s.lon).toFixed(2)}°${s.lon >= 0 ? 'E' : 'W'}`,
+    lat: s.lat,
+    lon: s.lon,
+    local: '—',
+    qsl: '—',
+    licensed: '—',
+    initials,
+    flag: '',
+    bearing,
+    distance,
+    age: 0,
+    class: '—',
+    rig: '—',
+    ant: '—',
+    power: '—',
+    qth: s.city ?? s.country ?? '—',
+    email: '—',
+    photoUrl: s.imageUrl ?? undefined,
+    qrzUrl: `https://www.qrz.com/db/${s.callsign}`,
+  };
 }
