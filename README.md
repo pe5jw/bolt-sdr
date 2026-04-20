@@ -25,6 +25,8 @@ long-running project a lot of the DSP heritage traces back to.
   protection
 - **S-meter** (live + demo), RX meter frame streaming
 - **Leaflet satellite map** with terminator and QRZ grid-square / beam heading
+  — to interact with the map (pan / zoom), **press and hold the `M` key**.
+  The experience isn't ideal yet and will improve over time.
 - **Radio discovery** on the LAN (Protocol-1 broadcast)
 
 ## Layout
@@ -55,6 +57,73 @@ dotnet run --project Zeus.Server
 ```
 
 Open **http://localhost:6060**, hit **Discover**, and connect to your HL2.
+
+## Getting started (developers)
+
+The backend and frontend run as two independent processes during development.
+The Vite dev server proxies `/api` and the WebSocket hub through to the .NET
+host, so you get hot-reload on the React side without rebuilding the server.
+
+### Prerequisites
+
+- **.NET 10 SDK**
+- **Node.js 20+** (npm ships with it)
+- **git**
+- A **Hermes Lite 2** on the same LAN (optional — the synthetic DSP engine
+  lets you drive most of the UI without a radio)
+
+### First-time setup
+
+```bash
+git clone https://github.com/brianbruff/openhpsdr-zeus.git
+cd openhpsdr-zeus
+
+# Restore .NET dependencies and sanity-check the build
+dotnet restore
+dotnet build Zeus.slnx
+
+# Install frontend dependencies
+npm --prefix zeus-web install
+```
+
+### Dev loop (two terminals)
+
+```bash
+# Terminal 1 — backend on :6060
+dotnet run --project Zeus.Server
+
+# Terminal 2 — Vite dev server on :5173 (proxies /api and /hub to :6060)
+npm --prefix zeus-web run dev
+```
+
+Then open **http://localhost:5173**. Edits under `zeus-web/src/` hot-reload;
+changes under `Zeus.Server/`, `Zeus.Protocol1/`, `Zeus.Dsp/`, or
+`Zeus.Contracts/` require restarting the backend.
+
+If you'd rather run the production-style single-port build, use the `Running`
+instructions above — the bundled UI is served directly from the .NET host on
+`:6060`.
+
+### Tests
+
+```bash
+dotnet test Zeus.slnx
+```
+
+Please ensure tests pass before opening a PR.
+
+### Useful tools
+
+- `tools/zeus-dump/` — Protocol-1 packet dumper, handy for protocol debugging
+- `tools/discovery-probe/` — LAN discovery probe for Protocol-1 radios
+
+### Project conventions
+
+- Backend port **:6060**, Vite dev port **:5173** — don't change these casually
+- Panadapter amber is **`#FFA028`** (single-hue, alpha-varied, no rainbow gradients)
+- Reference implementation is **Thetis** — not deskhpsdr
+- Deeper context for agents and contributors lives in `CLAUDE.md`, `docs/lessons/`,
+  and `docs/rca/` — worth a skim before touching DSP, protocol, or layout code
 
 ## Distribution
 
