@@ -1,4 +1,4 @@
-# OpenHpsdr Zeus — The King of SDRs
+# OpenHPSDR Zeus — The King of SDRs
 
 ![Zeus](docs/pics/zeus1.webp)
 
