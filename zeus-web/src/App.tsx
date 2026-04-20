@@ -261,23 +261,31 @@ export default function App() {
     <>Panadapter · {(vfoHz / 1e6).toFixed(3)} MHz · {bandLabel}</>
   );
 
-  // Dim/blur the workspace while no radio is connected so the eye lands on
-  // the topbar's Discover Radio panel and QRZ pill. No ConnectPanel inside —
-  // a single mount lives in the topbar (line ~358).
+  // When no radio is connected, dim the workspace and centre the full
+  // ConnectPanel on top so the eye lands on it. The backdrop is
+  // pointer-events:none so the topbar stays interactive (QRZ sign-in,
+  // Tweaks, etc.); the ConnectPanel itself re-enables pointer events so
+  // Discover / Connect buttons still click through.
   const disconnectedOverlay = useMemo(() => {
     if (connected) return null;
     return (
       <div
-        aria-hidden
         style={{
           position: 'absolute',
           inset: 0,
           background: 'rgba(0,0,0,0.55)',
           backdropFilter: 'blur(4px)',
           pointerEvents: 'none',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
           zIndex: 200,
         }}
-      />
+      >
+        <div style={{ pointerEvents: 'auto' }}>
+          <ConnectPanel />
+        </div>
+      </div>
     );
   }, [connected]);
 
@@ -355,7 +363,11 @@ export default function App() {
 
         <div className="spacer" style={{ flex: 1 }} />
 
-        <ConnectPanel />
+        {/* While disconnected the centre overlay owns the Discover UI; the
+            topbar slot holds the connected-state Disconnect control. Mounting
+            just one ConnectPanel at a time also avoids doubled 10s discovery
+            polls. */}
+        {connected && <ConnectPanel />}
 
         <QrzStatusPill />
 
