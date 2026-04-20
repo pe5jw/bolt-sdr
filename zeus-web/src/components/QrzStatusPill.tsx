@@ -40,11 +40,11 @@ export function QrzStatusPill() {
   }, [open]);
 
   const label = connected
-    ? `QRZ: ${home?.callsign ?? 'ON'}${hasXml ? '' : ' (no XML)'}`
-    : 'QRZ: off';
+    ? `${home?.callsign ?? 'ON'}${hasXml ? '' : ' (no XML)'}`
+    : 'Sign in to QRZ';
   const pillClass = connected
-    ? 'bg-emerald-700/40 text-emerald-300'
-    : 'bg-neutral-800 text-neutral-400';
+    ? 'bg-emerald-700/50 text-emerald-200 border border-emerald-600/70'
+    : 'bg-amber-700/30 text-amber-200 border border-amber-500/70';
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();

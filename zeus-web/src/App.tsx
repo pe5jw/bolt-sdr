@@ -26,7 +26,6 @@ import { DspPanel } from './components/DspPanel';
 import { Logbook } from './components/design/Logbook';
 import { QrzCard } from './components/design/QrzCard';
 import { TerminatorLines } from './components/design/TerminatorLines';
-import { TweaksPanel } from './components/design/TweaksPanel';
 import { bearingDeg, distanceKm } from './components/design/geo';
 import { LeafletWorldMap } from './components/design/LeafletWorldMap';
 import { startRealtime } from './realtime/ws-client';
@@ -101,22 +100,14 @@ export default function App() {
     });
   }, []);
 
-  // --- Variant / fonts (Tweaks panel) ---
-  const [variant, setVariant] = useState<string>(
-    () => localStorage.getItem('zeus.variant') || 'console',
-  );
-  const [fonts, setFonts] = useState<string>(
-    () => localStorage.getItem('zeus.fonts') || 'geist',
-  );
-  const [tweaksOpen, setTweaksOpen] = useState(false);
+  // Apply saved theme attributes to <html> on first render. The Tweaks panel
+  // used to toggle these at runtime; now the defaults are fixed.
   useEffect(() => {
+    const variant = localStorage.getItem('zeus.variant') || 'console';
+    const fonts = localStorage.getItem('zeus.fonts') || 'geist';
     document.documentElement.setAttribute('data-variant', variant);
-    localStorage.setItem('zeus.variant', variant);
-  }, [variant]);
-  useEffect(() => {
     document.documentElement.setAttribute('data-fonts', fonts);
-    localStorage.setItem('zeus.fonts', fonts);
-  }, [fonts]);
+  }, []);
 
   // --- Design-mock state (QRZ, DSP grid toggles, CW WPM, memories) ---
   const [callsign, setCallsign] = useState('EI6LF');
@@ -376,9 +367,6 @@ export default function App() {
           <span className="led on" style={{ marginRight: 6 }} />
           {terminatorActive ? 'QRZ ENGAGED' : 'Engage QRZ'}
         </button>
-        <button type="button" className="btn ghost" onClick={() => setTweaksOpen((o) => !o)}>
-          ⚙
-        </button>
       </div>
 
       {/* Control strip — real wired controls rebuilt into the design's chassis */}
@@ -634,25 +622,6 @@ export default function App() {
           <span className="v">{preampOn ? 'ON' : 'OFF'}</span>
         </div>
       </div>
-
-      {tweaksOpen && (
-        <TweaksPanel
-          variant={variant}
-          setVariant={setVariant}
-          fonts={fonts}
-          setFonts={setFonts}
-          onClose={() => setTweaksOpen(false)}
-        />
-      )}
-      {!tweaksOpen && (
-        <button
-          type="button"
-          className="tweaks-fab btn"
-          onClick={() => setTweaksOpen(true)}
-        >
-          Tweaks
-        </button>
-      )}
 
       {disconnectedOverlay}
     </div>
