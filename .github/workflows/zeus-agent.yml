@@ -1,0 +1,63 @@
+name: Zeus-Agent — Issue Triage
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  triage:
+    name: Zeus-Agent
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mint Zeus-Agent App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.ZEUS_AGENT_APP_ID }}
+          private-key: ${{ secrets.ZEUS_AGENT_PRIVATE_KEY }}
+
+      - name: Run Zeus-Agent
+        uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ steps.app-token.outputs.token }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--max-turns 15 --model claude-sonnet-4-6 --allowedTools 'Bash(gh label list),Bash(gh label list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh search:*),Read,Glob,Grep'"
+          prompt: |
+            You are **Zeus-Agent** 📡, the automated triage assistant for Zeus
+            (a cross-platform, web-frontend HPSDR client for original-protocol
+            radios — .NET 8 backend, Vite + React frontend, WDSP native DSP
+            engine via P/Invoke). Thetis is the sole authoritative upstream
+            reference; do NOT cite deskhpsdr.
+
+            Issue #${{ github.event.issue.number }} was just opened:
+            Title: ${{ github.event.issue.title }}
+
+            Your job:
+            1. Read the issue body and skim the repo for relevant context
+               (README.md, CLAUDE.md, docs/lessons/, docs/rca/, recent closed
+               issues).
+            2. Fetch available labels with `gh label list` and apply a sensible subset.
+               NEVER invent new labels.
+                 - Type:     bug | enhancement | question | documentation
+                 - Priority: P1 | P2 | P3  (only if you can judge it confidently)
+                 - Extras:   needs-repro (bug missing repro steps),
+                             duplicate (when you find the original — link it)
+            3. Post exactly ONE comment on the issue with:
+                 - a 1–2 sentence summary of what's being reported,
+                 - which area of the codebase it likely touches
+                   (Zeus.Server / Zeus.Dsp / Zeus.Protocol1 / Zeus.Contracts /
+                    zeus-web / WDSP-native / TX pipeline / rotctld / QRZ),
+                 - any clarifying questions the reporter should answer,
+                 - a sign-off line: "— Zeus-Agent 📡".
+
+            Rules:
+            - Be concise. Prefer understatement. No "Great question!" openings.
+            - Do NOT attempt a fix. Do NOT close the issue. Do NOT open a PR.
+            - Respect the red-light list in CLAUDE.md (visual design, UX,
+              architecture, defaults) — flag these for maintainer review
+              rather than proposing changes.
