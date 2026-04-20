@@ -201,5 +201,10 @@ export function RotatorStatusPill() {
 
 function formatAz(az: number | null | undefined): string {
   if (az == null || !Number.isFinite(az)) return '—';
-  return `${az.toFixed(0).padStart(3, '0')}°`;
+  // hamlib can report signed azimuths when the rotator crosses its zero
+  // point (e.g. -79° on a rotor that can swing past 0°). For display we
+  // want the equivalent 0..359 heading so the compass-style reading is
+  // unambiguous (−79° → 281°).
+  const normalized = ((az % 360) + 360) % 360;
+  return `${normalized.toFixed(0).padStart(3, '0')}°`;
 }
