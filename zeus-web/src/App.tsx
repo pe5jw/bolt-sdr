@@ -11,6 +11,7 @@ import { ModeBandwidth } from './components/ModeBandwidth';
 import { MoxButton } from './components/MoxButton';
 import { Panadapter } from './components/Panadapter';
 import { PreampButton } from './components/PreampButton';
+import { QrzStatusPill } from './components/QrzStatusPill';
 import { SMeterLive } from './components/SMeterLive';
 import { TxStageMeters } from './components/TxStageMeters';
 import { TunButton } from './components/TunButton';
@@ -291,8 +292,9 @@ export default function App() {
 
   return (
     <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
-      {/* Top bar */}
-      <div className="topbar">
+      {/* Top bar — sits above the disconnected overlay (zIndex 200) so QRZ
+          sign-in and Discover Radio stay usable before the HL2 is connected. */}
+      <div className="topbar" style={{ position: 'relative', zIndex: 300 }}>
         <div className="brand">
           <div className="brand-mark">
             <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden>
@@ -363,6 +365,8 @@ export default function App() {
         <div className="spacer" style={{ flex: 1 }} />
 
         <ConnectPanel />
+
+        <QrzStatusPill />
 
         <button
           type="button"
