@@ -477,55 +477,24 @@ export default function App() {
           <div className="panel-body hero-body">
             <div className={`map-layer ${terminatorActive ? 'visible' : ''}`}>
               <LeafletWorldMap
-                home={{ call: effectiveHome.call, lat: effectiveHome.lat, lon: effectiveHome.lon }}
+                home={{ call: effectiveHome.call, lat: effectiveHome.lat, lon: effectiveHome.lon, grid: effectiveHome.grid }}
                 target={
-                  contact ? { call: contact.callsign, lat: contact.lat, lon: contact.lon } : null
+                  contact
+                    ? { call: contact.callsign, lat: contact.lat, lon: contact.lon, grid: contact.grid }
+                    : null
                 }
                 beamBearing={beamOverrideDeg ?? undefined}
                 active={terminatorActive}
                 interactive={mapInteractive}
+                onRotateToBearing={(brg) => {
+                  const rot = useRotatorStore.getState();
+                  if (!rot.config.enabled || !rot.status?.connected) return;
+                  const normalized = ((brg % 360) + 360) % 360;
+                  setBeamOverrideDeg(normalized);
+                  setBeamInputStr(normalized.toFixed(0));
+                  void rot.setAzimuth(normalized);
+                }}
               />
-              {terminatorActive && contact && (
-                <div className="map-readout">
-                  <div className="mr-row">
-                    <span className="mr-k">FROM</span>
-                    <span className="mr-v accent">{effectiveHome.call}</span>
-                    <span className="mr-sub">
-                      {effectiveHome.grid || ''}
-                      {qrzHome?.city ? ` · ${qrzHome.city}` : ''}
-                    </span>
-                  </div>
-                  <div className="mr-divider" />
-                  <div className="mr-row">
-                    <span className="mr-k">TO</span>
-                    <span className="mr-v tx">{contact.callsign}</span>
-                    <span className="mr-sub">
-                      {contact.grid} · {contact.location}
-                    </span>
-                  </div>
-                  <div className="mr-row">
-                    <span className="mr-k">DIST</span>
-                    <span className="mr-v mono">
-                      {Math.round(dist).toLocaleString()} km
-                    </span>
-                    <span className="mr-sub">
-                      {Math.round(dist * 0.621).toLocaleString()} mi
-                    </span>
-                  </div>
-                  <div className="mr-row">
-                    <span className="mr-k">BRG</span>
-                    <span className="mr-v mono">{sp.toFixed(0)}°</span>
-                    <span className="mr-sub">SP / LP {lp.toFixed(0)}°</span>
-                  </div>
-                  {beamOverrideDeg != null && (
-                    <div className="mr-row">
-                      <span className="mr-k">BEAM</span>
-                      <span className="mr-v mono">{beamOverrideDeg.toFixed(0)}°</span>
-                      <span className="mr-sub">override</span>
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
             <div
               data-spectrum-stack

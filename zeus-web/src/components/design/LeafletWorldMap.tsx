@@ -4,8 +4,8 @@ import 'leaflet/dist/leaflet.css';
 import { bearingDeg, destinationPoint, distanceKm, greatCircleSegments } from './geo';
 
 type LeafletWorldMapProps = {
-  home: { call: string; lat: number; lon: number };
-  target: { call: string; lat: number; lon: number } | null;
+  home: { call: string; lat: number; lon: number; grid?: string | null };
+  target: { call: string; lat: number; lon: number; grid?: string | null } | null;
   /** Beam bearing (deg, 0=N, CW). Defaults to initial great-circle bearing when target is set. */
   beamBearing?: number;
   /** Beam range in km — Log4YM uses 5000 km to reach across oceans. */
@@ -15,6 +15,9 @@ type LeafletWorldMapProps = {
   /** When true, user can drag/zoom the map (zoom control appears). Off by
    *  default — the spectrum above owns pointer events for click-to-tune. */
   interactive?: boolean;
+  /** If present, the target popup shows a "Rotate to NNN°" button that calls
+   *  this with the current great-circle bearing. Wire to rotator-store. */
+  onRotateToBearing?: (bearingDeg: number) => void;
 };
 
 // Esri World Imagery — free satellite photo tiles, no API key. Dark oceans
@@ -26,6 +29,85 @@ const TILE_URL =
 const TILE_ATTRIBUTION =
   'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community';
 
+// Colour system ported from Log4YM's MapPlugin (amber target, cyan home +
+// beam, dark-navy popup chrome). Kept as string constants so any future
+// theme rework only needs to touch one block.
+const COLOR_AMBER = '#ffb432';
+const COLOR_CYAN = '#00ddff';
+const COLOR_CYAN_DIM = '#00bbdd';
+const COLOR_BG_DARK = '#1a1e26';
+const COLOR_TEXT_MUTED = '#a5b4c8';
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) =>
+    c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;',
+  );
+}
+
+// divIcon factories — matches Log4YM's stationIcon / targetIcon visuals.
+function homeIcon(): L.DivIcon {
+  const html = `
+    <div style="
+      width: 24px; height: 24px; border-radius: 50%;
+      background: linear-gradient(135deg, ${COLOR_CYAN}, ${COLOR_CYAN_DIM});
+      border: 3px solid #ffffff;
+      box-shadow: 0 0 10px rgba(0, 221, 255, 0.6);
+    "></div>`;
+  return L.divIcon({ className: 'lf-marker', html, iconSize: [24, 24], iconAnchor: [12, 12] });
+}
+
+function targetIcon(): L.DivIcon {
+  const html = `
+    <div style="
+      width: 20px; height: 20px; border-radius: 50%;
+      background: linear-gradient(135deg, ${COLOR_AMBER}, #ff4466);
+      border: 2px solid #ffffff;
+      box-shadow: 0 0 8px rgba(255, 180, 50, 0.6);
+    "></div>`;
+  return L.divIcon({ className: 'lf-marker', html, iconSize: [20, 20], iconAnchor: [10, 10] });
+}
+
+function buildTargetPopup(
+  target: { call: string; grid?: string | null },
+  bearing: number,
+  dist: number,
+  hasRotator: boolean,
+): string {
+  const call = escapeHtml(target.call);
+  const grid = target.grid ? escapeHtml(target.grid) : '';
+  const brg = `${bearing.toFixed(0)}°`;
+  const km = `${Math.round(dist).toLocaleString()} km`;
+  return `
+    <div style="
+      min-width: 180px; padding: 4px 2px;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      color: #e0e7ee; background: ${COLOR_BG_DARK};
+    ">
+      <div style="
+        font-size: 15px; font-weight: 700; font-family: ui-monospace, SFMono-Regular, monospace;
+        color: ${COLOR_AMBER}; letter-spacing: 0.05em;
+      ">${call}</div>
+      ${grid ? `<div style="font-size: 11px; font-family: ui-monospace, monospace; color: ${COLOR_TEXT_MUTED}; margin-top: 2px;">${grid}</div>` : ''}
+      <div style="font-size: 11px; font-family: ui-monospace, monospace; color: ${COLOR_CYAN}; margin-top: 6px;">
+        ${brg} &middot; ${km}
+      </div>
+      <div style="margin-top: 8px; display: flex; gap: 6px; align-items: center;">
+        ${hasRotator
+          ? `<button type="button" data-lf-action="rotate" data-lf-bearing="${bearing.toFixed(1)}"
+              style="
+                padding: 3px 8px; font-size: 11px; border-radius: 3px;
+                border: 1px solid ${COLOR_CYAN}; background: rgba(0,221,255,0.15);
+                color: ${COLOR_CYAN}; cursor: pointer; font-family: inherit;
+              ">Rotate ${brg}</button>`
+          : ''}
+        <a href="https://www.qrz.com/db/${call}" target="_blank" rel="noreferrer"
+          style="font-size: 11px; color: ${COLOR_AMBER}; text-decoration: none; font-weight: 600;">
+          QRZ.COM &#8599;
+        </a>
+      </div>
+    </div>`;
+}
+
 export function LeafletWorldMap({
   home,
   target,
@@ -33,6 +115,7 @@ export function LeafletWorldMap({
   beamRangeKm = 5000,
   active,
   interactive = false,
+  onRotateToBearing,
 }: LeafletWorldMapProps) {
   // Wrapper owns our dynamic className (`interactive`, aria-hidden). Leaflet
   // mounts into an inner div whose className we never touch, so the
@@ -45,6 +128,11 @@ export function LeafletWorldMap({
   const mapRef = useRef<L.Map | null>(null);
   const layerRef = useRef<L.LayerGroup | null>(null);
   const zoomCtrlRef = useRef<L.Control.Zoom | null>(null);
+  // Stash the callback in a ref so the marker effect doesn't tear down on
+  // every parent re-render — we want the popup to pick up the latest handler
+  // without invalidating the marker itself.
+  const onRotateRef = useRef(onRotateToBearing);
+  useEffect(() => { onRotateRef.current = onRotateToBearing; }, [onRotateToBearing]);
 
   // One-time init: Leaflet map, tile layer, attribution control in the corner.
   useEffect(() => {
@@ -132,16 +220,10 @@ export function LeafletWorldMap({
     layer.clearLayers();
     if (!active) return;
 
-    // Home marker — accent-blue filled circle with pulse halo.
-    L.circleMarker([home.lat, home.lon], {
-      radius: 6,
-      color: '#ffffff',
-      weight: 2,
-      fillColor: '#4a9eff',
-      fillOpacity: 1,
-      opacity: 1,
-    })
-      .bindTooltip(home.call, { permanent: true, direction: 'right', className: 'lf-tt lf-tt-home' })
+    // Home marker — cyan gradient divIcon (Log4YM stationIcon style).
+    const homeLabel = home.grid ? `${home.call} · ${home.grid}` : home.call;
+    L.marker([home.lat, home.lon], { icon: homeIcon() })
+      .bindTooltip(homeLabel, { permanent: true, direction: 'right', className: 'lf-tt lf-tt-home', offset: [14, 0] })
       .addTo(layer);
 
     if (target) {
@@ -155,32 +237,47 @@ export function LeafletWorldMap({
       );
       for (const seg of segments) {
         L.polyline(seg, {
-          color: '#ffb432',
-          weight: 2.5,
-          opacity: 0.95,
-          dashArray: '6, 10',
+          color: COLOR_AMBER,
+          weight: 2,
+          opacity: 0.8,
+          dashArray: '5, 10',
           lineCap: 'round',
         }).addTo(layer);
       }
 
-      // Target marker — TX-red filled circle.
-      L.circleMarker([target.lat, target.lon], {
-        radius: 7,
-        color: '#ffffff',
-        weight: 2,
-        fillColor: '#ff3838',
-        fillOpacity: 1,
-        opacity: 1,
-      })
-        .bindTooltip(
-          `${target.call} · ${dist.toFixed(0)} km · brg ${bear.toFixed(0)}°`,
-          { permanent: true, direction: 'left', className: 'lf-tt lf-tt-target' },
-        )
+      // Target marker — amber gradient divIcon with permanent callsign label.
+      const marker = L.marker([target.lat, target.lon], { icon: targetIcon() })
+        .bindTooltip(target.call, {
+          permanent: true,
+          direction: 'left',
+          className: 'lf-tt lf-tt-target',
+          offset: [-12, 0],
+        })
+        .bindPopup(buildTargetPopup(target, bear, dist, !!onRotateRef.current), {
+          closeButton: true,
+          className: 'lf-popup-wrap',
+          maxWidth: 260,
+        })
         .addTo(layer);
 
-      // Beam heading from home — static line toward the initial bearing of
-      // the great-circle (when beamBearing is omitted). Cyan dashed, Log4YM
-      // style. Beam is not wired to a rotator yet; this is just a visual cue.
+      // Attach the Rotate-to-bearing button handler on popup open. Leaflet
+      // rebuilds the popup DOM each open, so we re-query the button each time
+      // rather than holding a stale element reference.
+      marker.on('popupopen', (ev) => {
+        const el = (ev as L.PopupEvent).popup.getElement();
+        if (!el) return;
+        const btn = el.querySelector<HTMLButtonElement>('button[data-lf-action="rotate"]');
+        if (!btn) return;
+        btn.onclick = () => {
+          const val = Number(btn.dataset.lfBearing);
+          if (Number.isFinite(val)) onRotateRef.current?.(val);
+          marker.closePopup();
+        };
+      });
+
+      // Beam heading from home — cyan dashed, Log4YM style. Defaults to the
+      // initial great-circle bearing; the user's manual override (or the
+      // rotator's commanded azimuth upstream) replaces it.
       const beam = beamBearing ?? bear;
       const beamEnd = destinationPoint(home.lat, home.lon, beam, beamRangeKm);
       L.polyline(
@@ -189,10 +286,10 @@ export function LeafletWorldMap({
           beamEnd,
         ],
         {
-          color: '#00ddff',
-          weight: 2.5,
-          opacity: 0.8,
-          dashArray: '10, 6',
+          color: COLOR_CYAN,
+          weight: 3,
+          opacity: 0.7,
+          dashArray: '10, 5',
           lineCap: 'round',
         },
       ).addTo(layer);
