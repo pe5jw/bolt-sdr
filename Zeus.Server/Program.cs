@@ -54,6 +54,9 @@ builder.WebHost.ConfigureKestrel(k =>
 // WDSP while a Protocol1Client is attached. No IDspEngine DI registration —
 // swapping requires lifecycle control the container can't express.
 builder.Services.AddSingleton<IRadioDiscovery, RadioDiscoveryService>();
+builder.Services.AddSingleton<
+    Zeus.Protocol2.Discovery.IRadioDiscovery,
+    Zeus.Protocol2.Discovery.RadioDiscoveryService>();
 // TxIqRing is shared: TxAudioIngest writes modulated IQ into it, Protocol1Client
 // (constructed inside RadioService) reads from it for the EP2 payload.
 builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();
@@ -158,21 +161,41 @@ app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSo
     });
 });
 
-app.MapGet("/api/radios", async (IRadioDiscovery discovery, HttpContext ctx) =>
+app.MapGet("/api/radios", async (
+    IRadioDiscovery p1Discovery,
+    Zeus.Protocol2.Discovery.IRadioDiscovery p2Discovery,
+    HttpContext ctx) =>
 {
-    var radios = await discovery.DiscoverAsync(TimeSpan.FromMilliseconds(1500), ctx.RequestAborted);
-    return radios.Select(r => new RadioInfo(
+    var timeout = TimeSpan.FromMilliseconds(1500);
+    var p1Task = p1Discovery.DiscoverAsync(timeout, ctx.RequestAborted);
+    var p2Task = p2Discovery.DiscoverAsync(timeout, ctx.RequestAborted);
+    await Task.WhenAll(p1Task, p2Task);
+
+    var p1Infos = p1Task.Result.Select(MapP1);
+    var p2Infos = p2Task.Result.Select(MapP2);
+    return p1Infos.Concat(p2Infos).ToArray();
+
+    static RadioInfo MapP1(DiscoveredRadio r) => new(
         MacAddress: r.Mac.ToString(),
         IpAddress: r.Ip.ToString(),
         BoardId: r.Board.ToString(),
         FirmwareVersion: r.FirmwareString,
         Busy: r.Details.Busy,
-        Details: BuildDetails(r))).ToArray();
+        Details: BuildP1Details(r));
 
-    static IReadOnlyDictionary<string, string> BuildDetails(DiscoveredRadio r)
+    static RadioInfo MapP2(Zeus.Protocol2.Discovery.DiscoveredRadio r) => new(
+        MacAddress: r.Mac.ToString(),
+        IpAddress: r.Ip.ToString(),
+        BoardId: r.Board.ToString(),
+        FirmwareVersion: r.FirmwareString,
+        Busy: r.Details.Busy,
+        Details: BuildP2Details(r));
+
+    static IReadOnlyDictionary<string, string> BuildP1Details(DiscoveredRadio r)
     {
         var d = new Dictionary<string, string>
         {
+            ["protocol"] = "P1",
             ["rawBoardId"] = $"0x{r.Details.RawBoardId:X2}",
             ["gatewareBuild"] = r.Details.GatewareBuild.ToString(),
         };
@@ -181,6 +204,19 @@ app.MapGet("/api/radios", async (IRadioDiscovery discovery, HttpContext ctx) =>
         if (r.Details.MacAddressModified) d["macAddressModified"] = "true";
         if (r.Details.FixedIpAddress is { } ip) d["fixedIpAddress"] = ip.ToString();
         if (r.Details.HermesLite2MinorVersion is { } minor) d["hl2MinorVersion"] = minor.ToString();
+        return d;
+    }
+
+    static IReadOnlyDictionary<string, string> BuildP2Details(Zeus.Protocol2.Discovery.DiscoveredRadio r)
+    {
+        var d = new Dictionary<string, string>
+        {
+            ["protocol"] = "P2",
+            ["rawBoardId"] = $"0x{r.Details.RawBoardId:X2}",
+            ["protocolSupported"] = r.Details.ProtocolSupported.ToString(),
+            ["numReceivers"] = r.Details.NumReceivers.ToString(),
+        };
+        if (r.Details.BetaVersion != 0) d["betaVersion"] = r.Details.BetaVersion.ToString();
         return d;
     }
 });
