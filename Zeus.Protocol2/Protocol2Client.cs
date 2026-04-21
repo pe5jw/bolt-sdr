@@ -19,6 +19,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private const int BufLen = 1444;
     private const int DiscoverySamplesPerPacket = 238;
 
+    // On ANAN G2 MkII (Orion-II / Saturn) the first two DDC slots are wired
+    // to the PureSignal / diversity feedback path. User-visible receivers
+    // start at DDC2. pihpsdr's `new_protocol_receive_specific` and
+    // `new_protocol_high_priority` both do `ddc = 2 + i` for these boards;
+    // we follow the same convention. Radio then sends DDC2 IQ from port
+    // 1035 + 2 = 1037.
+    private const int G2RxDdc = 2;
+
+    // 2^32 / 122_880_000 — converts Hz to a 32-bit phase-increment word
+    // when the general packet is in "send phase word" mode (bit 3 of
+    // CmdGeneral[37], which pihpsdr and Thetis both set).
+    private const double HzToPhase = 34.952533333333333;
+
     private readonly ILogger<Protocol2Client> _log;
     private readonly Channel<IqFrame> _iqFrames = Channel.CreateUnbounded<IqFrame>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
@@ -27,10 +40,10 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private IPEndPoint? _radioEndpoint;
     private CancellationTokenSource? _rxCts;
     private Task? _rxTask;
+    private Task? _keepaliveTask;
     private int _sampleRateKhz = 48;
     private uint _rxFreqHz = 14_200_000;
     private byte _numAdc = 2;
-    private uint _outSeq;
     // Mercury preamp defaults OFF — on a G2 the ADC has enough dynamic range
     // that the preamp is a crutch, not a default. Operator enables it when
     // needed via the UI. Attenuator 0 dB so the front-end isn't knocked down.
@@ -41,6 +54,15 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private uint _lastDdc0Seq;
     private bool _haveFirstDdc0;
     private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+    // Per-stream sequence counters. The G2 firmware tracks seq per destination
+    // port; sharing one counter across CmdGeneral/CmdRx/CmdTx/CmdHighPriority
+    // makes the first HighPriority packet land at seq=2+, which the radio
+    // treats as "stream started mid-flight" and silently drops — leaving the
+    // DDC locked to whatever the previous client's last tune was.
+    private uint _seqCmdGeneral;
+    private uint _seqCmdRx;
+    private uint _seqCmdTx;
+    private uint _seqCmdHp;
 
     public Protocol2Client(ILogger<Protocol2Client> log)
     {
@@ -76,14 +98,22 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
         _sampleRateKhz = sampleRateKhz;
 
+        // Startup sequence matches Thetis SendStart() and Priapus/NextGenSDR:
+        // CmdGeneral → CmdRx → CmdTx → CmdHighPriority(run=1). Skipping CmdTx
+        // leaves the G2 MkII in a half-configured state where its BPF board
+        // latches a random band instead of honouring CmdHighPriority filter
+        // bits on subsequent tunes.
         SendCmdGeneral();
         Thread.Sleep(50);
         SendCmdRx();
+        Thread.Sleep(50);
+        SendCmdTx();
         Thread.Sleep(50);
         SendCmdHighPriority(run: true);
 
         _rxCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _rxTask = Task.Run(() => RxLoop(_rxCts.Token));
+        _keepaliveTask = Task.Run(() => KeepaliveLoop(_rxCts.Token));
         _log.LogInformation("p2.start rate={Rate}kHz freq={Freq}Hz", _sampleRateKhz, _rxFreqHz);
         return Task.CompletedTask;
     }
@@ -97,6 +127,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         try { await _rxTask.ConfigureAwait(false); }
         catch (OperationCanceledException) { }
         _rxTask = null;
+        if (_keepaliveTask is not null)
+        {
+            try { await _keepaliveTask.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+            _keepaliveTask = null;
+        }
         _rxCts?.Dispose();
         _rxCts = null;
         _iqFrames.Writer.TryComplete();
@@ -106,7 +142,10 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public void SetVfoAHz(long hz)
     {
         _rxFreqHz = (uint)Math.Clamp(hz, 0L, uint.MaxValue);
-        if (_rxTask is not null) SendCmdHighPriority(run: true);
+        var running = _rxTask is not null;
+        _log.LogInformation("p2.tune hz={Hz} running={Running} hpSeq={Seq}",
+            _rxFreqHz, running, _seqCmdHp);
+        if (running) SendCmdHighPriority(run: true);
     }
 
     public void SetSampleRateKhz(int rateKhz)
@@ -138,6 +177,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private void SendCmdGeneral()
     {
         var p = new byte[60];
+        WriteBeU32(p, 0, _seqCmdGeneral++);
         p[4] = 0x00;
         WriteBeU16(p, 5, 1025);
         WriteBeU16(p, 7, 1026);
@@ -153,12 +193,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         p[26] = 16;
         p[27] = 0;
         p[28] = 32;
-        p[37] = 0x00;
-        p[38] = 0x00;
+        // Matches pihpsdr new_protocol_general for ORION2/SATURN hardware:
+        // [37] bit 3 = phase-word mode (radio reads phase increments at the
+        // DDC-frequency offsets, not raw Hz), [38] = hardware-timer enable,
+        // [58] = PA enable, [59] = Alex0|Alex1 enable (0x03 is required on
+        // MkII for the BPF board to honour the alex bits further down).
+        p[37] = 0x08;
+        p[38] = 0x01;
         p[58] = 0x01;
-        // ALEX enable bits: Alex0 = 0x01, Alex1 = 0x02; Thetis sends 0x03 so
-        // the radio actually consumes the filter bytes in CmdHighPriority.
-        // Without this the radio silently ignores our BPF / antenna bits.
         p[59] = 0x03;
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1024));
     }
@@ -166,41 +208,130 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private void SendCmdRx()
     {
         var p = new byte[BufLen];
-        WriteBeU32(p, 0, _outSeq++);
-        p[4] = _numAdc;
+        WriteBeU32(p, 0, _seqCmdRx++);
+        // Mirrors pihpsdr new_protocol_receive_specific for the MkII:
+        //   n_adc = 2 (G2 has two physical ADCs), DDC2 enabled by bit 2 in
+        //   the enable mask, and the DDC config block sits at 17 + 2*6 = 29.
+        //   DDC0/1 stay disabled — those slots are reserved by the radio for
+        //   the PureSignal/Diversity hardware pair.
+        p[4] = 2;
         p[5] = 0;
         p[6] = 0;
-        p[7] = 0x01;              // enable RX0 only (for now)
-        p[17] = 0x00;             // RX0 <- ADC0
-        WriteBeU16(p, 18, _sampleRateKhz);
-        p[22] = 24;
+        p[7] = (byte)(1 << G2RxDdc);  // = 0x04
+        int off = 17 + G2RxDdc * 6;
+        p[off + 0] = 0x00;            // DDC2 <- ADC0
+        WriteBeU16(p, off + 1, _sampleRateKhz);
+        p[off + 5] = 24;              // bit depth
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1025));
+    }
+
+    private void SendCmdTx()
+    {
+        var p = new byte[60];
+        WriteBeU32(p, 0, _seqCmdTx++);
+        p[4] = 1;                 // num_dac
+        WriteBeU16(p, 14, _sampleRateKhz);
+        _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1026));
     }
 
     private void SendCmdHighPriority(bool run)
     {
         var p = new byte[BufLen];
-        WriteBeU32(p, 0, _outSeq++);
+        WriteBeU32(p, 0, _seqCmdHp++);
         p[4] = (byte)(run ? 0x01 : 0x00);
-        WriteBeU32(p, 9, _rxFreqHz);
+
+        // Frequency field is a PHASE word (general[37] bit 3 set) — radio
+        // reads a 32-bit phase increment, not Hz. pihpsdr computes this as
+        //   phase = freq_hz * 2^32 / 122_880_000
+        // The G2 MkII puts the user-visible RX0 at DDC slot 2, so the phase
+        // goes to bytes 9 + 2*4 = 17..20. Bytes 9..16 (DDC0/1) are left as
+        // zero per pihpsdr's non-PS non-diversity code path. TX DUC phase is
+        // written to 329..332 as the same value for out-of-band gating.
+        uint rxPhase = (uint)(_rxFreqHz * HzToPhase);
+        WriteBeU32(p, 9 + G2RxDdc * 4, rxPhase);
+        WriteBeU32(p, 329, rxPhase);
 
         // Mercury attenuator byte: bit 0 = RX0 preamp, bit 1 = RX1 preamp
-        // (Thetis network.c:1037). Setting RX0 preamp keeps the 20 dB LNA in
-        // circuit so weak bands (80m / 160m) don't disappear below the ADC
-        // noise floor.
+        // (Thetis network.c:1037).
         p[1403] = (byte)(_preampOn ? 0x01 : 0x00);
 
         // ADC0 step attenuator (0-31 dB). Thetis network.c:1057.
         p[1443] = _rxStepAttnDb;
 
-        // Alex0 RX0 filter word. ANT_1 (bit 24 → byte 1432 LSB) routes
-        // antenna 1 into RX0. Do NOT set bit 12 — while Thetis struct calls
-        // it "_Bypass" it corresponds to the PureSignal feedback path on
-        // ANAN MkII hardware and silences normal RX. Per-band HPF selection
-        // left to the radio's firmware for now; revisit with an explicit
-        // band setter later.
-        p[1432] = 0x01;
+        // Alex0 and Alex1 BPF words. pihpsdr constructs these with its own
+        // ALEX_* bit macros (same packed form Priapus uses).
+        uint alex = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: 1);
+        WriteBeU32(p, 1428, alex);
+        WriteBeU32(p, 1432, alex);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1027));
+    }
+
+    internal static uint ComputeAlexWord(uint rxFreqHz, uint txFreqHz, int txAnt)
+    {
+        uint word = 0;
+        word |= (uint)LpfBits(txFreqHz) << 24;
+        word |= (uint)(1 << (txAnt - 1)) << 16;
+        word |= (uint)HpfBits(rxFreqHz) << 8;
+        return word;
+    }
+
+    internal static byte HpfBits(uint freqHz)
+    {
+        if (freqHz >= 39_850_000u) return 0x40; // 6 m preamp
+        if (freqHz >= 26_465_000u) return 0x20; // bypass
+        if (freqHz >= 19_584_000u) return 0x02; // 20 MHz HPF
+        if (freqHz >= 12_075_000u) return 0x01; // 13 MHz HPF
+        if (freqHz >=  6_202_000u) return 0x04; // 9.5 MHz HPF
+        if (freqHz >=  4_665_000u) return 0x08; // 6.5 MHz HPF
+        return 0x10;                            // 1.5 MHz HPF
+    }
+
+    internal static byte LpfBits(uint freqHz)
+    {
+        if (freqHz >= 39_850_000u) return 0x10; // 6 m LPF
+        if (freqHz >= 26_465_000u) return 0x20; // 12/10 m LPF
+        if (freqHz >= 19_584_000u) return 0x40; // 17/15 m LPF
+        if (freqHz >= 12_075_000u) return 0x01; // 30/20 m LPF
+        if (freqHz >=  4_665_000u) return 0x02; // 60/40 m LPF
+        if (freqHz >=  2_750_000u) return 0x04; // 80 m LPF
+        return 0x08;                            // 160 m LPF
+    }
+
+    // Mirrors pihpsdr's new_protocol_timer_thread:
+    //   HighPriority every 100 ms, RX/TX specific every 200 ms, General
+    //   every 800 ms. The G2 MkII expects this cadence once the hardware
+    //   watchdog is enabled in CmdGeneral[38] — without it the radio
+    //   treats the stream as abandoned and freezes IQ within ~1 s.
+    private async Task KeepaliveLoop(CancellationToken ct)
+    {
+        int cycle = 0;
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(100, ct).ConfigureAwait(false);
+                cycle = (cycle % 8) + 1;
+                SendCmdHighPriority(run: true);
+                switch (cycle)
+                {
+                    case 2: case 4: case 6:
+                        SendCmdRx();
+                        break;
+                    case 1: case 3: case 5: case 7:
+                        SendCmdTx();
+                        break;
+                    case 8:
+                        SendCmdRx();
+                        SendCmdGeneral();
+                        break;
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "p2.keepalive exited with error");
+        }
     }
 
     private void RxLoop(CancellationToken ct)
