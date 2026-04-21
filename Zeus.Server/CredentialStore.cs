@@ -38,17 +38,31 @@ public sealed class CredentialStore : IDisposable
 
     public async Task SetAsync(string service, string username, string password, CancellationToken ct = default)
     {
-        var cred = new StoredCredential
-        {
-            Service = service,
-            Username = username,
-            Password = password,
-            UpdatedUtc = DateTime.UtcNow
-        };
-
         await Task.Run(() =>
         {
-            _credentials.Upsert(cred);
+            // Find existing credential for this service
+            var existing = _credentials.FindOne(x => x.Service == service);
+
+            if (existing != null)
+            {
+                // Update existing
+                existing.Username = username;
+                existing.Password = password;
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _credentials.Update(existing);
+            }
+            else
+            {
+                // Insert new
+                var cred = new StoredCredential
+                {
+                    Service = service,
+                    Username = username,
+                    Password = password,
+                    UpdatedUtc = DateTime.UtcNow
+                };
+                _credentials.Insert(cred);
+            }
         }, ct);
 
         _log.LogInformation("Stored credentials for service={Service} username={User}", service, username);
@@ -140,6 +154,7 @@ public sealed class CredentialStore : IDisposable
 
 public sealed class StoredCredential
 {
+    public int Id { get; set; }
     public string Service { get; set; } = string.Empty;
     public string Username { get; set; } = string.Empty;
     public string Password { get; set; } = string.Empty;
