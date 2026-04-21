@@ -1,0 +1,79 @@
+using System.Collections.Concurrent;
+
+namespace Zeus.Server.Tci;
+
+/// <summary>
+/// Rate-limits high-frequency events (VFO/DDS changes) per Thetis pattern.
+/// Coalesces rapid updates into a single broadcast at configured intervals
+/// to avoid flooding clients during tuning drags (which can fire hundreds
+/// of events per second).
+/// </summary>
+public sealed class TciRateLimiter : IDisposable
+{
+    private readonly int _intervalMs;
+    private readonly Timer _timer;
+    private readonly ConcurrentDictionary<string, string> _pending = new();
+    private readonly Action<string> _send;
+
+    /// <summary>
+    /// Create a rate limiter that flushes pending events every intervalMs.
+    /// </summary>
+    /// <param name="intervalMs">Flush cadence in milliseconds (e.g., 50 ms = 20 Hz)</param>
+    /// <param name="send">Callback to send a coalesced event string</param>
+    public TciRateLimiter(int intervalMs, Action<string> send)
+    {
+        _intervalMs = intervalMs;
+        _send = send;
+        _timer = new Timer(OnTick, null, intervalMs, intervalMs);
+    }
+
+    /// <summary>
+    /// Enqueue an event for rate-limited broadcast. If the same key is enqueued
+    /// multiple times before the next flush, only the latest value is sent.
+    /// </summary>
+    /// <param name="key">Deduplication key (e.g., "vfo:0,0" for RX0 VFO-A)</param>
+    /// <param name="commandLine">Full TCI command string to send (e.g., "vfo:0,0,14074000;")</param>
+    public void Enqueue(string key, string commandLine)
+    {
+        _pending[key] = commandLine;
+    }
+
+    /// <summary>
+    /// Immediately flush all pending events and reset the timer. Use when the
+    /// rate-limited path needs to be drained synchronously (e.g., on disconnect).
+    /// </summary>
+    public void FlushNow()
+    {
+        OnTick(null);
+    }
+
+    private void OnTick(object? state)
+    {
+        if (_pending.IsEmpty) return;
+
+        // Snapshot and clear atomically
+        var toSend = _pending.ToArray();
+        foreach (var kvp in toSend)
+        {
+            _pending.TryRemove(kvp.Key, out _);
+        }
+
+        // Send outside the lock
+        foreach (var kvp in toSend)
+        {
+            try
+            {
+                _send(kvp.Value);
+            }
+            catch
+            {
+                // Don't let a send failure stop other events from flushing
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        _timer.Dispose();
+    }
+}

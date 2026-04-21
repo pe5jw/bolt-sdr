@@ -5,6 +5,7 @@ using Zeus.Dsp;
 using Zeus.Protocol1;
 using Zeus.Protocol1.Discovery;
 using Zeus.Server;
+using Zeus.Server.Tci;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -56,6 +57,14 @@ builder.Services.AddSingleton<QrzService>();
 // requests; hosted-service registration runs ExecuteAsync.
 builder.Services.AddSingleton<RotctldService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RotctldService>());
+
+// TCI (Transceiver Control Interface) — ExpertSDR3-compatible WebSocket server
+// for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),
+// and SDR display tools. Disabled by default; enable via appsettings.json Tci:Enabled=true.
+builder.Services.Configure<TciOptions>(builder.Configuration.GetSection("Tci"));
+builder.Services.AddSingleton<SpotManager>();
+builder.Services.AddSingleton<TciServer>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<TciServer>());
 
 var app = builder.Build();
 
