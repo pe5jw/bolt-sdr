@@ -104,8 +104,8 @@ public sealed class Protocol1Client : IProtocol1Client
 
         _loopCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-        // Send Metis start. deskhpsdr sends 3× on macOS to work around first-UDP-drop;
-        // we mirror that for parity (doc 02 §3, old_protocol.c:3670-3681).
+        // Send Metis start. We send 3× on macOS to work around first-UDP-drop
+        // (doc 02 §3).
         SendStartStop(start: true);
 
         _rxThread = new Thread(RxLoop)
@@ -190,9 +190,8 @@ public sealed class Protocol1Client : IProtocol1Client
         EnableHl2Dither: Volatile.Read(ref _enableHl2Dither) != 0,
         Board: (HpsdrBoardKind)Volatile.Read(ref _boardKind),
         HasN2adr: Volatile.Read(ref _hasN2adr) != 0,
-        // UI percent → raw 0..255 HPSDR drive byte. deskhpsdr's own linear-amplitude
-        // path sits in transmitter->drive (0..1) → calcLevel → 0..255; for MVP we
-        // use the same 0..255 range directly.
+        // UI percent → raw 0..255 HPSDR drive byte. For MVP we use the 0..255
+        // range directly (no calcLevel linearization step).
         DriveLevel: (byte)(Volatile.Read(ref _drivePct) * 255 / 100));
 
     private void RxLoop()
@@ -252,10 +251,10 @@ public sealed class Protocol1Client : IProtocol1Client
                 ObserveSequence(seq);
                 Interlocked.Increment(ref _totalFrames);
 
-                // Fire per-frame: deskhpsdr processes each USB frame's C&C
-                // independently, so pairs like (addr=1, addr=2) both contribute
-                // updates. The former "last wins" logic masked the FWD reading
-                // whenever the HL2 paired its FWD frame with a REF frame.
+                // Fire per-frame: each USB frame's C&C is processed independently,
+                // so pairs like (addr=1, addr=2) both contribute updates. The former
+                // "last wins" logic masked the FWD reading whenever the HL2 paired
+                // its FWD frame with a REF frame.
                 // Synchronous fan-out; handlers must not block the RX thread.
                 if (telemetry0.C0Address != 0)
                 {
@@ -320,9 +319,9 @@ public sealed class Protocol1Client : IProtocol1Client
     // or its TX mixer sits at power-on default (likely 0) and the PA sees
     // no drive. RxFreq stays in the rotation so demod during duplex TX
     // follows QSY, and TxFreq shows up in 2 of every 4 packets so a QSY
-    // while keyed takes effect within a couple of ms. deskhpsdr reuses the
-    // RX VFO for TxFreq when Split/RIT are off; we do the same here since
-    // Zeus has no separate TX VFO yet.
+    // while keyed takes effect within a couple of ms. The RX VFO is reused for
+    // TxFreq when Split/RIT are off, which matches what we do here since Zeus
+    // has no separate TX VFO yet.
     internal static (ControlFrame.CcRegister first, ControlFrame.CcRegister second) PhaseRegisters(int phase, bool mox)
     {
         int p = phase & 0x3;
@@ -384,7 +383,7 @@ public sealed class Protocol1Client : IProtocol1Client
         Span<byte> buf = stackalloc byte[64];
         ControlFrame.BuildStartStop(buf, start);
         byte[] heap = buf.ToArray();
-        // deskhpsdr sends 3× on macOS (first-UDP-drop workaround). Harmless elsewhere.
+        // Send 3× on macOS (first-UDP-drop workaround). Harmless elsewhere.
         int sends = OperatingSystem.IsMacOS() ? 3 : 1;
         for (int i = 0; i < sends; i++)
         {

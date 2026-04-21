@@ -180,7 +180,7 @@ export function normalizeState(raw: unknown): RadioStateDto {
     filterLowHz: typeof r.filterLowHz === 'number' ? r.filterLowHz : 0,
     filterHighHz: typeof r.filterHighHz === 'number' ? r.filterHighHz : 0,
     sampleRate: typeof r.sampleRate === 'number' ? r.sampleRate : 0,
-    // Default 80 matches WdspDspEngine.ApplyAgcDefaults and the deskhpsdr
+    // Default 80 matches WdspDspEngine.ApplyAgcDefaults and the Thetis
     // AGC_MEDIUM preset. Missing from older servers — tolerate absence.
     agcTopDb: typeof r.agcTopDb === 'number' ? r.agcTopDb : 80,
     // Attenuator value in dB, range 0..31 (HpsdrAtten.MaxDb). 4-button UI

@@ -23,9 +23,9 @@ public sealed class TestToneGenerator : ITxIqSource
 
     /// <summary>
     /// Emit the next IQ sample. <paramref name="amplitude"/> is in 0..1 and
-    /// scales the full-scale s16 range; deskhpsdr's TX path treats the radio
-    /// as expecting full-scale IQ, so 1.0 here means s16 max. 0.5 leaves 6 dB
-    /// of headroom which is where the task #3 spec parks us at 100% drive.
+    /// scales the full-scale s16 range; the TX path treats the radio as
+    /// expecting full-scale IQ, so 1.0 here means s16 max. 0.5 leaves 6 dB of
+    /// headroom which is where the task #3 spec parks us at 100% drive.
     /// </summary>
     public (short i, short q) Next(double amplitude)
     {

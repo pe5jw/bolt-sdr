@@ -21,9 +21,8 @@ public class ControlFrameTests
         Span<byte> cc = stackalloc byte[5];
         ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.RxFreq, BaseState());
 
-        // CC0 = RxFreq wire byte (0x04) with MOX bit 0 clear. deskhpsdr writes
-        // output_buffer[C0] = 0x04 + (current_rx * 2) directly at
-        // old_protocol.c:2754 — no shift.
+        // CC0 = RxFreq wire byte (0x04) with MOX bit 0 clear. Wire encoding is
+        // output_buffer[C0] = 0x04 + (current_rx * 2) — no shift.
         Assert.Equal(0x04, cc[0]);
 
         // CC1..CC4 = big-endian 14_200_000 = 0x00D8ACC0
@@ -51,8 +50,7 @@ public class ControlFrameTests
 
     [Theory]
     // CcRegister values are the wire-byte encodings already (pre-shifted
-    // address with bit 0 reserved for MOX), mirroring deskhpsdr's direct
-    // writes at old_protocol.c:2741-2754. Pinned here to catch any future
+    // address with bit 0 reserved for MOX). Pinned here to catch any future
     // drift that reintroduces a spurious shift.
     [InlineData(ControlFrame.CcRegister.Config, false, 0x00)]
     [InlineData(ControlFrame.CcRegister.Config, true, 0x01)]
@@ -206,9 +204,9 @@ public class ControlFrameTests
     {
         // End-to-end: after SetMox(true), the client's CcState snapshot feeds
         // WriteCcBytes and the MOX bit shows up as C0 LSB on every CC0 the TX
-        // loop could emit. Protects the wire-level parity with deskhpsdr's
-        // output_buffer[C0] |= mox (old_protocol.c:2741-2754) from silent drift
-        // if the setter ever gets rewired to a separate field.
+        // loop could emit. Protects the wire-level parity (output_buffer[C0]
+        // |= mox) from silent drift if the setter ever gets rewired to a
+        // separate field.
         using var client = new Protocol1Client();
         client.SetMox(true);
         var state = client.SnapshotState();
@@ -274,9 +272,9 @@ public class ControlFrameTests
     [Fact]
     public void DriveFilter_Hl2_MoxOn_SetsC2PaEnableBit()
     {
-        // deskhpsdr old_protocol.c:2863-2884: on HL2, C2[3] = PA enable. Without
-        // this bit the HL2 gateware never energizes the PA, so `no power out at
-        // 100% drive` shows up as silence on the meter even with MOX + drive set.
+        // On HL2, C2[3] = PA enable. Without this bit the HL2 gateware never
+        // energizes the PA, so `no power out at 100% drive` shows up as silence
+        // on the meter even with MOX + drive set.
         Span<byte> cc = stackalloc byte[5];
         var s = BaseState() with { Board = HpsdrBoardKind.HermesLite2, Mox = true };
         ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.DriveFilter, s);
@@ -286,7 +284,7 @@ public class ControlFrameTests
     [Fact]
     public void DriveFilter_Hl2_MoxOff_LeavesC2Zero()
     {
-        // Don't assert PA enable while RX-only — matches deskhpsdr's radio_is_transmitting
+        // Don't assert PA enable while RX-only — matches the radio_is_transmitting
         // gate pattern applied everywhere else in the TX path.
         Span<byte> cc = stackalloc byte[5];
         var s = BaseState() with { Board = HpsdrBoardKind.HermesLite2, Mox = false };
@@ -361,11 +359,11 @@ public class ControlFrameTests
     [Fact]
     public void PhaseTable_MoxOn_TxFreqPayloadIsVfoA()
     {
-        // deskhpsdr old_protocol.c:2741-2750 uses channel_freq(-1) (which resolves
-        // to the TX VFO) for the 0x02 payload. We don't have a split TX VFO yet,
-        // so TxFreq should encode VfoAHz — same VFO used for RxFreq. Pinning this
-        // so a future split-VFO implementation changes the phase-table registers
-        // together with the CcState field.
+        // Protocol-1 uses channel_freq(-1) (which resolves to the TX VFO) for
+        // the 0x02 payload. We don't have a split TX VFO yet, so TxFreq should
+        // encode VfoAHz — same VFO used for RxFreq. Pinning this so a future
+        // split-VFO implementation changes the phase-table registers together
+        // with the CcState field.
         var state = new ControlFrame.CcState(
             VfoAHz: 7_074_000,
             Rate: HpsdrSampleRate.Rate48k,

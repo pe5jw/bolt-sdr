@@ -327,8 +327,8 @@ public sealed class RadioService : IDisposable
         ActiveClient?.SetDrive(clamped);
     }
 
-    // Thetis "AGC Top" slider — max post-AGC gain in dB. Clamped to deskhpsdr's
-    // UI range (−20..120). DspPipelineService picks this up through the
+    // Thetis "AGC Top" slider — max post-AGC gain in dB. Clamped to the
+    // Thetis UI range (−20..120). DspPipelineService picks this up through the
     // StateChanged event and forwards it to the active engine.
     public StateDto SetAgcTop(double topDb)
     {

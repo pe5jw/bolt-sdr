@@ -81,9 +81,9 @@ public class TestToneGeneratorTests
     [Fact]
     public void Ep2Payload_Hl2_IqLowBytesHaveLsbClear()
     {
-        // deskhpsdr old_protocol.c:2354-2357 clears the LSB of I and Q on HL2
-        // as a CWX firmware workaround. We mirror that — every low byte of I and
-        // Q must be even, so verify across a full packet.
+        // Protocol-1 clears the LSB of I and Q on HL2 as a CWX firmware
+        // workaround. We mirror that — every low byte of I and Q must be even,
+        // so verify across a full packet.
         var buf = new byte[ControlFrame.PacketLength];
         var tone = new TestToneGenerator();
         ControlFrame.BuildDataPacket(
@@ -107,10 +107,9 @@ public class TestToneGeneratorTests
     [Fact]
     public void Ep2Payload_AudioBytesAlwaysZeroOnHl2()
     {
-        // HL2 (no audio codec) ignores the audio s16 pair; deskhpsdr sends zeros
-        // to avoid unintentional extended-address writes (old_protocol.c:2227-2237).
-        // Pin this so a future audio-uplink refactor doesn't silently poke HL2
-        // registers.
+        // HL2 (no audio codec) ignores the audio s16 pair; send zeros to avoid
+        // unintentional extended-address writes. Pin this so a future
+        // audio-uplink refactor doesn't silently poke HL2 registers.
         var buf = new byte[ControlFrame.PacketLength];
         var tone = new TestToneGenerator();
         ControlFrame.BuildDataPacket(

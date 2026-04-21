@@ -1,6 +1,5 @@
-// Planner for waterfall horizontal shift on VFO change (doc 08 §5,
-// deskhpsdr waterfall.c behaviour). Pure logic so it can be unit-tested
-// without a WebGL context.
+// Planner for waterfall horizontal shift on VFO change (doc 08 §5). Pure
+// logic so it can be unit-tested without a WebGL context.
 //
 // Input is the "last-seen" frame geometry (width, hzPerPixel, centerHz) and
 // the incoming frame's same fields. Output tells the renderer what to do:
@@ -11,8 +10,8 @@
 //     this tick's row blit and remember the residual sub-pixel delta so
 //     subsequent fine retunes accumulate instead of being dropped
 //
-// Sign convention matches deskhpsdr: shiftPx = round((oldCenter − newCenter)
-// / hzPerPixel). The server emits `wfDb` with low freq on the left / high
+// Sign convention: shiftPx = round((oldCenter − newCenter) / hzPerPixel).
+// The server emits `wfDb` with low freq on the left / high
 // freq on the right (see DspPipelineService.Tick — unconditional
 // Array.Reverse), so a positive shiftPx means columns slide right.
 

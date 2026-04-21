@@ -77,11 +77,11 @@ public sealed class TxMetersService : BackgroundService
     private Zeus.Protocol1.IProtocol1Client? _subscribedClient;
 
     // HL2 C&C-echo addresses that carry the alex FWD/REF ADCs
-    // (deskhpsdr old_protocol.c:1847-1867; see TelemetryReading docs).
+    // (see TelemetryReading docs).
     // addr=1 (C0=0x08): Ain1 = alex_forward_power
     // addr=2 (C0=0x10): Ain0 = alex_reverse_power
-    // Match on bits 4:1 only — C0[0] is the PTT/MOX echo (old_protocol.c:1670,
-    // so a live TX packet arrives as 0x09/0x11), and C0[7] is the HL2 IOB ACK
+    // Match on bits 4:1 only — C0[0] is the PTT/MOX echo (so a live TX packet
+    // arrives as 0x09/0x11), and C0[7] is the HL2 IOB ACK
     // marker which PacketParser already filters out via the addr==1|2|3 gate.
     private const byte C0AddrMask = 0x7E;
     private const byte C0AddrAlexFwd = 0x08;

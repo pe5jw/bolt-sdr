@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { setAgcTop } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 
-// AGC top (max gain) in dB. 80 is the deskhpsdr AGC_MEDIUM default; the
-// WDSP docs call this the upper gain limit before compression kicks in.
+// AGC top (max gain) in dB. 80 is the Thetis AGC_MEDIUM default; the WDSP
+// docs call this the upper gain limit before compression kicks in.
 // 0-120 mirrors the range Thetis exposes on its AGC-T slider.
 const MIN = 0;
 const MAX = 120;

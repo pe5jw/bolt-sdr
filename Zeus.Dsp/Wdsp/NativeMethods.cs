@@ -86,8 +86,8 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXAAMDSBMode(int channel, int sbmode);
 
-    // AGC bindings — mode 3 (MED) is Thetis/deskhpsdr default; without this the
-    // WDSP output stays near the raw post-demod level (HL2 signals ~2e-5 peak),
+    // AGC bindings — mode 3 (MED) is the Thetis default; without this the WDSP
+    // output stays near the raw post-demod level (HL2 signals ~2e-5 peak),
     // which reaches the browser as near-silence or whisper-quiet hiss.
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -178,7 +178,7 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetDisplayAvBackmult(int disp, int pixout, double mult);
 
-    // deskhpsdr's GetPixels has no pixel_ref out-parameter — doc 03 predicted a 5th
+    // GetPixels has no pixel_ref out-parameter — doc 03 predicted a 5th
     // argument but the shipped ABI is 4-parameter. Writes float[num_pixels] in place.
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -456,8 +456,8 @@ internal static partial class NativeMethods
     internal static partial void SetTXAPanelGain1(int channel, double gain);
 
     // ALC (Automatic Level Control) must be on for the SSB modulator to emit
-    // non-zero IQ. deskhpsdr transmitter.c:1476 comment: "TX ALC on (never
-    // switch it off!)". When the ALC is disabled the mic reaches TXA but the
+    // non-zero IQ. Upstream TX code carries a "TX ALC on (never switch it
+    // off!)" warning. When the ALC is disabled the mic reaches TXA but the
     // modulator outputs 0.0 — confirmed on an HL2 live rig 2026-04-18.
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

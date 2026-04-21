@@ -47,16 +47,16 @@ public interface IProtocol1Client : IDisposable
     /// <summary>
     /// UI-level TX drive, 0..100 (values outside clamp). Mapped to the 0..255
     /// raw HPSDR drive byte (C0=0x12, C1) inside SnapshotState via
-    /// <c>raw = percent * 255 / 100</c>, matching deskhpsdr's
-    /// <c>transmitter-&gt;drive_level</c> range (old_protocol.c:2800).
+    /// <c>raw = percent * 255 / 100</c>, matching the Protocol-1
+    /// <c>transmitter-&gt;drive_level</c> range.
     /// </summary>
     void SetDrive(int percent);
 
     /// <summary>
     /// Raised from the RX loop whenever a successfully parsed EP6 packet carried
-    /// a C&amp;C echo on an AIN-bearing address (deskhpsdr old_protocol.c:1845-1867,
-    /// addresses 1/2/3 → C0 bytes 0x08/0x10/0x18). Fire-and-forget — handlers run
-    /// synchronously on the RX thread and must not block.
+    /// a C&amp;C echo on an AIN-bearing address (addresses 1/2/3 → C0 bytes
+    /// 0x08/0x10/0x18). Fire-and-forget — handlers run synchronously on the RX
+    /// thread and must not block.
     /// </summary>
     event Action<TelemetryReading>? TelemetryReceived;
 

@@ -3,15 +3,16 @@
 This directory vendors the WDSP DSP engine (Warren Pratt, GPLv3) and builds it
 as a shared library that `Zeus.Dsp` loads via P/Invoke.
 
-Source baseline: **`deskhpsdr/wdsp-1.29/`**. deskhpsdr already ported WDSP off
-MSVC with a `linux_port.{c,h}` shim and `#ifdef _WIN32` guards. Thetis's own
-WDSP tree is MSVC-only and is **not** suitable as an upstream.
+Source baseline: **upstream WDSP 1.29** (Warren Pratt) plus a
+`linux_port.{c,h}` portability shim and `#ifdef _WIN32` guards to get WDSP off
+MSVC. Thetis's own WDSP tree is MSVC-only and is **not** suitable as an
+upstream.
 
 Layout:
 
 ```
 native/
-  wdsp/                 # upstream .c/.h from deskhpsdr/wdsp-1.29
+  wdsp/                 # vendored upstream WDSP 1.29 .c/.h
   wdsp/stubs/           # minimal headers + no-op rnnr/sbnr for MVP
   wdsp/wdsp_export.h    # WDSP_EXPORT visibility macro (replaces PORT)
   wdsp/CMakeLists.txt   # the real build
@@ -86,7 +87,7 @@ one `fexchange0`-driven callers use.
 
 ## Source modifications vs. upstream
 
-Diff against `deskhpsdr/wdsp-1.29/` is intentionally tiny:
+Diff against upstream WDSP 1.29 is intentionally tiny:
 
 1. `comm.h` — replaced `#define PORT __declspec(dllexport)` with an include of
    `wdsp_export.h` and `#define PORT WDSP_EXPORT`. This is the single change
@@ -107,14 +108,14 @@ shimming (pthreads, aligned malloc, Sleep, `__declspec`).
 
 ## Re-vendoring upstream WDSP
 
-Bumping to a newer deskhpsdr snapshot is mechanical:
+Bumping to a newer WDSP snapshot is mechanical:
 
 ```sh
 rm native/wdsp/*.c native/wdsp/*.h
-cp /path/to/new-deskhpsdr/wdsp-1.29/*.{c,h} native/wdsp/
+cp /path/to/new-wdsp-1.29/*.{c,h} native/wdsp/
 # re-apply the comm.h PORT edit (see step 1 above)
 ./native/build.sh
 ```
 
-Don't copy deskhpsdr's `.o` files, `Makefile`, or `COMPILE.*` notes — we own
-the build system now.
+Don't copy upstream `.o` files, `Makefile`, or `COMPILE.*` notes — we own the
+build system now.

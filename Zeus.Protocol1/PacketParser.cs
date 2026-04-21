@@ -8,7 +8,7 @@ namespace Zeus.Protocol1;
 /// <paramref name="C0Address"/> byte is preserved (status bits in [2:0] + address
 /// in [7:3]) so consumers can disambiguate which physical ADC each u16 represents.
 /// <para>
-/// Per deskhpsdr old_protocol.c:1847-1867 the slot-to-ADC mapping on HL2 is:
+/// The slot-to-ADC mapping on HL2 is:
 ///   addr=1 (C0=0x08): Ain0 = exciter_pwr / HL2 temperature;   Ain1 = alex_forward_power
 ///   addr=2 (C0=0x10): Ain0 = alex_reverse_power;              Ain1 = ADC0 bias
 ///   addr=3 (C0=0x18): Ain0 = ADC1 bias;                        Ain1 = 0 (unused)
@@ -127,8 +127,8 @@ internal static class PacketParser
 
     /// <summary>
     /// Parse an EP6 RX IQ packet. Emits telemetry independently for each of the
-    /// two USB frames (deskhpsdr old_protocol.c dispatches process_ozy_input_buffer
-    /// per frame, so each frame's C&amp;C switch contributes its own ADC reading).
+    /// two USB frames — Protocol-1 dispatches per frame, so each frame's C&amp;C
+    /// switch contributes its own ADC reading.
     /// An empty reading is indicated by <see cref="TelemetryReading.C0Address"/> == 0
     /// — valid echoes always carry a non-zero addr byte (0x08 / 0x10 / 0x18,
     /// possibly OR'd with C0[0]=MOX echo).
@@ -169,9 +169,9 @@ internal static class PacketParser
             ReadOnlySpan<byte> usb = packet.Slice(frameStart, UsbFrameLength);
             if (usb[0] != Sync || usb[1] != Sync || usb[2] != Sync) return false;
 
-            // usb[3..8] are the echoed C&C bytes. deskhpsdr old_protocol.c:1758
-            // uses addr = (C0 >> 3) & 0x1F to dispatch; addresses 1/2/3 carry
-            // the ADC pairs we want. Each USB frame is an independent reading.
+            // usb[3..8] are the echoed C&C bytes. addr = (C0 >> 3) & 0x1F;
+            // addresses 1/2/3 carry the ADC pairs we want. Each USB frame is
+            // an independent reading.
             byte c0 = usb[3];
             int addr = (c0 >> 3) & 0x1F;
             if (addr is 1 or 2 or 3)

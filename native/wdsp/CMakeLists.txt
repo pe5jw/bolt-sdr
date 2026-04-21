@@ -5,14 +5,14 @@
 #   Linux   : libwdsp.so     (x86_64, arm64)
 #   Windows : wdsp.dll       (x64, arm64) — untested here, target is CMake-friendly
 #
-# Source is forked from deskhpsdr/wdsp-1.29 (Warren Pratt's WDSP 1.29 + deskHPSDR's
-# linux_port.c portability shim). Only the PORT macro in comm.h is patched (→
-# WDSP_EXPORT in wdsp_export.h) so every upstream __declspec(dllexport) resolves to
-# the right platform-specific visibility attribute.
+# Source is vendored upstream WDSP 1.29 (Warren Pratt) plus a linux_port.c
+# portability shim. Only the PORT macro in comm.h is patched (→ WDSP_EXPORT in
+# wdsp_export.h) so every upstream __declspec(dllexport) resolves to the right
+# platform-specific visibility attribute.
 #
-# FFTW3 (double precision) is required. Single-precision fftw3f is NOT used on the
-# RX call path WDSP-1.29 takes (verified: `grep -r "fftwf_" deskhpsdr/wdsp-1.29` is
-# empty), so we link fftw3 only.
+# FFTW3 (double precision) is required. Single-precision fftw3f is NOT used on
+# the RX call path WDSP-1.29 takes (verified: no fftwf_* references in the
+# upstream sources), so we link fftw3 only.
 #
 # NR3 (RNNoise) and NR4 (libspecbleach) are off for MVP: we compile
 # stubs/rnnr_stub.c and stubs/sbnr_stub.c in place of rnnr.c/sbnr.c. Enable via
@@ -36,8 +36,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 # -----------------------------------------------------------------------------
-# Source list (mirrors deskhpsdr's Makefile SOURCES, minus rnnr.c and sbnr.c
-# which are replaced by stubs when WDSP_WITH_NR3_NR4=OFF).
+# Source list (mirrors upstream WDSP 1.29 Makefile SOURCES, minus rnnr.c and
+# sbnr.c which are replaced by stubs when WDSP_WITH_NR3_NR4=OFF).
 # -----------------------------------------------------------------------------
 set(WDSP_SOURCES
     amd.c ammod.c amsq.c analyzer.c anf.c anr.c apfshadow.c bandpass.c

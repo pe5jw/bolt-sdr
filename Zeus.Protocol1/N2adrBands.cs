@@ -3,8 +3,8 @@ namespace Zeus.Protocol1;
 /// <summary>
 /// N2ADR 7-relay filter board band-to-OC-pin lookup. Returns the raw pin
 /// mask (bits 0..6 = pins 1..7) for a given VFO-A frequency. The caller is
-/// responsible for shifting into its final wire location — deskhpsdr writes
-/// <c>output_buffer[C2] |= rxband-&gt;OCrx &lt;&lt; 1</c> (old_protocol.c:2550).
+/// responsible for shifting into its final wire location — the mask is written
+/// as <c>output_buffer[C2] |= rxband-&gt;OCrx &lt;&lt; 1</c>.
 ///
 /// Masks match the Thetis "HERMESLITE" defaults at setup.cs:14655-14699
 /// (line numbers from OpenHPSDR-Thetis commit on bek's machine 2026-04-15).

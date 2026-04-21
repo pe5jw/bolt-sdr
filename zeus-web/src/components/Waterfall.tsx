@@ -6,8 +6,8 @@ import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
 
 // Throttle row uploads so the waterfall scrolls at ~(server tick / N).
-// With a 30 Hz server tick N=2 gives ~15 Hz, which matches the deskhpsdr
-// feel without costing much CPU. Shift/reset still run every frame so VFO
+// With a 30 Hz server tick N=2 gives ~15 Hz, which is a comfortable scroll
+// speed without costing much CPU. Shift/reset still run every frame so VFO
 // retunes stay synchronised with the panadapter's offset.
 // TODO(phase-3.1): expose as a UI setting.
 const WF_PUSH_EVERY_N = 2;

@@ -16,8 +16,8 @@ public enum HpsdrSampleRate : byte
 
 /// <summary>
 /// Extended RX attenuator, 0–31 dB. Wire-encoded in the dedicated attenuator
-/// register CC0=0x14 (deskhpsdr old_protocol.c:2891-2968). The Db value is the
-/// same API across boards; ControlFrame maps it per-board:
+/// register CC0=0x14. The Db value is the same API across boards; ControlFrame
+/// maps it per-board:
 /// <list type="bullet">
 /// <item>HL2 (<see cref="HpsdrBoardKind.HermesLite2"/>) writes C4 = 0x40 | (60 − Db) — HL2 has no hardware
 /// attenuator, so "attenuate by N dB" is expressed as "reduce firmware RX

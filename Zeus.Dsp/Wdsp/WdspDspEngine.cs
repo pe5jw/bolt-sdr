@@ -70,7 +70,7 @@ public sealed class WdspDspEngine : IDspEngine
         public int FilterLowAbsHz = 150;
         public int FilterHighAbsHz = 2850;
         public RxaMode CurrentMode = RxaMode.USB;
-        // Thetis "AGC Top" max-gain setting in dB. 80 matches the deskhpsdr
+        // Thetis "AGC Top" max-gain setting in dB. 80 matches the Thetis
         // AGC_MEDIUM default; the /api/agcGain endpoint can override at runtime.
         public double AgcTopDb = 80.0;
         // Read by RunWorker to gate xanbEXT/xnobEXT; writes only from SetNoiseReduction.
@@ -155,7 +155,7 @@ public sealed class WdspDspEngine : IDspEngine
         NativeMethods.SetRXAPanelRun(id, 1);
         // select=3 → route both I and Q into the panel. Without this WDSP
         // demodulates a single real-valued channel and can't separate sidebands
-        // (LSB/USB become audibly identical mush). See deskhpsdr receiver.c:964.
+        // (LSB/USB become audibly identical mush).
         NativeMethods.SetRXAPanelSelect(id, 3);
         NativeMethods.SetRXAPanelBinaural(id, 0);
         NativeMethods.SetRXAPanelGain1(id, 1.0);
@@ -218,7 +218,6 @@ public sealed class WdspDspEngine : IDspEngine
         // exec_bypass, and sets exchange (channel.c:278-283). After this
         // returns, fexchange0's `if (_InterlockedAnd (&ch[channel].exchange, 1))`
         // guard (iobuffs.c:484) will be satisfied and xrxa → xmeter will run.
-        // deskhpsdr mirrors this (receiver.c:1650 rx_on → SetChannelState(id,1,0)).
         NativeMethods.SetChannelState(id, 1, 0);
 
         return id;
@@ -1048,9 +1047,9 @@ public sealed class WdspDspEngine : IDspEngine
         NativeMethods.SetEXTNOBThreshold(id, NrDefaults.NbDefaultThresholdScaled);
     }
 
-    // Mirrors deskhpsdr src/receiver.c rx_set_agc() for AGC_MEDIUM — the mode all
-    // HL2 users start on. Without this, WDSP's AGC is off and the audio path has
-    // effectively unity gain on signals with peak ~2e-5, which is inaudible.
+    // Applies Thetis AGC_MEDIUM defaults — the mode all HL2 users start on.
+    // Without this, WDSP's AGC is off and the audio path has effectively
+    // unity gain on signals with peak ~2e-5, which is inaudible.
     private static void ApplyAgcDefaults(int id)
     {
         NativeMethods.SetRXAAGCMode(id, 3);              // MED

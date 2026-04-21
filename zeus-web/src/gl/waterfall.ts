@@ -7,9 +7,9 @@
 // history so carriers at a fixed absolute frequency stay at the same pixel
 // column across a retune. Two R32F textures A/B share a reused FBO; the
 // shift fragment pass reads from the active texture and writes a shifted
-// copy into the inactive one, then swaps. The deskhpsdr waterfall.c trick
-// of suppressing the row blit for the shift tick avoids a discontinuity
-// between the just-shifted top row and the pre-retune frame underneath.
+// copy into the inactive one, then swaps. Suppressing the row blit for the
+// shift tick avoids a discontinuity between the just-shifted top row and the
+// pre-retune frame underneath.
 //
 // Reset conditions (|shift| ≥ width, width change, hzPerPixel change) re-
 // seed both textures at -200 dB so uninitialised columns render as the
@@ -227,9 +227,8 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
           // Shift always runs — throttling it would let the history drift
           // out of sync with the panadapter's VFO-accumulated offset.
           performShift(decision.shiftPx);
-          // Suppress the new-row blit this tick per doc 08 §5 (deskhpsdr
-          // waterfall.c:294-297) so we don't overlay a post-retune row on
-          // top of a just-shifted frame.
+          // Suppress the new-row blit this tick per doc 08 §5 so we don't
+          // overlay a post-retune row on top of a just-shifted frame.
           lastCenterHz = decision.residualCenterHz;
           break;
       }

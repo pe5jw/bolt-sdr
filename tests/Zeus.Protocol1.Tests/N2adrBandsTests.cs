@@ -40,8 +40,8 @@ public class N2adrBandsTests
     [Fact]
     public void ControlFrame_ConfigC2_EmitsShiftedN2adrMask_WhenEnabled()
     {
-        // deskhpsdr writes output_buffer[C2] |= rxband->OCrx << 1
-        // (old_protocol.c:2550). Verify the final wire byte for a 20m park.
+        // Wire encoding: output_buffer[C2] |= rxband->OCrx << 1.
+        // Verify the final wire byte for a 20m park.
         Span<byte> cc = stackalloc byte[5];
         var state = new ControlFrame.CcState(
             VfoAHz: 14_200_000,

@@ -4,7 +4,7 @@
 
 Zeus is a cross-platform, web-frontend HPSDR client for original-protocol (Protocol 1) radios — Hermes, Mercury/Penelope/Metis, ANAN-class boards, and similar. It replaces the Windows-only **Thetis** client with a .NET 8 backend (`Zeus.Server`) and a Vite + React frontend, keeping **WDSP** as the DSP engine via P/Invoke.
 
-**Reference implementation:** Thetis (C# / WinForms). This is the *sole* authoritative source for protocol and DSP behavior. **Do not cite `deskhpsdr`** — different language, different bindings, different defaults.
+**Reference implementation:** Thetis (C# / WinForms). This is the *sole* authoritative source for protocol and DSP behavior.
 
 ## Autonomous-Agent Boundaries
 

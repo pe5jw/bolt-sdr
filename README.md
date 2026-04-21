@@ -121,7 +121,7 @@ Please ensure tests pass before opening a PR.
 
 - Backend port **:6060**, Vite dev port **:5173** — don't change these casually
 - Panadapter amber is **`#FFA028`** (single-hue, alpha-varied, no rainbow gradients)
-- Reference implementation is **Thetis** — not deskhpsdr
+- Reference implementation is **Thetis**
 - Deeper context for agents and contributors lives in `CLAUDE.md`, `docs/lessons/`,
   and `docs/rca/` — worth a skim before touching DSP, protocol, or layout code
 

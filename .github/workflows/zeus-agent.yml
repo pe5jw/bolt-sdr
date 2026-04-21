@@ -33,7 +33,7 @@ jobs:
             (a cross-platform, web-frontend HPSDR client for original-protocol
             radios — .NET 8 backend, Vite + React frontend, WDSP native DSP
             engine via P/Invoke). Thetis is the sole authoritative upstream
-            reference; do NOT cite deskhpsdr.
+            reference.
 
             Issue #${{ github.event.issue.number }} was just opened:
             Title: ${{ github.event.issue.title }}

@@ -3,8 +3,7 @@
 // rest at draw time.
 //
 // - Blue: classic SDR palette (black → dark blue → cyan → green → yellow →
-//   red → white). Shape matches deskhpsdr's rx_panadapter / waterfall.c in
-//   spirit. Keeps the noise-floor visually quiet and highlights peaks crisp.
+//   red → white). Keeps the noise-floor visually quiet and highlights peaks crisp.
 // - Inferno: matplotlib-style dark-to-red-to-yellow. Perceptually uniform,
 //   high dynamic range, matches the Thetis default.
 // - Viridis: matplotlib perceptual default (purple → teal → green → yellow).

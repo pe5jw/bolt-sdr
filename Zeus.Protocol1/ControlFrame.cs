@@ -22,7 +22,7 @@ internal static class ControlFrame
         RxFreq = 0x04,
         DriveFilter = 0x12,
         // Extended RX attenuator (both bare HPSDR and HL2 firmware gain).
-        // deskhpsdr old_protocol.c:2891-2968 writes these under C0=0x14.
+        // Protocol-1 writes these under C0=0x14.
         Attenuator = 0x14,
     }
 
@@ -41,10 +41,10 @@ internal static class ControlFrame
         bool EnableHl2Dither,
         HpsdrBoardKind Board,
         bool HasN2adr = false,
-        // Raw DriveFilter C1 payload byte (0..255). deskhpsdr stores this as
-        // transmitter->drive_level and copies it directly to output_buffer[C1]
-        // at old_protocol.c:2799-2800. Units are "hardware drive level 0..255";
-        // UI-side percent is mapped in Protocol1Client.SnapshotState.
+        // Raw DriveFilter C1 payload byte (0..255). This is the transmitter
+        // drive_level written directly to output_buffer[C1]. Units are
+        // "hardware drive level 0..255"; UI-side percent is mapped in
+        // Protocol1Client.SnapshotState.
         byte DriveLevel = 0);
 
     /// <summary>
@@ -56,8 +56,7 @@ internal static class ControlFrame
         if (cc.Length < 5) throw new ArgumentException("cc span < 5 bytes", nameof(cc));
 
         // CcRegister values are already the wire-byte encodings (pre-shifted
-        // address with bit 0 cleared for MOX), matching deskhpsdr's direct
-        // writes at old_protocol.c:2741-2754. Just OR the MOX bit in.
+        // address with bit 0 cleared for MOX). Just OR the MOX bit in.
         cc[0] = (byte)(((byte)register & 0xFE) | (state.Mox ? 1 : 0));
 
         switch (register)
@@ -73,12 +72,12 @@ internal static class ControlFrame
                 break;
 
             case CcRegister.DriveFilter:
-                // deskhpsdr old_protocol.c:2799-2800 writes C0=0x12, C1 = drive_level & 0xFF,
-                // then C2..C4 carry mic/filter/PA bits. On HermesLite2 that same block
-                // (old_protocol.c:2863-2884) zeroes C2/C3/C4 and lights C2[3] for PA
-                // enable when pa_enabled && !txband->disablePA. Without this bit the
-                // HL2 gateware never energizes the PA regardless of drive level. We
-                // gate on MOX so PA-enable is only asserted while transmitting.
+                // Protocol-1 writes C0=0x12, C1 = drive_level & 0xFF, then C2..C4
+                // carry mic/filter/PA bits. On HermesLite2 that same block zeroes
+                // C2/C3/C4 and lights C2[3] for PA enable when pa_enabled &&
+                // !txband->disablePA. Without this bit the HL2 gateware never
+                // energizes the PA regardless of drive level. We gate on MOX so
+                // PA-enable is only asserted while transmitting.
                 cc[1] = state.DriveLevel;
                 cc[2] = 0;
                 cc[3] = 0;
@@ -106,8 +105,7 @@ internal static class ControlFrame
         // Bare HPSDR (Hermes/Angelia/Orion/MkII): C4 = 0x20 | (Db & 0x1F).
         // HL2: C4 = 0x40 | (60 - Db) — HL2 has no physical RX step attenuator,
         // so the UI "attenuate by N dB" maps to "reduce firmware RX gain by N
-        // from its max of 60" (deskhpsdr old_protocol.c:2922-2941, and the
-        // HL2 gateware ad9866 rxgain register).
+        // from its max of 60" (HL2 gateware ad9866 rxgain register).
         int db = s.Atten.ClampedDb;
         byte c4 = s.Board == HpsdrBoardKind.HermesLite2
             ? (byte)(0x40 | Math.Clamp(60 - db, 0, 60))
@@ -126,8 +124,8 @@ internal static class ControlFrame
         c14[0] = c1;
 
         // C2: class-E PA at bit 0; OC pins (N2ADR filter board on HL2) at
-        // bits 1..7. deskhpsdr shifts the 7-bit pin mask left by 1 into the
-        // output buffer (old_protocol.c:2550). Class-E stays 0 for RX-only MVP.
+        // bits 1..7. The 7-bit pin mask is shifted left by 1 into the output
+        // buffer. Class-E stays 0 for RX-only MVP.
         byte c2 = 0;
         if (s.Board == HpsdrBoardKind.HermesLite2 && s.HasN2adr)
         {
@@ -170,8 +168,7 @@ internal static class ControlFrame
 
         packet.Clear();
 
-        // Metis header: 0xEF 0xFE 0x01 0x02 + BE uint32 seq. Endpoint 0x02 = TX/audio;
-        // this is what deskhpsdr uses for outgoing data (`metis_write(0x02, …)`).
+        // Metis header: 0xEF 0xFE 0x01 0x02 + BE uint32 seq. Endpoint 0x02 = TX/audio.
         packet[0] = 0xEF;
         packet[1] = 0xFE;
         packet[2] = 0x01;
@@ -207,11 +204,10 @@ internal static class ControlFrame
 
         // EP2 504-byte payload = 63 groups × 8 bytes, each group =
         // [L_audio s16 BE][R_audio s16 BE][I s16 BE][Q s16 BE]
-        // (deskhpsdr old_protocol.c:2277-2363, both the audio ring fill and the
-        // IQ ring fill write into the same 8-byte slot). HL2 has no audio codec
-        // in the MVP target, so audio bytes stay zero. HL2 also clears the LSB
-        // of the I and Q low bytes as a CWX workaround (`isample & 0xFE`,
-        // old_protocol.c:2354-2357) — we mirror that.
+        // (both the audio ring fill and the IQ ring fill write into the same
+        // 8-byte slot). HL2 has no audio codec in the MVP target, so audio
+        // bytes stay zero. HL2 also clears the LSB of the I and Q low bytes as
+        // a CWX workaround (`isample & 0xFE`) — we mirror that.
         //
         // Pre-conditions for writing a non-zero payload: MOX engaged, board is
         // HL2 (don't accidentally drive RF on other boards whose PA bits live
@@ -222,9 +218,8 @@ internal static class ControlFrame
             return;
         }
 
-        // The HL2's TXG stage (DriveFilter C1 = DriveLevel byte,
-        // deskhpsdr old_protocol.c:2799-2800) scales the transmit path by
-        // drive%. Scaling IQ here on top would double-multiply (drive⁴
+        // The HL2's TXG stage (DriveFilter C1 = DriveLevel byte) scales the
+        // transmit path by drive%. Scaling IQ here on top would double-multiply (drive⁴
         // power response). Amplitude = 0.85 is a fixed headroom factor
         // applied by BOTH sources: for the test-tone it keeps peak RF under
         // the HL2's 5 W rated spec (√(5/7.1) ≈ 0.84) on a flat-envelope
