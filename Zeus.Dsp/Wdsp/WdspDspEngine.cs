@@ -111,6 +111,20 @@ public sealed class WdspDspEngine : IDspEngine
     {
         _log = logger ?? NullLogger<WdspDspEngine>.Instance;
         WdspNativeLoader.EnsureResolverRegistered();
+        InitWisdom();
+    }
+
+    private void InitWisdom()
+    {
+        var dir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Zeus");
+        Directory.CreateDirectory(dir);
+        _log.LogInformation("wdsp.wisdom initialising dir={Dir}", dir);
+        int result = NativeMethods.WDSPwisdom(dir);
+        var status = Marshal.PtrToStringUTF8(NativeMethods.wisdom_get_status()) ?? string.Empty;
+        _log.LogInformation("wdsp.wisdom ready result={Result} ({Source}) status={Status}",
+            result, result == 0 ? "loaded" : "built", status);
     }
 
     public int OpenChannel(int sampleRateHz, int pixelWidth)
