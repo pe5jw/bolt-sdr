@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   connect as apiConnect,
+  connectP2 as apiConnectP2,
   disconnect as apiDisconnect,
+  disconnectP2 as apiDisconnectP2,
   fetchRadios,
   fetchState,
   setDrive,
@@ -112,14 +114,24 @@ export function ConnectPanel() {
     async (r: RadioInfoDto) => {
       if (inflightRef.current) return;
       const ep = endpointFor(r);
+      const isP2 = (r.details?.protocol ?? 'P1') === 'P2';
       setInflight(true);
       setError(null);
       try {
-        const next = await apiConnect({
-          endpoint: ep,
-          sampleRate: DEFAULT_SAMPLE_RATE,
-        });
-        applyState(next);
+        if (isP2) {
+          await apiConnectP2({
+            endpoint: ep,
+            sampleRate: 48_000,
+          });
+          const fresh = await fetchState();
+          applyState(fresh);
+        } else {
+          const next = await apiConnect({
+            endpoint: ep,
+            sampleRate: DEFAULT_SAMPLE_RATE,
+          });
+          applyState(next);
+        }
         setBoardId(r.boardId || null);
         setLastConnectedEndpoint(ep || null);
         // Auto-unmute on connect: the user's Connect click is the gesture
@@ -157,12 +169,15 @@ export function ConnectPanel() {
     setInflight(true);
     setError(null);
     try {
-      const next = await apiDisconnect();
-      applyState(next);
+      // Try P1 disconnect first; if the server reports it's a P2 session
+      // (no P1 client active), fall back to the P2 endpoint. Fire both as a
+      // safety net — each is idempotent and returns cleanly if nothing is
+      // connected on its side.
+      try { await apiDisconnect(); } catch { /* may be P2 */ }
+      try { await apiDisconnectP2(); } catch { /* may have been P1 */ }
+      const fresh = await fetchState();
+      applyState(fresh);
       setBoardId(null);
-      // Clear the discovery list immediately so the user doesn't see a stale
-      // "Connect" button against a backend that's just torn the channel down.
-      // The next 10-second tick will repopulate.
       setRadios(null);
     } catch (err) {
       setError(errorMessage(err));
@@ -317,27 +332,25 @@ export function ConnectPanel() {
                 <button
                   type="button"
                   onClick={() => handleConnect(r)}
-                  disabled={r.busy || inflight || dspPreparing || isP2}
+                  disabled={r.busy || inflight || (dspPreparing && !isP2)}
                   title={
-                    isP2
-                      ? 'Protocol 2 support is in progress — connect not yet available'
-                      : r.busy
-                        ? 'Radio is busy (in use by another client)'
-                        : dspPreparing
-                          ? 'DSP is preparing FFTW plans (first-run only, up to ~2 min)'
+                    r.busy
+                      ? 'Radio is busy (in use by another client)'
+                      : dspPreparing && !isP2
+                        ? 'DSP is preparing FFTW plans (first-run only, up to ~2 min)'
+                        : isP2
+                          ? 'Protocol 2 path — experimental, RX only'
                           : undefined
                   }
-                  className={`btn sm ${r.busy || isP2 ? '' : 'active'} ${dspPreparing ? 'pulsing' : ''}`}
+                  className={`btn sm ${r.busy ? '' : 'active'} ${dspPreparing && !isP2 ? 'pulsing' : ''}`}
                 >
-                  {isP2
-                    ? 'P2 (WIP)'
-                    : r.busy
-                      ? 'Busy'
-                      : dspPreparing
-                        ? 'Preparing DSP…'
-                        : inflight
-                          ? 'Connecting…'
-                          : 'Connect'}
+                  {r.busy
+                    ? 'Busy'
+                    : dspPreparing && !isP2
+                      ? 'Preparing DSP…'
+                      : inflight
+                        ? 'Connecting…'
+                        : 'Connect'}
                 </button>
               </li>
             );

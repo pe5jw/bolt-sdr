@@ -259,6 +259,60 @@ app.MapPost("/api/connect", async (ConnectRequest req, RadioService r, WdspWisdo
     }
 });
 
+app.MapPost("/api/connect/p2", async (ConnectRequest req, DspPipelineService dsp, WdspWisdomInitializer wisdom, HttpContext ctx) =>
+{
+    log.LogInformation("api.connect.p2 endpoint={Ep} rate={Rate}", req.Endpoint, req.SampleRate);
+
+    if (wisdom.Phase != WisdomPhase.Ready)
+        log.LogWarning("api.connect.p2 proceeding before wisdom ready; WDSP may fall back to synthetic");
+
+    if (!TryParseIpEndpoint(req.Endpoint, out var ipEndpoint))
+        return Results.BadRequest(new { error = $"Invalid endpoint '{req.Endpoint}'." });
+
+    var rateKhz = req.SampleRate switch
+    {
+        48_000 => 48,
+        96_000 => 96,
+        192_000 => 192,
+        384_000 => 384,
+        _ => 48,
+    };
+
+    try
+    {
+        await dsp.ConnectP2Async(ipEndpoint, rateKhz, numAdc: 2, ctx.RequestAborted);
+        return Results.Ok(new { protocol = "P2", endpoint = req.Endpoint, sampleRateKhz = rateKhz });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        log.LogError(ex, "api.connect.p2 failed");
+        return Results.Problem(ex.Message, statusCode: 500);
+    }
+});
+
+app.MapPost("/api/disconnect/p2", async (DspPipelineService dsp, HttpContext ctx) =>
+{
+    log.LogInformation("api.disconnect.p2");
+    await dsp.DisconnectP2Async(ctx.RequestAborted);
+    return Results.Ok(new { status = "disconnected" });
+});
+
+static bool TryParseIpEndpoint(string raw, out IPEndPoint ep)
+{
+    ep = null!;
+    var idx = raw.LastIndexOf(':');
+    string host = idx > 0 ? raw[..idx] : raw;
+    int port = 1024;
+    if (idx > 0 && int.TryParse(raw[(idx + 1)..], out var p)) port = p;
+    if (!IPAddress.TryParse(host, out var ip)) return false;
+    ep = new IPEndPoint(ip, port);
+    return true;
+}
+
 app.MapPost("/api/disconnect", async (RadioService r, HttpContext ctx) =>
 {
     log.LogInformation("api.disconnect");
