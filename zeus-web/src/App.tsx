@@ -21,11 +21,11 @@ import { VfoDisplay } from './components/VfoDisplay';
 import { Waterfall } from './components/Waterfall';
 import { ZoomControl } from './components/ZoomControl';
 import { AzimuthMap } from './components/design/AzimuthMap';
-import { CONTACTS, HOME, bandOf, type LogEntry } from './components/design/data';
+import { CONTACTS, HOME, bandOf } from './components/design/data';
 import { CwKeyer } from './components/design/CwKeyer';
 import { Dockable } from './components/design/Dockable';
 import { DspPanel } from './components/DspPanel';
-import { Logbook } from './components/design/Logbook';
+import { LogbookLive } from './components/design/LogbookLive';
 import { QrzCard } from './components/design/QrzCard';
 import { TerminatorLines } from './components/design/TerminatorLines';
 import { bearingDeg, distanceKm } from './components/design/geo';
@@ -264,8 +264,6 @@ export default function App() {
     e.preventDefault();
     engageTerminator();
   };
-
-  const onLogPick = (r: LogEntry) => engageTerminator(r.call);
 
   const bandLabel = bandOf(vfoHz);
 
@@ -677,7 +675,7 @@ export default function App() {
         <div className="bottom-row">
           <div className="bottom-slot hide-mobile">
             <Dockable title="Logbook" ledOn>
-              <Logbook onPick={onLogPick} />
+              <LogbookLive />
             </Dockable>
           </div>
           <div className="bottom-slot hide-mobile">
