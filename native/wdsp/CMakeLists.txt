@@ -108,6 +108,17 @@ if(PkgConfig_FOUND)
     endif()
 endif()
 
+# vcpkg / CMake CONFIG mode — used when the vcpkg toolchain is active (Windows)
+# or any platform where FFTW3 ships a CMake config package.
+if(NOT _fftw_found)
+    find_package(FFTW3 CONFIG QUIET)
+    if(FFTW3_FOUND)
+        target_link_libraries(wdsp PRIVATE FFTW3::fftw3)
+        set(_fftw_found TRUE)
+        message(STATUS "FFTW3 found via CMake config (vcpkg or system package)")
+    endif()
+endif()
+
 # macOS Homebrew fallback (arm64: /opt/homebrew, x86_64: /usr/local).
 if(NOT _fftw_found AND APPLE)
     foreach(_prefix /opt/homebrew/opt/fftw /usr/local/opt/fftw)
