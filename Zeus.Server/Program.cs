@@ -50,6 +50,7 @@ builder.Services.AddHostedService<TxTuneDriver>();
 // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
 // hung login surfaces quickly in the UI.
 builder.Services.AddHttpClient("Qrz", c => c.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddSingleton<CredentialStore>();
 builder.Services.AddSingleton<QrzService>();
 
 // rotctld (hamlib rotator daemon) client. BackgroundService with persistent
@@ -67,6 +68,10 @@ builder.Services.AddSingleton<TciServer>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<TciServer>());
 
 var app = builder.Build();
+
+// Initialize QrzService to restore stored credentials (silent login)
+var qrzService = app.Services.GetRequiredService<QrzService>();
+await qrzService.InitializeAsync(CancellationToken.None);
 
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
 app.UseDefaultFiles();
@@ -306,7 +311,11 @@ app.MapPost("/api/qrz/lookup", async (QrzLookupRequest req, QrzService qrz, Http
     }
 });
 
-app.MapPost("/api/qrz/logout", (QrzService qrz) => { qrz.Logout(); return Results.Ok(qrz.GetStatus()); });
+app.MapPost("/api/qrz/logout", async (QrzService qrz, HttpContext ctx) =>
+{
+    await qrz.LogoutAsync(ctx.RequestAborted);
+    return Results.Ok(qrz.GetStatus());
+});
 
 app.MapGet("/api/rotator/status", (RotctldService rot) => rot.GetStatus());
 
