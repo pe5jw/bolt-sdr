@@ -30,6 +30,7 @@ import { QrzCard } from './components/design/QrzCard';
 import { TerminatorLines } from './components/design/TerminatorLines';
 import { bearingDeg, distanceKm } from './components/design/geo';
 import { LeafletWorldMap } from './components/design/LeafletWorldMap';
+import { LeafletMapErrorBoundary } from './components/design/LeafletMapErrorBoundary';
 import { startRealtime } from './realtime/ws-client';
 import { getAudioClient } from './audio/audio-client';
 import { useMicUplink } from './audio/use-mic-uplink';
@@ -123,6 +124,11 @@ export default function App() {
   const [lookupKey, setLookupKey] = useState(0);
   const [beamOverrideDeg, setBeamOverrideDeg] = useState<number | null>(null);
   const [beamInputStr, setBeamInputStr] = useState('');
+  // Track whether the Leaflet map is available. Set to false when the map
+  // error boundary catches a load failure (missing tiles, Leaflet init fail).
+  // When false, QRZ info still renders but map-dependent UI (beam chips, etc.)
+  // is hidden.
+  const [mapAvailable, setMapAvailable] = useState(true);
 
   const qrzHome = useQrzStore((s) => s.home);
   const qrzLookup = useQrzStore((s) => s.lastLookup);
@@ -219,7 +225,7 @@ export default function App() {
     };
   }, []);
 
-  const mapInteractive = terminatorActive && mapModifier;
+  const mapInteractive = terminatorActive && mapModifier && mapAvailable;
 
   const onCallsignSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -443,7 +449,7 @@ export default function App() {
             <span className={`dot ${moxOn || tunOn ? 'tx' : 'on'}`} />
             <span className="title">{heroTitle}</span>
             <span className="spacer" style={{ flex: 1 }} />
-            {terminatorActive && contact && (
+            {terminatorActive && contact && mapAvailable && (
               <>
                 <button
                   type="button"
@@ -485,7 +491,7 @@ export default function App() {
                 </form>
               </>
             )}
-            {terminatorActive && (
+            {terminatorActive && mapAvailable && (
               <span
                 className={`chip mono ${mapInteractive ? 'accent' : ''}`}
                 title="Hold M to pan/zoom the map (click-to-tune paused)"
@@ -503,44 +509,52 @@ export default function App() {
           </div>
           <div className="panel-body hero-body">
             <div className={`map-layer ${terminatorActive ? 'visible' : ''}`}>
-              <LeafletWorldMap
-                home={{
-                  call: effectiveHome.call,
-                  lat: effectiveHome.lat,
-                  lon: effectiveHome.lon,
-                  grid: effectiveHome.grid,
-                  imageUrl: effectiveHome.imageUrl,
+              <LeafletMapErrorBoundary
+                onError={(error) => {
+                  console.warn('Leaflet map unavailable:', error.message);
+                  setMapAvailable(false);
                 }}
-                target={
-                  contact
-                    ? {
-                        call: contact.callsign,
-                        lat: contact.lat,
-                        lon: contact.lon,
-                        grid: contact.grid,
-                        imageUrl: contact.photoUrl ?? null,
-                      }
-                    : null
-                }
-                beamBearing={
-                  // Priority: rotctld live azimuth (ground truth — where the
-                  // antenna is actually pointing, including mid-rotation); then
-                  // the manual Go override (used when rotator is offline);
-                  // finally undefined, so LeafletWorldMap falls back to the
-                  // great-circle bearing to the target.
-                  rotLiveAz ?? beamOverrideDeg ?? undefined
-                }
-                active={terminatorActive}
-                interactive={mapInteractive}
-                onRotateToBearing={(brg) => {
-                  const rot = useRotatorStore.getState();
-                  if (!rot.config.enabled || !rot.status?.connected) return;
-                  const normalized = ((brg % 360) + 360) % 360;
-                  setBeamOverrideDeg(normalized);
-                  setBeamInputStr(normalized.toFixed(0));
-                  void rot.setAzimuth(normalized);
-                }}
-              />
+                fallback={null}
+              >
+                <LeafletWorldMap
+                  home={{
+                    call: effectiveHome.call,
+                    lat: effectiveHome.lat,
+                    lon: effectiveHome.lon,
+                    grid: effectiveHome.grid,
+                    imageUrl: effectiveHome.imageUrl,
+                  }}
+                  target={
+                    contact
+                      ? {
+                          call: contact.callsign,
+                          lat: contact.lat,
+                          lon: contact.lon,
+                          grid: contact.grid,
+                          imageUrl: contact.photoUrl ?? null,
+                        }
+                      : null
+                  }
+                  beamBearing={
+                    // Priority: rotctld live azimuth (ground truth — where the
+                    // antenna is actually pointing, including mid-rotation); then
+                    // the manual Go override (used when rotator is offline);
+                    // finally undefined, so LeafletWorldMap falls back to the
+                    // great-circle bearing to the target.
+                    rotLiveAz ?? beamOverrideDeg ?? undefined
+                  }
+                  active={terminatorActive}
+                  interactive={mapInteractive}
+                  onRotateToBearing={(brg) => {
+                    const rot = useRotatorStore.getState();
+                    if (!rot.config.enabled || !rot.status?.connected) return;
+                    const normalized = ((brg % 360) + 360) % 360;
+                    setBeamOverrideDeg(normalized);
+                    setBeamInputStr(normalized.toFixed(0));
+                    void rot.setAzimuth(normalized);
+                  }}
+                />
+              </LeafletMapErrorBoundary>
             </div>
             <div
               data-spectrum-stack
