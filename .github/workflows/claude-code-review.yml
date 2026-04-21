@@ -1,9 +1,10 @@
 name: Claude Code Review
 
 on:
-  # Use pull_request_target so the review also works for fork PRs —
-  # runs in the base-repo context (workflow from master, full permissions,
-  # secrets). Unlike `pull_request`, fork PRs still get secrets.
+  # Use pull_request_target so the review also works for fork PRs.
+  # pull_request_target runs in the base-repo context (workflow from main,
+  # full permissions, secrets, OIDC available) — unlike `pull_request`,
+  # which denies OIDC tokens for fork PRs and breaks claude-code-action.
   pull_request_target:
     types: [opened, synchronize, ready_for_review, reopened]
 
@@ -12,8 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: read
       issues: read
+      id-token: write
 
     steps:
       - name: Checkout PR head
@@ -23,46 +25,10 @@ jobs:
           fetch-depth: 1
 
       - name: Run Claude Code Review
-        uses: anthropics/claude-code-base-action@v1
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: >-
-            --max-turns 25 --model claude-sonnet-4-6
-            --allowedTools 'Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh api:*),Bash(gh label list),Bash(gh label list:*),Read,Glob,Grep'
-          prompt: |
-            You are the automated reviewer for Zeus (a cross-platform, web-frontend
-            HPSDR client — .NET 8 backend, Vite + React frontend, WDSP native DSP
-            via P/Invoke; Thetis is the sole authoritative upstream reference).
-
-            Review PR #${{ github.event.pull_request.number }} in
-            ${{ github.repository }}.
-
-            Steps:
-            1. Run `gh pr view $PR_NUMBER --repo $REPO` and
-               `gh pr diff $PR_NUMBER --repo $REPO` to read title, body, and diff.
-            2. Skim the repo for relevant context: CLAUDE.md, README.md,
-               docs/lessons/, docs/rca/, and any files the diff touches.
-            3. Evaluate against CLAUDE.md's red-light list — visual design, UX
-               behavior, architecture (new threads/deps/wire-format changes),
-               default values, feature scope creep. Flag anything that crosses
-               those lines. The maintainer (Brian, EI4HQ) is the sole authority
-               on design/UX/defaults.
-            4. Also check for: obvious bugs, missing error handling at system
-               boundaries, load-bearing invariants (docs/lessons/wdsp-init-gotchas.md
-               for DSP work), test coverage for new logic.
-
-            Post exactly ONE review comment via
-            `gh pr comment $PR_NUMBER --repo $REPO --body "…"` containing:
-              - 1–2 sentence summary of the change,
-              - a short checklist of what you verified,
-              - any concerns separated into Blocking / Nit,
-              - a sign-off line: "— automated review".
-
-            Rules:
-            - Be concise. Prefer understatement. No "Great PR!" openings.
-            - Do NOT approve or request changes via the review API — just comment.
-            - Do NOT merge, close, or otherwise mutate the PR.
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'code-review@claude-code-plugins'
+          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
