@@ -64,6 +64,36 @@ dotnet run --project Zeus.Server
 
 Open **http://localhost:6060**, hit **Discover**, and connect to your HL2.
 
+### First run — wait for WDSP wisdom before connecting
+
+The first time you start `Zeus.Server` on a machine, WDSP/FFTW runs a
+one-shot "wisdom" pass to plan the FFT sizes Zeus uses. It takes **1–3
+minutes** on a modern CPU, and during that time you'll see output like:
+
+```
+info: Zeus.Dsp.Wdsp.WdspWisdomInitializer[0]
+      wdsp.wisdom initialising dir=/home/<user>/.local/share/Zeus/
+Optimizing FFT sizes through 262145
+
+Please do not close this window until wisdom plans are completed.
+
+Planning COMPLEX FORWARD  FFT size 64
+Planning COMPLEX BACKWARD FFT size 64
+... (many lines) ...
+```
+
+**Don't click Discover or Connect in the web UI until you see:**
+
+```
+info: Zeus.Dsp.Wdsp.WdspWisdomInitializer[0]
+      wdsp.wisdom ready result=1 (built) status=...
+```
+
+Connecting to a radio while wisdom is still building will crash the backend
+with a native double-free abort. Once wisdom is cached
+(`~/.local/share/Zeus/wdspWisdom00` on Linux, `%LOCALAPPDATA%\Zeus\wdspWisdom00`
+on Windows), subsequent starts log `result=0 (loaded)` and come up instantly.
+
 ## Getting started (developers)
 
 The backend and frontend run as two independent processes during development.
@@ -103,8 +133,12 @@ npm --prefix zeus-web run dev
 ```
 
 Then open **http://localhost:5173**. Edits under `zeus-web/src/` hot-reload;
-changes under `Zeus.Server/`, `Zeus.Protocol1/`, `Zeus.Dsp/`, or
-`Zeus.Contracts/` require restarting the backend.
+changes under `Zeus.Server/`, `Zeus.Protocol1/`, `Zeus.Protocol2/`, `Zeus.Dsp/`,
+or `Zeus.Contracts/` require restarting the backend.
+
+> On the very first backend start, wait for `wdsp.wisdom ready` before clicking
+> Discover — see [First run](#first-run--wait-for-wdsp-wisdom-before-connecting)
+> above.
 
 If you'd rather run the production-style single-port build, use the `Running`
 instructions above — the bundled UI is served directly from the .NET host on
