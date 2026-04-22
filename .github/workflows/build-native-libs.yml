@@ -13,7 +13,10 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        arch: [x64, arm64]
+        # arm64 deferred: upstream channel.c uses _MM_SET_FLUSH_ZERO_MODE
+        # (SSE intrinsic) guarded only for linux/APPLE, so it fails to
+        # compile on Windows-on-ARM. Revisit if a Windows-ARM64 user asks.
+        arch: [x64]
     steps:
       - uses: actions/checkout@v4
 
