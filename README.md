@@ -6,9 +6,14 @@ A browser-based SDR console for the **Hermes Lite 2**. .NET 10 backend talks
 OpenHPSDR Protocol-1 to the radio and streams IQ / audio / meter data to a
 React + WebGL frontend over WebSocket.
 
-> Status: early but working. HL2 only. RX is solid; TX is operator-verified on
-> FM and TUNE (v0.1, April 2026). Other Protocol-1 radios (ANAN etc.) are not
-> yet supported.
+> Status: early but working.
+>
+> - **Hermes Lite 2 (Protocol-1):** RX is solid; TX is operator-verified on FM
+>   and TUNE (v0.1, April 2026).
+> - **ANAN G2 (Protocol-2):** RX verified on OrionMkII / fw 2.7b41 across
+>   80m–10m. TX and 160m are not yet wired — experimental.
+> - Other Protocol-1 radios (older ANAN, Hermes, Angelia, etc.) are not yet
+>   supported.
 
 ## About the name
 
@@ -27,7 +32,7 @@ long-running project a lot of the DSP heritage traces back to.
 - **Leaflet satellite map** with terminator and QRZ grid-square / beam heading
   — to interact with the map (pan / zoom), **press and hold the `M` key**.
   The experience isn't ideal yet and will improve over time.
-- **Radio discovery** on the LAN (Protocol-1 broadcast)
+- **Radio discovery** on the LAN (Protocol-1 + Protocol-2 broadcast, in parallel)
 
 ## Layout
 
@@ -35,6 +40,7 @@ long-running project a lot of the DSP heritage traces back to.
 | ------------------------ | --------------------------------------------------- |
 | `Zeus.Server/`           | ASP.NET Core host, SignalR hub, radio service       |
 | `Zeus.Protocol1/`        | OpenHPSDR Protocol-1 client, framing, discovery     |
+| `Zeus.Protocol2/`        | OpenHPSDR Protocol-2 client (ANAN G2)               |
 | `Zeus.Dsp/`              | DSP engine — WDSP via P/Invoke + synthetic fallback |
 | `Zeus.Contracts/`        | Wire-format DTOs shared backend ↔ web               |
 | `zeus-web/`              | Vite + React + TypeScript + WebGL frontend         |
