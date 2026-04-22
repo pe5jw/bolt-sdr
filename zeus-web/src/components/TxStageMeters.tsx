@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { useTxStore } from '../state/tx-store';
 
 // Per-stage TX meter panel. Replaces the Memory-channels placeholder in the
@@ -31,6 +32,31 @@ function isBypassed(dbfs: number): boolean {
   return dbfs <= BYPASSED_DBFS_THRESHOLD;
 }
 
+// Thetis convention (MeterManager.cs: attack 0.8, decay 0.1, ~2 s visible
+// history): the held peak decays 30 dB/sec, i.e. a peak at 0 dB drops off
+// the −60 dBFS axis over ~2 seconds. The hook tracks the running max in a
+// ref so the decay stays continuous across renders, using wall-clock time
+// for dt rather than frame count (the component re-renders at the 10 Hz WS
+// tick, giving ~3 dB steps — visually smooth enough for a 60 dB range).
+// Returns −Infinity while current is non-finite or ≤ the bypass sentinel.
+const PEAK_DECAY_DB_PER_SEC = 30;
+
+function usePeakHold(current: number, decayDbPerSec = PEAK_DECAY_DB_PER_SEC): number {
+  const state = useRef<{ db: number; ts: number }>({ db: -Infinity, ts: 0 });
+  if (!isFinite(current) || isBypassed(current)) {
+    state.current = { db: -Infinity, ts: 0 };
+    return -Infinity;
+  }
+  const now =
+    typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const prev = state.current;
+  const dt = prev.ts === 0 ? 0 : Math.max(0, (now - prev.ts) / 1000);
+  const decayed = isFinite(prev.db) ? prev.db - decayDbPerSec * dt : -Infinity;
+  const held = Math.max(current, decayed);
+  state.current = { db: held, ts: now };
+  return held;
+}
+
 // Convert a dBFS reading (≤ 0) to the 0..max axis the Meter primitive wants.
 // -60 dBFS → 0, 0 dBFS → 60.
 function dbfsToAxis(dbfs: number): number {
@@ -48,6 +74,9 @@ type LevelRowProps = {
 function LevelRow({ label, dbfs, hint }: LevelRowProps) {
   const bypassed = isBypassed(dbfs);
   const axis = dbfsToAxis(dbfs);
+  const held = usePeakHold(dbfs);
+  const heldAxis = dbfsToAxis(held);
+  const heldVisible = isFinite(held) && !isBypassed(held) && heldAxis > axis;
   const display = !isFinite(dbfs) || bypassed ? '—' : dbfs.toFixed(0);
   const rowTitle = bypassed ? `${hint} (stage bypassed)` : hint;
   return (
@@ -70,6 +99,23 @@ function LevelRow({ label, dbfs, hint }: LevelRowProps) {
                 : undefined,
           }}
         />
+        {heldVisible && (
+          // 2 px tick at the held peak — amber (#FFA028) @ 0.4 alpha, no new
+          // hue introduced. Decays 30 dB/sec per Thetis convention.
+          <div
+            className="meter-peak-hold"
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              left: `calc(${(heldAxis / LEVEL_RANGE_DB) * 100}% - 1px)`,
+              top: 0,
+              bottom: 0,
+              width: 2,
+              background: 'rgba(255, 160, 40, 0.4)',
+              pointerEvents: 'none',
+            }}
+          />
+        )}
         <div className="meter-ticks">
           {[0.25, 0.5, 0.75].map((t) => (
             <div key={t} className="meter-tick" style={{ left: `${t * 100}%` }} />
@@ -90,6 +136,11 @@ function GrRow({ db, hint }: { db: number; hint: string }) {
   // a meaningless readout.
   const bypassed = isBypassed(db);
   const clamped = bypassed ? 0 : Math.max(0, Math.min(GR_MAX_DB, db));
+  // GR axis is 20 dB wide; scale decay so full-range takes ~2 s.
+  const held = usePeakHold(db, GR_MAX_DB / 2);
+  const heldClamped = Math.max(0, Math.min(GR_MAX_DB, held));
+  const heldVisible =
+    isFinite(held) && !isBypassed(held) && heldClamped > clamped;
   const display =
     !isFinite(db) || bypassed ? '—' : db === 0 ? '0' : db.toFixed(1);
   const rowTitle = bypassed ? `${hint} (stage bypassed)` : hint;
@@ -113,6 +164,21 @@ function GrRow({ db, hint }: { db: number; hint: string }) {
                 : undefined,
           }}
         />
+        {heldVisible && (
+          <div
+            className="meter-peak-hold"
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              left: `calc(${(heldClamped / GR_MAX_DB) * 100}% - 1px)`,
+              top: 0,
+              bottom: 0,
+              width: 2,
+              background: 'rgba(255, 160, 40, 0.4)',
+              pointerEvents: 'none',
+            }}
+          />
+        )}
         <div className="meter-ticks">
           {[0.25, 0.5, 0.75].map((t) => (
             <div key={t} className="meter-tick" style={{ left: `${t * 100}%` }} />
