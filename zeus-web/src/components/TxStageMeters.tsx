@@ -232,6 +232,14 @@ export function TxStageMeters() {
         padding: '4px 0',
         opacity: transmitting ? 1 : 0.55,
         transition: 'opacity 120ms',
+        // The bottom-row slot is fixed at 200 px (see layout.css .workspace
+        // grid-template-rows) and .panel-body hides overflow, so without an
+        // inner scroller rows 4-6 (ALC / ALC GR / OUT) are clipped off the
+        // bottom of the Dockable. Use a thin scrollbar per the .side-stack
+        // convention rather than changing row density (deferred to Phase 2).
+        height: '100%',
+        overflowY: 'auto',
+        scrollbarWidth: 'thin',
       }}
       aria-label="TX stage meters"
     >
