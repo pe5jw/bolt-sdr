@@ -44,6 +44,31 @@ public sealed class TxMetersService : BackgroundService
     private static readonly TimeSpan MoxTick = TimeSpan.FromMilliseconds(100); // 10 Hz
     private static readonly TimeSpan IdleTick = TimeSpan.FromMilliseconds(500); // 2 Hz
 
+    // PA temperature broadcast cadence: 2 Hz regardless of MOX. Temperature
+    // is a protection signal (HL2 auto-disables TX at 55 °C) and moves on
+    // a seconds timescale, so piggybacking on the 10 Hz MOX tick would be
+    // wasted wire. When MOX is off the outer loop already ticks at 500 ms;
+    // when MOX is on the outer loop ticks at 100 ms and we throttle the
+    // PA broadcast with a last-sent timestamp.
+    private static readonly TimeSpan PaTempTick = TimeSpan.FromMilliseconds(500);
+
+    // MCP9700 / TMP36-style sensor on the HL2 Q6 position. Datasheet:
+    // V_out = 500 mV + 10 mV/°C * T; ADC is 12-bit against a 3.26 V ref.
+    // Derived: tempC = (3.26 * raw / 4096 - 0.5) * 100. See Steve Haynal's
+    // hermes-lite wiki for the board-level mapping and reference voltage.
+    private const double PaTempAdcRefVolts = 3.26;
+    private const int PaTempAdcFullScale = 4096;
+    private const double PaTempSensorOffsetVolts = 0.5;
+    private const double PaTempSensorVoltsPerDegC = 0.01;
+
+    // Clamp range for the conversion output. Below this the sensor is
+    // either unplugged or reading noise floor; above this the reading is
+    // well beyond the HL2 gateware's 55 °C shutdown. Broadcasting a
+    // clamped value keeps the UI from flashing red during boot while a
+    // floating ADC settles.
+    private const float PaTempMinC = -40f;
+    private const float PaTempMaxC = 125f;
+
     private readonly StreamingHub _hub;
     private readonly TxService _tx;
     private readonly DspPipelineService _pipe;
@@ -53,10 +78,18 @@ public sealed class TxMetersService : BackgroundService
     private readonly object _sync = new();
     private double _fwdAdc;
     private double _refAdc;
+    // PA temperature smoothed ADC and first-sample flag — separate from
+    // _seenSample because temperature arrives on a different slot and may
+    // show up before / after the FWD-REF pair on any given packet.
+    private double _paTempAdc;
+    private bool _seenPaTempSample;
     private bool _seenSample;
     // SWR trip state: timestamp when SWR first exceeded threshold, or null if
     // SWR is currently below threshold. Checked on every meter tick (100 ms).
     private DateTime? _swrAboveThresholdSince;
+    // Last time a PaTempFrame was broadcast, so the 10 Hz MOX loop can
+    // throttle itself down to the 2 Hz PA cadence without a separate timer.
+    private DateTime _lastPaTempBroadcastAtUtc = DateTime.MinValue;
 
     public TxMetersService(StreamingHub hub, RadioService radio, TxService tx, DspPipelineService pipe, ILogger<TxMetersService> log)
     {
@@ -75,10 +108,10 @@ public sealed class TxMetersService : BackgroundService
     // TelemetryReceived handler once the Protocol1 surface lands.
     private Zeus.Protocol1.IProtocol1Client? _subscribedClient;
 
-    // HL2 C&C-echo addresses that carry the alex FWD/REF ADCs
-    // (see TelemetryReading docs).
-    // addr=1 (C0=0x08): Ain1 = alex_forward_power
-    // addr=2 (C0=0x10): Ain0 = alex_reverse_power
+    // HL2 C&C-echo addresses that carry the alex FWD/REF ADCs and the PA
+    // temperature (see TelemetryReading docs in Zeus.Protocol1).
+    // addr=1 (C0=0x08): Ain0 = HL2 PA temperature;   Ain1 = alex_forward_power
+    // addr=2 (C0=0x10): Ain0 = alex_reverse_power;   Ain1 = ADC0 bias
     // Match on bits 4:1 only — C0[0] is the PTT/MOX echo (so a live TX packet
     // arrives as 0x09/0x11), and C0[7] is the HL2 IOB ACK
     // marker which PacketParser already filters out via the addr==1|2|3 gate.
@@ -87,9 +120,11 @@ public sealed class TxMetersService : BackgroundService
     private const byte C0AddrAlexRef = 0x10;
 
     /// <summary>
-    /// Entry point for telemetry consumers. FWD and REF live on different
-    /// C&amp;C echo slots (0x08 and 0x10), so one <see cref="Zeus.Protocol1.TelemetryReading"/>
-    /// updates at most one axis per call.
+    /// Entry point for telemetry consumers. FWD+temperature share the 0x08
+    /// slot (Ain1 / Ain0 respectively); REF arrives on 0x10 (Ain0). One
+    /// <see cref="Zeus.Protocol1.TelemetryReading"/> may update multiple axes
+    /// on the 0x08 slot (FWD + temperature) but never more than one slot's
+    /// worth per call — packets carry the echo-slot map, not a combined blob.
     /// </summary>
     public void OnTelemetry(Zeus.Protocol1.TelemetryReading reading)
     {
@@ -97,6 +132,10 @@ public sealed class TxMetersService : BackgroundService
         {
             case C0AddrAlexFwd:
                 ApplySmoothed(ref _fwdAdc, reading.Ain1);
+                // Ain0 on this slot is the HL2 Q6 temperature ADC. Smooth
+                // with the same α as FWD/REF so the UI sees a stable reading
+                // instead of ADC jitter.
+                ApplyPaTempSmoothed(reading.Ain0);
                 break;
             case C0AddrAlexRef:
                 ApplySmoothed(ref _refAdc, reading.Ain0);
@@ -134,6 +173,43 @@ public sealed class TxMetersService : BackgroundService
             }
             state = SmoothAlpha * state + (1.0 - SmoothAlpha) * raw;
         }
+    }
+
+    // Same α as FWD/REF (0.90 / 0.10) so the temperature reading settles at
+    // the same timescale the operator is already used to for protection
+    // signals. Tracked separately from _seenSample because the temperature
+    // arrives on the same slot as FWD but via a different AIN pair; seeding
+    // it on the first sample avoids a ~2 s ramp from zero.
+    internal void ApplyPaTempSmoothed(ushort raw)
+    {
+        lock (_sync)
+        {
+            if (!_seenPaTempSample)
+            {
+                _paTempAdc = raw;
+                _seenPaTempSample = true;
+                return;
+            }
+            _paTempAdc = SmoothAlpha * _paTempAdc + (1.0 - SmoothAlpha) * raw;
+        }
+    }
+
+    /// <summary>
+    /// Convert a raw HL2 Q6-sensor ADC reading to °C, clamped into the
+    /// plausible physical range so a floating ADC or disconnected sensor
+    /// can't trip the UI's 55 °C red zone at boot. Pure function — exposed
+    /// <c>internal</c> for unit tests. Formula derivation:
+    /// MCP9700-class sensor, V_out = 500 mV + 10 mV/°C · T, 12-bit ADC
+    /// against a 3.26 V reference; see the hermes-lite wiki / Steve
+    /// Haynal's HL2 docs for the board-level mapping.
+    /// </summary>
+    internal static float ConvertPaTempAdcToCelsius(double rawAdc)
+    {
+        double volts = rawAdc * PaTempAdcRefVolts / PaTempAdcFullScale;
+        double tempC = (volts - PaTempSensorOffsetVolts) / PaTempSensorVoltsPerDegC;
+        if (tempC < PaTempMinC) tempC = PaTempMinC;
+        if (tempC > PaTempMaxC) tempC = PaTempMaxC;
+        return (float)tempC;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -189,6 +265,22 @@ public sealed class TxMetersService : BackgroundService
                 }
 
                 _hub.Broadcast(frame);
+
+                // PA temperature broadcast — 2 Hz always, throttled against
+                // wall-clock so the 10 Hz MOX loop emits it every 5th tick
+                // and the 2 Hz idle loop emits it every tick. Suppressed
+                // until at least one telemetry sample has landed; a fresh
+                // client would otherwise see a garbage ADC of 0 mapped to
+                // the -40 °C clamp floor.
+                var nowUtc = DateTime.UtcNow;
+                bool paSeen;
+                double paAdc;
+                lock (_sync) { paSeen = _seenPaTempSample; paAdc = _paTempAdc; }
+                if (paSeen && nowUtc - _lastPaTempBroadcastAtUtc >= PaTempTick)
+                {
+                    _lastPaTempBroadcastAtUtc = nowUtc;
+                    _hub.Broadcast(new PaTempFrame(ConvertPaTempAdcToCelsius(paAdc)));
+                }
 
                 try { await Task.Delay(mox ? MoxTick : IdleTick, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { return; }
@@ -334,8 +426,14 @@ public sealed class TxMetersService : BackgroundService
         {
             _fwdAdc = 0;
             _refAdc = 0;
+            _paTempAdc = 0;
+            _seenPaTempSample = false;
             _seenSample = false;
             _swrAboveThresholdSince = null;
         }
+        // Reset the broadcast throttle so the next connection's first
+        // sample fires a PaTempFrame immediately instead of waiting out
+        // the previous session's 500 ms window.
+        _lastPaTempBroadcastAtUtc = DateTime.MinValue;
     }
 }
