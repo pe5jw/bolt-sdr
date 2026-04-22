@@ -812,32 +812,61 @@ public sealed class WdspDspEngine : IDspEngine
             iqInterleaved[2 * i + 1] = qout[i];
         }
 
-        // Per-stage TXA peak meters. Peak (not average) is what surfaces
-        // clipping-induced crackle — averages smooth a transient peak over
-        // the ~100 ms meter window and hide the very thing we're chasing.
-        // Indices per native/wdsp/TXA.h:49-66 txaMeterType.
-        //   MIC_PK=0   EQ_PK=2   LVLR_PK=4  LVLR_GAIN=6
-        //   CFC_PK=7   CFC_GAIN=9 COMP_PK=10 ALC_PK=12  ALC_GAIN=14  OUT_PK=15
+        // Per-stage TXA peak + average meters. Peak surfaces clipping-induced
+        // crackle that averages smooth away; the average is what the operator
+        // reads to judge level. Both are published so the frontend can show
+        // a Thetis-style dual-needle per row. Indices per native/wdsp/TXA.h:49-66
+        // txaMeterType:
+        //   0  MIC_PK    1  MIC_AV
+        //   2  EQ_PK     3  EQ_AV
+        //   4  LVLR_PK   5  LVLR_AV   6  LVLR_GAIN
+        //   7  CFC_PK    8  CFC_AV    9  CFC_GAIN
+        //  10  COMP_PK  11  COMP_AV
+        //  12  ALC_PK   13  ALC_AV   14  ALC_GAIN
+        //  15  OUT_PK   16  OUT_AV
         double micPk = NativeMethods.GetTXAMeter(txa, 0);
+        double micAv = NativeMethods.GetTXAMeter(txa, 1);
         double eqPk = NativeMethods.GetTXAMeter(txa, 2);
+        double eqAv = NativeMethods.GetTXAMeter(txa, 3);
         double lvlrPk = NativeMethods.GetTXAMeter(txa, 4);
+        double lvlrAv = NativeMethods.GetTXAMeter(txa, 5);
+        double lvlrGain = NativeMethods.GetTXAMeter(txa, 6);
+        double cfcPk = NativeMethods.GetTXAMeter(txa, 7);
+        double cfcAv = NativeMethods.GetTXAMeter(txa, 8);
+        double cfcGain = NativeMethods.GetTXAMeter(txa, 9);
+        double compPk = NativeMethods.GetTXAMeter(txa, 10);
+        double compAv = NativeMethods.GetTXAMeter(txa, 11);
         double alcPk = NativeMethods.GetTXAMeter(txa, 12);
+        double alcAv = NativeMethods.GetTXAMeter(txa, 13);
         double alcGain = NativeMethods.GetTXAMeter(txa, 14);
         double outPk = NativeMethods.GetTXAMeter(txa, 15);
+        double outAv = NativeMethods.GetTXAMeter(txa, 16);
 
         // Publish the snapshot before returning so pollers don't see a
         // partially-written set. Lock is uncontended in steady state —
         // ProcessTxBlock runs from the TX ingest thread and GetTxStageMeters
         // only from TxMetersService (10 Hz).
-        // alcGain from WDSP is 20*log10(linear_gain) ≤ 0 when reducing.
-        // Store as positive "gain reduction" dB per TxStageMeters convention.
+        // *Gain readings from WDSP are 20*log10(linear_gain) ≤ 0 when
+        // reducing. Store as positive "gain reduction" dB per TxStageMeters
+        // convention.
         var snap = new TxStageMeters(
             MicPk: (float)micPk,
+            MicAv: (float)micAv,
             EqPk: (float)eqPk,
+            EqAv: (float)eqAv,
             LvlrPk: (float)lvlrPk,
+            LvlrAv: (float)lvlrAv,
+            LvlrGr: (float)-lvlrGain,
+            CfcPk: (float)cfcPk,
+            CfcAv: (float)cfcAv,
+            CfcGr: (float)-cfcGain,
+            CompPk: (float)compPk,
+            CompAv: (float)compAv,
             AlcPk: (float)alcPk,
+            AlcAv: (float)alcAv,
             AlcGr: (float)-alcGain,
-            OutPk: (float)outPk);
+            OutPk: (float)outPk,
+            OutAv: (float)outAv);
         lock (_txMeterPublishLock) { _latestTxStageMeters = snap; }
 
         var now = DateTime.UtcNow;
@@ -852,8 +881,12 @@ public sealed class WdspDspEngine : IDspEngine
                 double ma = Math.Max(oi, oq); if (ma > ioutPeak) ioutPeak = ma;
             }
             _log.LogInformation(
-                "wdsp.tx.stage micBlockPeak={MP:F3} iqBlockPeak={IP:F4} | mic={Mic:F1} eq={Eq:F1} lvlr={Lvlr:F1} alc={Alc:F1} alcGr={AlcG:F1} out={Out:F1}",
-                micBlockPeak, ioutPeak, micPk, eqPk, lvlrPk, alcPk, alcGain, outPk);
+                "wdsp.tx.stage micBlockPeak={MP:F3} iqBlockPeak={IP:F4} | mic pk={MicPk:F1} av={MicAv:F1} | eq pk={EqPk:F1} av={EqAv:F1} | lvlr pk={LvlrPk:F1} av={LvlrAv:F1} gr={LvlrGr:F1} | alc pk={AlcPk:F1} av={AlcAv:F1} gr={AlcGr:F1} | out pk={OutPk:F1} av={OutAv:F1}",
+                micBlockPeak, ioutPeak,
+                micPk, micAv, eqPk, eqAv,
+                lvlrPk, lvlrAv, -lvlrGain,
+                alcPk, alcAv, -alcGain,
+                outPk, outAv);
         }
         return TxaInSize;
     }

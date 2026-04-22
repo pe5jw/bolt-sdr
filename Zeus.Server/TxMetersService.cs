@@ -8,7 +8,7 @@ namespace Zeus.Server;
 /// <summary>
 /// Consumes raw FWD/REF ADC readings from Protocol1, smooths them with an
 /// exponential low-pass, converts to watts + SWR per the HermesLite2
-/// calibration, and broadcasts a <see cref="TxMetersFrame"/> over the
+/// calibration, and broadcasts a <see cref="TxMetersV2Frame"/> over the
 /// StreamingHub at 10 Hz while MOX is on / 2 Hz when idle.
 ///
 /// PRD FR-6: If SWR > 2.5 sustained for ≥500 ms while MOX or TUN is on,
@@ -154,7 +154,7 @@ public sealed class TxMetersService : BackgroundService
                 // Meter during MOX *or* TUN — both drive the PA, both need live
                 // FWD/SWR readouts. Idle frame is only for fully-unkeyed RX.
                 bool mox = _tx.IsMoxOn || _tx.IsTunOn;
-                TxMetersFrame frame;
+                TxMetersV2Frame frame;
                 double swr = 1.0;
                 if (mox)
                 {
@@ -166,16 +166,7 @@ public sealed class TxMetersService : BackgroundService
                     // may lag the first TX block by a few ticks at MOX-on, which
                     // reads as "Silent" (−∞ level / 0 GR) — UI treats as empty.
                     var stage = _pipe.CurrentEngine?.GetTxStageMeters() ?? TxStageMeters.Silent;
-                    frame = new TxMetersFrame(
-                        FwdWatts: (float)fwdW,
-                        RefWatts: (float)refW,
-                        Swr: (float)swr,
-                        MicDbfs: stage.MicPk,
-                        EqPk: stage.EqPk,
-                        LvlrPk: stage.LvlrPk,
-                        AlcPk: stage.AlcPk,
-                        AlcGr: stage.AlcGr,
-                        OutPk: stage.OutPk);
+                    frame = BuildFrame((float)fwdW, (float)refW, (float)swr, stage);
 
                     if (EvaluateSwrTrip(swr, DateTime.UtcNow) is { } tripReason)
                     {
@@ -191,17 +182,7 @@ public sealed class TxMetersService : BackgroundService
                     // stale pre-unkey reading. Stage meters go to Silent (−∞)
                     // so the diagnostic strip renders empty instead of latching
                     // last-during-TX values.
-                    var silent = TxStageMeters.Silent;
-                    frame = new TxMetersFrame(
-                        FwdWatts: 0f,
-                        RefWatts: 0f,
-                        Swr: 1.0f,
-                        MicDbfs: silent.MicPk,
-                        EqPk: silent.EqPk,
-                        LvlrPk: silent.LvlrPk,
-                        AlcPk: silent.AlcPk,
-                        AlcGr: silent.AlcGr,
-                        OutPk: silent.OutPk);
+                    frame = BuildFrame(0f, 0f, 1.0f, TxStageMeters.Silent);
                     // Clear the trip timer when not keyed so a brief spike doesn't
                     // carry over into the next TX.
                     lock (_sync) { _swrAboveThresholdSince = null; }
@@ -267,6 +248,36 @@ public sealed class TxMetersService : BackgroundService
             return $"TX timeout: TUN keyed >{(int)TxTimeout.TotalSeconds} s — dropped to protect PA";
         return null;
     }
+
+    /// <summary>
+    /// Compose a <see cref="TxMetersV2Frame"/> from the protection readings
+    /// (FWD/REF/SWR) and the latest stage-meter snapshot. Kept as a small
+    /// helper so the MOX and idle branches in <see cref="ExecuteAsync"/>
+    /// stay symmetric and a future v3 frame is a one-line change. Pure
+    /// function — no instance state.
+    /// </summary>
+    internal static TxMetersV2Frame BuildFrame(float fwdW, float refW, float swr, TxStageMeters stage)
+        => new(
+            FwdWatts: fwdW,
+            RefWatts: refW,
+            Swr: swr,
+            MicPk: stage.MicPk,
+            MicAv: stage.MicAv,
+            EqPk: stage.EqPk,
+            EqAv: stage.EqAv,
+            LvlrPk: stage.LvlrPk,
+            LvlrAv: stage.LvlrAv,
+            LvlrGr: stage.LvlrGr,
+            CfcPk: stage.CfcPk,
+            CfcAv: stage.CfcAv,
+            CfcGr: stage.CfcGr,
+            CompPk: stage.CompPk,
+            CompAv: stage.CompAv,
+            AlcPk: stage.AlcPk,
+            AlcAv: stage.AlcAv,
+            AlcGr: stage.AlcGr,
+            OutPk: stage.OutPk,
+            OutAv: stage.OutAv);
 
     /// <summary>
     /// Port of Thetis <c>console.cs:25008-25072</c> watts math plus the
