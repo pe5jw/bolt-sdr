@@ -54,6 +54,9 @@ builder.WebHost.ConfigureKestrel(k =>
 // WDSP while a Protocol1Client is attached. No IDspEngine DI registration —
 // swapping requires lifecycle control the container can't express.
 builder.Services.AddSingleton<IRadioDiscovery, RadioDiscoveryService>();
+builder.Services.AddSingleton<
+    Zeus.Protocol2.Discovery.IRadioDiscovery,
+    Zeus.Protocol2.Discovery.RadioDiscoveryService>();
 // TxIqRing is shared: TxAudioIngest writes modulated IQ into it, Protocol1Client
 // (constructed inside RadioService) reads from it for the EP2 payload.
 builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();
@@ -158,21 +161,41 @@ app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSo
     });
 });
 
-app.MapGet("/api/radios", async (IRadioDiscovery discovery, HttpContext ctx) =>
+app.MapGet("/api/radios", async (
+    IRadioDiscovery p1Discovery,
+    Zeus.Protocol2.Discovery.IRadioDiscovery p2Discovery,
+    HttpContext ctx) =>
 {
-    var radios = await discovery.DiscoverAsync(TimeSpan.FromMilliseconds(1500), ctx.RequestAborted);
-    return radios.Select(r => new RadioInfo(
+    var timeout = TimeSpan.FromMilliseconds(1500);
+    var p1Task = p1Discovery.DiscoverAsync(timeout, ctx.RequestAborted);
+    var p2Task = p2Discovery.DiscoverAsync(timeout, ctx.RequestAborted);
+    await Task.WhenAll(p1Task, p2Task);
+
+    var p1Infos = p1Task.Result.Select(MapP1);
+    var p2Infos = p2Task.Result.Select(MapP2);
+    return p1Infos.Concat(p2Infos).ToArray();
+
+    static RadioInfo MapP1(DiscoveredRadio r) => new(
         MacAddress: r.Mac.ToString(),
         IpAddress: r.Ip.ToString(),
         BoardId: r.Board.ToString(),
         FirmwareVersion: r.FirmwareString,
         Busy: r.Details.Busy,
-        Details: BuildDetails(r))).ToArray();
+        Details: BuildP1Details(r));
 
-    static IReadOnlyDictionary<string, string> BuildDetails(DiscoveredRadio r)
+    static RadioInfo MapP2(Zeus.Protocol2.Discovery.DiscoveredRadio r) => new(
+        MacAddress: r.Mac.ToString(),
+        IpAddress: r.Ip.ToString(),
+        BoardId: r.Board.ToString(),
+        FirmwareVersion: r.FirmwareString,
+        Busy: r.Details.Busy,
+        Details: BuildP2Details(r));
+
+    static IReadOnlyDictionary<string, string> BuildP1Details(DiscoveredRadio r)
     {
         var d = new Dictionary<string, string>
         {
+            ["protocol"] = "P1",
             ["rawBoardId"] = $"0x{r.Details.RawBoardId:X2}",
             ["gatewareBuild"] = r.Details.GatewareBuild.ToString(),
         };
@@ -181,6 +204,19 @@ app.MapGet("/api/radios", async (IRadioDiscovery discovery, HttpContext ctx) =>
         if (r.Details.MacAddressModified) d["macAddressModified"] = "true";
         if (r.Details.FixedIpAddress is { } ip) d["fixedIpAddress"] = ip.ToString();
         if (r.Details.HermesLite2MinorVersion is { } minor) d["hl2MinorVersion"] = minor.ToString();
+        return d;
+    }
+
+    static IReadOnlyDictionary<string, string> BuildP2Details(Zeus.Protocol2.Discovery.DiscoveredRadio r)
+    {
+        var d = new Dictionary<string, string>
+        {
+            ["protocol"] = "P2",
+            ["rawBoardId"] = $"0x{r.Details.RawBoardId:X2}",
+            ["protocolSupported"] = r.Details.ProtocolSupported.ToString(),
+            ["numReceivers"] = r.Details.NumReceivers.ToString(),
+        };
+        if (r.Details.BetaVersion != 0) d["betaVersion"] = r.Details.BetaVersion.ToString();
         return d;
     }
 });
@@ -222,6 +258,60 @@ app.MapPost("/api/connect", async (ConnectRequest req, RadioService r, WdspWisdo
         return Results.Conflict(new { error = ex.Message });
     }
 });
+
+app.MapPost("/api/connect/p2", async (ConnectRequest req, DspPipelineService dsp, WdspWisdomInitializer wisdom, HttpContext ctx) =>
+{
+    log.LogInformation("api.connect.p2 endpoint={Ep} rate={Rate}", req.Endpoint, req.SampleRate);
+
+    if (wisdom.Phase != WisdomPhase.Ready)
+        log.LogWarning("api.connect.p2 proceeding before wisdom ready; WDSP may fall back to synthetic");
+
+    if (!TryParseIpEndpoint(req.Endpoint, out var ipEndpoint))
+        return Results.BadRequest(new { error = $"Invalid endpoint '{req.Endpoint}'." });
+
+    var rateKhz = req.SampleRate switch
+    {
+        48_000 => 48,
+        96_000 => 96,
+        192_000 => 192,
+        384_000 => 384,
+        _ => 48,
+    };
+
+    try
+    {
+        await dsp.ConnectP2Async(ipEndpoint, rateKhz, numAdc: 2, ctx.RequestAborted);
+        return Results.Ok(new { protocol = "P2", endpoint = req.Endpoint, sampleRateKhz = rateKhz });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        log.LogError(ex, "api.connect.p2 failed");
+        return Results.Problem(ex.Message, statusCode: 500);
+    }
+});
+
+app.MapPost("/api/disconnect/p2", async (DspPipelineService dsp, HttpContext ctx) =>
+{
+    log.LogInformation("api.disconnect.p2");
+    await dsp.DisconnectP2Async(ctx.RequestAborted);
+    return Results.Ok(new { status = "disconnected" });
+});
+
+static bool TryParseIpEndpoint(string raw, out IPEndPoint ep)
+{
+    ep = null!;
+    var idx = raw.LastIndexOf(':');
+    string host = idx > 0 ? raw[..idx] : raw;
+    int port = 1024;
+    if (idx > 0 && int.TryParse(raw[(idx + 1)..], out var p)) port = p;
+    if (!IPAddress.TryParse(host, out var ip)) return false;
+    ep = new IPEndPoint(ip, port);
+    return true;
+}
 
 app.MapPost("/api/disconnect", async (RadioService r, HttpContext ctx) =>
 {

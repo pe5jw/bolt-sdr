@@ -369,6 +369,29 @@ public sealed class RadioService : IDisposable
         StateChanged?.Invoke(next);
     }
 
+    // Used by DspPipelineService when a Protocol 2 radio connects or
+    // disconnects. RadioService's _activeClient is P1-only; this is how
+    // the shared state (Status, Endpoint, SampleRate) stays coherent for
+    // the UI without growing a P2 client slot here.
+    public void MarkProtocol2Connected(string endpoint, int sampleRateHz)
+    {
+        Mutate(s => s with
+        {
+            Status = ConnectionStatus.Connected,
+            Endpoint = endpoint,
+            SampleRate = sampleRateHz,
+        });
+    }
+
+    public void MarkProtocol2Disconnected()
+    {
+        Mutate(s => s with
+        {
+            Status = ConnectionStatus.Disconnected,
+            Endpoint = null,
+        });
+    }
+
     // Protocol1 → RadioService bridge. Runs on the RX thread at ~1.2 kHz;
     // hands off to HandleAdcOverload for the logic the tests can drive.
     private void OnAdcOverload(AdcOverloadStatus status) =>

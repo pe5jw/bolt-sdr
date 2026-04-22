@@ -1,3 +1,4 @@
+using System.Net;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Zeus.Contracts;
@@ -27,6 +28,12 @@ public class DspPipelineService : BackgroundService
 
     private Task? _iqPumpTask;
     private CancellationTokenSource? _iqPumpCts;
+
+    // Protocol 2 path (parallel to the RadioService-owned P1 path). Held
+    // directly here because RadioService is Protocol1Client-shaped and
+    // growing a P2 variant there would require a larger refactor; for now
+    // keeping it isolated avoids touching any P1 behavior.
+    private Zeus.Protocol2.Protocol2Client? _p2Client;
 
     private RxMode _appliedMode = RxMode.USB;
     private int _appliedLowHz;
@@ -173,6 +180,14 @@ public class DspPipelineService : BackgroundService
 
     private void OnRadioStateChanged(StateDto s)
     {
+        // Forward VFO changes to the P2 client when it's active. RadioService
+        // does this for P1 via ActiveClient?.SetVfoAHz() inside SetVfo, but
+        // ActiveClient is null for P2 connections, so the radio never learns
+        // about tune changes without this forward. Sample rate / mode follow
+        // here too when P2-side support is added.
+        var p2 = _p2Client;
+        p2?.SetVfoAHz(s.VfoHz);
+
         IDspEngine? engine;
         int channel;
         lock (_engineLock) { engine = _engine; channel = _channelId; }
@@ -256,6 +271,129 @@ public class DspPipelineService : BackgroundService
             }
         }, cts.Token);
     }
+
+    private void StartIqPumpP2(Zeus.Protocol2.Protocol2Client client)
+    {
+        var cts = new CancellationTokenSource();
+        _iqPumpCts = cts;
+        _iqPumpTask = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var frame in client.IqFrames.ReadAllAsync(cts.Token).ConfigureAwait(false))
+                {
+                    IDspEngine? engine;
+                    int channel;
+                    lock (_engineLock) { engine = _engine; channel = _channelId; }
+                    engine?.FeedIq(channel, frame.InterleavedSamples.Span);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (ChannelClosedException) { }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "dsp.pipeline p2 iq-pump exited with error");
+            }
+        }, cts.Token);
+    }
+
+    /// <summary>
+    /// Connect to a Protocol 2 radio and start streaming RX IQ into the DSP
+    /// engine. Parallel path to RadioService.ConnectAsync (which is Protocol 1
+    /// only); both swap the engine to WDSP and start a pump. Only one client
+    /// at a time.
+    /// </summary>
+    public async Task ConnectP2Async(IPEndPoint radioEndpoint, int sampleRateKhz, byte numAdc, CancellationToken ct)
+    {
+        if (_p2Client is not null)
+            throw new InvalidOperationException("Already connected (P2).");
+        if (_radio.ActiveClient is not null)
+            throw new InvalidOperationException("Already connected (P1). Disconnect first.");
+
+        var client = new Zeus.Protocol2.Protocol2Client(
+            _loggerFactory.CreateLogger<Zeus.Protocol2.Protocol2Client>());
+        client.SetNumAdc(numAdc);
+        await client.ConnectAsync(radioEndpoint, ct).ConfigureAwait(false);
+        await client.StartAsync(sampleRateKhz, ct).ConfigureAwait(false);
+
+        int rateHz = sampleRateKhz * 1000;
+        IDspEngine newEngine;
+        int newChannelId;
+        try
+        {
+            var wdsp = new WdspDspEngine(_loggerFactory.CreateLogger<WdspDspEngine>());
+            newChannelId = wdsp.OpenChannel(rateHz, Width);
+            wdsp.OpenTxChannel();
+            // Best-effort apply. Some local WDSP builds are missing newer
+            // entry points (e.g. SetRXAEMNRpost2Run); the channel itself is
+            // open and capable of spectrum work even if a noise-reduction
+            // toggle can't be set. Narrow catch so a genuinely broken engine
+            // still surfaces via the outer handler.
+            try { ApplyStateToNewChannel(wdsp, newChannelId); }
+            catch (EntryPointNotFoundException ex)
+            {
+                _log.LogWarning(ex, "dsp.pipeline p2 wdsp missing entry point — partial config applied");
+            }
+            newEngine = wdsp;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "dsp.pipeline p2 wdsp open failed, falling back to synthetic engine");
+            var synth = new SyntheticDspEngine();
+            newChannelId = synth.OpenChannel(rateHz, Width);
+            try { ApplyStateToNewChannel(synth, newChannelId); }
+            catch (EntryPointNotFoundException) { }
+            newEngine = synth;
+        }
+
+        IDspEngine? old;
+        int oldChannel;
+        lock (_engineLock)
+        {
+            old = _engine;
+            oldChannel = _channelId;
+            _engine = newEngine;
+            _channelId = newChannelId;
+            _sampleRateHz = rateHz;
+        }
+        TeardownEngine(old, oldChannel);
+        _log.LogInformation("dsp.pipeline p2 engine={Engine} rate={Rate}", newEngine.GetType().Name, rateHz);
+
+        _p2Client = client;
+        StartIqPumpP2(client);
+        _radio.MarkProtocol2Connected(radioEndpoint.ToString(), rateHz);
+    }
+
+    public async Task DisconnectP2Async(CancellationToken ct)
+    {
+        var client = _p2Client;
+        _p2Client = null;
+        if (client is null) return;
+
+        await StopIqPumpAsync().ConfigureAwait(false);
+        try { await client.StopAsync(ct).ConfigureAwait(false); } catch { }
+        await client.DisposeAsync().ConfigureAwait(false);
+
+        var synth = new SyntheticDspEngine();
+        int channelId = synth.OpenChannel(SyntheticSampleRateHz, Width);
+        ApplyStateToNewChannel(synth, channelId);
+
+        IDspEngine? old;
+        int oldChannel;
+        lock (_engineLock)
+        {
+            old = _engine;
+            oldChannel = _channelId;
+            _engine = synth;
+            _channelId = channelId;
+            _sampleRateHz = SyntheticSampleRateHz;
+        }
+        TeardownEngine(old, oldChannel);
+        _radio.MarkProtocol2Disconnected();
+        _log.LogInformation("dsp.pipeline p2 disconnected, engine=synthetic");
+    }
+
+    public Zeus.Protocol2.Protocol2Client? ActiveP2Client => _p2Client;
 
     private async Task StopIqPumpAsync()
     {

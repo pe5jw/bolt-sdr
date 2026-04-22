@@ -289,11 +289,35 @@ export function connect(
   );
 }
 
+export function connectP2(
+  req: ConnectRequest,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  return jsonFetch(
+    '/api/connect/p2',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+      signal,
+    },
+    (raw) => raw,
+  );
+}
+
 export function disconnect(signal?: AbortSignal): Promise<RadioStateDto> {
   return jsonFetch(
     '/api/disconnect',
     { method: 'POST', signal },
     normalizeState,
+  );
+}
+
+export function disconnectP2(signal?: AbortSignal): Promise<unknown> {
+  return jsonFetch(
+    '/api/disconnect/p2',
+    { method: 'POST', signal },
+    (raw) => raw,
   );
 }
 
