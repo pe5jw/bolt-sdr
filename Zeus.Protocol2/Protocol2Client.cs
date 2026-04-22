@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
@@ -430,8 +429,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         }
 
         // 238 complex samples: I (int24 BE) + Q (int24 BE), starting at byte 16.
+        // We own the array for the lifetime of the IqFrame the downstream
+        // pump consumes; there's no back-channel to Return it to a pool, so
+        // plain GC allocation is both simpler and correct.
         const int samplesPerPacket = DiscoverySamplesPerPacket;
-        var samples = ArrayPool<double>.Shared.Rent(samplesPerPacket * 2);
+        var samples = new double[samplesPerPacket * 2];
         const double scale = 1.0 / 8388608.0;
         for (int i = 0; i < samplesPerPacket; i++)
         {
