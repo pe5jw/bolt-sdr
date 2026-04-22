@@ -57,6 +57,13 @@ export type TxState = {
   // WDSP SetTXAPanelGain1(TXA, 10^(db/20)). Kept as int dB on the wire.
   micGainDb: number;
   setMicGainDb: (db: number) => void;
+  // Leveler max-gain slider 0..+15 dB (default +5 — matches backend default
+  // and HL2 community starting point). Higher = more aggressive voice
+  // leveling; can push ALC into hard limiting. Persisted — a user preference
+  // that should survive reload. Server clamps [0, 15]; we clamp here too so
+  // persisted / race-condition writes can't poison the store.
+  levelerMaxGainDb: number;
+  setLevelerMaxGainDb: (db: number) => void;
   // Meter telemetry pushed from the server's TxMetersService over WS (0x16 v2).
   // Defaults look "quiet": 0 W forward/reflected, 1.0 SWR (matched), -100 dBfs
   // mic (near silence) so the SMeter/dBfs readouts don't spike on first paint.
@@ -120,6 +127,9 @@ export const useTxStore = create<TxState>()(
       setDrivePercent: (p) => set({ drivePercent: p }),
       micGainDb: 0,
       setMicGainDb: (db) => set({ micGainDb: db }),
+      levelerMaxGainDb: 5,
+      setLevelerMaxGainDb: (db) =>
+        set({ levelerMaxGainDb: Math.max(0, Math.min(15, db)) }),
       fwdWatts: 0,
       refWatts: 0,
       swr: 1.0,
@@ -180,6 +190,7 @@ export const useTxStore = create<TxState>()(
       partialize: (s) => ({
         drivePercent: s.drivePercent,
         micGainDb: s.micGainDb,
+        levelerMaxGainDb: s.levelerMaxGainDb,
       }),
     },
   ),
