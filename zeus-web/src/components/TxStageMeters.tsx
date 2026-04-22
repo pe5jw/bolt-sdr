@@ -161,7 +161,11 @@ function LevelRow({ label, dbfs, hint }: LevelRowProps) {
   const display = !isFinite(dbfs) || bypassed ? '—' : dbfs.toFixed(0);
   const rowTitle = bypassed ? `${hint} (stage bypassed)` : hint;
   return (
-    <div className="meter" title={rowTitle}>
+    <div
+      className="meter"
+      title={rowTitle}
+      style={bypassed ? { opacity: 0.55 } : undefined}
+    >
       <div className="meter-head">
         <span className="label-xs">{label}</span>
         <span className="meter-val mono">
@@ -441,7 +445,11 @@ function GrRow({ db, hint }: { db: number; hint: string }) {
         : normalized.toFixed(1);
   const rowTitle = bypassed ? `${hint} (stage bypassed)` : hint;
   return (
-    <div className="meter" title={rowTitle}>
+    <div
+      className="meter"
+      title={rowTitle}
+      style={bypassed ? { opacity: 0.55 } : undefined}
+    >
       <div className="meter-head">
         <span className="label-xs">ALC GR</span>
         <span className="meter-val mono">
@@ -489,10 +497,142 @@ function GrRow({ db, hint }: { db: number; hint: string }) {
   );
 }
 
+// Compact CFC row: PK level bar on the left, GR bar on the right — same
+// visual language as AlcPairRow but in a single LevelRow-sized vertical
+// slot. CFC is bypassed by default (WDSP SetTXACFCRun is not called), so
+// both readings land on the −400 sentinel and the row dims to 55% via
+// the `bypassed` style on the outer meter chassis.
+function CfcPairRow({ pk, gr, hint }: { pk: number; gr: number; hint: string }) {
+  const pkBypassed = isBypassed(pk);
+  const grBypassed = isBypassed(gr);
+  // Row-level "bypassed" = both streams silent (CFC off in WDSP).
+  const bypassed = pkBypassed && grBypassed;
+
+  const pkAxis = dbfsToAxis(pk);
+  const pkHeld = usePeakHold(pk);
+  const pkHeldAxis = dbfsToAxis(pkHeld);
+  const pkHeldVisible =
+    isFinite(pkHeld) && !isBypassed(pkHeld) && pkHeldAxis > pkAxis;
+  const pkDisplay = !isFinite(pk) || pkBypassed ? '—' : pk.toFixed(0);
+
+  const grNormalized = grBypassed ? gr : Math.max(0, gr);
+  const grClamped = grBypassed ? 0 : Math.min(GR_MAX_DB, grNormalized);
+  const grOverdrive = grClamped >= ALC_ZONE_HEALTHY_END_DB;
+  const grHeld = usePeakHold(grNormalized, GR_MAX_DB / 2);
+  const grHeldClamped = Math.max(0, Math.min(GR_MAX_DB, grHeld));
+  const grHeldVisible =
+    isFinite(grHeld) && !isBypassed(grHeld) && grHeldClamped > grClamped;
+  const grDisplay =
+    !isFinite(grNormalized) || grBypassed
+      ? '—'
+      : grNormalized === 0
+        ? '0'
+        : grNormalized.toFixed(1);
+
+  const rowTitle = bypassed ? `${hint} (stage bypassed)` : hint;
+  return (
+    <div
+      className="meter"
+      title={rowTitle}
+      style={bypassed ? { opacity: 0.55 } : undefined}
+    >
+      <div className="meter-head">
+        <span className="label-xs">CFC</span>
+        <span className="meter-val mono" style={{ fontSize: 12 }}>
+          PK {pkDisplay}
+          <span className="unit"> dBFS</span>
+          <span style={{ color: 'var(--fg-3)', margin: '0 6px' }}>·</span>
+          GR {grDisplay}
+          <span className="unit"> dB</span>
+        </span>
+      </div>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: 6,
+          alignItems: 'stretch',
+        }}
+      >
+        {/* PK bar */}
+        <div className="meter-bar">
+          <div
+            className="meter-fill"
+            style={{
+              width: `${(pkAxis / LEVEL_RANGE_DB) * 100}%`,
+              filter:
+                pkAxis / LEVEL_RANGE_DB > LEVEL_DANGER_POS
+                  ? 'hue-rotate(-20deg) saturate(1.4)'
+                  : undefined,
+            }}
+          />
+          {pkHeldVisible && (
+            <div
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                left: `calc(${(pkHeldAxis / LEVEL_RANGE_DB) * 100}% - 1px)`,
+                top: 0,
+                bottom: 0,
+                width: 2,
+                background: 'rgba(255, 160, 40, 0.4)',
+                pointerEvents: 'none',
+              }}
+            />
+          )}
+          <div className="meter-ticks">
+            <div
+              className="meter-tick danger"
+              style={{ left: `${LEVEL_DANGER_POS * 100}%` }}
+            />
+          </div>
+        </div>
+        {/* GR bar */}
+        <div className="meter-bar">
+          <div
+            className="meter-fill"
+            style={{
+              width: `${(grClamped / GR_MAX_DB) * 100}%`,
+              filter: grOverdrive
+                ? 'hue-rotate(-20deg) saturate(1.4)'
+                : undefined,
+            }}
+          />
+          {grHeldVisible && (
+            <div
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                left: `calc(${(grHeldClamped / GR_MAX_DB) * 100}% - 1px)`,
+                top: 0,
+                bottom: 0,
+                width: 2,
+                background: 'rgba(255, 160, 40, 0.4)',
+                pointerEvents: 'none',
+              }}
+            />
+          )}
+          <div className="meter-ticks">
+            <div
+              className="meter-tick danger"
+              style={{
+                left: `${(ALC_ZONE_HEALTHY_END_DB / GR_MAX_DB) * 100}%`,
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function TxStageMeters() {
   const wdspMicPk = useTxStore((s) => s.wdspMicPk);
   const eqPk = useTxStore((s) => s.eqPk);
   const lvlrPk = useTxStore((s) => s.lvlrPk);
+  const cfcPk = useTxStore((s) => s.cfcPk);
+  const cfcGr = useTxStore((s) => s.cfcGr);
+  const compPk = useTxStore((s) => s.compPk);
   const alcPk = useTxStore((s) => s.alcPk);
   const alcGr = useTxStore((s) => s.alcGr);
   const outPk = useTxStore((s) => s.outPk);
@@ -537,6 +677,16 @@ export function TxStageMeters() {
         label="LVLR"
         dbfs={lvlrPk}
         hint="Post-Leveler peak — same as EQ while Leveler is disabled"
+      />
+      <CfcPairRow
+        pk={cfcPk}
+        gr={cfcGr}
+        hint="CFC (continuous-frequency compressor) peak + gain reduction"
+      />
+      <LevelRow
+        label="COMP"
+        dbfs={compPk}
+        hint="Post-compressor peak — bypassed by default"
       />
       <LevelRow
         label="ALC"
