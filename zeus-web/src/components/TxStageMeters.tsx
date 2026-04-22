@@ -1,6 +1,84 @@
 import { useRef } from 'react';
 import { useTxStore } from '../state/tx-store';
 
+// Overdrive detector — "you are distorting" signature per HL2 community
+// guidance: mic clipping (micPk >= -1 dBFS) AND ALC limiting hard
+// (alcGr > 10 dB), sustained >= 200 ms. At the 10 Hz WS frame rate that's
+// effectively "both conditions true for 2+ consecutive samples".
+const OVERDRIVE_MIC_PK_DBFS = -1;
+const OVERDRIVE_ALC_GR_DB = 10;
+const OVERDRIVE_SUSTAIN_MS = 200;
+
+function useOverdrive(): boolean {
+  const micPk = useTxStore((s) => s.wdspMicPk);
+  const alcGr = useTxStore((s) => s.alcGr);
+  const moxOn = useTxStore((s) => s.moxOn);
+  const tunOn = useTxStore((s) => s.tunOn);
+  // Track the most recent timestamp at which the sustained condition was
+  // NOT met. While it IS met, `now - lastNotMet` measures sustain time.
+  const lastNotMetRef = useRef<number>(
+    typeof performance !== 'undefined' ? performance.now() : 0,
+  );
+  const transmitting = moxOn || tunOn;
+  const conditionsMet =
+    transmitting &&
+    isFinite(micPk) &&
+    !isBypassed(micPk) &&
+    micPk >= OVERDRIVE_MIC_PK_DBFS &&
+    isFinite(alcGr) &&
+    alcGr > OVERDRIVE_ALC_GR_DB;
+  const now =
+    typeof performance !== 'undefined' ? performance.now() : Date.now();
+  if (!conditionsMet) {
+    lastNotMetRef.current = now;
+    return false;
+  }
+  return now - lastNotMetRef.current >= OVERDRIVE_SUSTAIN_MS;
+}
+
+export function OverdriveIndicator() {
+  const tripped = useOverdrive();
+  return (
+    <span
+      aria-live="polite"
+      aria-label={tripped ? 'Overdrive detected' : 'Overdrive clear'}
+      title={
+        tripped
+          ? 'Mic clipping + ALC limiting hard — reduce mic gain or drive.'
+          : 'Overdrive detector (mic peak ≥ -1 dBFS AND ALC GR > 10 dB sustained 200 ms)'
+      }
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '2px 6px',
+        borderRadius: 3,
+        fontSize: 9,
+        fontWeight: 700,
+        letterSpacing: '0.08em',
+        textTransform: 'uppercase',
+        background: tripped ? 'var(--tx)' : 'transparent',
+        color: tripped ? '#fff' : 'var(--fg-3)',
+        border: `1px solid ${tripped ? 'var(--tx)' : 'var(--panel-border)'}`,
+        opacity: tripped ? 1 : 0.35,
+        transition: 'background 120ms, opacity 120ms, color 120ms',
+        boxShadow: tripped ? '0 0 6px var(--tx-soft)' : undefined,
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: '50%',
+          background: tripped ? '#fff' : 'var(--fg-3)',
+        }}
+      />
+      Overdrive
+    </span>
+  );
+}
+
 // Per-stage TX meter panel. Replaces the Memory-channels placeholder in the
 // bottom row for now — TX diagnostics are higher-priority while we chase
 // the SSB audio-quality issue. Reads peak-dBFS readings published by

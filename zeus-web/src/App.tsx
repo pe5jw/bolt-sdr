@@ -16,7 +16,7 @@ import { PreampButton } from './components/PreampButton';
 import { QrzStatusPill } from './components/QrzStatusPill';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
 import { SMeterLive } from './components/SMeterLive';
-import { TxStageMeters } from './components/TxStageMeters';
+import { OverdriveIndicator, TxStageMeters } from './components/TxStageMeters';
 import { TunButton } from './components/TunButton';
 import { VfoDisplay } from './components/VfoDisplay';
 import { Waterfall } from './components/Waterfall';
@@ -732,7 +732,11 @@ export default function App() {
             </Dockable>
           </div>
           <div className="bottom-slot hide-mobile">
-            <Dockable title="TX Stage Meters" ledOn={moxOn || tunOn}>
+            <Dockable
+              title="TX Stage Meters"
+              ledOn={moxOn || tunOn}
+              actions={<OverdriveIndicator />}
+            >
               <TxStageMeters />
             </Dockable>
           </div>
