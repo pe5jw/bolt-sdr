@@ -1,6 +1,4 @@
 using System.Collections.Concurrent;
-using System.Net;
-using System.Net.Sockets;
 using System.Net.WebSockets;
 using Microsoft.Extensions.Options;
 using Zeus.Contracts;
@@ -8,11 +6,16 @@ using Zeus.Contracts;
 namespace Zeus.Server.Tci;
 
 /// <summary>
-/// TCI (Transceiver Control Interface) server. Hosts a WebSocket listener on
-/// a dedicated port (default 40001) for ExpertSDR3-compatible remote control.
-/// Spoken by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X), and
-/// SDR display tools. Implements TCI v1.8 protocol per the ExpertSDR3 spec.
+/// TCI (Transceiver Control Interface) server. Accepts ExpertSDR3-compatible
+/// WebSocket clients on a dedicated Kestrel listener (default :40001) wired
+/// in Program.cs via a port-branched middleware. Spoken by loggers (Log4OM,
+/// N1MM+), digital-mode apps (JTDX, WSJT-X), and SDR display tools. Implements
+/// TCI v1.8 per the ExpertSDR3 spec.
 /// </summary>
+// Hosted lifetime here only wires/unwires radio-event subscriptions and closes
+// live sessions on shutdown — the HTTP accept loop lives in Kestrel, not here.
+// (HttpListener on Windows needs a per-user urlacl for wildcard binds; Kestrel
+// binds sockets directly, so clone-and-run works without elevation. See #30.)
 public sealed class TciServer : IHostedService, IDisposable
 {
     private readonly ILogger<TciServer> _log;
@@ -24,9 +27,7 @@ public sealed class TciServer : IHostedService, IDisposable
     private readonly ILoggerFactory _loggerFactory;
 
     private readonly ConcurrentDictionary<Guid, TciSession> _clients = new();
-    private HttpListener? _listener;
-    private Task? _acceptTask;
-    private CancellationTokenSource? _cts;
+    private bool _subscribed;
 
     public TciServer(
         IOptions<TciOptions> options,
@@ -55,118 +56,61 @@ public sealed class TciServer : IHostedService, IDisposable
             return Task.CompletedTask;
         }
 
-        try
-        {
-            _cts = new CancellationTokenSource();
-            _listener = new HttpListener();
-            // HttpListener prefix syntax: "+" is the all-interfaces wildcard.
-            // Translate common user values ("0.0.0.0", "*", empty) so the
-            // config stays intuitive. Explicit IPs (e.g. "127.0.0.1") pass through.
-            string host = _options.BindAddress switch
-            {
-                "0.0.0.0" or "*" or "" or null => "+",
-                _ => _options.BindAddress,
-            };
-            string prefix = $"http://{host}:{_options.Port}/";
-            _listener.Prefixes.Add(prefix);
-            _listener.Start();
+        _radio.StateChanged += OnRadioStateChanged;
+        _radio.Connected += OnRadioConnected;
+        _radio.Disconnected += OnRadioDisconnected;
+        _subscribed = true;
 
-            _log.LogInformation("tci.listening bind={Bind} port={Port}", _options.BindAddress, _options.Port);
-
-            // Subscribe to radio events for broadcasting state changes
-            _radio.StateChanged += OnRadioStateChanged;
-            _radio.Connected += OnRadioConnected;
-            _radio.Disconnected += OnRadioDisconnected;
-
-            _acceptTask = AcceptLoopAsync(_cts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.LogError(ex, "tci.start failed");
-            throw;
-        }
-
+        _log.LogInformation("tci.listening bind={Bind} port={Port}", _options.BindAddress, _options.Port);
         return Task.CompletedTask;
     }
 
     public async Task StopAsync(CancellationToken ct)
     {
-        if (_listener is null) return;
-
-        _log.LogInformation("tci.stopping");
-
-        _radio.StateChanged -= OnRadioStateChanged;
-        _radio.Connected -= OnRadioConnected;
-        _radio.Disconnected -= OnRadioDisconnected;
-
-        try { _cts?.Cancel(); } catch (ObjectDisposedException) { }
-        _listener.Stop();
-
-        if (_acceptTask is not null)
+        if (_subscribed)
         {
-            try { await _acceptTask; } catch { /* shutdown */ }
+            _radio.StateChanged -= OnRadioStateChanged;
+            _radio.Connected -= OnRadioConnected;
+            _radio.Disconnected -= OnRadioDisconnected;
+            _subscribed = false;
         }
 
-        // Close all client sessions
+        _log.LogInformation("tci.stopping active={Count}", _clients.Count);
+
         foreach (var session in _clients.Values)
         {
             session.Dispose();
         }
         _clients.Clear();
 
-        _cts?.Dispose();
-        _cts = null;
-        _listener.Close();
-        _listener = null;
+        await Task.CompletedTask;
     }
 
-    private async Task AcceptLoopAsync(CancellationToken ct)
+    /// <summary>
+    /// Handle an incoming HTTP request on the TCI listener port. Upgrades to a
+    /// WebSocket, registers a session, and runs it to completion. Invoked from
+    /// the port-branch middleware in Program.cs.
+    /// </summary>
+    public async Task AcceptAsync(HttpContext context)
     {
-        while (!ct.IsCancellationRequested)
+        if (!context.WebSockets.IsWebSocketRequest)
         {
-            try
-            {
-                var context = await _listener!.GetContextAsync();
-                _ = Task.Run(() => HandleClientAsync(context, ct), ct);
-            }
-            catch (HttpListenerException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (ObjectDisposedException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "tci accept loop error");
-            }
-        }
-    }
-
-    private async Task HandleClientAsync(HttpListenerContext context, CancellationToken ct)
-    {
-        if (!context.Request.IsWebSocketRequest)
-        {
-            context.Response.StatusCode = 400;
-            context.Response.Close();
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
             return;
         }
 
-        HttpListenerWebSocketContext wsContext;
+        WebSocket ws;
         try
         {
-            wsContext = await context.AcceptWebSocketAsync(subProtocol: null);
+            ws = await context.WebSockets.AcceptWebSocketAsync();
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "tci websocket upgrade failed");
-            context.Response.StatusCode = 500;
-            context.Response.Close();
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
             return;
         }
 
-        var ws = wsContext.WebSocket;
         var id = Guid.NewGuid();
         var sessionLog = _loggerFactory.CreateLogger<TciSession>();
         var session = new TciSession(id, ws, sessionLog, _radio, _tx, _pipeline, _spots, _options);
@@ -176,7 +120,7 @@ public sealed class TciServer : IHostedService, IDisposable
 
         try
         {
-            await session.RunAsync(ct);
+            await session.RunAsync(context.RequestAborted);
         }
         finally
         {
@@ -245,14 +189,6 @@ public sealed class TciServer : IHostedService, IDisposable
 
     public void Dispose()
     {
-        try { _cts?.Cancel(); } catch (ObjectDisposedException) { }
-        _cts?.Dispose();
-        _cts = null;
-
-        _listener?.Stop();
-        _listener?.Close();
-        _listener = null;
-
         foreach (var session in _clients.Values)
         {
             session.Dispose();

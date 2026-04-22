@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http.Json;
 using Zeus.Contracts;
@@ -24,7 +25,30 @@ builder.Services.Configure<JsonOptions>(o =>
 // on the LAN (doc 01 §Deployment: local single-user, same LAN as radio).
 // ZEUS_PORT overrides the default (used by the /run skill's portOffset).
 var zeusPort = int.TryParse(Environment.GetEnvironmentVariable("ZEUS_PORT"), out var zp) ? zp : 6060;
-builder.WebHost.ConfigureKestrel(k => k.ListenAnyIP(zeusPort));
+
+// Resolve TCI bind settings from configuration before DI builds, because Kestrel's
+// listeners have to be declared now. TCI shares Kestrel (rather than a separate
+// HttpListener) so clone-and-run on Windows doesn't need an http.sys URL ACL — see #30.
+var tciSection = builder.Configuration.GetSection("Tci");
+var tciEnabled = tciSection.GetValue<bool>("Enabled");
+var tciBindAddress = tciSection.GetValue<string?>("BindAddress") ?? "0.0.0.0";
+var tciPort = tciSection.GetValue<int?>("Port") ?? 40001;
+
+builder.WebHost.ConfigureKestrel(k =>
+{
+    k.ListenAnyIP(zeusPort);
+    if (tciEnabled)
+    {
+        if (tciBindAddress is "0.0.0.0" or "*" or "")
+            k.ListenAnyIP(tciPort);
+        else if (string.Equals(tciBindAddress, "localhost", StringComparison.OrdinalIgnoreCase))
+            k.ListenLocalhost(tciPort);
+        else if (IPAddress.TryParse(tciBindAddress, out var tciIp))
+            k.Listen(tciIp, tciPort);
+        else
+            k.ListenAnyIP(tciPort);
+    }
+});
 
 // DspPipelineService owns engine selection directly: Synthetic while idle,
 // WDSP while a Protocol1Client is attached. No IDspEngine DI registration —
@@ -84,6 +108,19 @@ var qrzService = app.Services.GetRequiredService<QrzService>();
 await qrzService.InitializeAsync(CancellationToken.None);
 
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
+
+// Port-branch: any request arriving on the TCI listener (default :40001) is
+// routed straight to TciServer.AcceptAsync. Keeps TCI clients connecting to
+// ws://host:40001/ (root path, per ExpertSDR3 spec) from colliding with the
+// API/SPA on the main port.
+if (tciEnabled)
+{
+    app.UseWhen(
+        ctx => ctx.Connection.LocalPort == tciPort,
+        tciBranch => tciBranch.Run(ctx =>
+            ctx.RequestServices.GetRequiredService<TciServer>().AcceptAsync(ctx)));
+}
+
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
