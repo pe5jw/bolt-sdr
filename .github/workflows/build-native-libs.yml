@@ -17,9 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install FFTW via vcpkg
+      - name: Install FFTW via vcpkg (static-md triplet, dynamic CRT)
         run: |
-          vcpkg install fftw3:${{ matrix.arch }}-windows
+          # static-md = FFTW linked statically into wdsp.dll, but using the
+          # default dynamic CRT (/MD) so no CRT mismatch with CMake defaults.
+          # Result: a single self-contained wdsp.dll, no fftw3.dll needed.
+          vcpkg install fftw3:${{ matrix.arch }}-windows-static-md
           echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
 
       - name: Configure CMake
@@ -28,7 +31,8 @@ jobs:
           cmake -S native/wdsp -B native/build `
             -G "Visual Studio 17 2022" `
             -A $archFlag `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.arch }}-windows-static-md
 
       - name: Build
         run: |
