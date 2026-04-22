@@ -12,6 +12,7 @@ import { MobilePttButton } from './components/MobilePttButton';
 import { ModeBandwidth } from './components/ModeBandwidth';
 import { MoxButton } from './components/MoxButton';
 import { Panadapter } from './components/Panadapter';
+import { PaTempChip } from './components/PaTempChip';
 import { PreampButton } from './components/PreampButton';
 import { QrzStatusPill } from './components/QrzStatusPill';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
@@ -760,6 +761,7 @@ export default function App() {
         <button type="button" className="btn ghost hide-mobile">RIT</button>
         <button type="button" className="btn ghost hide-mobile">SAVE MEM</button>
         <div className="spacer" style={{ flex: 1 }} />
+        <PaTempChip />
         <div className="chip hide-mobile">
           <span className="k">LINK</span>
           <span className="v mono">{connected ? 'UP' : 'DOWN'}</span>

@@ -32,6 +32,12 @@ const RX_METER_BYTES = 1 + 4;
 // Server emits when SWR > 2.5 sustained ≥500 ms (PRD FR-6). Kind 0 = SWR trip.
 export const MSG_TYPE_ALERT = 0x13;
 
+// HL2 PA temperature: 1 type byte + 1 × f32 LE (°C). Broadcast at 2 Hz
+// regardless of MOX state; server clamps to [-40, 125] °C before send.
+// Operator-visible in the transport bar chip with 50/55 °C warning zones.
+export const MSG_TYPE_PA_TEMP = 0x17;
+const PA_TEMP_BYTES = 1 + 4;
+
 // WDSP wisdom status: 1 type byte + 1 phase byte (0=idle, 1=building, 2=ready).
 // Pushed once on WS attach and again on every transition. The UI disables the
 // Connect button and pulses while phase=building so the user doesn't try to
@@ -170,6 +176,18 @@ export function startRealtime(path = '/ws'): () => void {
             outPk: dv.getFloat32(73, true),
             outAv: dv.getFloat32(77, true),
           });
+          return;
+        }
+        if (peekType === MSG_TYPE_PA_TEMP) {
+          if (ev.data.byteLength < PA_TEMP_BYTES) {
+            warnOnce(
+              'ws-pa-temp-short',
+              `PA temp frame too short: ${ev.data.byteLength}`,
+            );
+            return;
+          }
+          const tempC = new DataView(ev.data).getFloat32(1, true);
+          useTxStore.getState().setPaTempC(tempC);
           return;
         }
         if (peekType === MSG_TYPE_RX_METER) {

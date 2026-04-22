@@ -102,6 +102,11 @@ export type TxState = {
   // sustained ≥500 ms. Dismissable amber banner in UI; sticks until dismissed.
   alert: Alert | null;
   setAlert: (a: Alert | null) => void;
+  // HL2 PA temperature (°C), from MsgType 0x17 at 2 Hz. Server clamps to
+  // [-40, 125]. null means "no reading yet" (server hasn't sampled or we
+  // haven't connected). Transient per-session — not persisted.
+  paTempC: number | null;
+  setPaTempC: (c: number) => void;
 };
 
 export const useTxStore = create<TxState>()(
@@ -165,6 +170,8 @@ export const useTxStore = create<TxState>()(
       setRxDbm: (dbm) => set({ rxDbm: dbm }),
       alert: null,
       setAlert: (a) => set({ alert: a }),
+      paTempC: null,
+      setPaTempC: (c) => set({ paTempC: c }),
     }),
     {
       name: 'zeus-tx',
