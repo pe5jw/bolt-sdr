@@ -53,6 +53,11 @@ function formatKhz(hz: number): string {
   return (hz / 1000).toFixed(3);
 }
 
+// Per-digit wheel tuning debounce. Wheel events fire at ~60 Hz during a spin;
+// we update the store (and therefore the display) on every tick for instant
+// feedback, but only POST the last resting value to avoid flooding /api/vfo.
+const WHEEL_DEBOUNCE_MS = 80;
+
 export function VfoDisplay() {
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const applyState = useConnectionStore((s) => s.applyState);
@@ -60,6 +65,15 @@ export function VfoDisplay() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const wheelTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wheelPending = useRef<number | null>(null);
+  const wheelInflight = useRef<AbortController | null>(null);
+
+  useEffect(() => () => {
+    wheelInflight.current?.abort();
+    if (wheelTimer.current != null) clearTimeout(wheelTimer.current);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -125,6 +139,49 @@ export function VfoDisplay() {
     [commitEdit, cancelEdit],
   );
 
+  // Per-digit wheel tuning: hover over a digit, scroll wheel to step that
+  // digit's decade. Wheel up = freq up. Updates local store immediately so
+  // the display tracks the wheel, POSTs the final resting value after the
+  // user stops scrolling.
+  const onDigitWheel = useCallback(
+    (e: React.WheelEvent<HTMLSpanElement>) => {
+      const decadeAttr = e.currentTarget.dataset.decade;
+      if (!decadeAttr) return;
+      const decade = Number.parseInt(decadeAttr, 10);
+      if (!Number.isFinite(decade) || decade <= 0) return;
+      e.preventDefault();
+
+      const direction = e.deltaY < 0 ? 1 : -1;
+      const current = useConnectionStore.getState().vfoHz;
+      const next = clampHz(current + direction * decade);
+      if (next === current) return;
+      useConnectionStore.setState({ vfoHz: next });
+      wheelPending.current = next;
+
+      if (wheelTimer.current != null) clearTimeout(wheelTimer.current);
+      wheelTimer.current = setTimeout(() => {
+        wheelTimer.current = null;
+        const target = wheelPending.current;
+        wheelPending.current = null;
+        if (target == null) return;
+        wheelInflight.current?.abort();
+        const ac = new AbortController();
+        wheelInflight.current = ac;
+        setVfo(target, ac.signal)
+          .then((reply) => {
+            if (ac.signal.aborted) return;
+            applyState(reply);
+          })
+          .catch((err) => {
+            if (ac.signal.aborted) return;
+            if (err instanceof DOMException && err.name === 'AbortError') return;
+            /* next state poll will reconcile */
+          });
+      }, WHEEL_DEBOUNCE_MS);
+    },
+    [applyState],
+  );
+
   const digits = useMemo(() => DIGIT_PLACES, []);
 
   return (
@@ -162,7 +219,7 @@ export function VfoDisplay() {
           type="button"
           onClick={beginEdit}
           aria-label="Edit frequency"
-          title="Click to enter frequency in kHz"
+          title="Click to enter frequency in kHz — scroll the wheel over a digit to tune it"
           className="freq-digits mono"
           style={{ background: 'none', border: 'none', cursor: 'text', width: '100%' }}
         >
@@ -171,7 +228,14 @@ export function VfoDisplay() {
             const isLeading = vfoHz < place.decade;
             return (
               <Fragment key={place.decade}>
-                <span className={`digit ${isLeading ? 'leading' : ''}`}>{d}</span>
+                <span
+                  className={`digit ${isLeading ? 'leading' : ''}`}
+                  data-decade={place.decade}
+                  onWheel={onDigitWheel}
+                  style={{ cursor: 'ns-resize' }}
+                >
+                  {d}
+                </span>
                 {place.separatorAfter && (
                   <span aria-hidden className="sep">
                     {place.separatorAfter}
@@ -183,7 +247,7 @@ export function VfoDisplay() {
         </button>
       )}
       <div className="freq-bot" style={{ justifyContent: 'flex-end', gap: 6, marginTop: 4 }}>
-        <span className="label-xs">MHz · click to enter kHz</span>
+        <span className="label-xs">MHz · click to type · wheel on a digit to step</span>
       </div>
     </div>
   );
