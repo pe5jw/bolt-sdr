@@ -208,26 +208,48 @@ See `native/README.md` for detailed build instructions and `docs/lessons/wdsp-in
 
 ## Acknowledgements
 
-Zeus stands on the shoulders of the OpenHPSDR community. A huge thank-you to:
+Zeus stands on the shoulders of the OpenHPSDR community. Most of what Zeus
+knows about Protocol-1 framing, Protocol-2 client behaviour, WDSP init
+ordering, meter pipelines, and TX safety was learned by reading the
+[Thetis source](https://github.com/ramdor/Thetis). Zeus is an independent
+reimplementation in .NET — not a fork — but Thetis is the authoritative
+reference for how an OpenHPSDR client should behave, and it continues a
+GPL-governed lineage that runs from FlexRadio PowerSDR through the
+OpenHPSDR (TAPR) ecosystem to Thetis itself.
 
-- **Richard Samphire (MW0LGE)** and **Reid (MI0BOT)** — Thetis is an awesome
-  starting point. Much of what Zeus knows about Protocol-1 framing, WDSP init
-  ordering, meter pipelines, and TX behaviour was learned by reading the
-  [Thetis source](https://github.com/TAPR/OpenHPSDR-Thetis). Zeus is an
-  independent reimplementation in .NET — not a fork — but Thetis is the sole
-  authoritative reference for how a Protocol-1 client should behave.
-- **Warren Pratt (NR0V)** — for [WDSP](https://github.com/TAPR/OpenHPSDR-Thetis/tree/master/Project%20Files/Source/wdsp),
-  the DSP engine Zeus loads via P/Invoke.
+Zeus gratefully acknowledges the Thetis contributors:
+
+- **Richard Samphire** (MW0LGE)
+- **Warren Pratt** (NR0V) — also author of **WDSP**, the DSP engine Zeus
+  loads via P/Invoke
+- **Laurence Barker** (G8NJJ)
+- **Rick Koch** (N1GP)
+- **Bryan Rambo** (W4WMT)
+- **Chris Codella** (W2PA)
+- **Doug Wigley** (W5WC)
+- **Richard Allen** (W5SD)
+- **Joe Torrey** (WD5Y)
+- **Andrew Mansfield** (M0YGG)
+- **Reid Campbell** (MI0BOT)
+- **FlexRadio Systems**
+
+Zeus contributors to date: **Brian Keating (EI6LF)** — project lead, and
+**Douglas J. Cerrato (KB2UKA)**.
+
+See [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md) for the full provenance statement,
+per-component licensing, and the per-file header convention Zeus uses to
+carry this acknowledgement through every source file.
 
 ## License
 
 Zeus is free software: you can redistribute it and/or modify it under the
 terms of the **GNU General Public License v2 or (at your option) any later
 version**, as published by the Free Software Foundation. See
-[`LICENSE`](LICENSE) for the full text.
+[`LICENSE`](LICENSE) for the full text and [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md)
+for the full provenance statement.
 
-This licensing aligns Zeus with its two direct upstreams — Thetis (GPL v2)
-and WDSP (GPL v3) — so that derivative work and linked distributions remain
-licence-compatible.
+This licensing aligns Zeus with its direct upstreams — Thetis (GPL v2+) and
+WDSP (GPL v2+, by NR0V) — so that the derivation chain and any linked
+distributions remain licence-compatible.
 
 Zeus is distributed WITHOUT ANY WARRANTY; see the GPL for details.

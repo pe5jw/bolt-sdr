@@ -1,3 +1,33 @@
+Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
+Copyright (C) 2025-2026 Brian Keating (EI6LF),
+                        Douglas J. Cerrato (KB2UKA), and contributors.
+
+Zeus is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation, either version 2 of the License, or (at your option) any later
+version.
+
+Zeus is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+details.
+
+You should have received a copy of the GNU General Public License along
+with Zeus; if not, see <https://www.gnu.org/licenses/>.
+
+Zeus is an independent reimplementation of an OpenHPSDR client in .NET.
+Its protocol, DSP wiring, and meter behaviour were developed with direct
+reference to the Thetis project (https://github.com/ramdor/Thetis) as the
+authoritative specification. Thetis itself continues a GPL-governed
+software lineage from FlexRadio PowerSDR through the OpenHPSDR ecosystem.
+See ATTRIBUTIONS.md at the root of this repository for the full provenance
+statement, the Thetis contributor acknowledgements, and the WDSP (NR0V)
+attribution.
+
+The text of the GNU General Public License version 2 follows.
+
+================================================================================
+
                     GNU GENERAL PUBLIC LICENSE
                        Version 2, June 1991
 
