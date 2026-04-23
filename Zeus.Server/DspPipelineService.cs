@@ -101,6 +101,7 @@ public class DspPipelineService : BackgroundService
         _radio.Connected += OnRadioConnected;
         _radio.Disconnected += OnRadioDisconnected;
         _radio.StateChanged += OnRadioStateChanged;
+        _radio.PaSnapshotChanged += OnPaSnapshotChanged;
 
         var panBuf = new float[Width];
         var wfBuf = new float[Width];
@@ -120,6 +121,7 @@ public class DspPipelineService : BackgroundService
             _radio.Connected -= OnRadioConnected;
             _radio.Disconnected -= OnRadioDisconnected;
             _radio.StateChanged -= OnRadioStateChanged;
+            _radio.PaSnapshotChanged -= OnPaSnapshotChanged;
             await StopIqPumpAsync().ConfigureAwait(false);
             CloseCurrentEngine();
         }
@@ -399,6 +401,18 @@ public class DspPipelineService : BackgroundService
         _p2Client = client;
         StartIqPumpP2(client);
         _radio.MarkProtocol2Connected(radioEndpoint.ToString(), rateHz);
+        // Push current PA snapshot into the brand-new client so byte 345 /
+        // byte 1401 / CmdGeneral[58] reflect PaSettingsStore from frame 1.
+        _radio.ReplayPaSnapshot();
+    }
+
+    private void OnPaSnapshotChanged(PaRuntimeSnapshot snap)
+    {
+        var p2 = _p2Client;
+        if (p2 is null) return;
+        p2.SetDriveByte(snap.DriveByte);
+        p2.SetOcMasks(snap.OcTxMask, snap.OcRxMask);
+        p2.SetPaEnabled(snap.PaEnabled);
     }
 
     public async Task DisconnectP2Async(CancellationToken ct)

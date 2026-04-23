@@ -158,3 +158,34 @@ public sealed record BandMemorySetRequest(long Hz, RxMode Mode);
 public sealed record UiLayoutDto(string LayoutJson, long UpdatedUtc);
 
 public sealed record UiLayoutSetRequest(string LayoutJson);
+
+// Per-band PA settings. Mirrors Thetis `PAProfile._gainValues[]` / piHPSDR
+// `band->pa_calibration` (single scalar dB per band — 9-point curve is a
+// Phase-4 follow-up). OcTx / OcRx are 7-bit Open-Collector masks driving the
+// N2ADR filter board on HL2 and ALEX/OC outputs on Orion-class radios; they
+// are OR'd with the board's auto-filter logic so stock HL2 filter switching
+// keeps working when the user hasn't set anything.
+public sealed record PaBandSettingsDto(
+    string Band,
+    double PaGainDb = 0.0,
+    bool DisablePa = false,
+    byte OcTx = 0,
+    byte OcRx = 0);
+
+// Globals shared across bands. PaMaxPowerWatts=0 disables the watts
+// conversion path and falls back to the legacy "drive% = raw 0-255 byte"
+// behavior so existing installs behave identically until the user runs
+// a calibration. OcTune is OR'd into the OC byte while TUN is engaged
+// (Thetis: OCtune in `Penny.cs`; piHPSDR: `OCtune<<1` in `old_protocol.c`).
+public sealed record PaGlobalSettingsDto(
+    bool PaEnabled = true,
+    int PaMaxPowerWatts = 0,
+    byte OcTune = 0);
+
+public sealed record PaSettingsDto(
+    PaGlobalSettingsDto Global,
+    IReadOnlyList<PaBandSettingsDto> Bands);
+
+public sealed record PaSettingsSetRequest(
+    PaGlobalSettingsDto Global,
+    IReadOnlyList<PaBandSettingsDto> Bands);

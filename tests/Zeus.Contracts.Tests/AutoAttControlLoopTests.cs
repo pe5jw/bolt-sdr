@@ -53,7 +53,8 @@ public class AutoAttControlLoopTests
     private static RadioService MakeService()
     {
         var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
-        return new(NullLoggerFactory.Instance, dspStore);
+        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance);
+        return new(NullLoggerFactory.Instance, dspStore, paStore);
     }
 
     private static readonly AdcOverloadStatus Overload = new(Adc0: true, Adc1: false);

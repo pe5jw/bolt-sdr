@@ -90,6 +90,20 @@ public interface IProtocol1Client : IDisposable
     void SetDrive(int percent);
 
     /// <summary>
+    /// Push a fully-computed raw drive byte (0..255), overriding the percent
+    /// path. RadioService uses this when PA calibration converts target watts
+    /// → drive byte via the per-band gain lookup.
+    /// </summary>
+    void SetDriveByte(byte value);
+
+    /// <summary>
+    /// User-configured Open-Collector pin masks (7 bits each). OR'd with the
+    /// board's auto-filter output. <paramref name="txMask"/> is asserted when
+    /// MOX is on; <paramref name="rxMask"/> otherwise.
+    /// </summary>
+    void SetOcMasks(byte txMask, byte rxMask);
+
+    /// <summary>
     /// Raised from the RX loop whenever a successfully parsed EP6 packet carried
     /// a C&amp;C echo on an AIN-bearing address (addresses 1/2/3 → C0 bytes
     /// 0x08/0x10/0x18). Fire-and-forget — handlers run synchronously on the RX
@@ -111,6 +125,13 @@ public interface IProtocol1Client : IDisposable
     /// OC pin encoding. Defaults to <see cref="HpsdrBoardKind.HermesLite2"/>.
     /// </summary>
     void SetBoardKind(HpsdrBoardKind board);
+
+    /// <summary>
+    /// Current board kind as latched via <see cref="SetBoardKind"/>. Defaults
+    /// to <see cref="HpsdrBoardKind.HermesLite2"/> when discovery did not
+    /// supply one.
+    /// </summary>
+    HpsdrBoardKind BoardKind { get; }
 
     /// <summary>
     /// Toggle the HL2 + N2ADR 7-relay filter board. When on, C2 bits [7:1]

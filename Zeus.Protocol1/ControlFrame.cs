@@ -82,7 +82,14 @@ internal static class ControlFrame
         // drive_level written directly to output_buffer[C1]. Units are
         // "hardware drive level 0..255"; UI-side percent is mapped in
         // Protocol1Client.SnapshotState.
-        byte DriveLevel = 0);
+        byte DriveLevel = 0,
+        // User-configured OC pin masks (7-bit) from PaSettingsStore. OR'd with
+        // the board's auto-filter output in WriteConfigPayload so the stock HL2
+        // + N2ADR behavior keeps working when the user hasn't configured
+        // anything. Selected by MOX: TX mask during transmit, RX mask otherwise
+        // (piHPSDR `old_protocol.c:1884-1904`).
+        byte UserOcTxMask = 0,
+        byte UserOcRxMask = 0);
 
     /// <summary>
     /// Write the 5 C&amp;C bytes for <paramref name="register"/> given the current
@@ -160,14 +167,19 @@ internal static class ControlFrame
         byte c1 = (byte)((byte)s.Rate & 0x03);
         c14[0] = c1;
 
-        // C2: class-E PA at bit 0; OC pins (N2ADR filter board on HL2) at
-        // bits 1..7. The 7-bit pin mask is shifted left by 1 into the output
-        // buffer. Class-E stays 0 for RX-only MVP.
-        byte c2 = 0;
+        // C2: class-E PA at bit 0; OC pins (N2ADR filter board on HL2, user-
+        // configured OC outputs on Orion-class) at bits 1..7. Class-E stays 0
+        // for RX-only MVP. We OR three sources so stock behavior holds when
+        // the user hasn't touched PA Settings:
+        //   1. Board auto-filter mask (N2ADR on HL2) — legacy path
+        //   2. User's per-band OC-TX mask when MOX, else OC-RX mask
+        byte ocPins = 0;
         if (s.Board == HpsdrBoardKind.HermesLite2 && s.HasN2adr)
         {
-            c2 |= (byte)(N2adrBands.RxOcMask(s.VfoAHz) << 1);
+            ocPins |= N2adrBands.RxOcMask(s.VfoAHz);
         }
+        ocPins |= (byte)((s.Mox ? s.UserOcTxMask : s.UserOcRxMask) & 0x7F);
+        byte c2 = (byte)(ocPins << 1);
         c14[1] = c2;
 
         // C3: Atlas step attenuator [1:0], RAND [2], DITHER [3], preamp [4],

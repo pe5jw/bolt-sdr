@@ -40,6 +40,7 @@ using Microsoft.Extensions.Logging;
 using Zeus.Contracts;
 using Zeus.Dsp;
 using Zeus.Protocol1;
+using Zeus.Protocol1.Discovery;
 
 namespace Zeus.Server;
 
@@ -51,6 +52,13 @@ public sealed class RadioService : IDisposable
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<RadioService> _log;
     private readonly DspSettingsStore _dspSettingsStore;
+    private readonly PaSettingsStore _paStore;
+    // Last-commanded slider value in UI percent (0..100). Needed here because
+    // the drive byte depends on three inputs — percent, per-band PA gain, and
+    // global max-watts — any of which can change independently. When a band
+    // edge is crossed or a PA setting is edited, we recompute without needing
+    // to wait for the next SetDrive call.
+    private int _drivePct;
 
     private StateDto _state;
 
@@ -59,6 +67,11 @@ public sealed class RadioService : IDisposable
     private bool _mox;
 
     private Protocol1Client? _activeClient;
+    // True while DspPipelineService has a live Protocol2 client and no P1 is
+    // active. Used to resolve the effective board kind for PA defaults when
+    // the user is on a G2 MkII / Saturn (P2 discovery flow skips
+    // Protocol1Client entirely).
+    private bool _p2Active;
     private bool _preampOn;
     // Auto-ATT defaults on; the user baseline starts at 0 dB and the control
     // loop ramps _attOffsetDb up to 31 dB on observed ADC overloads (Thetis
@@ -82,6 +95,12 @@ public sealed class RadioService : IDisposable
     public event Action<StateDto>? StateChanged;
     public event Action<IProtocol1Client>? Connected;
     public event Action? Disconnected;
+    // Fires whenever the effective PA snapshot changes (store edit, VFO band
+    // crossing, drive slider). DspPipelineService consumes this to forward the
+    // same snapshot into any live Protocol2Client (byte 345 / byte 1401 /
+    // CmdGeneral[58]). RadioService pushes to the P1 client directly because
+    // it owns _activeClient.
+    public event Action<PaRuntimeSnapshot>? PaSnapshotChanged;
 
     // Shared TX IQ source threaded through Protocol1Client. TxAudioIngest
     // writes into the same instance; this is the seam between "mic arrived
@@ -89,11 +108,13 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, Zeus.Protocol1.ITxIqSource? txIqSource = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, Zeus.Protocol1.ITxIqSource? txIqSource = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
         _dspSettingsStore = dspSettingsStore;
+        _paStore = paStore;
+        _paStore.Changed += RecomputePaAndPush;
         _txIqSource = txIqSource;
 
         // Load persisted DSP settings from the store, or use defaults if not found
@@ -166,6 +187,11 @@ public sealed class RadioService : IDisposable
             Mutate(s => s with { Status = ConnectionStatus.Connected });
             _log.LogInformation("radio.connected endpoint={Ep} rate={Rate}", ipEndpoint, hpsdrRate);
             Connected?.Invoke(client);
+            // Replay PA settings into the fresh client — drive byte, OC masks,
+            // and (for P2 downstream) PA-enable. Without this the client sits
+            // at the protocol defaults (drive=0, OC=0) until something else
+            // moves.
+            RecomputePaAndPush();
             return Snapshot();
         }
         catch
@@ -207,8 +233,17 @@ public sealed class RadioService : IDisposable
     public StateDto SetVfo(long hz)
     {
         long clamped = Math.Clamp(hz, 0L, 60_000_000L);
+        long previous;
+        lock (_sync) previous = _state.VfoHz;
         Mutate(s => s with { VfoHz = clamped });
         ActiveClient?.SetVfoAHz(clamped);
+        // Band edge crossed? Per-band PA gain / OC bits may have swapped — push
+        // the new snapshot before the next TX frame ships. Cheap when no
+        // crossing occurred (same bytes re-pushed).
+        if (BandUtils.FreqToBand(previous) != BandUtils.FreqToBand(clamped))
+        {
+            RecomputePaAndPush();
+        }
         return Snapshot();
     }
 
@@ -369,7 +404,66 @@ public sealed class RadioService : IDisposable
     public void SetDrive(int percent)
     {
         int clamped = Math.Clamp(percent, 0, 100);
-        ActiveClient?.SetDrive(clamped);
+        Interlocked.Exchange(ref _drivePct, clamped);
+        RecomputePaAndPush();
+    }
+
+    // DspPipelineService calls this right after a P2 client is created so the
+    // fresh connection sees the current PA snapshot without waiting for the
+    // next state change.
+    public void ReplayPaSnapshot() => RecomputePaAndPush();
+
+    // Compute the current drive byte + OC masks + PA enable from _drivePct,
+    // PaSettingsStore, and the current VFO band. Push to the active P1 client
+    // and fire PaSnapshotChanged for the P2 forwarder. Called on:
+    //   - SetDrive (slider moved)
+    //   - SetVfo when the band changes
+    //   - PaSettingsStore.Changed (user edited PA Settings)
+    //   - Connected (push current snapshot to fresh client)
+    private void RecomputePaAndPush()
+    {
+        var stateSnap = Snapshot();
+        var cfg = _paStore.GetAll(ConnectedBoardKind);
+        var bandName = BandUtils.FreqToBand(stateSnap.VfoHz);
+        var bandCfg = bandName is not null
+            ? cfg.Bands.FirstOrDefault(b => b.Band == bandName) ?? new PaBandSettingsDto(bandName)
+            : new PaBandSettingsDto("unknown");
+
+        int drivePct = Volatile.Read(ref _drivePct);
+        byte driveByte = ComputeDriveByte(drivePct, bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts);
+        bool paEnabled = cfg.Global.PaEnabled && !bandCfg.DisablePa;
+
+        ActiveClient?.SetDriveByte(driveByte);
+        ActiveClient?.SetOcMasks(bandCfg.OcTx, bandCfg.OcRx);
+
+        PaSnapshotChanged?.Invoke(new PaRuntimeSnapshot(
+            DriveByte: driveByte,
+            OcTxMask: bandCfg.OcTx,
+            OcRxMask: bandCfg.OcRx,
+            OcTuneMask: cfg.Global.OcTune,
+            PaEnabled: paEnabled));
+    }
+
+    // Shared math: target watts → dBm → subtract per-band PA gain → back to
+    // volts across 50Ω → normalize against 0.8V full-scale → 0..255 drive byte.
+    // When maxWatts == 0, fall back to the legacy UI-percent-to-byte mapping so
+    // existing installs behave identically until calibration is entered.
+    // Reference: Thetis console.cs:46801-46841, piHPSDR radio.c:2809-2828.
+    internal static byte ComputeDriveByte(int drivePct, double paGainDb, int maxWatts)
+    {
+        drivePct = Math.Clamp(drivePct, 0, 100);
+        if (maxWatts <= 0)
+        {
+            return (byte)(drivePct * 255 / 100);
+        }
+
+        double targetWatts = maxWatts * drivePct / 100.0;
+        if (targetWatts <= 0) return 0;
+
+        double sourceWatts = targetWatts / Math.Pow(10.0, paGainDb / 10.0);
+        double sourceVolts = Math.Sqrt(sourceWatts * 50.0);
+        double norm = Math.Clamp(sourceVolts / 0.8, 0.0, 1.0);
+        return (byte)Math.Round(norm * 255.0);
     }
 
     // Thetis "AGC Top" slider — max post-AGC gain in dB. Clamped to the
@@ -409,6 +503,7 @@ public sealed class RadioService : IDisposable
 
     public void Dispose()
     {
+        _paStore.Changed -= RecomputePaAndPush;
         try { DisconnectAsync(CancellationToken.None).GetAwaiter().GetResult(); }
         catch { /* best-effort */ }
     }
@@ -430,21 +525,43 @@ public sealed class RadioService : IDisposable
     // the UI without growing a P2 client slot here.
     public void MarkProtocol2Connected(string endpoint, int sampleRateHz)
     {
+        lock (_sync) _p2Active = true;
         Mutate(s => s with
         {
             Status = ConnectionStatus.Connected,
             Endpoint = endpoint,
             SampleRate = sampleRateHz,
         });
+        // P2 is alive — PA defaults should reflect G2 / Orion class so the
+        // operator sees realistic numbers when they open the PA panel.
+        RecomputePaAndPush();
     }
 
     public void MarkProtocol2Disconnected()
     {
+        lock (_sync) _p2Active = false;
         Mutate(s => s with
         {
             Status = ConnectionStatus.Disconnected,
             Endpoint = null,
         });
+    }
+
+    // Resolves the board class the PA settings UI/math should seed defaults
+    // from. P1 client wins when present (its BoardKind comes from discovery);
+    // bare P2 connections imply Orion MkII (ANAN G2 family); everything else
+    // is Unknown and falls back to 0 dB (legacy percent→byte).
+    public HpsdrBoardKind ConnectedBoardKind
+    {
+        get
+        {
+            lock (_sync)
+            {
+                if (_activeClient is not null) return _activeClient.BoardKind;
+                if (_p2Active) return HpsdrBoardKind.OrionMkII;
+                return HpsdrBoardKind.Unknown;
+            }
+        }
     }
 
     // Protocol1 → RadioService bridge. Runs on the RX thread at ~1.2 kHz;
