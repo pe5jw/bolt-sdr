@@ -25,11 +25,14 @@ const DB_CEIL = -30;
 const DRAG_MIN_INTERVAL_MS = 50;
 const EDGE_HIT_PX = 6;
 
-// Mockup palette.
-const COL_ACCENT = '#4a9eff';          // passband outline / corner handles
-const COL_TRACE = 'rgba(215, 225, 240, 0.85)'; // spectrum line
+// Mockup palette — neon-blue passband with a soft halo, light-grey
+// trace, muted tick labels.
+const COL_ACCENT = '#7fc2ff';          // passband outline / corner handles (bright cyan-blue)
+const COL_ACCENT_GLOW = 'rgba(127, 194, 255, 0.45)'; // halo under the outline
+const COL_TRACE = 'rgba(210, 222, 238, 0.8)'; // spectrum line
 const COL_TICK_LABEL = '#5a7598';      // axis tick text
-const COL_VFO_CENTER = 'rgba(74, 158, 255, 0.35)'; // subtle VFO center line
+const COL_TICK_LABEL_CENTER = '#b3c3dd'; // center (VFO) tick — slightly brighter
+const COL_VFO_CENTER = 'rgba(127, 194, 255, 0.22)'; // subtle VFO center line
 
 type DragMode = 'lo' | 'hi' | 'inside';
 
@@ -134,16 +137,21 @@ export function FilterMiniPan() {
       ctx.lineTo(w / 2, plotH);
       ctx.stroke();
 
-      // Passband rectangle — hollow (PRD §3.2.1 mockup) with corner triangles.
+      // Passband rectangle — hollow with a neon glow (PRD §3.2.1 mockup).
+      // Uses canvas shadowBlur to get a soft halo around the outline; ctx
+      // state is isolated via save/restore so the halo doesn't bleed onto
+      // the trace or axis labels.
       const passLeftPx = ((c.filterLowHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * w;
       const passRightPx = ((c.filterHighHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * w;
       const onScreen = passRightPx > 0 && passLeftPx < w;
       if (onScreen) {
         const clampedL = Math.max(0, passLeftPx);
         const clampedR = Math.min(w, passRightPx);
-        // Outline: 4 sides, 1.5 px blue.
+        ctx.save();
+        ctx.shadowColor = COL_ACCENT_GLOW;
+        ctx.shadowBlur = 6 * dpr;
         ctx.strokeStyle = COL_ACCENT;
-        ctx.lineWidth = 1.5 * dpr;
+        ctx.lineWidth = 1.75 * dpr;
         ctx.beginPath();
         ctx.rect(
           Math.round(clampedL) + 0.5,
@@ -152,8 +160,10 @@ export function FilterMiniPan() {
           plotH - 1,
         );
         ctx.stroke();
+        ctx.restore();
 
-        // Corner triangle handles (top-left, top-right).
+        // Corner triangle handles (top-left + top-right), bright fill,
+        // no shadow so they punch through crisply.
         const tri = Math.round(8 * dpr);
         ctx.fillStyle = COL_ACCENT;
         ctx.beginPath();
@@ -187,8 +197,8 @@ export function FilterMiniPan() {
         if (xPx < 0 || xPx > w) return;
         const text = formatTickMhz(absHz);
         const m = ctx.measureText(text);
-        // Bold the center (VFO) label via a brighter fill.
-        ctx.fillStyle = offHz === 0 ? '#a9b9d3' : COL_TICK_LABEL;
+        // Brighter fill on the VFO (center) tick, muted on the rest.
+        ctx.fillStyle = offHz === 0 ? COL_TICK_LABEL_CENTER : COL_TICK_LABEL;
         ctx.fillText(text, Math.max(2, Math.min(w - m.width - 2, xPx - m.width / 2)), labelY);
       });
     };

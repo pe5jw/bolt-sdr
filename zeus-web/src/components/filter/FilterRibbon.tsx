@@ -5,14 +5,22 @@
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 //
 // Filter visualization PRD §3.2 — advanced filter ribbon. Matches the
-// mockup at docs/pics/filterpanel_mockup.png: dark-chrome panel with
-// BANDWIDTH / LOW CUT / PASSBAND / HIGH CUT columns, a 10 kHz mini-
-// panadapter, a 3×2 preset-bandwidth grid plus CUSTOM, close (×).
+// updated mockup (docs/pics/filterpanel_mockup.png):
 //
-// Renders as a **dedicated workspace row** above the hero (same column
-// width as the panadapter). Side-stack spans both the ribbon row and
-// the hero row; when the ribbon is closed the row collapses to 0 and
-// the workspace lays out exactly as before.
+//   ┌────────────────────────────────────────────────────────────┐
+//   │ BANDWIDTH │ LOW CUT │ PASSBAND │ HIGH CUT │  ≡ PRESETS  ×  │
+//   │           │  freq   │  2.70 kHz│  freq    │  2.4  2.7  3.6 │
+//   │ ───────────────────────────────────────    │  6.0  9.0 12.0 │
+//   │ │  spectrum trace with passband box    │   │  [  CUSTOM  ✎ ]│
+//   │ └──────────────────────────────────────┘   │                │
+//   │  14.249 14.251 14.253 14.255 14.257 …      │                │
+//   │      DRAG EDGES TO ADJUST · DRAG INSIDE    │                │
+//   └────────────────────────────────────────────────────────────┘
+//
+// The ribbon lives as a dedicated workspace row above the hero — same
+// column width as the panadapter. Preset column is a fixed-width right
+// rail; everything else (readouts + mini-pan + hint) stacks vertically
+// on the left so the mini-pan gets the full spectrum-strip width.
 
 import { useCallback, useEffect } from 'react';
 import { useConnectionStore } from '../../state/connection-store';
@@ -101,13 +109,15 @@ export function FilterRibbon() {
   if (!open) return null;
   if (presets.length === 0) return null;
 
+  const currentWidth = Math.abs(filterHigh - filterLow);
+
   return (
     <div
       className="filter-ribbon"
       role="region"
       aria-label="Advanced filter ribbon"
     >
-      {/* Close × (top-right) */}
+      {/* Close × (top-right of the whole ribbon) */}
       <button
         type="button"
         aria-label="Close filter ribbon"
@@ -117,41 +127,40 @@ export function FilterRibbon() {
         ×
       </button>
 
-      <div className="filter-ribbon__grid">
-        {/* BANDWIDTH header column */}
-        <div className="filter-ribbon__col filter-ribbon__col--left">
-          <div className="filter-ribbon__label">BANDWIDTH</div>
-        </div>
+      <div className="filter-ribbon__body">
+        {/* Left column: top readout row, full-width mini-pan, footer hint */}
+        <div className="filter-ribbon__main">
+          <div className="filter-ribbon__topRow">
+            <div className="filter-ribbon__topCol filter-ribbon__topCol--bw">
+              <div className="filter-ribbon__label">BANDWIDTH</div>
+            </div>
+            <div className="filter-ribbon__topCol filter-ribbon__topCol--lo">
+              <div className="filter-ribbon__label">LOW CUT</div>
+              <div className="filter-ribbon__freq">{formatAbsFreq(lowAbs)}</div>
+            </div>
+            <div className="filter-ribbon__topCol filter-ribbon__topCol--pb">
+              <div className="filter-ribbon__label">PASSBAND</div>
+              <div className="filter-ribbon__passband">
+                <span className="filter-ribbon__passband-value">{widthKHz.toFixed(2)}</span>
+                <span className="filter-ribbon__passband-unit">kHz</span>
+              </div>
+            </div>
+            <div className="filter-ribbon__topCol filter-ribbon__topCol--hi">
+              <div className="filter-ribbon__label">HIGH CUT</div>
+              <div className="filter-ribbon__freq">{formatAbsFreq(highAbs)}</div>
+            </div>
+          </div>
 
-        {/* LOW CUT */}
-        <div className="filter-ribbon__col filter-ribbon__col--left">
-          <div className="filter-ribbon__label">LOW CUT</div>
-          <div className="filter-ribbon__freq">{formatAbsFreq(lowAbs)}</div>
-        </div>
+          <div className="filter-ribbon__minipan">
+            <FilterMiniPan />
+          </div>
 
-        {/* PASSBAND — focal */}
-        <div className="filter-ribbon__col filter-ribbon__col--center">
-          <div className="filter-ribbon__label">PASSBAND</div>
-          <div className="filter-ribbon__passband">
-            <span className="filter-ribbon__passband-value">
-              {widthKHz.toFixed(2)}
-            </span>
-            <span className="filter-ribbon__passband-unit">kHz</span>
+          <div className="filter-ribbon__hint">
+            DRAG EDGES TO ADJUST&nbsp;&nbsp;·&nbsp;&nbsp;DRAG INSIDE TO MOVE
           </div>
         </div>
 
-        {/* HIGH CUT */}
-        <div className="filter-ribbon__col filter-ribbon__col--right">
-          <div className="filter-ribbon__label">HIGH CUT</div>
-          <div className="filter-ribbon__freq">{formatAbsFreq(highAbs)}</div>
-        </div>
-
-        {/* Mini-panadapter */}
-        <div className="filter-ribbon__minipan">
-          <FilterMiniPan />
-        </div>
-
-        {/* PRESET BANDWIDTHS column */}
+        {/* Right column: presets rail, full ribbon height */}
         <div className="filter-ribbon__presets">
           <div className="filter-ribbon__label filter-ribbon__label--icon">
             <span className="filter-ribbon__presets-icon">≡</span>
@@ -160,11 +169,6 @@ export function FilterRibbon() {
           <div className="filter-ribbon__preset-grid">
             {presets.map((slot) => {
               const slotWidth = Math.abs(slot.highHz - slot.lowHz);
-              const currentWidth = Math.abs(filterHigh - filterLow);
-              // Active when the passband width matches this chip (±20 Hz) so
-              // the chip lights up whether selected from ribbon or compact
-              // panel, and regardless of whether filterPresetName is a VAR
-              // slot or a RIBBON_* synthesised name.
               const active = Math.abs(slotWidth - currentWidth) <= 20;
               const widthK = slotWidth / 1000;
               return (
@@ -190,11 +194,6 @@ export function FilterRibbon() {
             <span className="filter-ribbon__custom-icon" aria-hidden>✎</span>
           </button>
         </div>
-      </div>
-
-      {/* Footer hint — centered, uppercase, muted */}
-      <div className="filter-ribbon__hint">
-        DRAG EDGES TO ADJUST&nbsp;&nbsp;•&nbsp;&nbsp;DRAG INSIDE TO MOVE
       </div>
     </div>
   );
