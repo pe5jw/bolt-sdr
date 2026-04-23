@@ -90,6 +90,10 @@ export type RadioStateDto = {
   mode: RxMode;
   filterLowHz: number;
   filterHighHz: number;
+  // Null after a drag edit without a named-slot context (PRD §4.1).
+  filterPresetName: string | null;
+  // Advanced-filter ribbon visibility; persisted server-side.
+  filterAdvancedPaneOpen: boolean;
   sampleRate: number;
   agcTopDb: number;
   attenDb: number;
@@ -98,6 +102,14 @@ export type RadioStateDto = {
   adcOverloadWarning: boolean;
   nr: NrConfigDto;
   zoomLevel: ZoomLevel;
+};
+
+export type FilterPresetDto = {
+  slotName: string;
+  label: string;
+  lowHz: number;
+  highHz: number;
+  isVar: boolean;
 };
 
 export type RadioInfoDto = {
@@ -216,6 +228,8 @@ export function normalizeState(raw: unknown): RadioStateDto {
     mode: normalizeMode(r.mode),
     filterLowHz: typeof r.filterLowHz === 'number' ? r.filterLowHz : 0,
     filterHighHz: typeof r.filterHighHz === 'number' ? r.filterHighHz : 0,
+    filterPresetName: typeof r.filterPresetName === 'string' ? r.filterPresetName : null,
+    filterAdvancedPaneOpen: typeof r.filterAdvancedPaneOpen === 'boolean' ? r.filterAdvancedPaneOpen : false,
     sampleRate: typeof r.sampleRate === 'number' ? r.sampleRate : 0,
     // Default 80 matches WdspDspEngine.ApplyAgcDefaults and the Thetis
     // AGC_MEDIUM preset. Missing from older servers — tolerate absence.
@@ -408,6 +422,96 @@ export function setBandwidth(
       signal,
     },
     normalizeState,
+  );
+}
+
+// Preferred filter endpoint: includes optional preset name for chip tracking.
+export function setFilter(
+  lowHz: number,
+  highHz: number,
+  presetName?: string,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/filter',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ lowHz, highHz, presetName: presetName ?? null }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+function normalizeFilterPreset(raw: unknown): FilterPresetDto | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.slotName !== 'string' || typeof r.label !== 'string') return null;
+  return {
+    slotName: r.slotName,
+    label: r.label,
+    lowHz: typeof r.lowHz === 'number' ? r.lowHz : 0,
+    highHz: typeof r.highHz === 'number' ? r.highHz : 0,
+    isVar: Boolean(r.isVar),
+  };
+}
+
+export function getFilterPresets(
+  mode: RxMode,
+  signal?: AbortSignal,
+): Promise<FilterPresetDto[]> {
+  return jsonFetch(
+    `/api/filter/presets?mode=${encodeURIComponent(mode)}`,
+    { signal },
+    (raw) => {
+      if (!Array.isArray(raw)) return [];
+      return raw.flatMap((item) => {
+        const p = normalizeFilterPreset(item);
+        return p ? [p] : [];
+      });
+    },
+  );
+}
+
+export function setFilterAdvancedPaneOpen(
+  open: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/filter/advanced-pane',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ open }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+export function setFilterPresetOverride(
+  mode: RxMode,
+  slotName: string,
+  lowHz: number,
+  highHz: number,
+  signal?: AbortSignal,
+): Promise<FilterPresetDto[]> {
+  return jsonFetch(
+    '/api/filter/presets',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode, slotName, lowHz, highHz }),
+      signal,
+    },
+    (raw) => {
+      if (!Array.isArray(raw)) return [];
+      return raw.flatMap((item) => {
+        const p = normalizeFilterPreset(item);
+        return p ? [p] : [];
+      });
+    },
   );
 }
 

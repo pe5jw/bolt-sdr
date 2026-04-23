@@ -53,6 +53,10 @@ public sealed class RadioService : IDisposable
     private readonly ILogger<RadioService> _log;
     private readonly DspSettingsStore _dspSettingsStore;
     private readonly PaSettingsStore _paStore;
+    private readonly FilterPresetStore? _filterPresetStore;
+    // Last-known preset name per mode, preserved across mode switches.
+    // Accessed only from inside Mutate (under _sync) or at init.
+    private readonly Dictionary<RxMode, string?> _lastPresetPerMode = new();
     // Last-commanded slider value in UI percent (0..100). Needed here because
     // the drive byte depends on three inputs — percent, per-band PA gain, and
     // global max-watts — any of which can change independently. When a band
@@ -117,17 +121,26 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, Zeus.Protocol1.ITxIqSource? txIqSource = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
         _dspSettingsStore = dspSettingsStore;
         _paStore = paStore;
+        _filterPresetStore = filterPresetStore;
         _paStore.Changed += RecomputePaAndPush;
         _txIqSource = txIqSource;
 
         // Load persisted DSP settings from the store, or use defaults if not found
         var persistedNr = _dspSettingsStore.Get() ?? new NrConfig();
+
+        // Seed the last-preset cache from persisted store for all modes so
+        // the first mode-switch in a session recalls the correct slot.
+        if (filterPresetStore != null)
+        {
+            foreach (RxMode m in Enum.GetValues<RxMode>())
+                _lastPresetPerMode[m] = filterPresetStore.GetLastSelectedPreset(m);
+        }
 
         _state = new(
             Status: ConnectionStatus.Disconnected,
@@ -143,7 +156,19 @@ public sealed class RadioService : IDisposable
             ZoomLevel: 1,
             AutoAttEnabled: true,
             AttOffsetDb: 0,
-            AdcOverloadWarning: false);
+            AdcOverloadWarning: false,
+            // Zeus default filter (150/2850) maps to the seeded USB VAR1 slot.
+            FilterPresetName: "VAR1",
+            FilterAdvancedPaneOpen: filterPresetStore?.GetAdvancedPaneOpen() ?? false);
+    }
+
+    // Ribbon-visibility setter — frontend toggles via REST, server broadcasts
+    // a StateDto so other browser tabs stay in sync.
+    public StateDto SetFilterAdvancedPaneOpen(bool open)
+    {
+        _filterPresetStore?.SetAdvancedPaneOpen(open);
+        Mutate(s => s with { FilterAdvancedPaneOpen = open });
+        return Snapshot();
     }
 
     public IProtocol1Client? ActiveClient
@@ -271,8 +296,16 @@ public sealed class RadioService : IDisposable
 
     public StateDto SetMode(RxMode mode)
     {
+        RxMode departingMode = default;
+        string? departingPreset = null;
         Mutate(s =>
         {
+            departingMode = s.Mode;
+            departingPreset = s.FilterPresetName;
+
+            // Save departing mode's preset name to the in-memory cache.
+            _lastPresetPerMode[s.Mode] = s.FilterPresetName;
+
             // 1) Save current abs-filter into the mode we are LEAVING.
             int curLoAbs = Math.Min(Math.Abs(s.FilterLowHz), Math.Abs(s.FilterHighHz));
             int curHiAbs = Math.Max(Math.Abs(s.FilterLowHz), Math.Abs(s.FilterHighHz));
@@ -283,15 +316,54 @@ public sealed class RadioService : IDisposable
 
             // 3) Re-sign per target mode's sideband convention.
             var (lo, hi) = SignedFilterForMode(mode, fam.LoAbs, fam.HiAbs);
-            return s with { Mode = mode, FilterLowHz = lo, FilterHighHz = hi };
+
+            // 4) Restore the last-known preset name for the incoming mode.
+            _lastPresetPerMode.TryGetValue(mode, out var restoredPreset);
+            return s with { Mode = mode, FilterLowHz = lo, FilterHighHz = hi, FilterPresetName = restoredPreset };
         });
+
+        // Persist the departing mode's last preset outside the lock.
+        if (departingPreset != null)
+            _filterPresetStore?.UpsertLastSelectedPreset(departingMode, departingPreset);
+
         return Snapshot();
     }
 
-    public StateDto SetFilter(int lowHz, int highHz)
+    public StateDto SetFilter(int lowHz, int highHz, string? presetName = null)
     {
         if (highHz < lowHz) (lowHz, highHz) = (highHz, lowHz);
-        Mutate(s => s with { FilterLowHz = lowHz, FilterHighHz = highHz });
+        RxMode modeAtSet = RxMode.USB;
+        Mutate(s =>
+        {
+            modeAtSet = s.Mode;
+            if (presetName != null) _lastPresetPerMode[s.Mode] = presetName;
+            return s with { FilterLowHz = lowHz, FilterHighHz = highHz, FilterPresetName = presetName };
+        });
+        if (presetName != null)
+            _filterPresetStore?.UpsertLastSelectedPreset(modeAtSet, presetName);
+        return Snapshot();
+    }
+
+    public IReadOnlyList<FilterPresetDto> GetFilterPresets(RxMode mode)
+    {
+        var defaults = FilterPresets.DefaultsForMode(mode);
+        return defaults.Select(e =>
+        {
+            if (e.IsVar && _filterPresetStore != null)
+            {
+                var stored = _filterPresetStore.GetVarOverride(mode, e.SlotName);
+                if (stored.HasValue)
+                    return new FilterPresetDto(e.SlotName, e.Label, stored.Value.LowHz, stored.Value.HighHz, true);
+            }
+            return new FilterPresetDto(e.SlotName, e.Label, e.LowHz, e.HighHz, e.IsVar);
+        }).ToList();
+    }
+
+    public StateDto SetFilterPresetOverride(RxMode mode, string slotName, int loHz, int hiHz)
+    {
+        if (slotName is not ("VAR1" or "VAR2"))
+            throw new InvalidOperationException("Only VAR1 and VAR2 slots can be overridden.");
+        _filterPresetStore?.UpsertVarOverride(mode, slotName, loHz, hiHz);
         return Snapshot();
     }
 

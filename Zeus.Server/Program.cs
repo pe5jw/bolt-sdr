@@ -127,6 +127,7 @@ builder.Services.AddSingleton<BandMemoryStore>();
 builder.Services.AddSingleton<LayoutStore>();
 builder.Services.AddSingleton<DspSettingsStore>();
 builder.Services.AddSingleton<PaSettingsStore>();
+builder.Services.AddSingleton<FilterPresetStore>();
 builder.Services.AddSingleton<QrzService>();
 builder.Services.AddSingleton<LogService>();
 
@@ -374,6 +375,41 @@ app.MapPost("/api/bandwidth", (BandwidthSetRequest req, RadioService r) =>
 {
     log.LogInformation("api.bandwidth low={L} high={H}", req.Low, req.High);
     return r.SetFilter(req.Low, req.High);
+});
+
+// Filter preset endpoints (PRD §5.2). These are the preferred filter surface;
+// /api/bandwidth remains for backward compat. POST /api/filter also accepts
+// an optional PresetName to track which chip is active.
+app.MapPost("/api/filter", (FilterSetRequest req, RadioService r) =>
+{
+    log.LogInformation("api.filter low={L} high={H} preset={P}", req.LowHz, req.HighHz, req.PresetName);
+    return r.SetFilter(req.LowHz, req.HighHz, req.PresetName);
+});
+
+app.MapGet("/api/filter/presets", (string? mode, RadioService r) =>
+{
+    if (mode is null || !Enum.TryParse<RxMode>(mode, ignoreCase: true, out var rxMode))
+        return Results.BadRequest(new { error = $"Unknown mode '{mode}'. Expected one of: {string.Join(", ", Enum.GetNames<RxMode>())}" });
+    return Results.Ok(r.GetFilterPresets(rxMode));
+});
+
+app.MapPost("/api/filter/presets", (FilterPresetWriteRequest req, RadioService r) =>
+{
+    log.LogInformation("api.filter.presets mode={M} slot={S} low={L} high={H}", req.Mode, req.SlotName, req.LowHz, req.HighHz);
+    if (req.SlotName is not ("VAR1" or "VAR2"))
+        return Results.Conflict(new { error = "Fixed presets cannot be edited. Only VAR1 and VAR2 slots are writable." });
+    if (!Enum.IsDefined(req.Mode))
+        return Results.BadRequest(new { error = $"Unknown mode '{req.Mode}'." });
+    r.SetFilterPresetOverride(req.Mode, req.SlotName, req.LowHz, req.HighHz);
+    return Results.Ok(r.GetFilterPresets(req.Mode));
+});
+
+// Advanced-ribbon pane visibility. Persisted via FilterPresetStore so the
+// operator's close-the-ribbon choice survives a Zeus.Server restart.
+app.MapPost("/api/filter/advanced-pane", (FilterAdvancedPaneRequest req, RadioService r) =>
+{
+    log.LogInformation("api.filter.advancedPane open={Open}", req.Open);
+    return r.SetFilterAdvancedPaneOpen(req.Open);
 });
 
 app.MapPost("/api/sampleRate", (SampleRateSetRequest req, RadioService r) =>

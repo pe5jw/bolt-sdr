@@ -88,7 +88,13 @@ public sealed record StateDto(
     int AttOffsetDb = 0,
     // Red-lamp flag derived from Thetis' overload-level counter
     // (+2 per overload cycle, -1 per clean, clamped 0..5, warn when >3).
-    bool AdcOverloadWarning = false);
+    bool AdcOverloadWarning = false,
+    // Currently active filter preset slot name (e.g. "F6", "VAR1"). Null when
+    // the filter was set by a drag edit without a named slot context.
+    string? FilterPresetName = null,
+    // Advanced-filter ribbon visibility, persisted across server restarts via
+    // FilterPresetStore so the operator's close-the-ribbon choice sticks.
+    bool FilterAdvancedPaneOpen = false);
 
 public sealed record RadioInfo(
     string MacAddress,
