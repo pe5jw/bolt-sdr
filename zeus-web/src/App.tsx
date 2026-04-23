@@ -51,6 +51,7 @@ import { MicMeter } from './components/MicMeter';
 import { MobilePttButton } from './components/MobilePttButton';
 import { MobileZoomSlider } from './components/MobileZoomSlider';
 import { ModeBandwidth } from './components/ModeBandwidth';
+import { FilterPanel } from './components/filter/FilterPanel';
 import { MoxButton } from './components/MoxButton';
 import { Panadapter } from './components/Panadapter';
 import { PaTempChip } from './components/PaTempChip';
@@ -625,10 +626,12 @@ export default function App() {
       <div className="control-strip">
         <div className="hide-mobile" style={{ display: 'contents' }}>
           <ModeBandwidth />
+          <FilterPanel />
           <BandButtons />
         </div>
         <div className="show-mobile" style={{ display: 'none', gap: 8 }}>
           <ModeBandwidth />
+          <FilterPanel />
           <BandButtons />
         </div>
         <div className="ctrl-group hide-mobile" style={{ minWidth: 220 }}>

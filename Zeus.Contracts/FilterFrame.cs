@@ -35,47 +35,39 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useDisplayStore } from '../state/display-store';
-import { useConnectionStore } from '../state/connection-store';
+namespace Zeus.Contracts;
 
-// Translucent rectangle drawn inside the panadapter container to show the
-// active receive filter passband, mapped from [filterLowHz, filterHighHz]
-// relative to the VFO centre. Asymmetric by design: USB lives to the right
-// of carrier, LSB to the left, CW narrow around zero, AM symmetric.
-// Positioned by percentage of the total span so it tracks resize and tune
-// without measuring DOM width.
-export function PassbandOverlay() {
-  const centerHz = useDisplayStore((s) => s.centerHz);
-  const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
-  const width = useDisplayStore((s) => s.panDb?.length ?? 0);
-  const filterLowHz = useConnectionStore((s) => s.filterLowHz);
-  const filterHighHz = useConnectionStore((s) => s.filterHighHz);
+// Broadcast frame carrying the current RX filter state with optional preset
+// context. Emitted on every SetFilter call and on mode change.
+public sealed record FilterStateFrame(
+    int ChannelId,
+    RxMode Mode,
+    int LowHz,
+    int HighHz,
+    string? PresetName = null,
+    int? PresetIndex = null);
 
-  if (!width || hzPerPixel <= 0) return null;
+// REST / hub request to set the active filter. PresetName is optional;
+// nudges without a preset context (drag edits) omit it and clear the
+// active-preset highlight on the frontend.
+public sealed record FilterSetRequest(
+    int LowHz,
+    int HighHz,
+    string? PresetName = null);
 
-  const spanHz = width * hzPerPixel;
-  const center = Number(centerHz);
-  const startHz = center - spanHz / 2;
+// Request to write a VAR1 or VAR2 slot. Server rejects SlotName values
+// outside {VAR1, VAR2} with HTTP 409.
+public sealed record FilterPresetWriteRequest(
+    RxMode Mode,
+    string SlotName,
+    int LowHz,
+    int HighHz);
 
-  const passLowHz = center + filterLowHz;
-  const passHighHz = center + filterHighHz;
-  const leftPct = ((passLowHz - startHz) / spanHz) * 100;
-  const rightPct = ((passHighHz - startHz) / spanHz) * 100;
-  const widthPct = rightPct - leftPct;
-
-  if (widthPct <= 0 || leftPct > 100 || rightPct < 0) return null;
-
-  return (
-    <div
-      aria-hidden
-      className="pointer-events-none absolute inset-y-0 z-[5]"
-      style={{
-        left: `${leftPct}%`,
-        width: `${widthPct}%`,
-        background: 'rgba(255, 160, 40, 0.18)',
-        borderLeft: '1px solid rgba(255, 160, 40, 0.6)',
-        borderRight: '1px solid rgba(255, 160, 40, 0.6)',
-      }}
-    />
-  );
-}
+// DTO returned by GET /api/filter/presets. Carries the merged Thetis default
+// plus any operator VAR1/VAR2 overrides for a given mode.
+public sealed record FilterPresetDto(
+    string SlotName,
+    string Label,
+    int LowHz,
+    int HighHz,
+    bool IsVar);
