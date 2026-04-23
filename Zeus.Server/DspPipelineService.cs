@@ -102,6 +102,8 @@ public class DspPipelineService : BackgroundService
         _radio.Disconnected += OnRadioDisconnected;
         _radio.StateChanged += OnRadioStateChanged;
         _radio.PaSnapshotChanged += OnPaSnapshotChanged;
+        _radio.MoxChanged += OnRadioMoxChanged;
+        _radio.TunActiveChanged += OnRadioTunActiveChanged;
 
         var panBuf = new float[Width];
         var wfBuf = new float[Width];
@@ -122,6 +124,8 @@ public class DspPipelineService : BackgroundService
             _radio.Disconnected -= OnRadioDisconnected;
             _radio.StateChanged -= OnRadioStateChanged;
             _radio.PaSnapshotChanged -= OnPaSnapshotChanged;
+            _radio.MoxChanged -= OnRadioMoxChanged;
+            _radio.TunActiveChanged -= OnRadioTunActiveChanged;
             await StopIqPumpAsync().ConfigureAwait(false);
             CloseCurrentEngine();
         }
@@ -174,7 +178,9 @@ public class DspPipelineService : BackgroundService
 
         var wdsp = new WdspDspEngine(_loggerFactory.CreateLogger<WdspDspEngine>());
         int channelId = wdsp.OpenChannel(rate, Width);
-        wdsp.OpenTxChannel();
+        // P1 DAC runs at 48 kHz; keep TXA at the 48/48/48 profile Hermes is
+        // calibrated against.
+        wdsp.OpenTxChannel(outputRateHz: 48_000);
         ApplyStateToNewChannel(wdsp, channelId);
 
         IDspEngine? old;
@@ -362,7 +368,11 @@ public class DspPipelineService : BackgroundService
         {
             var wdsp = new WdspDspEngine(_loggerFactory.CreateLogger<WdspDspEngine>());
             newChannelId = wdsp.OpenChannel(rateHz, Width);
-            wdsp.OpenTxChannel();
+            // G2 MkII DUC on P2 expects 192 kHz TX IQ. WDSP upsamples internally
+            // (48k mic → 96k DSP → 192k out) and CFIR compensates the sinc
+            // droop. Feeding 48 kHz IQ to a 192 kHz DUC as we did before
+            // produced 8-10 kHz close-in spurs around the carrier.
+            wdsp.OpenTxChannel(outputRateHz: 192_000);
             // Best-effort apply. Some local WDSP builds are missing newer
             // entry points (e.g. SetRXAEMNRpost2Run); the channel itself is
             // open and capable of spectrum work even if a noise-reduction
@@ -412,7 +422,28 @@ public class DspPipelineService : BackgroundService
         if (p2 is null) return;
         p2.SetDriveByte(snap.DriveByte);
         p2.SetOcMasks(snap.OcTxMask, snap.OcRxMask);
+        p2.SetOcTuneMask(snap.OcTuneMask);
         p2.SetPaEnabled(snap.PaEnabled);
+    }
+
+    private void OnRadioMoxChanged(bool on)
+    {
+        _p2Client?.SetMox(on);
+    }
+
+    private void OnRadioTunActiveChanged(bool on)
+    {
+        _p2Client?.SetTune(on);
+    }
+
+    /// <summary>
+    /// Forward a WDSP TXA block of interleaved float IQ to the live P2 client.
+    /// No-op when P2 isn't connected; safe to call from TxTuneDriver / future
+    /// mic-MOX feeders without branching on protocol.
+    /// </summary>
+    public void ForwardTxIqToP2(ReadOnlySpan<float> iqInterleaved)
+    {
+        _p2Client?.SendTxIq(iqInterleaved);
     }
 
     public async Task DisconnectP2Async(CancellationToken ct)

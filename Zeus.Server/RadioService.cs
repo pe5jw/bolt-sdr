@@ -114,6 +114,12 @@ public sealed class RadioService : IDisposable
     // CmdGeneral[58]). RadioService pushes to the P1 client directly because
     // it owns _activeClient.
     public event Action<PaRuntimeSnapshot>? PaSnapshotChanged;
+    // Fires on every MOX / TUN edge. P1 side is pushed directly via
+    // ActiveClient?.SetMox; these events give DspPipelineService the hook it
+    // needs to forward the same bit into a live Protocol2Client, which owns
+    // its own CmdHighPriority byte 4.
+    public event Action<bool>? MoxChanged;
+    public event Action<bool>? TunActiveChanged;
 
     // Shared TX IQ source threaded through Protocol1Client. TxAudioIngest
     // writes into the same instance; this is the seam between "mic arrived
@@ -174,6 +180,16 @@ public sealed class RadioService : IDisposable
     public IProtocol1Client? ActiveClient
     {
         get { lock (_sync) return _activeClient; }
+    }
+
+    /// <summary>
+    /// True when any backend (P1 or P2) has a live connection. Needed by
+    /// TxService's MOX / TUN interlock — a G2 on P2 has no ActiveClient
+    /// (Protocol1Client is null) but still wants to accept TX requests.
+    /// </summary>
+    public bool IsConnected
+    {
+        get { lock (_sync) return _activeClient is not null || _p2Active; }
     }
 
     public StateDto Snapshot() { lock (_sync) return _state; }
@@ -476,6 +492,7 @@ public sealed class RadioService : IDisposable
     {
         lock (_sync) _mox = on;
         ActiveClient?.SetMox(on);
+        MoxChanged?.Invoke(on);
     }
 
     // Drive is transient like MOX — latched on the Protocol1Client so the
@@ -505,6 +522,7 @@ public sealed class RadioService : IDisposable
     {
         lock (_sync) _tunActive = on;
         RecomputePaAndPush();
+        TunActiveChanged?.Invoke(on);
     }
 
     // DspPipelineService calls this right after a P2 client is created so the

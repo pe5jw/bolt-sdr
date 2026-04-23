@@ -60,8 +60,14 @@ public sealed class PaSettingsStore : IDisposable
         lock (_sync)
         {
             var g = _globals.FindAll().FirstOrDefault();
+            // When nothing is persisted yet, seed the global with board-specific
+            // defaults so new operators don't land in the "PaMaxPowerWatts=0 →
+            // PaGainDb ignored" legacy mode on first connect.
             var global = g is null
-                ? new PaGlobalSettingsDto()
+                ? new PaGlobalSettingsDto(
+                    PaEnabled: true,
+                    PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board),
+                    OcTune: 0)
                 : new PaGlobalSettingsDto(g.PaEnabled, g.PaMaxPowerWatts, g.OcTune);
 
             var existing = _bands.FindAll().ToDictionary(e => e.Band, e => e);
@@ -91,13 +97,16 @@ public sealed class PaSettingsStore : IDisposable
         }
     }
 
-    public PaGlobalSettingsDto GetGlobal()
+    public PaGlobalSettingsDto GetGlobal(HpsdrBoardKind board = HpsdrBoardKind.Unknown)
     {
         lock (_sync)
         {
             var g = _globals.FindAll().FirstOrDefault();
             return g is null
-                ? new PaGlobalSettingsDto()
+                ? new PaGlobalSettingsDto(
+                    PaEnabled: true,
+                    PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board),
+                    OcTune: 0)
                 : new PaGlobalSettingsDto(g.PaEnabled, g.PaMaxPowerWatts, g.OcTune);
         }
     }

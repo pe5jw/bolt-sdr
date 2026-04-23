@@ -149,6 +149,7 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         public void SetTxLevelerMaxGain(double maxGainDb) => LevelerMaxGainCalls.Add(maxGainDb);
 
         public int TxBlockSamples => 1024;
+        public int TxOutputSamples => 1024;
         public int OpenChannel(int sampleRateHz, int pixelWidth) => 0;
         public void CloseChannel(int channelId) { }
         public void FeedIq(int channelId, ReadOnlySpan<double> interleavedIqSamples) { }
@@ -160,7 +161,7 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         public void SetZoom(int channelId, int level) { }
         public int ReadAudio(int channelId, Span<float> output) => 0;
         public bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut) => false;
-        public int OpenTxChannel() => 0;
+        public int OpenTxChannel(int outputRateHz = 48_000) => 0;
         public void SetMox(bool moxOn) { }
         public double GetRxaSignalDbm(int channelId) => -140.0;
         public void SetTxMode(RxMode mode) { }

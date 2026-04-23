@@ -78,8 +78,10 @@ public sealed class TxAudioIngest : IDisposable
     // draining. The excess gets shifted back after each flush.
     private readonly float[] _accumulator = new float[2048];
     private int _accumulatorFill;
+    // Sized for the larger of the P1 (1024 in / 2048 iq) and P2
+    // (512 in / 4096 iq) profiles so we don't reallocate at protocol switch.
     private readonly float[] _scratchMic = new float[1024];
-    private readonly float[] _scratchIq = new float[2048];
+    private readonly float[] _scratchIq = new float[4096];
 
     private long _totalMicSamples;
     private long _totalTxBlocks;
@@ -173,9 +175,12 @@ public sealed class TxAudioIngest : IDisposable
 
         var engine = _engineProvider();
         int blockSize = engine?.TxBlockSamples ?? 0;
-        if (engine is null || blockSize <= 0 || blockSize > _scratchMic.Length)
+        int iqOut = engine?.TxOutputSamples ?? 0;
+        if (engine is null || blockSize <= 0 || iqOut <= 0
+            || blockSize > _scratchMic.Length || 2 * iqOut > _scratchIq.Length)
         {
-            // Synthetic engine or no TXA open. Swallow samples quietly.
+            // Synthetic engine, no TXA open, or a protocol whose block size
+            // exceeds our scratch buffers. Swallow samples quietly.
             return;
         }
 
@@ -206,7 +211,7 @@ public sealed class TxAudioIngest : IDisposable
                 Array.Copy(_accumulator, 0, _scratchMic, 0, blockSize);
                 int produced = engine.ProcessTxBlock(
                     new ReadOnlySpan<float>(_scratchMic, 0, blockSize),
-                    new Span<float>(_scratchIq, 0, 2 * blockSize));
+                    new Span<float>(_scratchIq, 0, 2 * iqOut));
                 if (produced > 0)
                 {
                     _ring.Write(new ReadOnlySpan<float>(_scratchIq, 0, 2 * produced));

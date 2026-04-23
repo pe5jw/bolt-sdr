@@ -39,6 +39,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { setDrive } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
+import { usePaStore } from '../state/pa-store';
 
 // PRD FR-4 drive range: 0..100 percent. Per-pixel POSTs would flood the
 // server during a drag — trailing-edge debounce keeps the wire quiet while
@@ -51,6 +52,12 @@ export function DriveSlider() {
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const drivePercent = useTxStore((s) => s.drivePercent);
   const setDrivePercent = useTxStore((s) => s.setDrivePercent);
+  // Live "target watts" preview so the operator can read "35% of 100 W = 35 W"
+  // at a glance — the slider itself is target-watts-%, not drive-byte-%, and
+  // this field makes the muscle-memory bridge from Thetis explicit. Hidden
+  // when Rated PA Output is 0 (raw drive-byte mode — watts have no meaning).
+  const paMaxWatts = usePaStore((s) => s.settings.global.paMaxPowerWatts);
+  const targetWatts = paMaxWatts > 0 ? Math.round((paMaxWatts * drivePercent) / 100) : null;
 
   const inflightAbort = useRef<AbortController | null>(null);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -109,6 +116,15 @@ export function DriveSlider() {
       <span className="mono" style={{ width: 40, textAlign: 'right', color: 'var(--power)', fontSize: 11, fontWeight: 700 }}>
         {drivePercent}%
       </span>
+      {targetWatts !== null && (
+        <span
+          className="mono"
+          style={{ width: 44, textAlign: 'right', color: 'var(--neutral-400, #888)', fontSize: 10 }}
+          title="Target output watts = Rated PA Output × Drive %"
+        >
+          ~{targetWatts} W
+        </span>
+      )}
     </label>
   );
 }

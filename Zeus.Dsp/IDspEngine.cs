@@ -63,8 +63,11 @@ public interface IDspEngine : IDisposable
     bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut);
 
     /// <summary>Open the TXA channel. Idempotent — calling twice returns the existing id.
-    /// Must be called after at least one OpenChannel(RXA). For Synthetic, returns -1 and is a no-op.</summary>
-    int OpenTxChannel();
+    /// Must be called after at least one OpenChannel(RXA). For Synthetic, returns -1 and is a no-op.
+    /// <paramref name="outputRateHz"/> picks the TXA profile: 48000 for P1 (48k in/out, CFIR off),
+    /// 192000 for P2 (48k mic / 96k dsp / 192k out, CFIR on). Defaults to P1 for tests and
+    /// bring-up code that doesn't care.</summary>
+    int OpenTxChannel(int outputRateHz = 48_000);
 
     /// <summary>Flip MOX. When on: SetChannelState(RXA,0,1) then SetChannelState(TXA,1,0).
     /// When off: SetChannelState(TXA,0,1) then SetChannelState(RXA,1,0). For Synthetic, no-op.
@@ -84,14 +87,21 @@ public interface IDspEngine : IDisposable
     /// <summary>Process one WDSP-sized block of mic audio through TXA and return
     /// the modulated IQ. <paramref name="micMono"/> must contain exactly
     /// <see cref="TxBlockSamples"/> float samples (48 kHz mono). <paramref name="iqInterleaved"/>
-    /// receives 2 × TxBlockSamples floats ([I0, Q0, I1, Q1, …]).
+    /// receives 2 × <see cref="TxOutputSamples"/> floats ([I0, Q0, I1, Q1, …]).
+    /// For P1 the TXA output rate equals 48 kHz so input count == output count;
+    /// for P2 the TXA upsamples to 192 kHz so output count == 4 × input count.
     /// Returns the number of IQ complex samples produced (0 if TXA not open, MOX
     /// off, or the engine does not implement TX processing like Synthetic).</summary>
     int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved);
 
-    /// <summary>WDSP TXA block size in mono samples. Mic ingest buffers accumulate
-    /// this many samples before calling ProcessTxBlock.</summary>
+    /// <summary>WDSP TXA mic-input block size in mono samples. Mic ingest buffers
+    /// accumulate this many samples before calling ProcessTxBlock.</summary>
     int TxBlockSamples { get; }
+
+    /// <summary>WDSP TXA IQ-output block size in complex samples. Equals
+    /// <see cref="TxBlockSamples"/> for P1 (48 kHz out); for P2 the TXA upsamples
+    /// 48k → 192k so this is 4 × <see cref="TxBlockSamples"/>.</summary>
+    int TxOutputSamples { get; }
 
     /// <summary>Set TXA mic-side linear gain (Thetis audio.cs:218-224 wires the
     /// mic-gain dB slider via <c>SetTXAPanelGain1(TXA, 10^(db/20))</c>).

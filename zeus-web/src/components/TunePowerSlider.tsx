@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { setTuneDrive } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
+import { usePaStore } from '../state/pa-store';
 
 // Same 0..100 range and debounce shape as DriveSlider; the backend picks
 // between the two sources based on TUN keying state so the UX/wire are
@@ -29,6 +30,9 @@ export function TunePowerSlider() {
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const tunePercent = useTxStore((s) => s.tunePercent);
   const setTunePercent = useTxStore((s) => s.setTunePercent);
+  // Live target-watts readout (see DriveSlider for rationale).
+  const paMaxWatts = usePaStore((s) => s.settings.global.paMaxPowerWatts);
+  const targetWatts = paMaxWatts > 0 ? Math.round((paMaxWatts * tunePercent) / 100) : null;
 
   const inflightAbort = useRef<AbortController | null>(null);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -95,6 +99,15 @@ export function TunePowerSlider() {
       >
         {tunePercent}%
       </span>
+      {targetWatts !== null && (
+        <span
+          className="mono"
+          style={{ width: 44, textAlign: 'right', color: 'var(--neutral-400, #888)', fontSize: 10 }}
+          title="Target tune watts = Rated PA Output × Tune %"
+        >
+          ~{targetWatts} W
+        </span>
+      )}
     </label>
   );
 }

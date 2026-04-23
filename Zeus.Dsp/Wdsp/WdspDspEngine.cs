@@ -51,12 +51,32 @@ public sealed class WdspDspEngine : IDspEngine
     private const int RxaInSize = 1024;
     private const int RxaDspSize = 1024;
 
-    // TXA: match RXA's 1024@48k window. The Thetis 64@96k profile was tried
-    // on 2026-04-18 and produced ~0.6 W on TUN at 100% drive (target ~6 W),
-    // so this branch (feature/tx_pwr2) restores the dcd3766 settings that
-    // the operator confirmed produced rated power.
-    private const int TxaInSize = 1024;
-    private const int TxaDspSize = 1024;
+    // TXA profile varies by protocol — OpenTxChannel picks the right one:
+    //   P1 (48 kHz DAC) : in=1024@48k, dsp=1024@48k, out=1024@48k, CFIR off
+    //   P2 (192 kHz DAC): in=512@48k,  dsp=1024@96k, out=2048@192k, CFIR on
+    // pihpsdr transmitter.c:954-997 (protocol switch → buffer_size / dsp_rate /
+    // ratio) and Thetis audio.cs:1800-1809 (SampleRateTX + SetTXACFIRRun)
+    // define these exactly. Zeus was previously hard-coded to the P1 profile
+    // regardless of protocol, which on P2 left the G2 DUC starved (it runs
+    // at 192 kHz but we fed 48 kHz) and generated 8-10 kHz close-in spurs
+    // on TUN and MOX.
+    private const int TxaInSizeP1 = 1024;
+    private const int TxaDspSizeP1 = 1024;
+    private const int TxaOutSizeP1 = 1024;
+    private const int TxaInSizeP2 = 512;
+    private const int TxaDspSizeP2 = 1024;
+    private const int TxaOutSizeP2 = 2048;
+
+    // Latched values chosen at OpenTxChannel time; ProcessTxBlock uses them
+    // to size the mic / iq spans. Default to the P1 profile so tests and
+    // bring-up code that open TXA without specifying a protocol still work.
+    private int _txaInSize = TxaInSizeP1;
+    private int _txaDspSize = TxaDspSizeP1;
+    private int _txaOutSize = TxaOutSizeP1;
+    private int _txaInputRateHz = 48_000;
+    private int _txaDspRateHz = 48_000;
+    private int _txaOutputRateHz = 48_000;
+    private bool _txaCfirRun;
 
     // Leveler max-gain ceiling in dB applied at TXA init. Matches the
     // W1AEX / softerhardware community default ("CFC Audio Tools" guide,
@@ -611,7 +631,7 @@ public sealed class WdspDspEngine : IDspEngine
         }
     }
 
-    public int OpenTxChannel()
+    public int OpenTxChannel(int outputRateHz = 48_000)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
 
@@ -619,25 +639,50 @@ public sealed class WdspDspEngine : IDspEngine
         {
             if (_txaChannelId is int existing) return existing;
 
+            // Pick the TXA profile from the requested output rate. P1's DAC
+            // runs at 48 kHz; the G2 on P2 expects 192 kHz. Any other value
+            // falls back to the P1 profile (treated as "not a supported P2
+            // rate" and keeps us off the air until the connect path specifies
+            // one we know about).
+            if (outputRateHz == 192_000)
+            {
+                _txaInSize = TxaInSizeP2;
+                _txaDspSize = TxaDspSizeP2;
+                _txaOutSize = TxaOutSizeP2;
+                _txaInputRateHz = 48_000;
+                _txaDspRateHz = 96_000;
+                _txaOutputRateHz = 192_000;
+                _txaCfirRun = true;
+            }
+            else
+            {
+                _txaInSize = TxaInSizeP1;
+                _txaDspSize = TxaDspSizeP1;
+                _txaOutSize = TxaOutSizeP1;
+                _txaInputRateHz = 48_000;
+                _txaDspRateHz = 48_000;
+                _txaOutputRateHz = 48_000;
+                _txaCfirRun = false;
+            }
+
             // TXA id must not collide with any RXA id — pick the first free slot
             // past the current RXA allocation. WDSP doesn't care about id
             // ordering, it just uses the int as an index into its channel table.
             int id = 0;
             while (_channels.ContainsKey(id) || id == _txaChannelId) id++;
 
-            // TXA matches the RXA OpenChannel shape — tdelay defaults identical
-            // — differing only in `type: 1` (TX) and `state: 0` (stays quiescent
-            // until SetMox(true)). Sample rates all 48 kHz: P1 EP2 uplink is
-            // 48 kHz, TXA runs at 48 kHz internally, output returns to 48 kHz
-            // for the EP2 packer. This is the dcd3766 configuration that the
-            // operator confirmed produced rated TX power.
+            // type: 1 (TX), state: 0 (stays quiescent until SetMox). Rates
+            // chosen above so P1 keeps its 48/48/48 shape (rated power
+            // confirmed on Hermes) and P2 matches pihpsdr transmitter.c's
+            // 48/96/192 profile with ratio=4 so the G2 DUC sees samples at
+            // its expected 192 kHz clock.
             NativeMethods.OpenChannel(
                 channel: id,
-                in_size: TxaInSize,
-                dsp_size: TxaDspSize,
-                input_samplerate: 48_000,
-                dsp_rate: 48_000,
-                output_samplerate: 48_000,
+                in_size: _txaInSize,
+                dsp_size: _txaDspSize,
+                input_samplerate: _txaInputRateHz,
+                dsp_rate: _txaDspRateHz,
+                output_samplerate: _txaOutputRateHz,
                 type: 1,
                 state: 0,
                 tdelayup: 0.010,
@@ -663,6 +708,27 @@ public sealed class WdspDspEngine : IDspEngine
             // bp0 is always on from create_bandpass; nothing to enable here.
             NativeMethods.SetTXAPanelRun(id, 1);
             NativeMethods.SetTXAPanelGain1(id, 1.0);
+            // pihpsdr transmitter.c:1298 routes mic to both I and Q via
+            // PanelSelect=2 ("Mic I sample"). Without this, WDSP's default
+            // may leave Q unassigned, allowing a secondary signal path to
+            // leak into the TXA output.
+            NativeMethods.SetTXAPanelSelect(id, 2);
+
+            // Explicitly disable the PreGen stage and zero its state — pihpsdr
+            // transmitter.c:1293-1296 does this on every TXA open. WDSP's
+            // create_channel does not guarantee these defaults, and a residual
+            // non-zero PreGen tone shows up alongside the PostGen tune carrier
+            // as a second discrete frequency on the air (reported as
+            // "2-tone-like output" during TUN on the G2 MkII).
+            NativeMethods.SetTXAPreGenMode(id, 0);
+            NativeMethods.SetTXAPreGenToneMag(id, 0.0);
+            NativeMethods.SetTXAPreGenToneFreq(id, 0.0);
+            NativeMethods.SetTXAPreGenRun(id, 0);
+
+            // Clamp PostGen off at open time too — TUN will re-enable it via
+            // SetTxTune. Same rationale: WDSP state from a previous channel
+            // open can leak through if we don't zero it.
+            NativeMethods.SetTXAPostGenRun(id, 0);
 
             // Explicit clean-slate TX chain state. WDSP initializes these
             // "off" at channel-create, but asserting them makes the baseline
@@ -693,10 +759,21 @@ public sealed class WdspDspEngine : IDspEngine
             NativeMethods.SetTXAAMSQRun(id, 0);
             NativeMethods.SetTXAALCSt(id, 1);
 
+            // CFIR compensates the sinc droop introduced by the TXA upsample
+            // to the output rate. Thetis (audio.cs:1808) turns it ON for P2,
+            // OFF for P1; pihpsdr (transmitter.c:1288) does the same. Wiring
+            // this on P1 would over-correct the flat 48k chain and tilt the
+            // passband, so it's conditional on the P2 profile.
+            if (_txaCfirRun)
+            {
+                NativeMethods.SetTXACFIRRun(id, 1);
+            }
+
             _txaChannelId = id;
             _log.LogInformation(
-                "wdsp.openTxChannel id={Id} chain=[alc=1 lvlr=1 lvlrMax={LvlrMax:F1}dB cpdr=0 cfc=0 phrot=0 osctrl=0 eq=0 amsq=0] bp=150..2850 panelGain=1.0 (Leveler enabled to match Thetis default)",
-                id, DefaultLevelerMaxGainDb);
+                "wdsp.openTxChannel id={Id} rates={InRate}/{DspRate}/{OutRate} sizes={InSz}/{OutSz} cfir={Cfir} chain=[alc=1 lvlr=1 lvlrMax={LvlrMax:F1}dB cpdr=0 cfc=0 phrot=0 osctrl=0 eq=0 amsq=0] bp=150..2850 panelGain=1.0",
+                id, _txaInputRateHz, _txaDspRateHz, _txaOutputRateHz,
+                _txaInSize, _txaOutSize, _txaCfirRun ? 1 : 0, DefaultLevelerMaxGainDb);
             return id;
         }
     }
@@ -759,7 +836,8 @@ public sealed class WdspDspEngine : IDspEngine
         }
     }
 
-    public int TxBlockSamples => TxaInSize;
+    public int TxBlockSamples => _txaInSize;
+    public int TxOutputSamples => _txaOutSize;
 
     public void SetTxPanelGain(double linearGain)
     {
@@ -800,23 +878,36 @@ public sealed class WdspDspEngine : IDspEngine
             // null for SSB). Sign mirrors Thetis's sideband rule.
             if (on)
             {
-                const double cwPitch = 600.0;
+                // pihpsdr radio.c:2716/2743 tunes at freq=0.0 — a true
+                // zero-beat carrier right on the VFO, which is the correct
+                // signal for tuning an external antenna tuner. Thetis uses
+                // ±cw_pitch so the tone survives the SSB bandpass, but for
+                // an ATU we want the carrier on-frequency, not 600 Hz off.
+                // Mode 0 = single tone (pihpsdr transmitter.c:2808, Thetis
+                // console.cs:30089 — both use mode 0).
+                const double toneFreq = 0.0;
                 const double toneMag = 0.99999;
-                double freq = _txCurrentMode switch
-                {
-                    RxaMode.LSB or RxaMode.CWL or RxaMode.DIGL => -cwPitch,
-                    _ => +cwPitch,
-                };
                 NativeMethods.SetTXAPostGenMode(txa, 0);
-                NativeMethods.SetTXAPostGenToneFreq(txa, freq);
+                NativeMethods.SetTXAPostGenToneFreq(txa, toneFreq);
                 NativeMethods.SetTXAPostGenToneMag(txa, toneMag);
                 NativeMethods.SetTXAPostGenRun(txa, 1);
-                _log.LogInformation("wdsp.setTxTune on=true mode={Mode} freq={Freq:F0} mag={Mag:F5}", _txCurrentMode, freq, toneMag);
+                // Disable Leveler while TUN is keyed. The 0 Hz tone lives
+                // below the SSB bandpass (150-2850 Hz), so the bandpass
+                // attenuates it ~30-40 dB. With the default Leveler on at
+                // +5 dB max gain, WDSP's AGC loop pumps trying to boost the
+                // weak signal — showing up as slow AM envelope on the
+                // panadapter. pihpsdr sidesteps this by keeping Leveler off
+                // by default (transmitter.c:2612 — state = compressor||cfc,
+                // both off on tune). We restore Leveler on TUN-off so mic
+                // MOX keeps its current Thetis-matching behavior.
+                NativeMethods.SetTXALevelerSt(txa, 0);
+                _log.LogInformation("wdsp.setTxTune on=true mode=singletone freq={Freq:F0} mag={Mag:F5} leveler=off", toneFreq, toneMag);
             }
             else
             {
                 NativeMethods.SetTXAPostGenRun(txa, 0);
-                _log.LogInformation("wdsp.setTxTune on=false");
+                NativeMethods.SetTXALevelerSt(txa, 1);
+                _log.LogInformation("wdsp.setTxTune on=false leveler=on");
             }
         }
     }
@@ -840,10 +931,12 @@ public sealed class WdspDspEngine : IDspEngine
     public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved)
     {
         if (_disposed != 0) return 0;
-        if (micMono.Length != TxaInSize)
-            throw new ArgumentException($"expected mic span of {TxaInSize}", nameof(micMono));
-        if (iqInterleaved.Length != 2 * TxaInSize)
-            throw new ArgumentException($"expected iq span of {2 * TxaInSize}", nameof(iqInterleaved));
+        int inSize = _txaInSize;
+        int outSize = _txaOutSize;
+        if (micMono.Length != inSize)
+            throw new ArgumentException($"expected mic span of {inSize}", nameof(micMono));
+        if (iqInterleaved.Length != 2 * outSize)
+            throw new ArgumentException($"expected iq span of {2 * outSize}", nameof(iqInterleaved));
 
         int txa;
         lock (_txaLock)
@@ -852,16 +945,16 @@ public sealed class WdspDspEngine : IDspEngine
             txa = id;
         }
 
-        // fexchange2 wants mutable refs to the first float of each buffer. Copy
-        // the mic ReadOnlySpan into a scratch array so we can pass a ref, and
-        // stack-allocate Qin as silence and the output I/Q buffers. 1024 floats
-        // × 4 buffers = 16 KiB, well inside the default stack budget.
-        Span<float> iin = stackalloc float[TxaInSize];
+        // fexchange2 wants mutable refs to the first float of each buffer.
+        // For P2, in != out (inSize=512 mic, outSize=2048 IQ). Stack-allocate
+        // both — max combined footprint is 512 + 512 + 2048 + 2048 = 5120 floats
+        // ≈ 20 KiB, well inside the default stack budget.
+        Span<float> iin = stackalloc float[inSize];
         micMono.CopyTo(iin);
-        Span<float> qin = stackalloc float[TxaInSize];
+        Span<float> qin = stackalloc float[inSize];
         qin.Clear();
-        Span<float> iout = stackalloc float[TxaInSize];
-        Span<float> qout = stackalloc float[TxaInSize];
+        Span<float> iout = stackalloc float[outSize];
+        Span<float> qout = stackalloc float[outSize];
 
         NativeMethods.fexchange2(txa, ref iin[0], ref qin[0], ref iout[0], ref qout[0], out int err);
         if (err != 0 && ++_txFexchangeErrLogged <= 8)
@@ -869,7 +962,7 @@ public sealed class WdspDspEngine : IDspEngine
             _log.LogWarning("wdsp.fexchange2 tx err={Err} (suppressed after 8 occurrences)", err);
         }
 
-        for (int i = 0; i < TxaInSize; i++)
+        for (int i = 0; i < outSize; i++)
         {
             iqInterleaved[2 * i] = iout[i];
             iqInterleaved[2 * i + 1] = qout[i];
@@ -937,9 +1030,12 @@ public sealed class WdspDspEngine : IDspEngine
         {
             _lastTxMeterLogUtc = now;
             double micBlockPeak = 0, ioutPeak = 0;
-            for (int i = 0; i < TxaInSize; i++)
+            for (int i = 0; i < inSize; i++)
             {
                 double m = Math.Abs(iin[i]); if (m > micBlockPeak) micBlockPeak = m;
+            }
+            for (int i = 0; i < outSize; i++)
+            {
                 double oi = Math.Abs(iout[i]); double oq = Math.Abs(qout[i]);
                 double ma = Math.Max(oi, oq); if (ma > ioutPeak) ioutPeak = ma;
             }
@@ -951,7 +1047,7 @@ public sealed class WdspDspEngine : IDspEngine
                 alcPk, alcAv, -alcGain,
                 outPk, outAv);
         }
-        return TxaInSize;
+        return outSize;
     }
 
     // Mirror of ApplyBandpassForMode for the TX side. TXA has one bandpass
