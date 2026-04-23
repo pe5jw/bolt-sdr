@@ -126,6 +126,7 @@ builder.Services.AddSingleton<CredentialStore>();
 builder.Services.AddSingleton<BandMemoryStore>();
 builder.Services.AddSingleton<LayoutStore>();
 builder.Services.AddSingleton<DspSettingsStore>();
+builder.Services.AddSingleton<PaSettingsStore>();
 builder.Services.AddSingleton<QrzService>();
 builder.Services.AddSingleton<LogService>();
 
@@ -495,6 +496,24 @@ app.MapPut("/api/bands/memory/{band}", (string band, BandMemorySetRequest req, B
         return Results.BadRequest(new { error = "hz must be positive" });
     store.Upsert(band, req.Hz, req.Mode);
     return Results.Ok(new BandMemoryDto(band, req.Hz, req.Mode));
+});
+
+// PA settings — per-band gain/OC masks + globals. Single PUT replaces the
+// whole snapshot because the UI edits rows as a table; incremental PATCHing
+// would deadlock with the RadioService recompute subscription fired on Save.
+// The GET uses the currently connected board's defaults to fill missing
+// rows so the panel opens with model-appropriate seeds on first load.
+app.MapGet("/api/pa-settings", (PaSettingsStore store, RadioService radio) =>
+    Results.Ok(store.GetAll(radio.ConnectedBoardKind)));
+
+app.MapPut("/api/pa-settings", (PaSettingsSetRequest req, PaSettingsStore store, RadioService radio) =>
+{
+    if (req.Global is null || req.Bands is null)
+        return Results.BadRequest(new { error = "global and bands required" });
+    if (req.Global.PaMaxPowerWatts < 0)
+        return Results.BadRequest(new { error = "paMaxPowerWatts must be >= 0" });
+    store.Save(new PaSettingsDto(req.Global, req.Bands));
+    return Results.Ok(store.GetAll(radio.ConnectedBoardKind));
 });
 
 // UI layout: flexlayout-react panel arrangement, persisted per operator profile.

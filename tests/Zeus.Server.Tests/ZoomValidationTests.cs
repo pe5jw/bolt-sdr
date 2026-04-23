@@ -52,7 +52,8 @@ public class ZoomValidationTests
     private static RadioService BuildRadio()
     {
         var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
-        return new RadioService(NullLoggerFactory.Instance, dspStore);
+        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance);
+        return new RadioService(NullLoggerFactory.Instance, dspStore, paStore);
     }
 
     [Theory]

@@ -68,6 +68,12 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _hasN2adr;      // 0 / 1
     private int _mox;           // 0 / 1
     private int _drivePct;      // 0..100 UI percent; mapped to 0..255 on snapshot
+    // When >= 0, RadioService has pushed a fully-computed drive byte (post PA
+    // calibration) and we send that instead of the percent mapping. Legacy
+    // callers that only call SetDrive(percent) keep working untouched.
+    private int _driveByteOverride = -1;
+    private int _ocTxMask;      // user OC pin mask for TX (low 7 bits)
+    private int _ocRxMask;      // user OC pin mask for RX (low 7 bits)
     private long _droppedFrames;
     private long _totalFrames;
 
@@ -204,10 +210,21 @@ public sealed class Protocol1Client : IProtocol1Client
     public void SetAttenuator(HpsdrAtten atten) => Interlocked.Exchange(ref _attenDb, atten.ClampedDb);
     public void SetAntennaRx(HpsdrAntenna ant) => Interlocked.Exchange(ref _antenna, (int)ant);
     public void SetBoardKind(HpsdrBoardKind board) => Interlocked.Exchange(ref _boardKind, (int)board);
+
+    public HpsdrBoardKind BoardKind => (HpsdrBoardKind)Volatile.Read(ref _boardKind);
     public void SetHasN2adr(bool hasN2adr) => Interlocked.Exchange(ref _hasN2adr, hasN2adr ? 1 : 0);
     public void SetMox(bool on) => Interlocked.Exchange(ref _mox, on ? 1 : 0);
     public void SetDrive(int percent) =>
         Interlocked.Exchange(ref _drivePct, Math.Clamp(percent, 0, 100));
+
+    public void SetDriveByte(byte value) =>
+        Interlocked.Exchange(ref _driveByteOverride, value);
+
+    public void SetOcMasks(byte txMask, byte rxMask)
+    {
+        Interlocked.Exchange(ref _ocTxMask, txMask & 0x7F);
+        Interlocked.Exchange(ref _ocRxMask, rxMask & 0x7F);
+    }
 
     public void Dispose()
     {
@@ -217,19 +234,29 @@ public sealed class Protocol1Client : IProtocol1Client
         try { DisconnectAsync(CancellationToken.None).GetAwaiter().GetResult(); } catch { }
     }
 
-    internal ControlFrame.CcState SnapshotState() => new(
-        VfoAHz: Interlocked.Read(ref _vfoAHz),
-        Rate: (HpsdrSampleRate)Volatile.Read(ref _rate),
-        PreampOn: Volatile.Read(ref _preamp) != 0,
-        Atten: new HpsdrAtten(Volatile.Read(ref _attenDb)),
-        RxAntenna: (HpsdrAntenna)Volatile.Read(ref _antenna),
-        Mox: Volatile.Read(ref _mox) != 0,
-        EnableHl2Dither: Volatile.Read(ref _enableHl2Dither) != 0,
-        Board: (HpsdrBoardKind)Volatile.Read(ref _boardKind),
-        HasN2adr: Volatile.Read(ref _hasN2adr) != 0,
-        // UI percent → raw 0..255 HPSDR drive byte. For MVP we use the 0..255
-        // range directly (no calcLevel linearization step).
-        DriveLevel: (byte)(Volatile.Read(ref _drivePct) * 255 / 100));
+    internal ControlFrame.CcState SnapshotState()
+    {
+        int over = Volatile.Read(ref _driveByteOverride);
+        byte drive = over >= 0
+            ? (byte)over
+            // UI percent → raw 0..255 HPSDR drive byte. Used only when
+            // RadioService hasn't pushed a calibrated byte (tests / legacy).
+            : (byte)(Volatile.Read(ref _drivePct) * 255 / 100);
+
+        return new(
+            VfoAHz: Interlocked.Read(ref _vfoAHz),
+            Rate: (HpsdrSampleRate)Volatile.Read(ref _rate),
+            PreampOn: Volatile.Read(ref _preamp) != 0,
+            Atten: new HpsdrAtten(Volatile.Read(ref _attenDb)),
+            RxAntenna: (HpsdrAntenna)Volatile.Read(ref _antenna),
+            Mox: Volatile.Read(ref _mox) != 0,
+            EnableHl2Dither: Volatile.Read(ref _enableHl2Dither) != 0,
+            Board: (HpsdrBoardKind)Volatile.Read(ref _boardKind),
+            HasN2adr: Volatile.Read(ref _hasN2adr) != 0,
+            DriveLevel: drive,
+            UserOcTxMask: (byte)Volatile.Read(ref _ocTxMask),
+            UserOcRxMask: (byte)Volatile.Read(ref _ocRxMask));
+    }
 
     private void RxLoop()
     {

@@ -53,7 +53,8 @@ public class TxTimeoutTests
     {
         var loggerFactory = NullLoggerFactory.Instance;
         var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
-        var radio = new RadioService(loggerFactory, dspStore);
+        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance);
+        var radio = new RadioService(loggerFactory, dspStore, paStore);
         var hub = new StreamingHub(new NullLogger<StreamingHub>());
         var pipeline = new DspPipelineService(radio, hub, loggerFactory);
         tx = new TxService(radio, pipeline, hub, new NullLogger<TxService>());
