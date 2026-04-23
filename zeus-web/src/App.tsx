@@ -107,6 +107,7 @@ export default function App() {
   const preampOn = useConnectionStore((s) => s.preampOn);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
+  const filterRibbonOpen = useConnectionStore((s) => s.filterAdvancedPaneOpen);
   const connected = status === 'Connected';
 
   useKeyboardShortcuts();
@@ -666,7 +667,16 @@ export default function App() {
       {useFlexLayout ? (
         <FlexWorkspace />
       ) : (
-      <div className={`workspace ${terminatorActive ? 'terminator' : ''}`}>
+      <div
+        className={`workspace ${terminatorActive ? 'terminator' : ''} ${filterRibbonOpen ? 'has-filter-ribbon' : ''}`}
+      >
+        {/* Advanced filter ribbon — dedicated row above the hero, same column
+            width as the panadapter. Hidden on mobile by the enclosing .app
+            layout (mobile uses the fixed grid, which doesn't reach this
+            branch via ?layout=flex). When closed, FilterRibbon renders null
+            and the `has-filter-ribbon` class is absent, so the workspace
+            collapses to its original two-row layout. */}
+        <FilterRibbon />
         {/* Hero — spectrum + waterfall with QRZ world-map layer */}
         <div className={`panel hero ${terminatorActive ? 'qrz-mode' : ''} ${mapInteractive ? 'map-mode' : ''}`}>
           <div className="panel-head">
@@ -920,11 +930,6 @@ export default function App() {
       </div>
 
       {disconnectedOverlay}
-      {/* Filter ribbon — self-contained floating panel; renders via React
-          portal into document.body, so it does not join the `.app` CSS grid
-          and never disturbs the existing panadapter / waterfall layout.
-          When closed, FilterRibbon returns null (no DOM). */}
-      <FilterRibbon />
       <SettingsMenu open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
     </SpectrumWheelActionsContext.Provider>

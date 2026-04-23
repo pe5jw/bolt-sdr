@@ -1,0 +1,176 @@
+/* ===========================================================
+   Filter visualization PRD §3.2 — advanced filter ribbon.
+   Matches docs/pics/filterpanel_mockup.png (and the updated
+   screenshot): near-black panel, muted blue-grey labels, light
+   spectrum trace, hollow cyan-blue passband with corner handles.
+
+   Lives as a dedicated row inside `.workspace` column 1 — above
+   `.hero`, beside `.side-stack`. When `.workspace.has-filter-
+   ribbon` is not set (ribbon closed), the row never exists.
+   =========================================================== */
+
+/* Workspace becomes a 3-row grid when the ribbon is open. Hero
+   and bottom-row shift down one slot; side-stack grows to span
+   all three rows so the vertical layout stays stable. */
+.workspace.has-filter-ribbon {
+  grid-template-rows: auto 1fr 200px;
+}
+.workspace.has-filter-ribbon .filter-ribbon { grid-column: 1; grid-row: 1; }
+.workspace.has-filter-ribbon .hero         { grid-row: 2; }
+.workspace.has-filter-ribbon .bottom-row   { grid-row: 3; }
+.workspace.has-filter-ribbon .side-stack   { grid-row: 1 / span 3; }
+
+.filter-ribbon {
+  position: relative;
+  background: #0b1017;
+  border: 1px solid #1a2230;
+  border-radius: 6px;
+  padding: 12px 16px 12px 18px;
+  color: #e8edf5;
+  font-family: inherit;
+  min-height: 0;
+}
+
+.filter-ribbon__close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: #6a8bb0;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+}
+.filter-ribbon__close:hover { color: #cfd9ea; background: rgba(255, 255, 255, 0.04); }
+
+.filter-ribbon__grid {
+  display: grid;
+  grid-template-columns: 82px 130px 1fr 130px minmax(340px, 1.4fr) 200px;
+  column-gap: 20px;
+  align-items: center;
+  min-height: 128px;
+}
+
+.filter-ribbon__col { display: flex; flex-direction: column; gap: 4px; }
+.filter-ribbon__col--left   { align-items: flex-start; }
+.filter-ribbon__col--right  { align-items: flex-end; }
+.filter-ribbon__col--center { align-items: center; text-align: center; }
+
+.filter-ribbon__label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 1.8px;
+  color: #7590b3;
+  text-transform: uppercase;
+  line-height: 1;
+}
+.filter-ribbon__label--icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.filter-ribbon__presets-icon { opacity: 0.7; font-size: 12px; }
+
+.filter-ribbon__freq {
+  font-size: 20px;
+  font-weight: 400;
+  color: #e8edf5;
+  letter-spacing: 0.4px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.filter-ribbon__passband {
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+  line-height: 1;
+  margin-top: 2px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.filter-ribbon__passband-value { font-size: 30px; font-weight: 500; }
+.filter-ribbon__passband-unit  { font-size: 13px; color: #a9b9d3; font-weight: 400; }
+
+/* Mini-pan grid cell — fixed height so the preset column beside it
+   has room for 3 rows of chips + CUSTOM without stretching. */
+.filter-ribbon__minipan {
+  position: relative;
+  height: 110px;
+}
+
+/* Preset bandwidths column */
+.filter-ribbon__presets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-self: center;
+}
+.filter-ribbon__preset-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+.filter-ribbon__chip {
+  padding: 6px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  border-radius: 4px;
+  border: 1px solid #1f2c42;
+  background: #0e1520;
+  color: #8fa3c2;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.filter-ribbon__chip:hover { border-color: #2a3d5a; color: #c4d4ec; }
+.filter-ribbon__chip.is-active {
+  border-color: #4a9eff;
+  background: #152038;
+  color: #ffffff;
+  box-shadow: inset 0 0 0 1px rgba(74, 158, 255, 0.15);
+}
+
+.filter-ribbon__custom {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 1.4px;
+  border-radius: 4px;
+  border: 1px solid #1f2c42;
+  background: #0e1520;
+  color: #8fa3c2;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-transform: uppercase;
+}
+.filter-ribbon__custom:hover { border-color: #2a3d5a; color: #c4d4ec; }
+.filter-ribbon__custom.is-active {
+  border-color: #4a9eff;
+  background: #152038;
+  color: #ffffff;
+}
+.filter-ribbon__custom-icon { opacity: 0.6; margin-left: 8px; font-size: 11px; }
+
+/* Footer hint */
+.filter-ribbon__hint {
+  margin-top: 6px;
+  text-align: center;
+  font-size: 9.5px;
+  letter-spacing: 1.8px;
+  color: #5a7598;
+  text-transform: uppercase;
+}

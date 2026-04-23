@@ -170,35 +170,58 @@ export function formatAbsFreq(hz: number): string {
   return `${sign}${mhz}.${String(khzPart).padStart(3, '0')}.${String(hzPart).padStart(3, '0')}`;
 }
 
-// Ribbon's six-preset subset. PRD §3.2 "a 3×2 grid of chip buttons". We map
-// each ribbon width to the nearest real F-slot for the active mode so the
-// chip is a second view of the compact panel's row, not a parallel preset
-// system. When no exact F-slot match exists we pick the closest by width.
-const RIBBON_SLOT_NAMES_BY_MODE: Record<RxMode, readonly string[]> = {
-  // SSB: a spread of tight-to-AM-wide SSB widths.
-  USB: ['F10', 'F7', 'F6', 'F5', 'F3', 'F1'],
-  LSB: ['F10', 'F7', 'F6', 'F5', 'F3', 'F1'],
-  // CW: narrow-to-wide CW widths.
-  CWU: ['F10', 'F9', 'F8', 'F7', 'F6', 'F4'],
-  CWL: ['F10', 'F9', 'F8', 'F7', 'F6', 'F4'],
-  // AM/SAM: wide-audio widths.
-  AM:  ['F10', 'F9', 'F7', 'F5', 'F3', 'F1'],
-  SAM: ['F10', 'F9', 'F7', 'F5', 'F3', 'F1'],
-  DSB: ['F10', 'F7', 'F5', 'F3', 'F2', 'F1'],
-  DIGL: ['F10', 'F8', 'F5', 'F3', 'F2', 'F1'],
-  DIGU: ['F10', 'F8', 'F5', 'F3', 'F2', 'F1'],
-  FM:  [],
+// Ribbon's six-preset widths, matching the mockup at
+// docs/pics/filterpanel_mockup.png: 2.4 / 2.7 / 3.6 / 6.0 / 9.0 / 12.0 kHz
+// for SSB. These are synthesised — they're not the Thetis F-slot table.
+// The mockup places them as the "common widths" view, so the ribbon
+// treats them as fixed width presets that map onto Lo/Hi per mode.
+//
+// Per-mode Lo/Hi derivation:
+//   USB / DIGU: Lo = 100, Hi = 100 + widthHz
+//   LSB / DIGL: Lo = -(100 + widthHz), Hi = -100
+//   CWU: Lo = cwPitch - widthHz/2, Hi = cwPitch + widthHz/2
+//   CWL: Lo = -(cwPitch + widthHz/2), Hi = -(cwPitch - widthHz/2)
+//   AM / SAM / DSB / FM: symmetric around 0
+const RIBBON_WIDTHS_KHZ: Record<RxMode, readonly number[]> = {
+  USB:  [2.4, 2.7, 3.6, 6.0, 9.0, 12.0],
+  LSB:  [2.4, 2.7, 3.6, 6.0, 9.0, 12.0],
+  CWU:  [0.05, 0.1, 0.25, 0.5, 1.0, 2.0],
+  CWL:  [0.05, 0.1, 0.25, 0.5, 1.0, 2.0],
+  AM:   [4.0, 6.0, 8.0, 10.0, 16.0, 20.0],
+  SAM:  [4.0, 6.0, 8.0, 10.0, 16.0, 20.0],
+  DSB:  [2.4, 4.0, 6.0, 8.0, 12.0, 16.0],
+  DIGL: [0.25, 0.5, 1.0, 2.0, 2.4, 3.0],
+  DIGU: [0.25, 0.5, 1.0, 2.0, 2.4, 3.0],
+  FM:   [],
 };
 
-// Return the 6 ribbon-chip slots for the active mode. Falls back gracefully
-// when the mode has no table (FM returns [] — caller hides the grid).
+function ribbonSlotFor(mode: RxMode, widthKHz: number): FilterPresetSlot {
+  const widthHz = Math.round(widthKHz * 1000);
+  const label = widthKHz % 1 === 0 ? `${widthKHz.toFixed(1)} kHz` : `${widthKHz.toFixed(1)} kHz`;
+  const slotName = `RIBBON_${widthHz}`;
+  const cwP = 600; // CW_PITCH in filterPresets.ts
+  let lowHz = 0;
+  let highHz = 0;
+  switch (mode) {
+    case 'USB': case 'DIGU':
+      lowHz = 100; highHz = 100 + widthHz; break;
+    case 'LSB': case 'DIGL':
+      lowHz = -(100 + widthHz); highHz = -100; break;
+    case 'CWU':
+      lowHz = cwP - Math.round(widthHz / 2); highHz = cwP + Math.round(widthHz / 2); break;
+    case 'CWL':
+      lowHz = -(cwP + Math.round(widthHz / 2)); highHz = -(cwP - Math.round(widthHz / 2)); break;
+    case 'AM': case 'SAM': case 'DSB': case 'FM':
+      lowHz = -Math.round(widthHz / 2); highHz = Math.round(widthHz / 2); break;
+  }
+  return { slotName, label, lowHz, highHz, isVar: false };
+}
+
+// Return the 6 ribbon-chip widths for the active mode. FM returns []
+// (ribbon is suppressed for FM per mockup / Thetis).
 export function getRibbonPresetsForMode(mode: RxMode): readonly FilterPresetSlot[] {
-  const names = RIBBON_SLOT_NAMES_BY_MODE[mode] ?? RIBBON_SLOT_NAMES_BY_MODE.USB;
-  const table = getPresetsForMode(mode);
-  return names.flatMap((n) => {
-    const hit = table.find((s) => s.slotName === n);
-    return hit ? [hit] : [];
-  });
+  const widths = RIBBON_WIDTHS_KHZ[mode] ?? RIBBON_WIDTHS_KHZ.USB;
+  return widths.map((w) => ribbonSlotFor(mode, w));
 }
 
 // Per-mode nudge step for edge adjustments (keyboard arrow keys in the ribbon,

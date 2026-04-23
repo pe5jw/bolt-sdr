@@ -18,7 +18,7 @@ import { useDisplayStore } from '../../state/display-store';
 import { useConnectionStore } from '../../state/connection-store';
 import { setFilter } from '../../api/client';
 
-const RIBBON_SPAN_HZ = 10_000;        // 10 kHz span centered on VFO
+const RIBBON_SPAN_HZ = 12_000;        // 12 kHz span centered on VFO (matches mockup: 14.249..14.261)
 const TICK_STEP_HZ = 2_000;           // label a tick every 2 kHz
 const DB_FLOOR = -130;
 const DB_CEIL = -30;

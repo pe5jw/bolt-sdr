@@ -5,16 +5,16 @@
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 //
 // Filter visualization PRD §3.2 — advanced filter ribbon. Matches the
-// mockup at docs/pics/filterpanel_mockup.png: dark-chrome floating panel
-// with BANDWIDTH / LOW CUT / PASSBAND / HIGH CUT columns, a 10 kHz
-// mini-panadapter, a 3×2 preset-bandwidth grid plus CUSTOM, close (×).
+// mockup at docs/pics/filterpanel_mockup.png: dark-chrome panel with
+// BANDWIDTH / LOW CUT / PASSBAND / HIGH CUT columns, a 10 kHz mini-
+// panadapter, a 3×2 preset-bandwidth grid plus CUSTOM, close (×).
 //
-// Rendered via React portal into document.body so the ribbon is purely
-// additive — it does not participate in the main-app CSS grid and cannot
-// disturb the existing panadapter / waterfall / workspace layout.
+// Renders as a **dedicated workspace row** above the hero (same column
+// width as the panadapter). Side-stack spans both the ribbon row and
+// the hero row; when the ribbon is closed the row collapses to 0 and
+// the workspace lays out exactly as before.
 
 import { useCallback, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { useConnectionStore } from '../../state/connection-store';
 import { setFilter, setFilterAdvancedPaneOpen } from '../../api/client';
 import {
@@ -101,156 +101,81 @@ export function FilterRibbon() {
   if (!open) return null;
   if (presets.length === 0) return null;
 
-  // Mockup-matching palette. var(--accent) is the Zeus blue (#4a9eff).
-  const labelStyle: React.CSSProperties = {
-    fontSize: 10,
-    fontWeight: 500,
-    letterSpacing: 1.6,
-    color: '#7c9fc9',
-    textTransform: 'uppercase',
-  };
-  const freqStyle: React.CSSProperties = {
-    fontSize: 22,
-    fontWeight: 400,
-    color: '#e8edf5',
-    letterSpacing: 0.6,
-    marginTop: 4,
-    fontVariantNumeric: 'tabular-nums',
-  };
-
-  return createPortal(
+  return (
     <div
       className="filter-ribbon"
       role="region"
       aria-label="Advanced filter ribbon"
-      style={{
-        position: 'fixed',
-        top: 140,
-        left: 16,
-        right: 16,
-        zIndex: 250,
-        padding: '12px 16px 14px',
-        borderRadius: 8,
-        background: '#0b1017',
-        backgroundColor: '#0b1017',
-        border: '1px solid #1a2230',
-        boxShadow: '0 10px 30px rgba(0, 0, 0, 0.55)',
-        color: '#e8edf5',
-        fontFamily: 'inherit',
-        isolation: 'isolate',
-      }}
     >
       {/* Close × (top-right) */}
       <button
         type="button"
         aria-label="Close filter ribbon"
         onClick={closeRibbon}
-        style={{
-          position: 'absolute',
-          top: 8,
-          right: 10,
-          width: 24,
-          height: 24,
-          padding: 0,
-          background: 'transparent',
-          border: 'none',
-          color: '#7c9fc9',
-          cursor: 'pointer',
-          fontSize: 18,
-          lineHeight: 1,
-        }}
+        className="filter-ribbon__close"
       >
         ×
       </button>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '90px 130px 1fr 130px minmax(320px, 1.2fr) 210px',
-          columnGap: 20,
-          alignItems: 'center',
-          minHeight: 140,
-        }}
-      >
+      <div className="filter-ribbon__grid">
         {/* BANDWIDTH header column */}
-        <div style={{ alignSelf: 'center' }}>
-          <div style={labelStyle}>BANDWIDTH</div>
+        <div className="filter-ribbon__col filter-ribbon__col--left">
+          <div className="filter-ribbon__label">BANDWIDTH</div>
         </div>
 
         {/* LOW CUT */}
-        <div style={{ alignSelf: 'center' }}>
-          <div style={labelStyle}>LOW CUT</div>
-          <div style={freqStyle}>{formatAbsFreq(lowAbs)}</div>
+        <div className="filter-ribbon__col filter-ribbon__col--left">
+          <div className="filter-ribbon__label">LOW CUT</div>
+          <div className="filter-ribbon__freq">{formatAbsFreq(lowAbs)}</div>
         </div>
 
-        {/* PASSBAND — focal element */}
-        <div style={{ textAlign: 'center', alignSelf: 'center' }}>
-          <div style={labelStyle}>PASSBAND</div>
-          <div
-            style={{
-              marginTop: 2,
-              fontVariantNumeric: 'tabular-nums',
-              letterSpacing: 0.5,
-              color: '#ffffff',
-            }}
-          >
-            <span style={{ fontSize: 30, fontWeight: 500 }}>
+        {/* PASSBAND — focal */}
+        <div className="filter-ribbon__col filter-ribbon__col--center">
+          <div className="filter-ribbon__label">PASSBAND</div>
+          <div className="filter-ribbon__passband">
+            <span className="filter-ribbon__passband-value">
               {widthKHz.toFixed(2)}
             </span>
-            <span style={{ fontSize: 13, marginLeft: 6, color: '#a9b9d3', fontWeight: 400 }}>
-              kHz
-            </span>
+            <span className="filter-ribbon__passband-unit">kHz</span>
           </div>
         </div>
 
         {/* HIGH CUT */}
-        <div style={{ textAlign: 'right', alignSelf: 'center' }}>
-          <div style={labelStyle}>HIGH CUT</div>
-          <div style={freqStyle}>{formatAbsFreq(highAbs)}</div>
+        <div className="filter-ribbon__col filter-ribbon__col--right">
+          <div className="filter-ribbon__label">HIGH CUT</div>
+          <div className="filter-ribbon__freq">{formatAbsFreq(highAbs)}</div>
         </div>
 
-        {/* Mini-panadapter — fixed height so the preset column beside it has
-            enough room without stretching. */}
-        <div style={{ position: 'relative', alignSelf: 'center', height: 120 }}>
+        {/* Mini-panadapter */}
+        <div className="filter-ribbon__minipan">
           <FilterMiniPan />
         </div>
 
         {/* PRESET BANDWIDTHS column */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignSelf: 'center' }}>
-          <div style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ opacity: 0.7 }}>≡</span>
+        <div className="filter-ribbon__presets">
+          <div className="filter-ribbon__label filter-ribbon__label--icon">
+            <span className="filter-ribbon__presets-icon">≡</span>
             <span>PRESET BANDWIDTHS</span>
           </div>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr 1fr',
-              gap: 6,
-            }}
-          >
+          <div className="filter-ribbon__preset-grid">
             {presets.map((slot) => {
-              const active = filterPresetName === slot.slotName;
-              const widthK = Math.abs(slot.highHz - slot.lowHz) / 1000;
+              const slotWidth = Math.abs(slot.highHz - slot.lowHz);
+              const currentWidth = Math.abs(filterHigh - filterLow);
+              // Active when the passband width matches this chip (±20 Hz) so
+              // the chip lights up whether selected from ribbon or compact
+              // panel, and regardless of whether filterPresetName is a VAR
+              // slot or a RIBBON_* synthesised name.
+              const active = Math.abs(slotWidth - currentWidth) <= 20;
+              const widthK = slotWidth / 1000;
               return (
                 <button
                   key={slot.slotName}
                   type="button"
                   onClick={() => selectPreset(slot)}
-                  title={`${slot.slotName}: ${slot.lowHz}/${slot.highHz} Hz`}
-                  style={{
-                    padding: '6px 8px',
-                    fontSize: 11,
-                    fontWeight: 500,
-                    borderRadius: 4,
-                    border: `1px solid ${active ? '#4a9eff' : '#223046'}`,
-                    background: active ? 'rgba(74, 158, 255, 0.14)' : 'rgba(18, 26, 40, 0.8)',
-                    color: active ? '#ffffff' : '#a9b9d3',
-                    cursor: 'pointer',
-                    fontVariantNumeric: 'tabular-nums',
-                    letterSpacing: 0.4,
-                  }}
+                  title={`${widthK.toFixed(1)} kHz (${slot.lowHz}..${slot.highHz} Hz)`}
+                  className={`filter-ribbon__chip ${active ? 'is-active' : ''}`}
                 >
-                  {widthK % 1 === 0 ? `${widthK.toFixed(1)} kHz` : `${widthK.toFixed(1)} kHz`}
+                  {widthK.toFixed(1)} kHz
                 </button>
               );
             })}
@@ -259,42 +184,18 @@ export function FilterRibbon() {
             type="button"
             onClick={armCustom}
             title="Arm custom edit — active slot becomes VAR1"
-            style={{
-              padding: '6px 8px',
-              fontSize: 11,
-              fontWeight: 500,
-              letterSpacing: 1.4,
-              borderRadius: 4,
-              border: `1px solid ${filterPresetName === 'VAR1' || filterPresetName === 'VAR2' ? '#4a9eff' : '#223046'}`,
-              background: 'rgba(18, 26, 40, 0.8)',
-              color: filterPresetName === 'VAR1' || filterPresetName === 'VAR2' ? '#ffffff' : '#a9b9d3',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 6,
-            }}
+            className={`filter-ribbon__custom ${filterPresetName === 'VAR1' || filterPresetName === 'VAR2' ? 'is-active' : ''}`}
           >
             <span>CUSTOM</span>
-            <span style={{ opacity: 0.6 }}>✎</span>
+            <span className="filter-ribbon__custom-icon" aria-hidden>✎</span>
           </button>
         </div>
       </div>
 
       {/* Footer hint — centered, uppercase, muted */}
-      <div
-        style={{
-          marginTop: 6,
-          textAlign: 'center',
-          fontSize: 9.5,
-          letterSpacing: 1.6,
-          color: '#5a7598',
-          textTransform: 'uppercase',
-        }}
-      >
+      <div className="filter-ribbon__hint">
         DRAG EDGES TO ADJUST&nbsp;&nbsp;•&nbsp;&nbsp;DRAG INSIDE TO MOVE
       </div>
-    </div>,
-    document.body,
+    </div>
   );
 }
