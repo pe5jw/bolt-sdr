@@ -88,6 +88,7 @@ public class TxAudioIngestTests
         public void SetMox(bool moxOn) { }
         public double GetRxaSignalDbm(int channelId) => -140.0;
         public void SetTxMode(RxMode mode) { }
+        public void SetTxFilter(int lowHz, int highHz) { }
         public void SetTxPanelGain(double linearGain) { }
         public void SetTxLevelerMaxGain(double maxGainDb) { }
         public void SetTxTune(bool on) { }

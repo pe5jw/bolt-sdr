@@ -144,6 +144,7 @@ public sealed class SyntheticDspEngine : IDspEngine
     // mirrors WDSP so tests that round-trip through the interface can assume
     // the same buffering shape.
     public void SetTxMode(RxMode mode) { }
+    public void SetTxFilter(int lowHz, int highHz) { }
     public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved) => 0;
     public int TxBlockSamples => 1024;
     public int TxOutputSamples => 1024;

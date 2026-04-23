@@ -78,12 +78,19 @@ public sealed class WdspDspEngine : IDspEngine
     private int _txaOutputRateHz = 48_000;
     private bool _txaCfirRun;
 
-    // Leveler max-gain ceiling in dB applied at TXA init. Matches the
-    // W1AEX / softerhardware community default ("CFC Audio Tools" guide,
-    // ~+5 dB) — milder than Thetis's stock +15 dB, erring toward cleaner
-    // transmit audio on the first connect. Operator overrides via
+    // Leveler max-gain ceiling in dB applied at TXA init. Thetis ships
+    // 15 dB (radio.cs:2981 tx_leveler_max_gain = 15.0). Zeus used to ship
+    // 5 dB — which turned out to be the WDSP C-init default (TXA.c:169
+    // 1.778 linear), not a considered choice. With Compressor off the
+    // Leveler is the only makeup stage, so 5 dB left operators 10+ dB
+    // below Thetis-equivalent modulation on the air.
+    //
+    // Operator (kb2uka) requested 8 dB: his external analog rack already
+    // provides significant preamp and pre-DSP conditioning, so a smaller
+    // Leveler ceiling sounds cleaner than the Thetis stock 15 dB on his
+    // setup. Operators without an external rack can push it up to 15 via
     // POST /api/tx/leveler-max-gain.
-    internal const double DefaultLevelerMaxGainDb = 5.0;
+    internal const double DefaultLevelerMaxGainDb = 8.0;
 
     // Legacy aliases — RXA-side code still references these. Kept = RxaInSize
     // / RxaDspSize so existing callsites (audio outSamples math, channel
@@ -698,6 +705,10 @@ public sealed class WdspDspEngine : IDspEngine
             // at state=0 and consumes nothing.
             NativeMethods.SetTXAMode(id, (int)RxaMode.USB);
             _txCurrentMode = RxaMode.USB;
+            // Default passband matches the stock SSB TX width. DspPipelineService
+            // re-asserts this from the live StateDto (TxFilterLowHz/HighHz)
+            // immediately after OpenTxChannel so operator-edited widths survive
+            // a protocol switch / engine reopen.
             NativeMethods.SetTXABandpassFreqs(id, 150.0, 2850.0);
             NativeMethods.SetTXABandpassWindow(id, 1);
             // Intentionally NOT calling SetTXABandpassRun(id, 1): despite the
@@ -758,6 +769,16 @@ public sealed class WdspDspEngine : IDspEngine
             NativeMethods.SetTXAEQRun(id, 0);
             NativeMethods.SetTXAAMSQRun(id, 0);
             NativeMethods.SetTXAALCSt(id, 1);
+            // ALC tuning — Zeus previously left these at WDSP library defaults
+            // (MaxGain=0 dB linear/1.0). Thetis ships +3 dB max gain
+            // (database.cs:4596). Attack 1 ms / Decay 10 ms matches both
+            // pihpsdr (transmitter.c:1290-1291) and the WDSP factory that
+            // Thetis inherits (TXA.c:319, tau_attack = 0.001). A slower 2 ms
+            // attack missed plosive onset and the follow-up ALC chop sounded
+            // crunchy — operator described it as "brittle."
+            NativeMethods.SetTXAALCMaxGain(id, 3.0);
+            NativeMethods.SetTXAALCAttack(id, 1);
+            NativeMethods.SetTXAALCDecay(id, 10);
 
             // CFIR compensates the sinc droop introduced by the TXA upsample
             // to the output rate. Thetis (audio.cs:1808) turns it ON for P2,
@@ -921,9 +942,22 @@ public sealed class WdspDspEngine : IDspEngine
             if (_txaChannelId is not int txa) return;
             NativeMethods.SetTXAMode(txa, (int)mapped);
             _txCurrentMode = mapped;
-            ApplyTxBandpassForMode(txa, mapped);
+            // TXA bandpass is now operator-controlled — DspPipelineService
+            // asserts SetTxFilter after SetTxMode using the per-mode-family
+            // memory in RadioService. No auto-apply here.
         }
         _log.LogInformation("wdsp.setTxMode mode={Mode}", mapped);
+    }
+
+    public void SetTxFilter(int lowHz, int highHz)
+    {
+        if (_disposed != 0) return;
+        lock (_txaLock)
+        {
+            if (_txaChannelId is not int txa) return;
+            NativeMethods.SetTXABandpassFreqs(txa, lowHz, highHz);
+        }
+        _log.LogInformation("wdsp.setTxFilter low={Low} high={High}", lowHz, highHz);
     }
 
     private DateTime _lastTxMeterLogUtc;
@@ -1048,29 +1082,6 @@ public sealed class WdspDspEngine : IDspEngine
                 outPk, outAv);
         }
         return outSize;
-    }
-
-    // Mirror of ApplyBandpassForMode for the TX side. TXA has one bandpass
-    // (SetTXABandpassFreqs), not the three-stage RXA chain, so this is short.
-    private void ApplyTxBandpassForMode(int txa, RxaMode mode)
-    {
-        const double lo = 150.0;
-        const double hi = 2850.0;
-        double low, high;
-        switch (mode)
-        {
-            case RxaMode.LSB:
-            case RxaMode.CWL:
-            case RxaMode.DIGL:
-                low = -hi; high = -lo; break;
-            case RxaMode.USB:
-            case RxaMode.CWU:
-            case RxaMode.DIGU:
-                low = lo; high = hi; break;
-            default:
-                low = -hi; high = hi; break;
-        }
-        NativeMethods.SetTXABandpassFreqs(txa, low, high);
     }
 
     public void Dispose()

@@ -75,6 +75,8 @@ public class DspPipelineService : BackgroundService
     private RxMode _appliedMode = RxMode.USB;
     private int _appliedLowHz;
     private int _appliedHighHz;
+    private int _appliedTxLowHz;
+    private int _appliedTxHighHz;
     private double _appliedAgcTopDb;
     private NrConfig _appliedNr = new();
     private int _appliedZoomLevel = 1;
@@ -252,6 +254,12 @@ public class DspPipelineService : BackgroundService
             _appliedLowHz = s.FilterLowHz;
             _appliedHighHz = s.FilterHighHz;
         }
+        if (s.TxFilterLowHz != _appliedTxLowHz || s.TxFilterHighHz != _appliedTxHighHz)
+        {
+            engine.SetTxFilter(s.TxFilterLowHz, s.TxFilterHighHz);
+            _appliedTxLowHz = s.TxFilterLowHz;
+            _appliedTxHighHz = s.TxFilterHighHz;
+        }
         if (s.AgcTopDb != _appliedAgcTopDb)
         {
             engine.SetAgcTop(channel, s.AgcTopDb);
@@ -280,6 +288,7 @@ public class DspPipelineService : BackgroundService
         // OpenTxChannel).
         engine.SetTxMode(s.Mode);
         engine.SetFilter(channelId, s.FilterLowHz, s.FilterHighHz);
+        engine.SetTxFilter(s.TxFilterLowHz, s.TxFilterHighHz);
         engine.SetVfoHz(channelId, s.VfoHz);
         engine.SetAgcTop(channelId, s.AgcTopDb);
         engine.SetNoiseReduction(channelId, nr);
@@ -287,6 +296,8 @@ public class DspPipelineService : BackgroundService
         _appliedMode = s.Mode;
         _appliedLowHz = s.FilterLowHz;
         _appliedHighHz = s.FilterHighHz;
+        _appliedTxLowHz = s.TxFilterLowHz;
+        _appliedTxHighHz = s.TxFilterHighHz;
         _appliedAgcTopDb = s.AgcTopDb;
         _appliedNr = nr;
         _appliedZoomLevel = s.ZoomLevel;

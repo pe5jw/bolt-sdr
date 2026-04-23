@@ -84,6 +84,12 @@ public interface IDspEngine : IDisposable
     /// TXA is open.</summary>
     void SetTxMode(RxMode mode);
 
+    /// <summary>Set TXA bandpass (SetTXABandpassFreqs). <paramref name="lowHz"/>
+    /// / <paramref name="highHz"/> are signed Hz around baseband — LSB-style
+    /// passbands are negative, DSB/AM/FM symmetric. No-op for Synthetic and
+    /// when TXA is not open.</summary>
+    void SetTxFilter(int lowHz, int highHz);
+
     /// <summary>Process one WDSP-sized block of mic audio through TXA and return
     /// the modulated IQ. <paramref name="micMono"/> must contain exactly
     /// <see cref="TxBlockSamples"/> float samples (48 kHz mono). <paramref name="iqInterleaved"/>
