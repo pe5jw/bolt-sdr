@@ -85,6 +85,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // needed via the UI. Attenuator 0 dB so the front-end isn't knocked down.
     private bool _preampOn;
     private byte _rxStepAttnDb;
+    // PA settings — pushed from RadioService when PaSettingsStore changes or
+    // the VFO crosses a band edge. _paEnabled is the global toggle that lands
+    // in CmdGeneral[58]; _driveByte is the pre-calibrated drive level for
+    // CmdHighPriority[345]; _ocTxMask/_ocRxMask drive CmdHighPriority[1401]
+    // (OR'd with OCtune once that's plumbed).
+    private bool _paEnabled = true;
+    private byte _driveByte;
+    private byte _ocTxMask;
+    private byte _ocRxMask;
+    private bool _moxOn;
     private long _totalFrames;
     private long _droppedFrames;
     private uint _lastDdc0Seq;
@@ -210,6 +220,31 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
+    public void SetDriveByte(byte value)
+    {
+        _driveByte = value;
+        if (_rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
+    public void SetOcMasks(byte txMask, byte rxMask)
+    {
+        _ocTxMask = (byte)(txMask & 0x7F);
+        _ocRxMask = (byte)(rxMask & 0x7F);
+        if (_rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
+    public void SetPaEnabled(bool enabled)
+    {
+        _paEnabled = enabled;
+        if (_rxTask is not null) SendCmdGeneral();
+    }
+
+    public void SetMox(bool on)
+    {
+        _moxOn = on;
+        if (_rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
     private void SendCmdGeneral()
     {
         var p = new byte[60];
@@ -236,7 +271,10 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // MkII for the BPF board to honour the alex bits further down).
         p[37] = 0x08;
         p[38] = 0x01;
-        p[58] = 0x01;
+        // [58] bit 0 = PA enable (piHPSDR `new_protocol.c:658-677`; Thetis
+        // `network.c` SendGeneral). The old hard-coded 0x01 became the
+        // default; PaSettingsStore now owns the bit.
+        p[58] = (byte)(_paEnabled ? 0x01 : 0x00);
         p[59] = 0x03;
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1024));
     }
@@ -286,6 +324,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         uint rxPhase = (uint)(_rxFreqHz * HzToPhase);
         WriteBeU32(p, 9 + G2RxDdc * 4, rxPhase);
         WriteBeU32(p, 329, rxPhase);
+
+        // Drive level (0..255) at byte 345. Set by RadioService after applying
+        // per-band PA gain calibration. Honored by the radio only while run=1
+        // and TX is keyed elsewhere (byte 4 bit 1). piHPSDR `new_protocol.c:860`.
+        p[345] = _driveByte;
+
+        // OC outputs (7-bit mask) shifted left by 1 into byte 1401. TX mask
+        // when MOX is on, RX mask otherwise. piHPSDR `new_protocol.c:877-894`
+        // (OCtune handling deferred until Tune integrates with PA settings).
+        p[1401] = (byte)(((_moxOn ? _ocTxMask : _ocRxMask) & 0x7F) << 1);
 
         // Mercury attenuator byte: bit 0 = RX0 preamp, bit 1 = RX1 preamp
         // (Thetis network.c:1037).

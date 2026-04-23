@@ -1,0 +1,108 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF),
+//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//
+// This program is free software: you can redistribute it and/or modify it
+// under the terms of the GNU General Public License as published by the
+// Free Software Foundation, either version 2 of the License, or (at your
+// option) any later version. See the LICENSE file at the root of this
+// repository for the full text, or https://www.gnu.org/licenses/.
+//
+// See ATTRIBUTIONS.md at the repository root for the full provenance
+// statement and per-component attribution.
+
+export type PaBandSettings = {
+  band: string;
+  paGainDb: number;
+  disablePa: boolean;
+  ocTx: number;
+  ocRx: number;
+};
+
+export type PaGlobalSettings = {
+  paEnabled: boolean;
+  paMaxPowerWatts: number;
+  ocTune: number;
+};
+
+export type PaSettings = {
+  global: PaGlobalSettings;
+  bands: PaBandSettings[];
+};
+
+type PaBandDtoRaw = {
+  band?: unknown;
+  paGainDb?: unknown;
+  disablePa?: unknown;
+  ocTx?: unknown;
+  ocRx?: unknown;
+};
+
+type PaGlobalDtoRaw = {
+  paEnabled?: unknown;
+  paMaxPowerWatts?: unknown;
+  ocTune?: unknown;
+};
+
+type PaSettingsDtoRaw = {
+  global?: PaGlobalDtoRaw;
+  bands?: unknown;
+};
+
+function toNumber(v: unknown, fallback = 0): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+}
+
+function toBool(v: unknown, fallback = false): boolean {
+  return typeof v === 'boolean' ? v : fallback;
+}
+
+function normalizeGlobal(raw: PaGlobalDtoRaw | undefined): PaGlobalSettings {
+  return {
+    paEnabled: toBool(raw?.paEnabled, true),
+    paMaxPowerWatts: Math.max(0, Math.round(toNumber(raw?.paMaxPowerWatts, 0))),
+    ocTune: Math.max(0, Math.min(0x7f, Math.round(toNumber(raw?.ocTune, 0)))),
+  };
+}
+
+function normalizeBand(raw: PaBandDtoRaw): PaBandSettings {
+  return {
+    band: typeof raw.band === 'string' ? raw.band : '',
+    paGainDb: toNumber(raw.paGainDb, 0),
+    disablePa: toBool(raw.disablePa, false),
+    ocTx: Math.max(0, Math.min(0x7f, Math.round(toNumber(raw.ocTx, 0)))),
+    ocRx: Math.max(0, Math.min(0x7f, Math.round(toNumber(raw.ocRx, 0)))),
+  };
+}
+
+function normalize(raw: PaSettingsDtoRaw): PaSettings {
+  const bandsArr = Array.isArray(raw.bands) ? (raw.bands as PaBandDtoRaw[]) : [];
+  return {
+    global: normalizeGlobal(raw.global),
+    bands: bandsArr.filter((b) => typeof b?.band === 'string').map(normalizeBand),
+  };
+}
+
+export async function fetchPaSettings(signal?: AbortSignal): Promise<PaSettings> {
+  const res = await fetch('/api/pa-settings', { signal });
+  if (!res.ok) throw new Error(`GET /api/pa-settings → ${res.status}`);
+  const raw = (await res.json()) as PaSettingsDtoRaw;
+  return normalize(raw);
+}
+
+export async function updatePaSettings(
+  settings: PaSettings,
+  signal?: AbortSignal,
+): Promise<PaSettings> {
+  const res = await fetch('/api/pa-settings', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(settings),
+    signal,
+  });
+  if (!res.ok) throw new Error(`PUT /api/pa-settings → ${res.status}`);
+  const raw = (await res.json()) as PaSettingsDtoRaw;
+  return normalize(raw);
+}

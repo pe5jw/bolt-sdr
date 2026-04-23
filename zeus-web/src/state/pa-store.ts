@@ -1,0 +1,106 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF),
+//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//
+// This program is free software: you can redistribute it and/or modify it
+// under the terms of the GNU General Public License as published by the
+// Free Software Foundation, either version 2 of the License, or (at your
+// option) any later version. See the LICENSE file at the root of this
+// repository for the full text, or https://www.gnu.org/licenses/.
+//
+// See ATTRIBUTIONS.md at the repository root for the full provenance
+// statement and per-component attribution.
+
+import { create } from 'zustand';
+import {
+  fetchPaSettings,
+  updatePaSettings,
+  type PaBandSettings,
+  type PaGlobalSettings,
+  type PaSettings,
+} from '../api/pa';
+
+// Canonical HF band order — must match Zeus.Server/BandUtils.HfBands. The
+// settings panel iterates this for a consistent row order even when the
+// backend returns bands in a different order or omits some.
+export const HF_BANDS: readonly string[] = [
+  '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m',
+] as const;
+
+function defaultBand(band: string): PaBandSettings {
+  return { band, paGainDb: 0, disablePa: false, ocTx: 0, ocRx: 0 };
+}
+
+function defaultState(): PaSettings {
+  return {
+    global: { paEnabled: true, paMaxPowerWatts: 0, ocTune: 0 },
+    bands: HF_BANDS.map(defaultBand),
+  };
+}
+
+// Canonicalize the array coming back from the backend: fill in missing bands
+// with defaults so the UI doesn't have to guard for holes.
+function canonicalize(s: PaSettings): PaSettings {
+  const byBand = new Map<string, PaBandSettings>(s.bands.map((b) => [b.band, b]));
+  return {
+    global: s.global,
+    bands: HF_BANDS.map((b) => byBand.get(b) ?? defaultBand(b)),
+  };
+}
+
+type PaStore = {
+  settings: PaSettings;
+  loaded: boolean;
+  inflight: boolean;
+  error: string | null;
+  load: () => Promise<void>;
+  save: () => Promise<void>;
+  setGlobal: (patch: Partial<PaGlobalSettings>) => void;
+  setBand: (band: string, patch: Partial<Omit<PaBandSettings, 'band'>>) => void;
+};
+
+export const usePaStore = create<PaStore>((set, get) => ({
+  settings: defaultState(),
+  loaded: false,
+  inflight: false,
+  error: null,
+
+  load: async () => {
+    set({ inflight: true, error: null });
+    try {
+      const s = await fetchPaSettings();
+      set({ settings: canonicalize(s), loaded: true, inflight: false });
+    } catch (err) {
+      set({
+        error: err instanceof Error ? err.message : String(err),
+        inflight: false,
+      });
+    }
+  },
+
+  save: async () => {
+    set({ inflight: true, error: null });
+    try {
+      const s = await updatePaSettings(get().settings);
+      set({ settings: canonicalize(s), inflight: false });
+    } catch (err) {
+      set({
+        error: err instanceof Error ? err.message : String(err),
+        inflight: false,
+      });
+    }
+  },
+
+  setGlobal: (patch) =>
+    set((s) => ({ settings: { ...s.settings, global: { ...s.settings.global, ...patch } } })),
+
+  setBand: (band, patch) =>
+    set((s) => ({
+      settings: {
+        ...s.settings,
+        bands: s.settings.bands.map((b) => (b.band === band ? { ...b, ...patch } : b)),
+      },
+    })),
+}));

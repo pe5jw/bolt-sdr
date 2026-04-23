@@ -14,6 +14,7 @@
 // statement and per-component attribution.
 
 import { useEffect, useRef, useState } from 'react';
+import { PaSettingsPanel } from './PaSettingsPanel';
 
 type TabId =
   | 'general'
@@ -206,9 +207,13 @@ export function SettingsMenu({ open, onClose }: Props) {
         className="flex-1 overflow-auto px-6 py-6 text-sm text-neutral-300"
         role="tabpanel"
       >
-        <p className="italic text-neutral-500">
-          {TABS.find((t) => t.id === active)?.label} settings — coming soon.
-        </p>
+        {active === 'pa' ? (
+          <PaSettingsPanel />
+        ) : (
+          <p className="italic text-neutral-500">
+            {TABS.find((t) => t.id === active)?.label} settings — coming soon.
+          </p>
+        )}
       </div>
 
       <div className="flex items-center justify-between border-t border-neutral-800 px-4 py-3">
