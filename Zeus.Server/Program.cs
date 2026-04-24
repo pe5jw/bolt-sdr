@@ -377,6 +377,15 @@ app.MapPost("/api/bandwidth", (BandwidthSetRequest req, RadioService r) =>
     return r.SetFilter(req.Low, req.High);
 });
 
+// TX bandpass filter — signed Hz pair (LSB negative, DSB symmetric). Per-mode
+// family memory is managed in RadioService, identical shape to the RX filter.
+// Operator-editable via Settings → TX Filter panel.
+app.MapPost("/api/tx-filter", (TxFilterSetRequest req, RadioService r) =>
+{
+    log.LogInformation("api.tx-filter low={L} high={H}", req.LowHz, req.HighHz);
+    return r.SetTxFilter(req.LowHz, req.HighHz);
+});
+
 // Filter preset endpoints (PRD §5.2). These are the preferred filter surface;
 // /api/bandwidth remains for backward compat. POST /api/filter also accepts
 // an optional PresetName to track which chip is active.

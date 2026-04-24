@@ -74,7 +74,7 @@ public sealed class TxService
     public bool TrySetMox(bool on, out string? error)
     {
         // FR-1 interlock: no TX unless connected. Band-legality check deferred to a follow-up.
-        if (on && _radio.ActiveClient is null) { error = "not connected"; return false; }
+        if (on && !_radio.IsConnected) { error = "not connected"; return false; }
 
         bool wasTunOn;
         lock (_sync)
@@ -116,10 +116,11 @@ public sealed class TxService
 
     public bool TrySetTun(bool on, out string? error)
     {
-        // Same connect-interlock as MOX: no TX of any kind without an active
-        // client (the HL2 PA-enable bit is gated on MOX, but TUN flips MOX on
-        // via the engine, so we reject the precondition here for symmetry).
-        if (on && _radio.ActiveClient is null) { error = "not connected"; return false; }
+        // Same connect-interlock as MOX: no TX of any kind without a connected
+        // backend. IsConnected covers both P1 (Protocol1Client) and P2
+        // (Protocol2Client owned by DspPipelineService); ActiveClient alone
+        // would reject TUN on any G2 MkII.
+        if (on && !_radio.IsConnected) { error = "not connected"; return false; }
 
         bool wasMoxOn;
         lock (_sync)

@@ -94,7 +94,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private byte _driveByte;
     private byte _ocTxMask;
     private byte _ocRxMask;
+    private byte _ocTuneMask;
     private bool _moxOn;
+    private bool _tuneActive;
     private long _totalFrames;
     private long _droppedFrames;
     private uint _lastDdc0Seq;
@@ -109,6 +111,27 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private uint _seqCmdRx;
     private uint _seqCmdTx;
     private uint _seqCmdHp;
+    private uint _seqCmdTxIq;
+
+    // TX-DUC IQ accumulator. WDSP TXA emits 1024/2048-sample blocks; the P2
+    // wire format wants 240 complex samples per 1444-byte packet on port 1029.
+    // We buffer into this 240-pair scratch and enqueue whenever it fills.
+    private const int TxIqSamplesPerPacket = 240;
+    // DAC rate = 192 kHz. 240 samples = 1.25 ms of audio per packet. A steady
+    // 1 packet / 1.25 ms stream keeps the radio's TX FIFO level instead of
+    // bursting (which shows up on the air as a pulsed / AM-modulated carrier
+    // with multi-tone-looking sidebands).
+    private const double TxDacSampleRate = 192_000.0;
+    // Mirrors pihpsdr new_protocol.c:1972 — target FIFO fill of ~1250 samples
+    // (6.5 ms of audio buffered in the radio). Past that we pace; below it
+    // we send as fast as packets are ready so the radio never underruns.
+    private const double TxFifoTargetSamples = 1250.0;
+    private readonly float[] _txIqScratch = new float[TxIqSamplesPerPacket * 2];
+    private int _txIqScratchCount;
+    private readonly object _txIqGate = new();
+    private readonly Channel<byte[]> _txIqQueue = Channel.CreateUnbounded<byte[]>(
+        new UnboundedChannelOptions { SingleReader = true });
+    private Task? _txIqSenderTask;
 
     public Protocol2Client(ILogger<Protocol2Client> log)
     {
@@ -160,6 +183,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _rxCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _rxTask = Task.Run(() => RxLoop(_rxCts.Token));
         _keepaliveTask = Task.Run(() => KeepaliveLoop(_rxCts.Token));
+        // Paced TX IQ sender — drains the queue FlushTxIqLocked fills and
+        // holds the radio's DUC FIFO at a steady level.
+        _txIqSenderTask = Task.Run(() => TxIqSenderLoop(_rxCts.Token));
         _log.LogInformation("p2.start rate={Rate}kHz freq={Freq}Hz", _sampleRateKhz, _rxFreqHz);
         return Task.CompletedTask;
     }
@@ -178,6 +204,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             try { await _keepaliveTask.ConfigureAwait(false); }
             catch (OperationCanceledException) { }
             _keepaliveTask = null;
+        }
+        _txIqQueue.Writer.TryComplete();
+        if (_txIqSenderTask is not null)
+        {
+            try { await _txIqSenderTask.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+            _txIqSenderTask = null;
         }
         _rxCts?.Dispose();
         _rxCts = null;
@@ -233,6 +266,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
+    public void SetOcTuneMask(byte mask)
+    {
+        _ocTuneMask = (byte)(mask & 0x7F);
+        if (_rxTask is not null && _tuneActive) SendCmdHighPriority(run: true);
+    }
+
     public void SetPaEnabled(bool enabled)
     {
         _paEnabled = enabled;
@@ -242,7 +281,157 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public void SetMox(bool on)
     {
         _moxOn = on;
+        if (!on) ResetTxIq();
         if (_rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
+    public void SetTune(bool on)
+    {
+        _tuneActive = on;
+        if (!on) ResetTxIq();
+        if (_rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
+    /// <summary>
+    /// Push a block of interleaved float IQ (−1..+1) into the TX-DUC stream.
+    /// The block is buffered; when the accumulator reaches 240 complex
+    /// samples a 1444-byte P2 packet is sent to port 1029 (pihpsdr
+    /// new_protocol.c:1909-1942 — new_protocol_txiq_thread). Caller owns the
+    /// input buffer; we copy. Samples are scaled by pihpsdr's ggain=0.896
+    /// (transmitter.c:1761) to compensate for the end-of-chain FIR gain and
+    /// then quantized to signed 24-bit BE.
+    /// </summary>
+    public void SendTxIq(ReadOnlySpan<float> iqInterleaved)
+    {
+        if (_sock is null || _rxTask is null) return;
+        if ((iqInterleaved.Length & 1) != 0)
+            throw new ArgumentException("interleaved length must be even (I,Q pairs)", nameof(iqInterleaved));
+
+        lock (_txIqGate)
+        {
+            int idx = 0;
+            while (idx < iqInterleaved.Length)
+            {
+                int capacity = _txIqScratch.Length - _txIqScratchCount;
+                int copyLen = Math.Min(capacity, iqInterleaved.Length - idx);
+                iqInterleaved.Slice(idx, copyLen).CopyTo(_txIqScratch.AsSpan(_txIqScratchCount));
+                _txIqScratchCount += copyLen;
+                idx += copyLen;
+                if (_txIqScratchCount >= _txIqScratch.Length)
+                {
+                    FlushTxIqLocked();
+                }
+            }
+        }
+    }
+
+    private void ResetTxIq()
+    {
+        lock (_txIqGate) _txIqScratchCount = 0;
+        // Drain any queued-but-unsent packets so a fresh key-down starts
+        // from an empty FIFO model and the radio isn't playing 10 ms of
+        // the previous transmission's IQ when PTT re-engages.
+        while (_txIqQueue.Reader.TryRead(out _)) { }
+    }
+
+    private void FlushTxIqLocked()
+    {
+        // The 0.896 trim pihpsdr applies in transmitter.c:1707-1712 is
+        // CW-path-only — it compensates for the CW shaped pulse skipping
+        // WDSP TXA's end-of-chain FIR. The regular TXA path (which is what
+        // Zeus feeds — mic and TUN both go through TXA) takes the samples
+        // unscaled (transmitter.c:1739-1754), so no pre-quantize trim here.
+        var p = new byte[BufLen];
+        WriteBeU32(p, 0, _seqCmdTxIq++);
+        for (int i = 0; i < TxIqSamplesPerPacket; i++)
+        {
+            float fi = _txIqScratch[i * 2];
+            float fq = _txIqScratch[i * 2 + 1];
+            int vi = Int24Clamp(fi);
+            int vq = Int24Clamp(fq);
+            int off = 4 + i * 6;
+            p[off + 0] = (byte)((vi >> 16) & 0xff);
+            p[off + 1] = (byte)((vi >> 8) & 0xff);
+            p[off + 2] = (byte)(vi & 0xff);
+            p[off + 3] = (byte)((vq >> 16) & 0xff);
+            p[off + 4] = (byte)((vq >> 8) & 0xff);
+            p[off + 5] = (byte)(vq & 0xff);
+        }
+        // Enqueue instead of sending inline. The sender task drains this at
+        // the DAC rate so the radio's TX FIFO stays level — sending the full
+        // 8-packet burst from one WDSP cycle straight to the wire overfills
+        // then starves the FIFO, showing up as a pulsed carrier.
+        _txIqQueue.Writer.TryWrite(p);
+        _txIqScratchCount = 0;
+    }
+
+    private async Task TxIqSenderLoop(CancellationToken ct)
+    {
+        // Port of pihpsdr's new_protocol_txiq_thread (new_protocol.c:1909-1997).
+        // Maintains a software model of the radio's TX FIFO fill level: each
+        // packet adds 240 samples, wall-clock elapses drain at 192 kHz. When
+        // the modeled level exceeds the target (1250 samples ≈ 6.5 ms) we hold
+        // for 1 ms before sending the next packet. Below the target we send
+        // as fast as the queue delivers — that's the startup ramp that fills
+        // the radio's FIFO to its steady-state depth.
+        var reader = _txIqQueue.Reader;
+        var ep = new IPEndPoint(_radioEndpoint!.Address, 1029);
+        double fifoSamples = 0.0;
+        long lastTicks = Stopwatch.GetTimestamp();
+        double ticksPerSecond = Stopwatch.Frequency;
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                byte[] packet;
+                try { packet = await reader.ReadAsync(ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+                catch (ChannelClosedException) { break; }
+
+                // Drain by wall-clock since the previous send.
+                long now = Stopwatch.GetTimestamp();
+                double elapsedSec = (now - lastTicks) / ticksPerSecond;
+                fifoSamples -= elapsedSec * TxDacSampleRate;
+                if (fifoSamples < 0.0) fifoSamples = 0.0;
+                lastTicks = now;
+
+                // If the radio's FIFO would overflow, wait a tick before the
+                // next send. The 1 ms delay is coarse but well within the
+                // FIFO's 6.5 ms target headroom, so no underrun risk.
+                if (fifoSamples > TxFifoTargetSamples)
+                {
+                    try { await Task.Delay(1, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                    now = Stopwatch.GetTimestamp();
+                    elapsedSec = (now - lastTicks) / ticksPerSecond;
+                    fifoSamples -= elapsedSec * TxDacSampleRate;
+                    if (fifoSamples < 0.0) fifoSamples = 0.0;
+                    lastTicks = now;
+                }
+
+                fifoSamples += TxIqSamplesPerPacket;
+                try { _sock!.SendTo(packet, ep); }
+                catch (ObjectDisposedException) { break; }
+                catch (SocketException ex)
+                {
+                    _log.LogWarning(ex, "p2.txiq send failed");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "p2.txiq sender exited with error");
+        }
+    }
+
+    private static int Int24Clamp(float v)
+    {
+        if (v >  1.0f) v =  1.0f;
+        if (v < -1.0f) v = -1.0f;
+        // 8_388_607 = 2^23 - 1. Using the ceiling (8_388_608) would map +1.0
+        // to a value that, when sign-extended on the far side, wraps to
+        // −8_388_608 — a full-scale negative spike on the loudest sample.
+        return (int)MathF.Round(v * 8_388_607.0f);
     }
 
     private void SendCmdGeneral()
@@ -312,7 +501,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     {
         var p = new byte[BufLen];
         WriteBeU32(p, 0, _seqCmdHp++);
-        p[4] = (byte)(run ? 0x01 : 0x00);
+        // Byte 4 bit 0 = run, bit 1 = PTT. Thetis network.c:924-925 and
+        // pihpsdr new_protocol.c:746-757 both set bit 1 whenever the radio
+        // should key — covers both mic-MOX and TUN. Without this bit the
+        // radio stays in RX regardless of drive / tune state.
+        p[4] = (byte)((_moxOn ? 0x02 : 0x00) | (run ? 0x01 : 0x00));
 
         // Frequency field is a PHASE word (general[37] bit 3 set) — radio
         // reads a 32-bit phase increment, not Hz. pihpsdr computes this as
@@ -330,10 +523,15 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // and TX is keyed elsewhere (byte 4 bit 1). piHPSDR `new_protocol.c:860`.
         p[345] = _driveByte;
 
-        // OC outputs (7-bit mask) shifted left by 1 into byte 1401. TX mask
-        // when MOX is on, RX mask otherwise. piHPSDR `new_protocol.c:877-894`
-        // (OCtune handling deferred until Tune integrates with PA settings).
-        p[1401] = (byte)(((_moxOn ? _ocTxMask : _ocRxMask) & 0x7F) << 1);
+        // OC outputs (7-bit mask) shifted left by 1 into byte 1401. During
+        // TX the TX mask applies; during TUN we OR in the OCtune mask so
+        // anything wired to the tune pin (e.g. an external linear's tune-
+        // mode relay) closes. RX mask when keyed down. pihpsdr
+        // new_protocol.c:877-894.
+        byte ocBits = _moxOn
+            ? (byte)(_ocTxMask | (_tuneActive ? _ocTuneMask : (byte)0))
+            : _ocRxMask;
+        p[1401] = (byte)((ocBits & 0x7F) << 1);
 
         // Mercury attenuator byte: bit 0 = RX0 preamp, bit 1 = RX1 preamp
         // (Thetis network.c:1037).
@@ -344,12 +542,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
         // Alex words. Bit positions and BPF selections per pihpsdr's alex.h +
         // new_protocol.c (function new_protocol_high_priority, device cases
-        // NEW_DEVICE_ORION2 / NEW_DEVICE_SATURN). Alex0 holds the RX BPF +
-        // TX LPF + TX antenna; Alex1 duplicates for the RX path during TX.
-        // Offsets: Alex0 at 1432..1435, Alex1 at 1428..1431.
-        uint alex = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: 1);
-        WriteBeU32(p, 1428, alex);
-        WriteBeU32(p, 1432, alex);
+        // NEW_DEVICE_ORION2 / NEW_DEVICE_SATURN). Offsets: Alex0 at 1432..1435,
+        // Alex1 at 1428..1431. During TX both words need ALEX_TX_RELAY
+        // (pihpsdr new_protocol.c:989-992) so the T/R relay on the LPF board
+        // flips to the TX path; without it the TX signal reaches the antenna
+        // through the RX filters and DAC images radiate as out-of-band
+        // harmonics. Alex1 additionally gets RX_GNDonTX to short the RX input
+        // while keyed, protecting the ADC.
+        bool xmit = _moxOn;
+        uint alexCommon = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: 1);
+        uint alex0 = alexCommon | (xmit ? ALEX_TX_RELAY : 0u);
+        uint alex1 = alexCommon | (xmit ? ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX : 0u);
+        WriteBeU32(p, 1428, alex1);
+        WriteBeU32(p, 1432, alex0);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1027));
     }
 
@@ -382,6 +587,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private const uint ALEX_TX_ANTENNA_2   = 0x02000000;
     private const uint ALEX_TX_ANTENNA_3   = 0x04000000;
 
+    // Flips the T/R relay on the LPF board so the TX path reaches the antenna
+    // through the selected TX LPF instead of through the RX BPF path. OR'd
+    // into both alex0 and alex1 during TX (pihpsdr new_protocol.c:989-992).
+    private const uint ALEX_TX_RELAY       = 0x08000000;
+    // Alex1-only: grounds the RX input while keyed so the hot TX field doesn't
+    // back-feed into the Mercury ADC (pihpsdr alex.h ANAN7000_RX_GNDonTX).
+    private const uint ALEX1_ANAN7000_RX_GNDonTX = 0x00000100;
+
     internal static uint ComputeAlexWord(uint rxFreqHz, uint txFreqHz, int txAnt)
     {
         uint word = 0;
@@ -410,16 +623,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         return ALEX_ANAN7000_RX_6_PRE_BPF;
     }
 
-    // TX LPF band splits (pihpsdr calc_tx_alex in alex.c). Same band groupings
-    // as the physical LPF board — not HPF-shaped.
+    // TX LPF band splits. Thresholds match pihpsdr new_protocol.c:1204-1218
+    // exactly (strict > rather than >= so the band edges route the way the
+    // LPF board expects; off-by-one on a threshold lets the wrong filter
+    // pass harmonics at e.g. 24.9 MHz or 16.4 MHz).
     internal static uint LpfBitsAnan7000(uint freqHz)
     {
-        if (freqHz >= 33_000_000u) return ALEX_6_BYPASS_LPF;
-        if (freqHz >= 22_000_000u) return ALEX_12_10_LPF;
-        if (freqHz >= 15_000_000u) return ALEX_17_15_LPF;
-        if (freqHz >=  8_000_000u) return ALEX_30_20_LPF;
-        if (freqHz >=  4_500_000u) return ALEX_60_40_LPF;
-        if (freqHz >=  2_500_000u) return ALEX_80_LPF;
+        if (freqHz > 35_600_000u) return ALEX_6_BYPASS_LPF;
+        if (freqHz > 24_000_000u) return ALEX_12_10_LPF;
+        if (freqHz > 16_500_000u) return ALEX_17_15_LPF;
+        if (freqHz >  8_000_000u) return ALEX_30_20_LPF;
+        if (freqHz >  5_000_000u) return ALEX_60_40_LPF;
+        if (freqHz >  2_500_000u) return ALEX_80_LPF;
         return ALEX_160_LPF;
     }
 

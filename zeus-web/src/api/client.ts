@@ -94,6 +94,9 @@ export type RadioStateDto = {
   filterPresetName: string | null;
   // Advanced-filter ribbon visibility; persisted server-side.
   filterAdvancedPaneOpen: boolean;
+  // TX bandpass (signed, per-sideband). Per-mode family memory on the server.
+  txFilterLowHz: number;
+  txFilterHighHz: number;
   sampleRate: number;
   agcTopDb: number;
   attenDb: number;
@@ -230,6 +233,8 @@ export function normalizeState(raw: unknown): RadioStateDto {
     filterHighHz: typeof r.filterHighHz === 'number' ? r.filterHighHz : 0,
     filterPresetName: typeof r.filterPresetName === 'string' ? r.filterPresetName : null,
     filterAdvancedPaneOpen: typeof r.filterAdvancedPaneOpen === 'boolean' ? r.filterAdvancedPaneOpen : false,
+    txFilterLowHz: typeof r.txFilterLowHz === 'number' ? r.txFilterLowHz : 150,
+    txFilterHighHz: typeof r.txFilterHighHz === 'number' ? r.txFilterHighHz : 2850,
     sampleRate: typeof r.sampleRate === 'number' ? r.sampleRate : 0,
     // Default 80 matches WdspDspEngine.ApplyAgcDefaults and the Thetis
     // AGC_MEDIUM preset. Missing from older servers — tolerate absence.
@@ -438,6 +443,26 @@ export function setFilter(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ lowHz, highHz, presetName: presetName ?? null }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// TX bandpass filter — signed Hz pair, LSB negative, DSB symmetric. Per-mode
+// memory is server-side; caller passes already-signed values for the active
+// mode.
+export function setTxFilter(
+  lowHz: number,
+  highHz: number,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx-filter',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ lowHz, highHz }),
       signal,
     },
     normalizeState,

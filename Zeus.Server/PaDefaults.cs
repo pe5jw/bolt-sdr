@@ -87,4 +87,25 @@ internal static class PaDefaults
         if (board == HpsdrBoardKind.HermesLite2) return Hl2FlatGainDb;
         return TableFor(board).TryGetValue(band, out var v) ? v : 0.0;
     }
+
+    // Rated PA output in watts per board class. Used as the default for
+    // PaGlobalSettingsDto.PaMaxPowerWatts when no operator-entered value is
+    // stored. Without this, new installs fall into the
+    // `maxWatts == 0` → `byte = pct * 255 / 100` legacy path, which silently
+    // ignores PaGainDb and makes the per-band settings feel broken.
+    //
+    // Values match the Thetis factory labels per board class. Operators can
+    // override at any time via the PA Settings panel and the stored value
+    // wins over this default on subsequent reads.
+    public static int GetMaxPowerWatts(HpsdrBoardKind board) => board switch
+    {
+        HpsdrBoardKind.HermesLite2 => 5,      // HL2: class-A 5 W stock
+        HpsdrBoardKind.Hermes      => 10,     // Hermes / ANAN-10 / ANAN-10E: 10 W
+        HpsdrBoardKind.Metis       => 10,     // Metis boards paired with 10 W PA
+        HpsdrBoardKind.Griffin     => 10,
+        HpsdrBoardKind.Angelia     => 100,    // ANAN-100 / ANAN-100B / ANAN-8000D: 100 W
+        HpsdrBoardKind.Orion       => 100,    // ANAN-100D / ANAN-200D: 100 W
+        HpsdrBoardKind.OrionMkII   => 100,    // ANAN-7000D / G1 / G2 / G2-1K driven: 100 W
+        _                          => 0,      // Unknown board — keep legacy mode, no surprises
+    };
 }
