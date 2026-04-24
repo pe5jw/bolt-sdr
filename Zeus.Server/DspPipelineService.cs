@@ -84,6 +84,12 @@ public class DspPipelineService : BackgroundService
 
     private uint _seq;
     private uint _audioSeq;
+    // Latched from MoxChanged so Tick can route the panadapter to the TX
+    // analyzer during keying without snapshotting RadioService. TUN also flips
+    // MOX on (TxService.cs:153-155), so this single flag covers both paths —
+    // see issue #81. volatile because MoxChanged fires on the caller's thread
+    // and Tick reads from the pipeline thread.
+    private volatile bool _keyed;
     // RX S-meter broadcast throttle. Pipeline ticks at 30 Hz; broadcasting
     // every 6 ticks = 5 Hz gives a smoother meter than Thetis's 4 Hz baseline
     // without spamming the WS (30 Hz dBm readouts add nothing a UI can use).
@@ -447,6 +453,7 @@ public class DspPipelineService : BackgroundService
 
     private void OnRadioMoxChanged(bool on)
     {
+        _keyed = on;
         _p2Client?.SetMox(on);
     }
 
@@ -561,8 +568,22 @@ public class DspPipelineService : BackgroundService
 
         engine.SetVfoHz(channel, state.VfoHz);
 
-        bool pan = engine.TryGetDisplayPixels(channel, DisplayPixout.Panadapter, panBuf);
-        bool wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
+        // While keyed (MOX or TUN — see _keyed comment) pull from the TX
+        // analyzer so the panadapter shows the transmitted signal instead of
+        // the RX front end's TX bleed (issue #81). If the TX analyzer isn't
+        // ready (not yet produced an FFT, or engine doesn't have a TX
+        // analyzer — e.g. Synthetic), TryGetTxDisplayPixels returns false and
+        // we fall through to the RX analyzer, matching the pre-issue-#81
+        // behaviour. This fallback also covers the first ~1 tick after
+        // keying before the analyzer averaging has settled.
+        bool pan = false, wf = false;
+        if (_keyed)
+        {
+            pan = engine.TryGetTxDisplayPixels(DisplayPixout.Panadapter, panBuf);
+            wf = engine.TryGetTxDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+        }
+        if (!pan) pan = engine.TryGetDisplayPixels(channel, DisplayPixout.Panadapter, panBuf);
+        if (!wf) wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
 
         // Flip to display order (low freq left, high freq right). WDSP emits
         // pixel 0 = highest positive frequency — see doc 03 §10 and

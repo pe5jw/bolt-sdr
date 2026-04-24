@@ -178,6 +178,22 @@ public sealed class WdspDspEngine : IDspEngine
     private TxStageMeters? _latestTxStageMeters;
     private readonly object _txMeterPublishLock = new();
 
+    // TX panadapter analyzer. Separate WDSP `disp` slot from RXA's, fed with
+    // the post-CFIR IQ from ProcessTxBlock so the operator can see the on-air
+    // signal during MOX / TUN. The analyzer runs at the TXA output rate
+    // (48 kHz on P1, 192 kHz on P2 post-CFIR) and uses fscLin/fscHin bin
+    // clipping to display the same frequency span as the RXA analyzer —
+    // matches pihpsdr transmitter.c:2323-2324. See issue #81.
+    //
+    // `_txDispLock` serializes Spectrum0 feed (from ProcessTxBlock), GetPixels
+    // (from TryGetTxDisplayPixels), and SetAnalyzer reconfig (from SetZoom) —
+    // same pattern as ChannelState.AnalyzerLock on the RX side.
+    private readonly object _txDispLock = new();
+    private int _txDispPixelWidth;
+    private int _txDispZoomLevel = 1;
+    private int _txDispRxSampleRateHz;
+    private bool _txDispAlive;
+
     public WdspDspEngine(ILogger<WdspDspEngine>? logger = null)
     {
         _log = logger ?? NullLogger<WdspDspEngine>.Instance;
@@ -412,7 +428,23 @@ public sealed class WdspDspEngine : IDspEngine
             state.ZoomLevel = level;
             ConfigureAnalyzer(channelId, state.SampleRateHz, state.PixelWidth, level);
         }
-        _log.LogInformation("wdsp.setZoom channel={Id} level={Level}", channelId, level);
+
+        // Mirror zoom onto the TX analyzer so the TX panadapter span stays
+        // lock-step with RX — otherwise keying mid-zoom would show a different
+        // frequency window on MOX. No-op when TX analyzer is off.
+        int? txaIdToReconfig = null;
+        lock (_txDispLock)
+        {
+            if (_txDispAlive && _txaChannelId is int txa)
+            {
+                _txDispZoomLevel = level;
+                txaIdToReconfig = txa;
+                TryConfigureTxAnalyzer(txa, _txaOutputRateHz, _txDispRxSampleRateHz, _txDispPixelWidth, level);
+            }
+        }
+
+        _log.LogInformation("wdsp.setZoom channel={Id} level={Level} txDisp={TxDisp}",
+            channelId, level, txaIdToReconfig?.ToString() ?? "off");
     }
 
     public void SetNoiseReduction(int channelId, NrConfig cfg)
@@ -652,6 +684,24 @@ public sealed class WdspDspEngine : IDspEngine
         }
     }
 
+    public bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut)
+    {
+        if (_disposed != 0) return false;
+        int disp;
+        int expectedWidth;
+        lock (_txDispLock)
+        {
+            if (!_txDispAlive) return false;
+            if (_txaChannelId is not int txa) return false;
+            disp = txa;
+            expectedWidth = _txDispPixelWidth;
+            if (dbOut.Length != expectedWidth)
+                throw new ArgumentException($"expected span of {expectedWidth}", nameof(dbOut));
+            NativeMethods.GetPixels(disp, (int)which, ref MemoryMarshal.GetReference(dbOut), out int flag);
+            return flag == 1;
+        }
+    }
+
     public int OpenTxChannel(int outputRateHz = 48_000)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
@@ -805,10 +855,70 @@ public sealed class WdspDspEngine : IDspEngine
             }
 
             _txaChannelId = id;
+
+            // TX panadapter analyzer — issue #81. Match the first RXA's pixel
+            // width and zoom so the TX trace renders into the same widget
+            // without a span change on MOX. If no RXA exists yet (shouldn't
+            // happen in practice — RadioService opens RX before TX), skip
+            // analyzer creation and leave _txDispAlive false so the server
+            // falls back to the RX pixels during MOX.
+            int rxPixelWidth = 0;
+            int rxSampleRateHz = 0;
+            int rxZoom = 1;
+            foreach (var st in _channels.Values)
+            {
+                rxPixelWidth = st.PixelWidth;
+                rxSampleRateHz = st.SampleRateHz;
+                rxZoom = Math.Max(1, st.ZoomLevel);
+                break;
+            }
+            if (rxPixelWidth > 0)
+            {
+                // Analyzer disp index reuses the TXA channel id — WDSP keeps
+                // channels and analyzers in separate arrays so the collision
+                // between RXA's channel=0 / disp=0 and TXA's channel=id /
+                // disp=id is purely in our bookkeeping, not in the library.
+                NativeMethods.XCreateAnalyzer(id, out int txRc, MaxFftSize, 1, 1, null);
+                if (txRc == 0)
+                {
+                    bool configured;
+                    lock (_txDispLock)
+                    {
+                        _txDispPixelWidth = rxPixelWidth;
+                        _txDispZoomLevel = rxZoom;
+                        _txDispRxSampleRateHz = rxSampleRateHz;
+                        configured = TryConfigureTxAnalyzer(id, _txaOutputRateHz, rxSampleRateHz, rxPixelWidth, rxZoom);
+                        if (configured)
+                        {
+                            ConfigureDisplayAveraging(id);
+                            _txDispAlive = true;
+                        }
+                    }
+                    if (!configured)
+                    {
+                        // Rate relationship doesn't support bin-clip (e.g. TX narrower
+                        // than RX, or non-integer ratio). Destroy the unused analyzer
+                        // slot and leave _txDispAlive false so the panadapter falls
+                        // back to the RX analyzer on MOX.
+                        NativeMethods.DestroyAnalyzer(id);
+                        _log.LogWarning(
+                            "wdsp.openTxChannel tx-analyzer skipped — rx={RxRate} tx={TxRate} not an integer multiple; panadapter will fall back to RX trace",
+                            rxSampleRateHz, _txaOutputRateHz);
+                    }
+                }
+                else
+                {
+                    _log.LogWarning(
+                        "wdsp.openTxChannel tx-analyzer XCreateAnalyzer rc={Rc} — TX panadapter will fall back to RX trace",
+                        txRc);
+                }
+            }
+
             _log.LogInformation(
-                "wdsp.openTxChannel id={Id} rates={InRate}/{DspRate}/{OutRate} sizes={InSz}/{OutSz} cfir={Cfir} chain=[alc=1 lvlr=1 lvlrMax={LvlrMax:F1}dB cpdr=0 cfc=0 phrot=0 osctrl=0 eq=0 amsq=0] bp=150..2850 panelGain=1.0",
+                "wdsp.openTxChannel id={Id} rates={InRate}/{DspRate}/{OutRate} sizes={InSz}/{OutSz} cfir={Cfir} chain=[alc=1 lvlr=1 lvlrMax={LvlrMax:F1}dB cpdr=0 cfc=0 phrot=0 osctrl=0 eq=0 amsq=0] bp=150..2850 panelGain=1.0 txDisp={TxDisp}(pix={Pix} rxRate={RxRate} txRate={TxRate} zoom={Zoom})",
                 id, _txaInputRateHz, _txaDspRateHz, _txaOutputRateHz,
-                _txaInSize, _txaOutSize, _txaCfirRun ? 1 : 0, DefaultLevelerMaxGainDb);
+                _txaInSize, _txaOutSize, _txaCfirRun ? 1 : 0, DefaultLevelerMaxGainDb,
+                _txDispAlive ? "on" : "off", _txDispPixelWidth, _txDispRxSampleRateHz, _txaOutputRateHz, _txDispZoomLevel);
             return id;
         }
     }
@@ -1012,6 +1122,28 @@ public sealed class WdspDspEngine : IDspEngine
             iqInterleaved[2 * i + 1] = qout[i];
         }
 
+        // Feed the TX analyzer with the post-CFIR IQ so TryGetTxDisplayPixels
+        // can serve the panadapter during MOX (issue #81). pihpsdr's
+        // transmitter.c:1639 feeds iq_output_buffer — same tap point. We feed
+        // unconditionally here: ProcessTxBlock only runs while TXA is keyed,
+        // and when it isn't called the analyzer's log-recursive average just
+        // coasts. No Q-negation — the sideband mirror fix is HL2-specific to
+        // the RX ADC path (see RunWorker:1223-1227); TXA modulator already
+        // places energy on the right side of the carrier.
+        if (_txDispAlive)
+        {
+            Span<double> txSpectrumIq = stackalloc double[2 * outSize];
+            for (int i = 0; i < outSize; i++)
+            {
+                txSpectrumIq[2 * i] = iout[i];
+                txSpectrumIq[2 * i + 1] = qout[i];
+            }
+            lock (_txDispLock)
+            {
+                NativeMethods.Spectrum0(1, txa, 0, 0, ref txSpectrumIq[0]);
+            }
+        }
+
         // Per-stage TXA peak + average meters. Peak surfaces clipping-induced
         // crackle that averages smooth away; the average is what the operator
         // reads to judge level. Both are published so the frontend can show
@@ -1106,6 +1238,14 @@ public sealed class WdspDspEngine : IDspEngine
         {
             if (_txaChannelId is int txa)
             {
+                lock (_txDispLock)
+                {
+                    if (_txDispAlive)
+                    {
+                        NativeMethods.DestroyAnalyzer(txa);
+                        _txDispAlive = false;
+                    }
+                }
                 NativeMethods.CloseChannel(txa);
                 _txaChannelId = null;
             }
@@ -1130,6 +1270,27 @@ public sealed class WdspDspEngine : IDspEngine
             NativeMethods.SetDisplayAvBackmult(disp, pixout, backmult);
             NativeMethods.SetDisplayNumAverage(disp, pixout, 2);
         }
+    }
+
+    // TX analyzer wrapper: reuses ConfigureAnalyzer's bin-clip math after
+    // folding the TX/RX rate ratio into an "effective zoom" so the TX trace
+    // displays the same frequency span as RX. Example: P2 TX at 192 kHz vs
+    // RX at 48 kHz is a 4× rate ratio; at RX zoom=1 the effective TX zoom is
+    // 4, which clips 3/8 × fft_size bins off each side — i.e. keeps the
+    // centre 25% of the full-span FFT, which is exactly pihpsdr's fixed
+    // 24 kHz-wide TX panadapter (transmitter.c:2323-2324). On P1 the ratio
+    // is 1 and this degenerates back to RX-zoom behaviour.
+    // Returns true when the TX/RX rate relationship supports the bin-clip span
+    // match (txRate is a positive integer multiple of rxRate). Callers that get
+    // false skip TX analyzer creation and fall back to the RX analyzer during
+    // MOX — matches the pre-issue-#81 behaviour for that codepath.
+    private static bool TryConfigureTxAnalyzer(int disp, int txSampleRateHz, int rxSampleRateHz, int pixelWidth, int rxZoomLevel)
+    {
+        if (rxSampleRateHz <= 0 || txSampleRateHz < rxSampleRateHz || txSampleRateHz % rxSampleRateHz != 0)
+            return false;
+        int effectiveZoom = rxZoomLevel * (txSampleRateHz / rxSampleRateHz);
+        ConfigureAnalyzer(disp, txSampleRateHz, pixelWidth, effectiveZoom);
+        return true;
     }
 
     private static void ConfigureAnalyzer(int disp, int sampleRateHz, int pixelWidth, int zoomLevel)

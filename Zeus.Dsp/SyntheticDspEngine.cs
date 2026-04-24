@@ -155,6 +155,11 @@ public sealed class SyntheticDspEngine : IDspEngine
     public void SetTxTune(bool on) { }
     public TxStageMeters GetTxStageMeters() => TxStageMeters.Silent;
 
+    // Synthetic has no TX analyzer; the TX panadapter stays on the RX trace.
+    // Returning false tells DspPipelineService.Tick to leave the display alone
+    // while MOX is on, matching the existing "no new data" semantics.
+    public bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
+
     private const float NoiseFloorDb = -90f;
     private const float SweepPeakDb = -25f;
     private const float StaticPeakDb = -35f;

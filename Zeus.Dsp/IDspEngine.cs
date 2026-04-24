@@ -69,6 +69,14 @@ public interface IDspEngine : IDisposable
 
     bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut);
 
+    /// <summary>TX panadapter / waterfall pixels in dBm, sourced from a
+    /// dedicated WDSP analyzer fed with the post-CFIR TX IQ. Returns false
+    /// when TXA is not open or no fresh FFT is ready. The TX analyzer is
+    /// configured to display the same frequency span as the RXA analyzer
+    /// (via bin clipping) so the panadapter axis does not move on MOX —
+    /// see issue #81. No-op on Synthetic.</summary>
+    bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut);
+
     /// <summary>Open the TXA channel. Idempotent — calling twice returns the existing id.
     /// Must be called after at least one OpenChannel(RXA). For Synthetic, returns -1 and is a no-op.
     /// <paramref name="outputRateHz"/> picks the TXA profile: 48000 for P1 (48k in/out, CFIR off),
