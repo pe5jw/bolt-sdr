@@ -15,6 +15,8 @@
 
 import { useEffect } from 'react';
 import { HF_BANDS, usePaStore } from '../state/pa-store';
+import { useRadioStore } from '../state/radio-store';
+import { BOARD_LABELS } from '../api/radio';
 
 const OC_PINS = [1, 2, 3, 4, 5, 6, 7] as const;
 
@@ -66,17 +68,50 @@ export function PaSettingsPanel() {
   const load = usePaStore((s) => s.load);
   const setGlobal = usePaStore((s) => s.setGlobal);
   const setBand = usePaStore((s) => s.setBand);
+  const resetToBoardDefaults = usePaStore((s) => s.resetToBoardDefaults);
+  const selection = useRadioStore((s) => s.selection);
 
   useEffect(() => {
     load();
   }, [load]);
 
+  // Reset targets the operator's explicit pick when set, else the effective
+  // board (connected > preferred). Undefined override = server decides.
+  const resetTargetBoard =
+    selection.preferred !== 'Auto' ? selection.preferred : selection.effective;
+  const resetTargetLabel =
+    resetTargetBoard === 'Unknown'
+      ? 'defaults'
+      : `${BOARD_LABELS[resetTargetBoard]} defaults`;
+  const canReset = resetTargetBoard !== 'Unknown' && !inflight;
+
+  const handleResetToDefaults = () => {
+    const override = selection.preferred !== 'Auto' ? selection.preferred : undefined;
+    resetToBoardDefaults(override);
+  };
+
   return (
     <div className="space-y-6">
       <section>
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-widest text-neutral-300">
-          Global
-        </h3>
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <h3 className="text-xs font-semibold uppercase tracking-widest text-neutral-300">
+            Global
+          </h3>
+          <button
+            type="button"
+            onClick={handleResetToDefaults}
+            disabled={!canReset}
+            title={
+              canReset
+                ? `Replace PA Gain (all bands) and Rated PA Output with ${BOARD_LABELS[resetTargetBoard]}'s factory defaults. Your OC masks and Disable-PA checkboxes are not touched. APPLY to persist.`
+                : 'Select a radio above to reset to its defaults.'
+            }
+            className="btn sm"
+            style={{ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase' }}
+          >
+            Reset to {resetTargetLabel}
+          </button>
+        </div>
         <div className="grid grid-cols-1 gap-4 rounded bg-neutral-800/40 p-3 md:grid-cols-3">
           <label className="flex items-center gap-2 text-xs text-neutral-300">
             <input
