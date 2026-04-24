@@ -131,7 +131,7 @@ public sealed class SyntheticDspEngine : IDspEngine
     // TX interface — synthetic engine has no TXA and no outbound path. Returning
     // -1 lets callers distinguish "no TXA open" from any real id. SetMox is a
     // no-op so TxService calls while disconnected don't throw.
-    public int OpenTxChannel() => -1;
+    public int OpenTxChannel(int outputRateHz = 48_000) => -1;
 
     public void SetMox(bool moxOn) { }
 
@@ -144,8 +144,10 @@ public sealed class SyntheticDspEngine : IDspEngine
     // mirrors WDSP so tests that round-trip through the interface can assume
     // the same buffering shape.
     public void SetTxMode(RxMode mode) { }
+    public void SetTxFilter(int lowHz, int highHz) { }
     public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved) => 0;
     public int TxBlockSamples => 1024;
+    public int TxOutputSamples => 1024;
     public void SetTxPanelGain(double linearGain) { }
     public void SetTxLevelerMaxGain(double maxGainDb) { }
     public void SetTxTune(bool on) { }

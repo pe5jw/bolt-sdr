@@ -114,6 +114,12 @@ public sealed class RadioService : IDisposable
     // CmdGeneral[58]). RadioService pushes to the P1 client directly because
     // it owns _activeClient.
     public event Action<PaRuntimeSnapshot>? PaSnapshotChanged;
+    // Fires on every MOX / TUN edge. P1 side is pushed directly via
+    // ActiveClient?.SetMox; these events give DspPipelineService the hook it
+    // needs to forward the same bit into a live Protocol2Client, which owns
+    // its own CmdHighPriority byte 4.
+    public event Action<bool>? MoxChanged;
+    public event Action<bool>? TunActiveChanged;
 
     // Shared TX IQ source threaded through Protocol1Client. TxAudioIngest
     // writes into the same instance; this is the seam between "mic arrived
@@ -174,6 +180,16 @@ public sealed class RadioService : IDisposable
     public IProtocol1Client? ActiveClient
     {
         get { lock (_sync) return _activeClient; }
+    }
+
+    /// <summary>
+    /// True when any backend (P1 or P2) has a live connection. Needed by
+    /// TxService's MOX / TUN interlock — a G2 on P2 has no ActiveClient
+    /// (Protocol1Client is null) but still wants to accept TX requests.
+    /// </summary>
+    public bool IsConnected
+    {
+        get { lock (_sync) return _activeClient is not null || _p2Active; }
     }
 
     public StateDto Snapshot() { lock (_sync) return _state; }
@@ -294,6 +310,18 @@ public sealed class RadioService : IDisposable
     private FamilyFilter _fmFilter = new(0, 5500);
     private FamilyFilter _cwFilter = new(0, 125);
 
+    // TX-side per-family filter memory. Thetis stores a single TX filter Lo/Hi
+    // (setup.cs:5029-5066); pihpsdr uses hardcoded per-mode shapes
+    // (transmitter.c:2108-2211). Zeus mirrors the RX per-family model so the
+    // operator's USB TX width survives an AM round-trip, and LSB/USB share
+    // absolute values with sign flipped at apply time. Defaults track Thetis
+    // stock: SSB 150-2850, AM/DSB 0-4000, FM 0-3000 (Thetis narrowest FM TX
+    // is 3 kHz half-width), CW 0-150 (150 Hz around cw_pitch is plenty).
+    private FamilyFilter _ssbTxFilter = new(150, 2850);
+    private FamilyFilter _amTxFilter = new(0, 4000);
+    private FamilyFilter _fmTxFilter = new(0, 3000);
+    private FamilyFilter _cwTxFilter = new(0, 150);
+
     public StateDto SetMode(RxMode mode)
     {
         RxMode departingMode = default;
@@ -306,20 +334,31 @@ public sealed class RadioService : IDisposable
             // Save departing mode's preset name to the in-memory cache.
             _lastPresetPerMode[s.Mode] = s.FilterPresetName;
 
-            // 1) Save current abs-filter into the mode we are LEAVING.
+            // 1) Save current abs-filter into the mode we are LEAVING (RX + TX).
             int curLoAbs = Math.Min(Math.Abs(s.FilterLowHz), Math.Abs(s.FilterHighHz));
             int curHiAbs = Math.Max(Math.Abs(s.FilterLowHz), Math.Abs(s.FilterHighHz));
             StoreFamilyFilter(s.Mode, curLoAbs, curHiAbs);
+            int curTxLoAbs = Math.Min(Math.Abs(s.TxFilterLowHz), Math.Abs(s.TxFilterHighHz));
+            int curTxHiAbs = Math.Max(Math.Abs(s.TxFilterLowHz), Math.Abs(s.TxFilterHighHz));
+            StoreTxFamilyFilter(s.Mode, curTxLoAbs, curTxHiAbs);
 
-            // 2) Look up the target family's remembered filter.
+            // 2) Look up the target family's remembered filter (RX + TX).
             var fam = FamilyFilterFor(mode);
+            var txFam = TxFamilyFilterFor(mode);
 
             // 3) Re-sign per target mode's sideband convention.
             var (lo, hi) = SignedFilterForMode(mode, fam.LoAbs, fam.HiAbs);
+            var (txLo, txHi) = SignedFilterForMode(mode, txFam.LoAbs, txFam.HiAbs);
 
             // 4) Restore the last-known preset name for the incoming mode.
             _lastPresetPerMode.TryGetValue(mode, out var restoredPreset);
-            return s with { Mode = mode, FilterLowHz = lo, FilterHighHz = hi, FilterPresetName = restoredPreset };
+            return s with
+            {
+                Mode = mode,
+                FilterLowHz = lo, FilterHighHz = hi,
+                TxFilterLowHz = txLo, TxFilterHighHz = txHi,
+                FilterPresetName = restoredPreset,
+            };
         });
 
         // Persist the departing mode's last preset outside the lock.
@@ -341,6 +380,17 @@ public sealed class RadioService : IDisposable
         });
         if (presetName != null)
             _filterPresetStore?.UpsertLastSelectedPreset(modeAtSet, presetName);
+        return Snapshot();
+    }
+
+    // TX bandpass filter setter. Signed pair like SetFilter — caller is
+    // expected to have already re-signed positive (abs) values per the current
+    // mode's sideband convention. DspPipelineService picks up the state-change
+    // and forwards to the engine via IDspEngine.SetTxFilter.
+    public StateDto SetTxFilter(int lowHz, int highHz)
+    {
+        if (highHz < lowHz) (lowHz, highHz) = (highHz, lowHz);
+        Mutate(s => s with { TxFilterLowHz = lowHz, TxFilterHighHz = highHz });
         return Snapshot();
     }
 
@@ -382,6 +432,31 @@ public sealed class RadioService : IDisposable
                 _cwFilter = slot; break;
         }
     }
+
+    private void StoreTxFamilyFilter(RxMode mode, int loAbs, int hiAbs)
+    {
+        var slot = new FamilyFilter(loAbs, hiAbs);
+        switch (mode)
+        {
+            case RxMode.USB: case RxMode.LSB: case RxMode.DIGU: case RxMode.DIGL:
+                _ssbTxFilter = slot; break;
+            case RxMode.AM: case RxMode.SAM: case RxMode.DSB:
+                _amTxFilter = slot; break;
+            case RxMode.FM:
+                _fmTxFilter = slot; break;
+            case RxMode.CWL: case RxMode.CWU:
+                _cwTxFilter = slot; break;
+        }
+    }
+
+    private FamilyFilter TxFamilyFilterFor(RxMode mode) => mode switch
+    {
+        RxMode.USB or RxMode.LSB or RxMode.DIGU or RxMode.DIGL => _ssbTxFilter,
+        RxMode.AM or RxMode.SAM or RxMode.DSB => _amTxFilter,
+        RxMode.FM => _fmTxFilter,
+        RxMode.CWL or RxMode.CWU => _cwTxFilter,
+        _ => _ssbTxFilter,
+    };
 
     private FamilyFilter FamilyFilterFor(RxMode mode) => mode switch
     {
@@ -476,6 +551,7 @@ public sealed class RadioService : IDisposable
     {
         lock (_sync) _mox = on;
         ActiveClient?.SetMox(on);
+        MoxChanged?.Invoke(on);
     }
 
     // Drive is transient like MOX — latched on the Protocol1Client so the
@@ -505,6 +581,7 @@ public sealed class RadioService : IDisposable
     {
         lock (_sync) _tunActive = on;
         RecomputePaAndPush();
+        TunActiveChanged?.Invoke(on);
     }
 
     // DspPipelineService calls this right after a P2 client is created so the

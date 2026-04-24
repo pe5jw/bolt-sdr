@@ -484,6 +484,13 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXABandpassWindow(int channel, int wintype);
 
+    // Correcting FIR — compensates the sinc droop introduced by TXA's
+    // 48k → 192k upsample on P2. P2 firmware requires this on; P1 leaves it
+    // off. Thetis audio.cs:1803-1808, pihpsdr transmitter.c:1288.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACFIRRun(int channel, int run);
+
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXAPanelRun(int channel, int run);
@@ -574,6 +581,32 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXAPostGenToneFreq(int channel, double freq);
+
+    // Pre-DSP generator (injected before the TX chain). pihpsdr transmitter.c
+    // :1293-1296 explicitly disables PreGen on TXA open — WDSP's create_channel
+    // doesn't guarantee mag=0/run=0, and a residual PreGen tone would appear
+    // alongside the PostGen tune tone as a second carrier.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPreGenRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPreGenMode(int channel, int mode);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPreGenToneMag(int channel, double mag);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPreGenToneFreq(int channel, double freq);
+
+    // TXA Panel input-select. pihpsdr sets this to 2 = "Mic I sample" on open
+    // (transmitter.c:1298). Default varies by WDSP build — being explicit.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPanelSelect(int channel, int select);
 
     // meter.h:67 — returns a dBm value from RXA's internal meter ring. `mt` is
     // the rxaMeterType ordinal: 0 = RXA_S_PK, 1 = RXA_S_AV (what the S-meter

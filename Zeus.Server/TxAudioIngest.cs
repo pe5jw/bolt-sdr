@@ -78,8 +78,10 @@ public sealed class TxAudioIngest : IDisposable
     // draining. The excess gets shifted back after each flush.
     private readonly float[] _accumulator = new float[2048];
     private int _accumulatorFill;
+    // Sized for the larger of the P1 (1024 in / 2048 iq) and P2
+    // (512 in / 4096 iq) profiles so we don't reallocate at protocol switch.
     private readonly float[] _scratchMic = new float[1024];
-    private readonly float[] _scratchIq = new float[2048];
+    private readonly float[] _scratchIq = new float[4096];
 
     private long _totalMicSamples;
     private long _totalTxBlocks;
@@ -105,27 +107,35 @@ public sealed class TxAudioIngest : IDisposable
         TxService tx,
         StreamingHub hub,
         ILogger<TxAudioIngest> log)
-        : this(ring, () => pipeline.CurrentEngine, () => tx.IsMoxOn, hub, log)
+        : this(ring, () => pipeline.CurrentEngine, () => tx.IsMoxOn, hub, log,
+               forwardP2: iq => pipeline.ForwardTxIqToP2(iq.Span))
     {
     }
 
     /// <summary>Test-only constructor that wires the engine + MOX lookups
-    /// through plain delegates so unit tests don't need a live pipeline.</summary>
+    /// through plain delegates so unit tests don't need a live pipeline.
+    /// <paramref name="forwardP2"/> is called with the same IQ block that's
+    /// handed to the P1 ring so mic MOX on a Protocol 2 radio (G2 MkII) has
+    /// a TX path. Null in tests that don't exercise the P2 forward.</summary>
     internal TxAudioIngest(
         TxIqRing ring,
         Func<IDspEngine?> engineProvider,
         Func<bool> isMoxOn,
         StreamingHub hub,
-        ILogger<TxAudioIngest> log)
+        ILogger<TxAudioIngest> log,
+        Action<ReadOnlyMemory<float>>? forwardP2 = null)
     {
         _ring = ring;
         _engineProvider = engineProvider;
         _isMoxOn = isMoxOn;
+        _forwardP2 = forwardP2;
         _hub = hub;
         _log = log;
         _handler = OnMicPcmBytes;
         _hub.MicPcmReceived += _handler;
     }
+
+    private readonly Action<ReadOnlyMemory<float>>? _forwardP2;
 
     public long TotalMicSamples { get { lock (_sync) return _totalMicSamples; } }
     public long TotalTxBlocks { get { lock (_sync) return _totalTxBlocks; } }
@@ -173,9 +183,12 @@ public sealed class TxAudioIngest : IDisposable
 
         var engine = _engineProvider();
         int blockSize = engine?.TxBlockSamples ?? 0;
-        if (engine is null || blockSize <= 0 || blockSize > _scratchMic.Length)
+        int iqOut = engine?.TxOutputSamples ?? 0;
+        if (engine is null || blockSize <= 0 || iqOut <= 0
+            || blockSize > _scratchMic.Length || 2 * iqOut > _scratchIq.Length)
         {
-            // Synthetic engine or no TXA open. Swallow samples quietly.
+            // Synthetic engine, no TXA open, or a protocol whose block size
+            // exceeds our scratch buffers. Swallow samples quietly.
             return;
         }
 
@@ -206,10 +219,16 @@ public sealed class TxAudioIngest : IDisposable
                 Array.Copy(_accumulator, 0, _scratchMic, 0, blockSize);
                 int produced = engine.ProcessTxBlock(
                     new ReadOnlySpan<float>(_scratchMic, 0, blockSize),
-                    new Span<float>(_scratchIq, 0, 2 * blockSize));
+                    new Span<float>(_scratchIq, 0, 2 * iqOut));
                 if (produced > 0)
                 {
-                    _ring.Write(new ReadOnlySpan<float>(_scratchIq, 0, 2 * produced));
+                    var iqSpan = new ReadOnlySpan<float>(_scratchIq, 0, 2 * produced);
+                    // P1 path — EP2 packer in Protocol1Client drains the ring.
+                    _ring.Write(iqSpan);
+                    // P2 path — Protocol2Client's 1029-port DUC sender. No-op
+                    // when P2 isn't the active backend so both protocols share
+                    // this seam cleanly. Mirrors TxTuneDriver's dual-write.
+                    _forwardP2?.Invoke(new ReadOnlyMemory<float>(_scratchIq, 0, 2 * produced));
                     _totalTxBlocks++;
 
                     // Accumulate peaks for the 1 Hz diagnostic log.

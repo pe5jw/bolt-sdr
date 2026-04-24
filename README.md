@@ -11,7 +11,8 @@ React + WebGL frontend over WebSocket.
 > - **Hermes Lite 2 (Protocol-1):** RX is solid; TX is operator-verified on FM
 >   and TUNE (v0.1, April 2026).
 > - **ANAN G2 (Protocol-2):** RX verified on OrionMkII / fw 2.7b41 across
->   80m–10m. TX and 160m are not yet wired — experimental.
+>   80m–10m. TX wired for TUNE and MOX — on-air carrier verified clean via an
+>   external KiwiSDR. 160m not yet wired.
 > - Other Protocol-1 radios (older ANAN, Hermes, Angelia, etc.) are not yet
 >   supported.
 
@@ -93,6 +94,57 @@ Connecting to a radio while wisdom is still building will crash the backend
 with a native double-free abort. Once wisdom is cached
 (`~/.local/share/Zeus/wdspWisdom00` on Linux, `%LOCALAPPDATA%\Zeus\wdspWisdom00`
 on Windows), subsequent starts log `result=0 (loaded)` and come up instantly.
+
+## PA settings (power calibration)
+
+Zeus maps the drive / tune slider to an on-air wattage using a two-input
+formula lifted from Thetis and pihpsdr:
+
+1. **Rated PA Output (W)** — the amplifier's rated max power at full drive.
+2. **PA Gain (dB)**, per band — the amplifier's forward gain from DUC output
+   to the antenna (not a trim; the amplifier's physical gain).
+
+Slider 100 % targets the rated wattage; slider 50 % targets half that wattage.
+The per-band gain corrects for the fact that different HF bands need different
+drive bytes to produce the same on-air watts.
+
+### Defaults
+
+Fresh installs now seed the Rated PA Output per board class:
+
+| Radio class                        | Rated PA Output (default) |
+| ---------------------------------- | ------------------------- |
+| Hermes Lite 2                      |    5 W                    |
+| Hermes / Metis / Griffin / ANAN-10 |   10 W                    |
+| ANAN-100 / 100B / 8000D (Angelia)  |  100 W                    |
+| ANAN-100D / 200D (Orion)           |  100 W                    |
+| ANAN-7000D / G1 / G2 (OrionMkII)   |  100 W                    |
+
+Per-band PA Gain defaults are seeded from Thetis's per-board calibration
+tables (see `Zeus.Server/PaDefaults.cs`).
+
+> **Upgrading from an older Zeus install?** The per-board default only
+> applies on first run — if you've used Zeus before the `pa_globals` record
+> is already stored with `PaMaxPowerWatts = 0`, which silently forces the
+> legacy linear mode (PA Gain is ignored). **Open the Settings menu → PA
+> tab, set `Rated PA Output (W)` to 100 for a G2 / ANAN or 10 for a Hermes,
+> and click Apply.** Or delete `~/.local/share/Zeus/zeus-prefs.db` to start
+> fresh and pick up the new defaults automatically.
+
+### Applying changes
+
+**PA settings require an explicit Apply click to persist.** After editing
+any value in the Settings menu's PA tab, click the **Apply** button at the
+bottom of the tab — changes only take effect on the radio at that moment.
+Closing the Settings modal without clicking Apply discards pending edits.
+
+## Known quirks
+
+- **TUN carrier looks momentarily wide / pulses for ~1 s on the Zeus
+  panadapter when you first key it.** This is a Zeus display artifact —
+  the actual RF transmitted is a clean zero-beat single-tone carrier,
+  verified via an external receiver (KiwiSDR). To be cleaned up at a
+  later date.
 
 ## Getting started (developers)
 

@@ -71,6 +71,7 @@ import { CONTACTS, bandOf } from './components/design/data';
 import { CwKeyer } from './components/design/CwKeyer';
 import { Dockable } from './components/design/Dockable';
 import { DspPanel } from './components/DspPanel';
+import { TxFilterPanel } from './components/TxFilterPanel';
 import { LogbookLive } from './components/design/LogbookLive';
 import { QrzCard } from './components/design/QrzCard';
 import { TerminatorLines } from './components/design/TerminatorLines';
@@ -871,6 +872,12 @@ export default function App() {
           <div className="side-slot hide-mobile">
             <Dockable title="DSP" ledOn={dspActive}>
               <DspPanel />
+            </Dockable>
+          </div>
+
+          <div className="side-slot hide-mobile">
+            <Dockable title="TX Filter" ledOn={false}>
+              <TxFilterPanel />
             </Dockable>
           </div>
 

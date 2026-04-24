@@ -80,8 +80,11 @@ export function PaSettingsPanel() {
             PA Enabled
           </label>
 
-          <label className="flex items-center gap-2 text-xs text-neutral-300">
-            Max Power (W)
+          <label
+            className="flex items-center gap-2 text-xs text-neutral-300"
+            title="Rated PA output in watts. Slider 100% targets this wattage. Seeded from the connected board kind — HL2 = 5 W, Hermes-class = 10 W, ANAN/Orion/G2 = 100 W. Set to 0 to fall back to the raw drive-byte mode (PA Gain field is ignored)."
+          >
+            Rated PA Output (W)
             <input
               type="number"
               min={0}
@@ -91,9 +94,11 @@ export function PaSettingsPanel() {
               onChange={(e) => setGlobal({ paMaxPowerWatts: Number(e.target.value) || 0 })}
               className="w-20 rounded border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-right text-xs text-neutral-100"
             />
-            <span className="text-[10px] text-neutral-500">
-              (0 = legacy, no watts math)
-            </span>
+            {settings.global.paMaxPowerWatts === 0 && (
+              <span className="text-[10px] text-amber-400">
+                (0 = raw drive-byte mode — PA Gain ignored)
+              </span>
+            )}
           </label>
 
           <div className="flex flex-col gap-1 text-xs text-neutral-300">
@@ -122,7 +127,12 @@ export function PaSettingsPanel() {
             <thead className="text-[10px] uppercase tracking-wider text-neutral-500">
               <tr>
                 <th className="px-2 py-2 text-left">Band</th>
-                <th className="px-2 py-2 text-right">Gain (dB)</th>
+                <th
+                  className="px-2 py-2 text-right"
+                  title="PA forward gain in dB per band — the amplifier's own gain from DUC output to antenna. NOT a trim. Seeded from the board kind (e.g. G2 MkII ≈ 48-51 dB on HF). Used together with Rated PA Output (W) to compute the drive byte: lower gain here → more drive byte → more output at a given slider %."
+                >
+                  PA Gain (dB)
+                </th>
                 <th className="px-2 py-2 text-center">Disable PA</th>
                 <th className="px-2 py-2 text-left">OC TX (1..7)</th>
                 <th className="px-2 py-2 text-left">OC RX (1..7)</th>
@@ -190,7 +200,10 @@ export function PaSettingsPanel() {
         </div>
       </section>
 
-      <div className="flex items-center justify-between">
+      <div
+        className="sticky bottom-0 -mx-[22px] -mb-[18px] flex items-center justify-between border-t border-neutral-800 px-[22px] py-2"
+        style={{ background: 'var(--bg-1)' }}
+      >
         <span className="text-[11px] text-neutral-500">
           {inflight ? 'Saving…' : loaded ? 'Loaded from server' : 'Loading…'}
           {error ? ` · error: ${error}` : ''}

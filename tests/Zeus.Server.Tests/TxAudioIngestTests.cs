@@ -55,6 +55,7 @@ public class TxAudioIngestTests
     {
         public int BlockSize { get; set; } = 1024;
         public int TxBlockSamples => BlockSize;
+        public int TxOutputSamples => BlockSize;
         public int ProcessedBlocks { get; private set; }
 
         public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved)
@@ -83,10 +84,11 @@ public class TxAudioIngestTests
         public void SetZoom(int channelId, int level) { }
         public int ReadAudio(int channelId, Span<float> output) => 0;
         public bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut) => false;
-        public int OpenTxChannel() => 0;
+        public int OpenTxChannel(int outputRateHz = 48_000) => 0;
         public void SetMox(bool moxOn) { }
         public double GetRxaSignalDbm(int channelId) => -140.0;
         public void SetTxMode(RxMode mode) { }
+        public void SetTxFilter(int lowHz, int highHz) { }
         public void SetTxPanelGain(double linearGain) { }
         public void SetTxLevelerMaxGain(double maxGainDb) { }
         public void SetTxTune(bool on) { }
