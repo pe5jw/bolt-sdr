@@ -912,15 +912,11 @@ public sealed class WdspDspEngine : IDspEngine
                 NativeMethods.SetTXAPostGenToneFreq(txa, toneFreq);
                 NativeMethods.SetTXAPostGenToneMag(txa, toneMag);
                 NativeMethods.SetTXAPostGenRun(txa, 1);
-                // Disable Leveler while TUN is keyed. The 0 Hz tone lives
-                // below the SSB bandpass (150-2850 Hz), so the bandpass
-                // attenuates it ~30-40 dB. With the default Leveler on at
-                // +5 dB max gain, WDSP's AGC loop pumps trying to boost the
-                // weak signal — showing up as slow AM envelope on the
-                // panadapter. pihpsdr sidesteps this by keeping Leveler off
-                // by default (transmitter.c:2612 — state = compressor||cfc,
-                // both off on tune). We restore Leveler on TUN-off so mic
-                // MOX keeps its current Thetis-matching behavior.
+                // Disable Leveler while TUN is keyed. pihpsdr sidesteps the
+                // AGC-pumping AM envelope by keeping Leveler off
+                // (transmitter.c:2612 — state = compressor||cfc, both off
+                // on tune). We restore Leveler on TUN-off so mic MOX keeps
+                // its current Thetis-matching behavior.
                 NativeMethods.SetTXALevelerSt(txa, 0);
                 _log.LogInformation("wdsp.setTxTune on=true mode=singletone freq={Freq:F0} mag={Mag:F5} leveler=off", toneFreq, toneMag);
             }
