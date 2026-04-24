@@ -279,7 +279,7 @@ public sealed class WdspDspEngine : IDspEngine
         NativeMethods.XCreateAnalyzer(id, out int rc, MaxFftSize, 1, 1, null);
         if (rc != 0) throw new InvalidOperationException($"XCreateAnalyzer failed rc={rc}");
 
-        ConfigureAnalyzer(id, sampleRateHz, pixelWidth, zoomLevel: 1);
+        ConfigureAnalyzer(id, sampleRateHz, InSize, pixelWidth, zoomLevel: 1);
         ConfigureDisplayAveraging(id);
 
         var state = new ChannelState
@@ -426,7 +426,7 @@ public sealed class WdspDspEngine : IDspEngine
         {
             if (state.ZoomLevel == level) return;
             state.ZoomLevel = level;
-            ConfigureAnalyzer(channelId, state.SampleRateHz, state.PixelWidth, level);
+            ConfigureAnalyzer(channelId, state.SampleRateHz, InSize, state.PixelWidth, level);
         }
 
         // Mirror zoom onto the TX analyzer so the TX panadapter span stays
@@ -439,7 +439,7 @@ public sealed class WdspDspEngine : IDspEngine
             {
                 _txDispZoomLevel = level;
                 txaIdToReconfig = txa;
-                TryConfigureTxAnalyzer(txa, _txaOutputRateHz, _txDispRxSampleRateHz, _txDispPixelWidth, level);
+                TryConfigureTxAnalyzer(txa, _txaOutputRateHz, _txaOutSize, _txDispRxSampleRateHz, _txDispPixelWidth, level);
             }
         }
 
@@ -887,7 +887,7 @@ public sealed class WdspDspEngine : IDspEngine
                         _txDispPixelWidth = rxPixelWidth;
                         _txDispZoomLevel = rxZoom;
                         _txDispRxSampleRateHz = rxSampleRateHz;
-                        configured = TryConfigureTxAnalyzer(id, _txaOutputRateHz, rxSampleRateHz, rxPixelWidth, rxZoom);
+                        configured = TryConfigureTxAnalyzer(id, _txaOutputRateHz, _txaOutSize, rxSampleRateHz, rxPixelWidth, rxZoom);
                         if (configured)
                         {
                             ConfigureDisplayAveraging(id);
@@ -1284,16 +1284,20 @@ public sealed class WdspDspEngine : IDspEngine
     // match (txRate is a positive integer multiple of rxRate). Callers that get
     // false skip TX analyzer creation and fall back to the RX analyzer during
     // MOX — matches the pre-issue-#81 behaviour for that codepath.
-    private static bool TryConfigureTxAnalyzer(int disp, int txSampleRateHz, int rxSampleRateHz, int pixelWidth, int rxZoomLevel)
+    private static bool TryConfigureTxAnalyzer(int disp, int txSampleRateHz, int txBlockSize, int rxSampleRateHz, int pixelWidth, int rxZoomLevel)
     {
         if (rxSampleRateHz <= 0 || txSampleRateHz < rxSampleRateHz || txSampleRateHz % rxSampleRateHz != 0)
             return false;
         int effectiveZoom = rxZoomLevel * (txSampleRateHz / rxSampleRateHz);
-        ConfigureAnalyzer(disp, txSampleRateHz, pixelWidth, effectiveZoom);
+        // bf_sz must match the per-Spectrum0 block size fed from ProcessTxBlock
+        // (_txaOutSize: 1024 on P1, 2048 on P2). Hardcoding InSize left WDSP
+        // reading only the first 1024 of each 2048-sample P2 block, aliasing at
+        // (192000/1024) ≈ 188 Hz and producing a spur comb on the TUN carrier.
+        ConfigureAnalyzer(disp, txSampleRateHz, txBlockSize, pixelWidth, effectiveZoom);
         return true;
     }
 
-    private static void ConfigureAnalyzer(int disp, int sampleRateHz, int pixelWidth, int zoomLevel)
+    private static void ConfigureAnalyzer(int disp, int sampleRateHz, int bfSize, int pixelWidth, int zoomLevel)
     {
         int overlap = (int)Math.Max(0, Math.Ceiling(AnalyzerFftSize - (double)sampleRateHz / AnalyzerFps));
         int maxW = AnalyzerFftSize + (int)Math.Min(
@@ -1321,7 +1325,7 @@ public sealed class WdspDspEngine : IDspEngine
             typ: 1,
             flp: ref flp,
             sz: AnalyzerFftSize,
-            bf_sz: InSize,
+            bf_sz: bfSize,
             win_type: AnalyzerWindow,
             pi_alpha: AnalyzerKaiserPi,
             ovrlp: overlap,
