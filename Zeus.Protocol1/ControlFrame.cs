@@ -281,9 +281,18 @@ internal static class ControlFrame
         const double amplitude = 1.0;
 
         var payload = frame[8..];
+        int peak = 0;
+        long sumAbs = 0;
+        int firstI = 0, firstQ = 0;
         for (int s = 0; s < IqSamplesPerUsbFrame; s++)
         {
             var (iSample, qSample) = source.Next(amplitude);
+            if (s == 0) { firstI = iSample; firstQ = qSample; }
+            int ai = Math.Abs((int)iSample);
+            int aq = Math.Abs((int)qSample);
+            if (ai > peak) peak = ai;
+            if (aq > peak) peak = aq;
+            sumAbs += ai + aq;
             int off = s * 8;
             // Audio L/R stay zero (payload was cleared).
             payload[off + 4] = (byte)((iSample >> 8) & 0xFF);
@@ -291,7 +300,22 @@ internal static class ControlFrame
             payload[off + 6] = (byte)((qSample >> 8) & 0xFF);
             payload[off + 7] = (byte)(qSample & 0xFE);
         }
+        LastPeakAbs = peak;
+        LastMeanAbs = (int)(sumAbs / (2 * IqSamplesPerUsbFrame));
+        LastFirstI = firstI;
+        LastFirstQ = firstQ;
+        LastDriveByte = state.DriveLevel;
     }
+
+    // Diagnostic tap — read by Protocol1Client.TxLoopAsync to log what's
+    // actually on the wire. Each WriteUsbFrame call updates these; TxLoopAsync
+    // logs them at 1 Hz so we can tell whether the IQ reaching the HL2 is
+    // really at rated amplitude vs being attenuated somewhere in the chain.
+    public static volatile int LastPeakAbs;
+    public static volatile int LastMeanAbs;
+    public static volatile int LastFirstI;
+    public static volatile int LastFirstQ;
+    public static volatile byte LastDriveByte;
 
     public static IPEndPoint Port1024(IPAddress address) => new IPEndPoint(address, 1024);
 }
