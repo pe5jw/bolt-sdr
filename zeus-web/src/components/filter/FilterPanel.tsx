@@ -78,7 +78,7 @@ export function FilterPanel() {
   if (presets.length === 0) return null;
 
   return (
-    <div className="ctrl-group" style={{ minWidth: 320 }}>
+    <div className="ctrl-group" style={{ minWidth: 400 }}>
       <div
         className="label-xs ctrl-lbl"
         style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
@@ -91,7 +91,7 @@ export function FilterPanel() {
           {widthLabel}
         </span>
       </div>
-      <div className="btn-row wrap" style={{ gap: 3 }}>
+      <div className="btn-row wrap" style={{ gap: 3, width: 400 }}>
         {presets.map((slot) => (
           <button
             key={slot.slotName}
