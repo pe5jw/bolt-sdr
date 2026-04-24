@@ -1127,16 +1127,19 @@ public sealed class WdspDspEngine : IDspEngine
         // transmitter.c:1639 feeds iq_output_buffer — same tap point. We feed
         // unconditionally here: ProcessTxBlock only runs while TXA is keyed,
         // and when it isn't called the analyzer's log-recursive average just
-        // coasts. No Q-negation — the sideband mirror fix is HL2-specific to
-        // the RX ADC path (see RunWorker:1223-1227); TXA modulator already
-        // places energy on the right side of the carrier.
+        // coasts. Q is negated (complex conjugate) to match the RX analyzer's
+        // treatment in RunWorker: WDSP's analyzer pipeline renders both
+        // sidebands flipped about the carrier for our IQ convention, so the
+        // same empirical fix is needed on TX. Observed on a G2 MkII: without
+        // the negation, an LSB carrier/modulation rendered on the USB side
+        // and vice-versa even though on-air RF and audio were correct.
         if (_txDispAlive)
         {
             Span<double> txSpectrumIq = stackalloc double[2 * outSize];
             for (int i = 0; i < outSize; i++)
             {
                 txSpectrumIq[2 * i] = iout[i];
-                txSpectrumIq[2 * i + 1] = qout[i];
+                txSpectrumIq[2 * i + 1] = -qout[i];
             }
             lock (_txDispLock)
             {
