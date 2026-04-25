@@ -92,6 +92,10 @@ jobs:
         working-directory: zeus-web
 
       - name: Publish .NET application
+        # Force bash so the backslash line-continuations parse correctly on
+        # windows-latest, where the default shell is PowerShell (which
+        # treats `--self-contained \` as a unary operator and errors out).
+        shell: bash
         run: |
           dotnet publish Zeus.Server/Zeus.Server.csproj \
             -c Release \
