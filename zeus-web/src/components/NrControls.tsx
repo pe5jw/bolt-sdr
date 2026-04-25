@@ -123,10 +123,11 @@ export function NrControls() {
   );
 
   const cycleNr = useCallback(() => {
+    if (!connected) return;
     const idx = NR_CYCLE.indexOf(nr.nrMode);
     const nextIdx = (idx < 0 ? 0 : idx + 1) % NR_CYCLE.length;
     send({ ...nr, nrMode: NR_CYCLE[nextIdx]! });
-  }, [nr, send]);
+  }, [nr, send, connected]);
 
   const cycleNb = useCallback(() => {
     const idx = NB_CYCLE.indexOf(nr.nbMode);
@@ -170,9 +171,9 @@ export function NrControls() {
       </button>
       <button
         type="button"
-        disabled={!connected}
         onClick={cycleNr}
         onContextMenu={onNrContextMenu}
+        aria-disabled={!connected}
         className={`${nrActive ? ACTIVE_BTN : IDLE_BTN} ${DISABLED}`}
         title={nrButtonTitle(nr.nrMode)}
       >
