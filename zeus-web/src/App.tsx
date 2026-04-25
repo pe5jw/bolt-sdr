@@ -55,6 +55,8 @@ import { ModeBandwidth } from './components/ModeBandwidth';
 import { FilterPanel } from './components/filter/FilterPanel';
 import { FilterRibbon, useFilterRibbonOpenSync } from './components/filter/FilterRibbon';
 import { MoxButton } from './components/MoxButton';
+import { PsToggleButton } from './components/PsToggleButton';
+import { TwoToneButton } from './components/TwoToneButton';
 import { Panadapter } from './components/Panadapter';
 import { PaTempChip } from './components/PaTempChip';
 import { PreampButton } from './components/PreampButton';
@@ -88,6 +90,7 @@ import { useQrzStore } from './state/qrz-store';
 import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
 import { useTxStore } from './state/tx-store';
+import { useLayoutPreferenceStore } from './state/layout-preference-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
 import type L from 'leaflet';
@@ -100,6 +103,7 @@ const STATE_POLL_MS = 333;
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'pa' | 'qrz' | 'rotator' | 'about' | undefined>();
   const status = useConnectionStore((s) => s.status);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
@@ -132,7 +136,14 @@ export default function App() {
       ctrl = new AbortController();
       try {
         const next = await fetchState(ctrl.signal);
-        if (!cancelled) useConnectionStore.getState().applyState(next);
+        if (!cancelled) {
+          useConnectionStore.getState().applyState(next);
+          // Hydrate persistable PS / TwoTone fields from the server's StateDto
+          // so server-persisted edits (e.g. operator changed MOX delay on
+          // another tab) reach this tab even after the initial connect-time
+          // hydrate. Master-arm fields are session-only and skipped.
+          useTxStore.getState().hydrateFromState(next);
+        }
       } catch {
         /* transient errors reconcile on the next tick */
       }
@@ -165,6 +176,27 @@ export default function App() {
     const fonts = localStorage.getItem('zeus.fonts') || 'geist';
     document.documentElement.setAttribute('data-variant', variant);
     document.documentElement.setAttribute('data-fonts', fonts);
+  }, []);
+
+  // Handle deeplink via URL hash (#qrz, #rotator, #pa, #about).
+  // Opens settings menu and navigates to the specified tab.
+  useEffect(() => {
+    const handleHash = () => {
+      const hash = window.location.hash.slice(1); // Remove '#'
+      if (hash === 'qrz' || hash === 'rotator' || hash === 'pa' || hash === 'about') {
+        setSettingsInitialTab(hash);
+        setSettingsOpen(true);
+        // Clear the hash after handling it
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    };
+
+    // Check on mount
+    handleHash();
+
+    // Listen for hash changes
+    window.addEventListener('hashchange', handleHash);
+    return () => window.removeEventListener('hashchange', handleHash);
   }, []);
 
   // --- Design-mock state (QRZ, DSP grid toggles, CW WPM, memories) ---
@@ -464,15 +496,16 @@ export default function App() {
     );
   }, [connected]);
 
-  // Feature flag: ?layout=flex activates the flexlayout-react dockable panel
-  // layout. Mobile viewports (≤900px) always use the fixed grid regardless of
-  // the flag — the mobile layout does not support flexlayout-react.
+  // Feature flag: layout preference store determines whether to use the
+  // flexlayout-react dockable panel layout. Mobile viewports (≤900px) always
+  // use the fixed grid regardless of the preference — the mobile layout does
+  // not support flexlayout-react.
+  const layoutMode = useLayoutPreferenceStore((s) => s.layoutMode);
   const useFlexLayout = useMemo(() => {
     if (typeof window === 'undefined') return false;
-    const wantsFlexLayout = new URLSearchParams(window.location.search).get('layout') === 'flex';
     const isMobile = window.matchMedia('(max-width: 900px)').matches;
-    return wantsFlexLayout && !isMobile;
-  }, []);
+    return layoutMode === 'flex' && !isMobile;
+  }, [layoutMode]);
 
   // Bundle workspace state into a context so panel components can consume it
   // without prop-drilling through the FlexWorkspace factory.
@@ -628,7 +661,7 @@ export default function App() {
           onClick={() => setSettingsOpen(true)}
           title="Open settings menu"
         >
-          MENU
+          ⚙
         </button>
       </div>
 
@@ -682,9 +715,7 @@ export default function App() {
         className={`workspace ${terminatorActive ? 'terminator' : ''} ${filterRibbonOpen ? 'has-filter-ribbon' : ''}`}
       >
         {/* Advanced filter ribbon — dedicated row above the hero, same column
-            width as the panadapter. Hidden on mobile by the enclosing .app
-            layout (mobile uses the fixed grid, which doesn't reach this
-            branch via ?layout=flex). When closed, FilterRibbon renders null
+            width as the panadapter. When closed, FilterRibbon renders null
             and the `has-filter-ribbon` class is absent, so the workspace
             collapses to its original two-row layout. */}
         <FilterRibbon />
@@ -924,6 +955,8 @@ export default function App() {
       <div className="transport">
         <MoxButton />
         <TunButton />
+        <PsToggleButton />
+        <TwoToneButton />
         <div className="transport-sep" />
         <AudioToggle />
         <MicMeter />
@@ -944,7 +977,7 @@ export default function App() {
       </div>
 
       {disconnectedOverlay}
-      <SettingsMenu open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsMenu open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsInitialTab} />
     </div>
     </SpectrumWheelActionsContext.Provider>
     </WorkspaceContext.Provider>
