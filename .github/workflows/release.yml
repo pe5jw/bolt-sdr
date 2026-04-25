@@ -53,10 +53,6 @@ jobs:
             runner: ubuntu-latest
             rid: linux-x64
             artifact: linux-tarball
-          - os: macos-x64
-            runner: macos-13  # Intel Mac
-            rid: osx-x64
-            artifact: macos-x64-dmg
           - os: macos-arm64
             runner: macos-latest  # Apple Silicon
             rid: osx-arm64
@@ -189,9 +185,12 @@ jobs:
             - Includes .NET runtime and all dependencies
             - Run the installer and follow the prompts
 
-          ### macOS
-          - **Zeus-${{ steps.version.outputs.version }}-macos-arm64.dmg** - Apple Silicon (M1/M2/M3)
-          - **Zeus-${{ steps.version.outputs.version }}-macos-x64.dmg** - Intel Macs
+          ### macOS (Apple Silicon)
+          - **Zeus-${{ steps.version.outputs.version }}-macos-arm64.dmg** - M1/M2/M3 Macs
+
+          Intel Mac builds are no longer published — the `macos-13` runner queue
+          on GitHub-hosted Actions is too slow to be practical. If you need an
+          Intel build, build from source.
 
           **IMPORTANT for macOS users**: After installation, you must remove the quarantine attribute:
           ```bash
@@ -224,7 +223,6 @@ jobs:
           files: |
             release-artifacts/windows-installer/*
             release-artifacts/linux-tarball/*
-            release-artifacts/macos-x64-dmg/*
             release-artifacts/macos-arm64-dmg/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
