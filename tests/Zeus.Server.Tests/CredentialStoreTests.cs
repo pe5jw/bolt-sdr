@@ -48,16 +48,14 @@ public sealed class CredentialStoreTests : IDisposable
 
     public CredentialStoreTests()
     {
-        // Create a temporary test directory
+        // Per-fixture isolated dir so parallel tests can't collide on the real
+        // %LOCALAPPDATA%\Zeus\zeus.db. Env-var override doesn't redirect
+        // Environment.GetFolderPath on Windows (it uses SHGetKnownFolderPath),
+        // so the store needs an explicit directory injection.
         _testDbDir = Path.Combine(Path.GetTempPath(), $"zeus-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_testDbDir);
 
-        // Override the app data dir for testing by setting environment variable
-        Environment.SetEnvironmentVariable("HOME", _testDbDir);
-        Environment.SetEnvironmentVariable("USERPROFILE", _testDbDir);
-        Environment.SetEnvironmentVariable("LOCALAPPDATA", _testDbDir);
-
-        _store = new CredentialStore(NullLogger<CredentialStore>.Instance);
+        _store = new CredentialStore(NullLogger<CredentialStore>.Instance, _testDbDir);
     }
 
     public void Dispose()
@@ -142,39 +140,35 @@ public sealed class CredentialStoreTests : IDisposable
     [Fact]
     public async Task DatabaseFile_IsEncrypted()
     {
-        // Arrange
         const string service = "encryption-test";
         const string password = "SENSITIVE_PASSWORD_12345";
 
-        // Act
         await _store.SetAsync(service, "user", password);
 
-        // Dispose to flush and close the DB
         _store.Dispose();
 
-        // Assert - Check that the password is not in plaintext in the DB file
-        // The DB is created in the actual user's app data dir
-        var appDataDir = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData,
-            Environment.SpecialFolderOption.DoNotVerify);
-        var zeusDir = Path.Combine(appDataDir, "Zeus");
+        var dbFiles = Directory.GetFiles(_testDbDir, "zeus.db*");
+        Assert.NotEmpty(dbFiles);
 
-        if (Directory.Exists(zeusDir))
+        var dbFile = dbFiles[0];
+        // Permissive share: LiteDB on Windows can leave the file briefly
+        // share-locked even after Dispose; FileShare.ReadWrite | Delete
+        // avoids spurious IOException without hiding any real bug.
+        using (var fs = new FileStream(dbFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
         {
-            var dbFiles = Directory.GetFiles(zeusDir, "zeus.db*");
-            if (dbFiles.Length > 0)
+            var dbContent = new byte[fs.Length];
+            var read = 0;
+            while (read < dbContent.Length)
             {
-                var dbFile = dbFiles[0];
-                var dbContent = File.ReadAllText(dbFile);
-
-                // The password should not appear as plaintext in the encrypted database
-                Assert.DoesNotContain(password, dbContent);
+                var n = fs.Read(dbContent, read, dbContent.Length - read);
+                if (n <= 0) break;
+                read += n;
             }
+            var asText = Encoding.UTF8.GetString(dbContent, 0, read);
+            Assert.DoesNotContain(password, asText);
         }
 
-        // If we can't verify the file (which is OK in some test environments),
-        // at least verify we can retrieve the stored credential
-        using var store2 = new CredentialStore(NullLogger<CredentialStore>.Instance);
+        using var store2 = new CredentialStore(NullLogger<CredentialStore>.Instance, _testDbDir);
         var retrieved = await store2.GetAsync(service);
         Assert.NotNull(retrieved);
         Assert.Equal(password, retrieved.Password);

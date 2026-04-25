@@ -46,10 +46,20 @@ public sealed class CredentialStore : IDisposable
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<StoredCredential> _credentials;
     private readonly ILogger<CredentialStore> _log;
+    private readonly string? _dataDirectoryOverride;
 
     public CredentialStore(ILogger<CredentialStore> log)
+        : this(log, dataDirectoryOverride: null)
+    {
+    }
+
+    // Test-friendly ctor: lets callers point the store at an isolated directory
+    // so they don't share %LOCALAPPDATA%\Zeus\zeus.db with other tests on the
+    // same machine. Production DI uses the parameterless overload above.
+    public CredentialStore(ILogger<CredentialStore> log, string? dataDirectoryOverride)
     {
         _log = log;
+        _dataDirectoryOverride = dataDirectoryOverride;
         var dbPath = GetDatabasePath();
         var dbPassword = GetOrCreateDatabasePassword();
 
@@ -122,23 +132,27 @@ public sealed class CredentialStore : IDisposable
         _db?.Dispose();
     }
 
-    private static string GetDatabasePath()
+    private string GetDatabasePath()
     {
+        return Path.Combine(GetZeusDir(), "zeus.db");
+    }
+
+    private string GetZeusDir()
+    {
+        if (!string.IsNullOrEmpty(_dataDirectoryOverride))
+        {
+            return _dataDirectoryOverride;
+        }
+
         var appDataDir = Environment.GetFolderPath(
             Environment.SpecialFolder.LocalApplicationData,
             Environment.SpecialFolderOption.Create);
-
-        var zeusDir = Path.Combine(appDataDir, "Zeus");
-        return Path.Combine(zeusDir, "zeus.db");
+        return Path.Combine(appDataDir, "Zeus");
     }
 
     private string GetOrCreateDatabasePassword()
     {
-        var appDataDir = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData,
-            Environment.SpecialFolderOption.Create);
-
-        var zeusDir = Path.Combine(appDataDir, "Zeus");
+        var zeusDir = GetZeusDir();
         var keyPath = Path.Combine(zeusDir, ".dbkey");
 
         if (File.Exists(keyPath))
