@@ -148,12 +148,20 @@ public sealed class TxService
             wasTunOn = _tunOn;
             if (req.Enabled)
             {
-                // TwoTone-on preempts MOX and TUN (PRD FR-7 mutual-exclusion);
-                // the test signal owns the TX path while armed.
-                _moxOn = false;
+                // TwoTone-on preempts TUN and OWNS MOX while armed (PRD FR-7
+                // mutual-exclusion + Thetis setup.cs:11162-11165). _moxOn
+                // tracks "TX is keyed", whether by mic-MOX or TwoTone — the
+                // operator's MOX button reflects the same flag, so a TwoTone
+                // arm reads as "transmitting" in the UI.
                 _tunOn = false;
-                _moxStartedAt = null;
                 _tunStartedAt = null;
+                _moxOn = true;
+                _moxStartedAt = DateTime.UtcNow;
+            }
+            else
+            {
+                _moxOn = false;
+                _moxStartedAt = null;
             }
         }
 

@@ -33,10 +33,10 @@ public sealed class PsSettingsStore : IDisposable
     private readonly ILiteCollection<PsSettingsEntry> _entries;
     private readonly ILogger<PsSettingsStore> _log;
 
-    public PsSettingsStore(ILogger<PsSettingsStore> log)
+    public PsSettingsStore(ILogger<PsSettingsStore> log, string? dbPathOverride = null)
     {
         _log = log;
-        var dbPath = GetDatabasePath();
+        var dbPath = dbPathOverride ?? GetDatabasePath();
 
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))

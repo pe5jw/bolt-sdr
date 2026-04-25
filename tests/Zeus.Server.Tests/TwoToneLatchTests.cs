@@ -76,4 +76,88 @@ public class TwoToneLatchTests
         Assert.False(tx.IsMoxOn);
         Assert.False(tx.IsTunOn);
     }
+
+    // ---- TrySetTwoTone — round-3 auto-MOX path (Thetis parity).
+    // Brian's expectation: pressing 2-Tone produces RF without a separate
+    // MOX press. TrySetTwoTone owns the MOX state while armed and drops it
+    // unconditionally on disarm (mirrors setup.cs:11162-11165, 11189-11216).
+
+    private static (RadioService radio, TxService tx) BuildConnectedRadioAndTx()
+    {
+        var loggerFactory = NullLoggerFactory.Instance;
+        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
+        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance);
+        var radio = new RadioService(loggerFactory, dspStore, paStore);
+        // Mark the radio P2-connected so the connect-interlock in
+        // TrySetTwoTone passes — production calls this from
+        // ConnectP2Async; here we shortcut.
+        radio.MarkProtocol2Connected("127.0.0.1:1024", 48_000);
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        var pipeline = new DspPipelineService(radio, hub, loggerFactory);
+        return (radio, new TxService(radio, pipeline, hub, new NullLogger<TxService>()));
+    }
+
+    [Fact]
+    public void TrySetTwoTone_NotConnected_ReturnsFalse_AndDoesNotKeyMox()
+    {
+        // Connect interlock — same shape as TrySetMox / TrySetTun.
+        var tx = BuildTxService();    // RadioService not connected
+
+        var ok = tx.TrySetTwoTone(
+            new Zeus.Contracts.TwoToneSetRequest(Enabled: true), out var err);
+
+        Assert.False(ok);
+        Assert.Equal("not connected", err);
+        Assert.False(tx.IsMoxOn);
+        Assert.False(tx.IsTwoToneOn);
+    }
+
+    [Fact]
+    public void TrySetTwoTone_Arm_KeysMox_AndLatchesTwoToneOn()
+    {
+        var (_, tx) = BuildConnectedRadioAndTx();
+
+        var ok = tx.TrySetTwoTone(
+            new Zeus.Contracts.TwoToneSetRequest(
+                Enabled: true, Freq1: 700, Freq2: 1900, Mag: 0.49),
+            out var err);
+
+        Assert.True(ok);
+        Assert.Null(err);
+        Assert.True(tx.IsTwoToneOn);
+        Assert.True(tx.IsMoxOn);
+    }
+
+    [Fact]
+    public void TrySetTwoTone_Disarm_DropsMox_AndClearsTwoToneOn()
+    {
+        var (_, tx) = BuildConnectedRadioAndTx();
+        // Arm first.
+        tx.TrySetTwoTone(
+            new Zeus.Contracts.TwoToneSetRequest(Enabled: true), out _);
+        Assert.True(tx.IsMoxOn);
+
+        // Disarm.
+        var ok = tx.TrySetTwoTone(
+            new Zeus.Contracts.TwoToneSetRequest(Enabled: false), out var err);
+
+        Assert.True(ok);
+        Assert.Null(err);
+        Assert.False(tx.IsTwoToneOn);
+        Assert.False(tx.IsMoxOn);
+    }
+
+    [Fact]
+    public void TrySetTwoTone_Disarm_AllowedEvenWhenNotConnected()
+    {
+        // The connect interlock only gates arm — disarm always passes so an
+        // operator can clear the latch after a disconnect.
+        var tx = BuildTxService();    // RadioService not connected
+
+        var ok = tx.TrySetTwoTone(
+            new Zeus.Contracts.TwoToneSetRequest(Enabled: false), out var err);
+
+        Assert.True(ok);
+        Assert.Null(err);
+    }
 }

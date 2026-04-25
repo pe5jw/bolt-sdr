@@ -593,18 +593,35 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     private void SendCmdTx()
     {
+        var p = ComposeCmdTxBuffer(_seqCmdTx++, (ushort)_sampleRateKhz, _txStepAttnDb);
+        _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1026));
+    }
+
+    // Test-seamed Compose for the CmdTx (TxSpecific) packet. Layout per
+    // Thetis network.c (function specific_buffer / fillTxSpecificBuffer
+    // around line 1235) and pihpsdr new_protocol.c new_protocol_tx_specific:
+    //   bytes 0..3   : sequence (BE)
+    //   byte  4      : num_dac (1 on G2)
+    //   bytes 14..15 : DAC sample rate kHz (BE)
+    //   byte  57     : ADC2 TX step attenuator (0..31 dB)
+    //   byte  58     : ADC1 TX step attenuator
+    //   byte  59     : ADC0 TX step attenuator
+    // Other bytes are zero on G2 — pihpsdr fills mic-source flags but the
+    // G2 ignores them.
+    internal static byte[] ComposeCmdTxBuffer(uint seq, ushort sampleRateKhz, byte txStepAttnDb)
+    {
         var p = new byte[60];
-        WriteBeU32(p, 0, _seqCmdTx++);
+        WriteBeU32(p, 0, seq);
         p[4] = 1;                 // num_dac
-        WriteBeU16(p, 14, _sampleRateKhz);
+        WriteBeU16(p, 14, sampleRateKhz);
         // TX step attenuator — Thetis network.c:1238-1242 writes the same
         // value into bytes 57 (ADC2), 58 (ADC1), 59 (ADC0). 0..31 dB.
         // Drives the PS auto-attenuate loop's recovery path when feedback
         // level lands outside the 128..181 ideal window.
-        p[57] = _txStepAttnDb;
-        p[58] = _txStepAttnDb;
-        p[59] = _txStepAttnDb;
-        _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1026));
+        p[57] = txStepAttnDb;
+        p[58] = txStepAttnDb;
+        p[59] = txStepAttnDb;
+        return p;
     }
 
     /// <summary>

@@ -224,4 +224,49 @@ public class PsWireFormatTests
 
         Assert.Equal(p1, p2);
     }
+
+    // ---- CmdTx (TxSpecific) — TX step attenuator wire support for PS
+    // AutoAttenuate. Thetis network.c:1238-1242 writes the same value into
+    // bytes 57/58/59 (ADC2/ADC1/ADC0). Without these PsAutoAttenuate has
+    // nowhere to land its dB ramp.
+
+    [Fact]
+    public void CmdTx_TxStepAttn_LandsInBytes57Through59()
+    {
+        var p = Protocol2Client.ComposeCmdTxBuffer(
+            seq: 1, sampleRateKhz: 48, txStepAttnDb: 17);
+
+        Assert.Equal((byte)17, p[57]);
+        Assert.Equal((byte)17, p[58]);
+        Assert.Equal((byte)17, p[59]);
+    }
+
+    [Fact]
+    public void CmdTx_DefaultZeroAttn_LeavesBytes57Through59Clear()
+    {
+        var p = Protocol2Client.ComposeCmdTxBuffer(
+            seq: 0, sampleRateKhz: 48, txStepAttnDb: 0);
+
+        Assert.Equal((byte)0, p[57]);
+        Assert.Equal((byte)0, p[58]);
+        Assert.Equal((byte)0, p[59]);
+    }
+
+    [Fact]
+    public void CmdTx_PreservesSequenceAndNumDac()
+    {
+        var p = Protocol2Client.ComposeCmdTxBuffer(
+            seq: 0xCAFEBABE, sampleRateKhz: 192, txStepAttnDb: 5);
+
+        // Sequence at byte 0 BE
+        Assert.Equal((byte)0xCA, p[0]);
+        Assert.Equal((byte)0xFE, p[1]);
+        Assert.Equal((byte)0xBA, p[2]);
+        Assert.Equal((byte)0xBE, p[3]);
+        // num_dac always 1 on G2
+        Assert.Equal((byte)1, p[4]);
+        // Sample rate at bytes 14..15 BE — 192 = 0x00C0
+        Assert.Equal((byte)0x00, p[14]);
+        Assert.Equal((byte)0xC0, p[15]);
+    }
 }
