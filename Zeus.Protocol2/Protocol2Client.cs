@@ -728,6 +728,25 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // back-feed into the Mercury ADC (pihpsdr alex.h ANAN7000_RX_GNDonTX).
     private const uint ALEX1_ANAN7000_RX_GNDonTX = 0x00000100;
 
+    /// <summary>
+    /// Compose the alex0 word the way <see cref="SendCmdHighPriority"/>
+    /// does, exposed internal so wire-format tests can assert the
+    /// PureSignal-related bits without standing up a socket. Mirrors the
+    /// in-line logic at SendCmdHighPriority &gt; alex0 calculation.
+    /// </summary>
+    internal static uint ComposeAlex0ForTest(
+        uint rxFreqHz,
+        bool moxOn,
+        bool psEnabled,
+        bool psExternal)
+    {
+        uint alexCommon = ComputeAlexWord(rxFreqHz, rxFreqHz, txAnt: 1);
+        uint alex0 = alexCommon | (moxOn ? ALEX_TX_RELAY : 0u);
+        if (psEnabled && moxOn) alex0 |= AlexPsBit;
+        if (psEnabled && psExternal && moxOn) alex0 |= AlexRxAntennaBypass;
+        return alex0;
+    }
+
     internal static uint ComputeAlexWord(uint rxFreqHz, uint txFreqHz, int txAnt)
     {
         uint word = 0;
@@ -916,22 +935,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     {
         var seq = BinaryPrimitives.ReadUInt32BigEndian(buf);
         const int samplesPerPacket = 119;
-        const float scale = 1f / 8388608f;
 
         for (int i = 0; i < samplesPerPacket; i++)
         {
             int off = 16 + i * 12;
-            int d0i = SignExtend24((buf[off + 0] << 16) | (buf[off + 1] << 8) | buf[off + 2]);
-            int d0q = SignExtend24((buf[off + 3] << 16) | (buf[off + 4] << 8) | buf[off + 5]);
-            int d1i = SignExtend24((buf[off + 6] << 16) | (buf[off + 7] << 8) | buf[off + 8]);
-            int d1q = SignExtend24((buf[off + 9] << 16) | (buf[off + 10] << 8) | buf[off + 11]);
-
-            // DDC0 (off+0..5) is PS_RX_FEEDBACK -> pscc's "rx" pair.
-            // DDC1 (off+6..11) is PS_TX_FEEDBACK -> pscc's "tx" pair.
-            _psRxI[_psBlockFill] = d0i * scale;
-            _psRxQ[_psBlockFill] = d0q * scale;
-            _psTxI[_psBlockFill] = d1i * scale;
-            _psTxQ[_psBlockFill] = d1q * scale;
+            // DecodePsPairForTest is the canonical mapping (DDC0=rx, DDC1=tx).
+            // Reusing it here keeps the test-asserted contract identical to
+            // the live decode path so the regression guard is real.
+            var (sampleRxI, sampleRxQ, sampleTxI, sampleTxQ) =
+                DecodePsPairForTest(new ReadOnlySpan<byte>(buf, off, 12));
+            _psRxI[_psBlockFill] = sampleRxI;
+            _psRxQ[_psBlockFill] = sampleRxQ;
+            _psTxI[_psBlockFill] = sampleTxI;
+            _psTxQ[_psBlockFill] = sampleTxQ;
 
             if (_psBlockFill == 0) _psBlockStartSeq = seq;
             _psBlockFill++;
@@ -958,6 +974,25 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     {
         if ((raw & 0x800000) != 0) raw |= unchecked((int)0xFF000000);
         return raw;
+    }
+
+    /// <summary>
+    /// Test seam — decode a single sample-pair from a PS paired packet and
+    /// return the (rxI, rxQ, txI, txQ) destination assignments per the
+    /// pihpsdr DDC0=RX_FEEDBACK / DDC1=TX_FEEDBACK contract. Used by tests
+    /// to guard against re-introducing the round-1 swap bug.
+    /// </summary>
+    internal static (float rxI, float rxQ, float txI, float txQ)
+        DecodePsPairForTest(ReadOnlySpan<byte> pair)
+    {
+        if (pair.Length < 12) throw new ArgumentException("pair must be 12 bytes", nameof(pair));
+        const float scale = 1f / 8388608f;
+        int d0i = SignExtend24((pair[0]  << 16) | (pair[1]  << 8) | pair[2]);
+        int d0q = SignExtend24((pair[3]  << 16) | (pair[4]  << 8) | pair[5]);
+        int d1i = SignExtend24((pair[6]  << 16) | (pair[7]  << 8) | pair[8]);
+        int d1q = SignExtend24((pair[9]  << 16) | (pair[10] << 8) | pair[11]);
+        // DDC0 -> rx, DDC1 -> tx.
+        return (d0i * scale, d0q * scale, d1i * scale, d1q * scale);
     }
 
     public void Dispose()

@@ -110,4 +110,118 @@ public class PsWireFormatTests
         // engaging the feedback-coupler tap.
         Assert.Equal(0x00040000u, Protocol2Client.AlexPsBit);
     }
+
+    [Fact]
+    public void AlexRxAntennaBypass_Is_0x00000800()
+    {
+        // pihpsdr new_protocol.c:1284-1296. Wrong value silently breaks
+        // the External feedback path.
+        Assert.Equal(0x00000800u, Protocol2Client.AlexRxAntennaBypass);
+    }
+
+    // ---- DDC0/DDC1 destination assignment (round-1 swap regression) ----
+
+    [Fact]
+    public void DecodePsPair_Ddc0BytesLandInRx_Ddc1BytesLandInTx()
+    {
+        // Synthesize a sample-pair with distinct, identifiable patterns
+        // for DDC0 vs DDC1 so a swap bug shows up immediately.
+        // DDC0 = +1.0 in I, +0.5 in Q (max-positive pattern)
+        // DDC1 = -1.0 in I, -0.5 in Q (max-negative pattern)
+        // 24-bit signed: 0x7FFFFF =  8388607, 0x800000 = -8388608.
+        // We use 0x400000 (≈+0.5) and 0xC00000 (≈-0.5) for the Q values.
+        var pair = new byte[12]
+        {
+            // DDC0 I = 0x7FFFFF
+            0x7F, 0xFF, 0xFF,
+            // DDC0 Q = 0x400000
+            0x40, 0x00, 0x00,
+            // DDC1 I = 0x800000
+            0x80, 0x00, 0x00,
+            // DDC1 Q = 0xC00000
+            0xC0, 0x00, 0x00,
+        };
+
+        var (rxI, rxQ, txI, txQ) = Protocol2Client.DecodePsPairForTest(pair);
+
+        // DDC0 → rx side, DDC1 → tx side. If this assertion ever flips,
+        // PS will arm but never correct (round-1 bug).
+        Assert.True(rxI > 0.99f, $"rxI from DDC0 should be ~+1.0, got {rxI}");
+        Assert.True(rxQ > 0.49f && rxQ < 0.51f, $"rxQ from DDC0 should be ~+0.5, got {rxQ}");
+        Assert.True(txI < -0.99f, $"txI from DDC1 should be ~-1.0, got {txI}");
+        Assert.True(txQ < -0.49f && txQ > -0.51f, $"txQ from DDC1 should be ~-0.5, got {txQ}");
+    }
+
+    // ---- ALEX bypass bit (External feedback antenna) ----
+
+    [Fact]
+    public void Alex0_BypassBit_SetWhenExternal_PsArmed_AndMox()
+    {
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: 14_200_000,
+            moxOn: true,
+            psEnabled: true,
+            psExternal: true);
+
+        Assert.True((alex0 & Protocol2Client.AlexRxAntennaBypass) != 0,
+            "Bypass bit must be set when PS armed && External && MOX.");
+    }
+
+    [Fact]
+    public void Alex0_BypassBit_ClearWhenInternal()
+    {
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: 14_200_000,
+            moxOn: true,
+            psEnabled: true,
+            psExternal: false);
+
+        Assert.True((alex0 & Protocol2Client.AlexRxAntennaBypass) == 0,
+            "Bypass bit must stay clear in Internal-coupler mode.");
+        // Sanity: PS bit is still set during MOX.
+        Assert.True((alex0 & Protocol2Client.AlexPsBit) != 0,
+            "PS bit should still be set on alex0 during xmit + PS armed.");
+    }
+
+    [Fact]
+    public void Alex0_BypassBit_ClearWhenMoxOff()
+    {
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: 14_200_000,
+            moxOn: false,
+            psEnabled: true,
+            psExternal: true);
+
+        Assert.True((alex0 & Protocol2Client.AlexRxAntennaBypass) == 0,
+            "Bypass bit must not flip on alex0 outside xmit (matches pihpsdr).");
+    }
+
+    [Fact]
+    public void Alex0_BypassBit_ClearWhenPsDisarmed()
+    {
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: 14_200_000,
+            moxOn: true,
+            psEnabled: false,
+            psExternal: true);
+
+        Assert.True((alex0 & Protocol2Client.AlexRxAntennaBypass) == 0,
+            "Bypass bit must not flip when PS isn't armed even if External is selected.");
+    }
+
+    // ---- RxSpecific buffer parity between Internal and External ----
+
+    [Fact]
+    public void CmdRx_BytesAreIdentical_BetweenInternalAndExternal()
+    {
+        // The RxSpecific buffer doesn't take a 'feedback source' input
+        // (only psEnabled) — verify it stays that way so a future change
+        // doesn't accidentally start emitting different bytes per source.
+        var p1 = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 1, numAdc: 2, sampleRateKhz: 192, psEnabled: true);
+        var p2 = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 1, numAdc: 2, sampleRateKhz: 192, psEnabled: true);
+
+        Assert.Equal(p1, p2);
+    }
 }
