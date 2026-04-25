@@ -278,11 +278,11 @@ export function usePanTuneGesture(
       const dir = wheelAccum > 0 ? -1 : 1;
       wheelAccum = 0;
 
-      // Zoom convention (both spectrum and map): wheel forward = zoom OUT.
-      // Map pan lives on alt+drag, not alt+wheel — matches the standard
-      // web-map gesture where wheel over the map is zoom.
+      // Spectrum zoom (shift+wheel) keeps the wheel-forward = zoom OUT
+      // convention. Map zoom (alt+wheel) inverts it to match the standard
+      // web-map gesture (wheel forward = zoom IN, like Google/Leaflet).
       if (alt) {
-        wheelActions.onMapZoom?.(-dir);
+        wheelActions.onMapZoom?.(dir);
         return;
       }
       if (shift) {

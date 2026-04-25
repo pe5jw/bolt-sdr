@@ -340,10 +340,12 @@ export default function App() {
     return () => window.removeEventListener('keydown', h);
   }, []);
 
-  // Hold-to-steer: while 'M' is down (outside a text field), the Leaflet map
-  // becomes interactive and the spectrum canvas stops intercepting events.
-  // Keyup — and a defensive blur/visibilitychange — release the modifier so
-  // you don't get stuck if focus leaves the window mid-press.
+  // Hold-to-steer: while Alt/Option is down (outside a text field), the
+  // Leaflet map becomes interactive and the spectrum canvas stops intercepting
+  // events. Pairs with the alt+wheel zoom and alt+drag pan in
+  // use-pan-tune-gesture. Keyup — and a defensive blur/visibilitychange —
+  // release the modifier so you don't get stuck if focus leaves the window
+  // mid-press.
   useEffect(() => {
     const inField = (t: EventTarget | null) =>
       t instanceof HTMLInputElement ||
@@ -351,12 +353,12 @@ export default function App() {
       (t instanceof HTMLElement && t.isContentEditable);
     const onDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
-      if ((e.key === 'm' || e.key === 'M') && !inField(e.target)) {
+      if (e.key === 'Alt' && !inField(e.target)) {
         setMapModifier(true);
       }
     };
     const onUp = (e: KeyboardEvent) => {
-      if (e.key === 'm' || e.key === 'M') setMapModifier(false);
+      if (e.key === 'Alt') setMapModifier(false);
     };
     const release = () => setMapModifier(false);
     window.addEventListener('keydown', onDown);
@@ -739,18 +741,13 @@ export default function App() {
             {terminatorActive && mapAvailable && (
               <span
                 className={`chip mono ${mapInteractive ? 'accent' : ''}`}
-                title="Hold M to pan/zoom the map (click-to-tune paused)"
+                title="Hold ⌥ (Alt) to zoom and pan the map (click-to-tune paused)"
               >
-                <span className="k">M</span>
-                <span className="v">{mapInteractive ? 'MAP' : 'hold'}</span>
+                <span className="k">⌥</span>
+                <span className="v">+ −</span>
               </span>
             )}
-            <span className="chip mono">
-              <span className="k">HZ/PX</span>
-              <span className="v">
-                {useDisplayHzPerPixel()}
-              </span>
-            </span>
+            <HzPerPixelChip />
           </div>
           <div className="panel-body hero-body">
             <div className={`map-layer ${terminatorActive ? 'visible' : ''}`}>
@@ -954,13 +951,21 @@ export default function App() {
   );
 }
 
-// Small hook hoisted to a name so the Hero chip reads the current bin width
-// without blocking re-render of siblings that don't care about hzPerPixel.
+// Isolated child component so the hzPerPixel store subscription is scoped to
+// this chip rather than the whole App tree — bin-width changes re-render only
+// the chip, not the panadapter / waterfall / VFO siblings.
 import { useDisplayStore } from './state/display-store';
-function useDisplayHzPerPixel(): string {
+function HzPerPixelChip() {
   const v = useDisplayStore((s) => s.hzPerPixel);
-  if (!Number.isFinite(v) || v <= 0) return '—';
-  return v >= 1 ? `${v.toFixed(1)} Hz` : `${(v * 1000).toFixed(0)} mHz`;
+  const text = !Number.isFinite(v) || v <= 0
+    ? '—'
+    : v >= 1 ? `${v.toFixed(1)} Hz` : `${(v * 1000).toFixed(0)} mHz`;
+  return (
+    <span className="chip mono">
+      <span className="k">HZ/PX</span>
+      <span className="v">{text}</span>
+    </span>
+  );
 }
 
 // QRZ XML gives us a sparser record than the design-time Contact type; fill
