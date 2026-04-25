@@ -170,6 +170,16 @@ public sealed class WdspDspEngine : IDspEngine
     // Tracked so SetTxMode can re-sign bandpass bounds (LSB family wants negative,
     // USB family positive) the same way RXA does through ApplyBandpassForMode.
     private RxaMode _txCurrentMode = RxaMode.USB;
+    // TwoTone arm-state cache. SetTwoTone records the operator-supplied freqs
+    // (positive Hz) here when arming; SetTxMode reads them back so a mid-test
+    // mode change re-asserts the sideband-correct signed freqs onto PostGen.
+    // gen.c xgen mode-1 emits e^(-jωt) — positive freq always lands LSB-side
+    // of carrier, so USB-family modes need a sign flip to put the tones inside
+    // the displayed bandpass. See gen.c:241-242 and Thetis setup.cs:11097-11101
+    // (chkInvertTones, gated behind a checkbox there; we auto-sign per mode).
+    private double _twoToneF1Hz;
+    private double _twoToneF2Hz;
+    private bool _twoToneArmed;
     // Latest per-stage TX peak meters, published atomically at the end of each
     // ProcessTxBlock. The reader (TxMetersService, 10 Hz during MOX) sees a
     // consistent snapshot without blocking the DSP thread. null until first TX
@@ -1132,6 +1142,24 @@ public sealed class WdspDspEngine : IDspEngine
             // TXA bandpass is now operator-controlled — DspPipelineService
             // asserts SetTxFilter after SetTxMode using the per-mode-family
             // memory in RadioService. No auto-apply here.
+            //
+            // TwoTone is sideband-sensitive (gen.c xgen mode-1 emits e^(-jωt)
+            // which always lands LSB-side of carrier). If a TwoTone test is
+            // mid-flight when the operator changes mode, re-assert PostGen
+            // freqs with the new sign so the tones stay inside the displayed
+            // bandpass. Mag and run flag stay as last set.
+            if (_twoToneArmed)
+            {
+                bool usbFamily = mapped == RxaMode.USB
+                              || mapped == RxaMode.CWU
+                              || mapped == RxaMode.DIGU;
+                double signedF1 = usbFamily ? -_twoToneF1Hz : _twoToneF1Hz;
+                double signedF2 = usbFamily ? -_twoToneF2Hz : _twoToneF2Hz;
+                NativeMethods.SetTXAPostGenTTFreq(txa, signedF1, signedF2);
+                _log.LogInformation(
+                    "wdsp.setTxMode twoTone re-signed f1={F1} f2={F2} signedF1={SF1} signedF2={SF2} mode={Mode}",
+                    _twoToneF1Hz, _twoToneF2Hz, signedF1, signedF2, mapped);
+            }
         }
         _log.LogInformation("wdsp.setTxMode mode={Mode}", mapped);
     }
@@ -1162,25 +1190,43 @@ public sealed class WdspDspEngine : IDspEngine
             if (_txaChannelId is not int txa) return;
             if (on)
             {
+                // gen.c xgen mode-1 emits e^(-jωt): positive freq lands on
+                // the LSB-side of carrier in any TX mode. USB-family modes
+                // need a sign flip so the tones appear above carrier inside
+                // the displayed bandpass. Cache the operator-supplied
+                // (unsigned) freqs so SetTxMode can re-assert with the
+                // correct sign on a mid-test mode change.
+                bool usbFamily = _txCurrentMode == RxaMode.USB
+                              || _txCurrentMode == RxaMode.CWU
+                              || _txCurrentMode == RxaMode.DIGU;
+                double signedF1 = usbFamily ? -freq1 : freq1;
+                double signedF2 = usbFamily ? -freq2 : freq2;
+                _twoToneF1Hz = freq1;
+                _twoToneF2Hz = freq2;
+                _twoToneArmed = true;
                 // PostGen mode=1 = two-tone summed (gen.c:221-241).
                 NativeMethods.SetTXAPostGenMode(txa, 1);
-                NativeMethods.SetTXAPostGenTTFreq(txa, freq1, freq2);
+                NativeMethods.SetTXAPostGenTTFreq(txa, signedF1, signedF2);
                 NativeMethods.SetTXAPostGenTTMag(txa, mag, mag);
                 NativeMethods.SetTXAPostGenRun(txa, 1);
                 // Same Leveler-off pattern SetTxTune uses; the test signal
                 // doesn't need voice-energy AGC and Leveler can pump on the
                 // discrete tones.
                 NativeMethods.SetTXALevelerSt(txa, 0);
+                _log.LogInformation(
+                    "wdsp.setTwoTone on=true f1={F1} f2={F2} signedF1={SF1} signedF2={SF2} mag={Mag:F3} mode={Mode}",
+                    freq1, freq2, signedF1, signedF2, mag, _txCurrentMode);
             }
             else
             {
+                _twoToneArmed = false;
                 NativeMethods.SetTXAPostGenRun(txa, 0);
                 NativeMethods.SetTXALevelerSt(txa, 1);
+                _log.LogInformation(
+                    "wdsp.setTwoTone on=false f1={F1} f2={F2} mag={Mag:F3}",
+                    freq1, freq2, mag);
             }
         }
-        _log.LogInformation(
-            "wdsp.setTwoTone on={On} f1={F1} f2={F2} mag={Mag:F3}",
-            on, freq1, freq2, mag);
     }
 
     public void SetPsHwPeak(double hwPeak)
