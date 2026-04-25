@@ -211,6 +211,10 @@ public sealed class WdspDspEngine : IDspEngine
     private const int PsFeedbackBlockSize = 1024;
     private readonly int[] _psInfoBuf = new int[16];
     private double _psMaxTxEnvelope;
+    // Bring-up diagnostic — emit info[] every Nth GetPsStageMeters tick so the
+    // calcc state machine is visible in the server log without flooding.
+    // Drop alongside the wdsp.psSeed log once PS is confirmed stable.
+    private int _psInfoLogCounter;
 
     public WdspDspEngine(ILogger<WdspDspEngine>? logger = null)
     {
@@ -906,6 +910,10 @@ public sealed class WdspDspEngine : IDspEngine
             NativeMethods.SetPSHWPeak(id, _psHwPeak);
             NativeMethods.SetPSControl(id, 1, 0, 0, 0);   // RESET state
             // SetPSRunCal stays 0 until the operator arms PS.
+            // Bring-up diagnostic — drop once PS is confirmed stable on rack.
+            _log.LogInformation(
+                "wdsp.psSeed pinMode=1 mapMode=1 ptol={Ptol} hwPeak={Peak:F4} feedbackRate=192000",
+                _psPtol ? 0.4 : 0.8, _psHwPeak);
 
             // TX panadapter analyzer — issue #81. Match the first RXA's pixel
             // width and zoom so the TX trace renders into the same widget
@@ -1386,6 +1394,20 @@ public sealed class WdspDspEngine : IDspEngine
         float depthDb = correcting
             ? (float)(20.0 * Math.Log10(Math.Max(feedback, 1e-3) / 256.0))
             : 0f;
+
+        // Bring-up diagnostic — log info[0..7] + correcting/state every Nth
+        // call so the calcc state machine progression is visible during a
+        // rack run. With TxMetersService running at ~10 Hz, N=50 ≈ 5 s.
+        // Drop once PS is confirmed working.
+        if (++_psInfoLogCounter % 50 == 0)
+        {
+            _log.LogDebug(
+                "wdsp.psInfo binfo=[{B0},{B1},{B2},{B3},{B4},{B5},{B6},{B7}] correcting={C} state={S}",
+                _psInfoBuf[0], _psInfoBuf[1], _psInfoBuf[2], _psInfoBuf[3],
+                _psInfoBuf[4], _psInfoBuf[5], _psInfoBuf[6], _psInfoBuf[7],
+                _psInfoBuf[14], _psInfoBuf[15]);
+        }
+
         return new PsStageMeters(
             FeedbackLevel: feedback,
             CalState: calState,
