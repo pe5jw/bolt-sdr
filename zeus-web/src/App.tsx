@@ -340,10 +340,12 @@ export default function App() {
     return () => window.removeEventListener('keydown', h);
   }, []);
 
-  // Hold-to-steer: while 'M' is down (outside a text field), the Leaflet map
-  // becomes interactive and the spectrum canvas stops intercepting events.
-  // Keyup — and a defensive blur/visibilitychange — release the modifier so
-  // you don't get stuck if focus leaves the window mid-press.
+  // Hold-to-steer: while Alt/Option is down (outside a text field), the
+  // Leaflet map becomes interactive and the spectrum canvas stops intercepting
+  // events. Pairs with the alt+wheel zoom and alt+drag pan in
+  // use-pan-tune-gesture. Keyup — and a defensive blur/visibilitychange —
+  // release the modifier so you don't get stuck if focus leaves the window
+  // mid-press.
   useEffect(() => {
     const inField = (t: EventTarget | null) =>
       t instanceof HTMLInputElement ||
@@ -351,12 +353,12 @@ export default function App() {
       (t instanceof HTMLElement && t.isContentEditable);
     const onDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
-      if ((e.key === 'm' || e.key === 'M') && !inField(e.target)) {
+      if (e.key === 'Alt' && !inField(e.target)) {
         setMapModifier(true);
       }
     };
     const onUp = (e: KeyboardEvent) => {
-      if (e.key === 'm' || e.key === 'M') setMapModifier(false);
+      if (e.key === 'Alt') setMapModifier(false);
     };
     const release = () => setMapModifier(false);
     window.addEventListener('keydown', onDown);
@@ -739,10 +741,10 @@ export default function App() {
             {terminatorActive && mapAvailable && (
               <span
                 className={`chip mono ${mapInteractive ? 'accent' : ''}`}
-                title="Hold M to pan/zoom the map (click-to-tune paused)"
+                title="Hold ⌥ (Alt) to zoom and pan the map (click-to-tune paused)"
               >
-                <span className="k">M</span>
-                <span className="v">{mapInteractive ? 'MAP' : 'hold'}</span>
+                <span className="k">⌥</span>
+                <span className="v">+ −</span>
               </span>
             )}
             <HzPerPixelChip />

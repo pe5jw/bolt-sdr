@@ -143,10 +143,10 @@ export function HeroPanel() {
         {terminatorActive && mapAvailable && (
           <span
             className={`chip mono ${mapInteractive ? 'accent' : ''}`}
-            title="Hold M to pan/zoom the map (click-to-tune paused)"
+            title="Hold ⌥ (Alt) to zoom and pan the map (click-to-tune paused)"
           >
-            <span className="k">M</span>
-            <span className="v">{mapInteractive ? 'MAP' : 'hold'}</span>
+            <span className="k">⌥</span>
+            <span className="v">+ −</span>
           </span>
         )}
         <span className="chip mono">
