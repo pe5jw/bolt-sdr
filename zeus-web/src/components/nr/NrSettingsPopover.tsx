@@ -25,7 +25,6 @@ import {
   NR4_DEFAULTS,
   setNr2Post2,
   setNr4,
-  type NrConfigDto,
   type RadioStateDto,
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
@@ -326,30 +325,3 @@ function NumericRow({ id, label, value, step, min, max, onChange }: NumericRowPr
   );
 }
 
-// Helper for the "no tunables" stub above. Kept exported for any future
-// caller that wants to render the current persisted values without the
-// popover wrapper.
-export function nrConfigHasOverrides(nr: NrConfigDto, mode: NrPopoverMode): boolean {
-  switch (mode) {
-    case 'Anr':
-      return false;
-    case 'Emnr':
-      return (
-        nr.emnrPost2Run != null
-        || nr.emnrPost2Factor != null
-        || nr.emnrPost2Nlevel != null
-        || nr.emnrPost2Rate != null
-        || nr.emnrPost2Taper != null
-      );
-    case 'Sbnr':
-      return (
-        nr.nr4ReductionAmount != null
-        || nr.nr4SmoothingFactor != null
-        || nr.nr4WhiteningFactor != null
-        || nr.nr4NoiseRescale != null
-        || nr.nr4PostFilterThreshold != null
-        || nr.nr4NoiseScalingType != null
-        || nr.nr4Position != null
-      );
-  }
-}
