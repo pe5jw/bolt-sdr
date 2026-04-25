@@ -97,6 +97,7 @@ export function ConnectPanel() {
   const inflight = useConnectionStore((s) => s.inflight);
   const setInflight = useConnectionStore((s) => s.setInflight);
   const setBoardId = useConnectionStore((s) => s.setBoardId);
+  const setConnectedProtocol = useConnectionStore((s) => s.setConnectedProtocol);
   const lastConnectedEndpoint = useConnectionStore(
     (s) => s.lastConnectedEndpoint,
   );
@@ -202,6 +203,7 @@ export function ConnectPanel() {
           applyState(next);
         }
         setBoardId(r.boardId || null);
+        setConnectedProtocol(isP2 ? 'P2' : 'P1');
         setLastConnectedEndpoint(ep || null);
         applyPostConnectEffects();
       } catch (err) {
@@ -210,7 +212,7 @@ export function ConnectPanel() {
         setInflight(false);
       }
     },
-    [applyState, setBoardId, setInflight, setLastConnectedEndpoint],
+    [applyState, setBoardId, setConnectedProtocol, setInflight, setLastConnectedEndpoint],
   );
 
   const handleManualConnect = useCallback(
@@ -245,6 +247,7 @@ export function ConnectPanel() {
           applyState(next);
         }
         setBoardId(null);
+        setConnectedProtocol(protocol);
         setLastConnectedEndpoint(ep);
         applyPostConnectEffects();
         if (manualSave || override) {
@@ -259,8 +262,8 @@ export function ConnectPanel() {
     },
     [
       manualIp, manualPort, manualProtocol, manualSampleRate,
-      manualSave, applyState, setBoardId, setInflight, setLastConnectedEndpoint,
-      saveEndpoint, setManualFormDefaults,
+      manualSave, applyState, setBoardId, setConnectedProtocol, setInflight,
+      setLastConnectedEndpoint, saveEndpoint, setManualFormDefaults,
     ],
   );
 
@@ -274,13 +277,14 @@ export function ConnectPanel() {
       const fresh = await fetchState();
       applyState(fresh);
       setBoardId(null);
+      setConnectedProtocol(null);
       setRadios(null);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
       setInflight(false);
     }
-  }, [applyState, setBoardId, setInflight]);
+  }, [applyState, setBoardId, setConnectedProtocol, setInflight]);
 
   const handleRetry = useCallback(() => {
     setError(null);

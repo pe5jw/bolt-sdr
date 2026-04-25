@@ -860,6 +860,98 @@ export async function setLevelerMaxGain(
   }
 }
 
+// PureSignal master arm + cal-mode. POST /api/tx/ps. Backend swaps the engine
+// state machine (SetPSRunCal, SetPSControl) and toggles the radio-side
+// feedback wire bits. Returns the updated StateDto.
+export async function setPs(
+  req: { enabled: boolean; auto: boolean; single: boolean },
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/ps',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+      signal,
+    },
+    (raw) => raw as RadioStateDto,
+  );
+}
+
+// PureSignal advanced settings. Nullable fields = partial update so the
+// settings panel doesn't have to round-trip every value.
+export async function setPsAdvanced(
+  req: {
+    ptol?: boolean;
+    autoAttenuate?: boolean;
+    moxDelaySec?: number;
+    loopDelaySec?: number;
+    ampDelayNs?: number;
+    hwPeak?: number;
+    intsSpiPreset?: string;
+  },
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/ps/advanced',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+      signal,
+    },
+    (raw) => raw as RadioStateDto,
+  );
+}
+
+export async function resetPs(signal?: AbortSignal): Promise<void> {
+  await jsonFetch('/api/tx/ps/reset', { method: 'POST', signal }, () => null);
+}
+
+export async function savePs(filename: string, signal?: AbortSignal): Promise<void> {
+  await jsonFetch(
+    '/api/tx/ps/save',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ filename }),
+      signal,
+    },
+    () => null,
+  );
+}
+
+export async function restorePs(filename: string, signal?: AbortSignal): Promise<void> {
+  await jsonFetch(
+    '/api/tx/ps/restore',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ filename }),
+      signal,
+    },
+    () => null,
+  );
+}
+
+// Two-tone test generator. Protocol-agnostic — works on both P1 and P2.
+export async function setTwoTone(
+  req: { enabled: boolean; freq1?: number; freq2?: number; mag?: number },
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/twotone',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+      signal,
+    },
+    (raw) => raw as RadioStateDto,
+  );
+}
+
 // Mic-gain endpoint: POST /api/mic-gain { db }. Returns { micGainDb }.
 // Backend may not have landed the handler yet — a 404 is downgraded to a
 // silent warnOnce so the console doesn't fill with noise during the
