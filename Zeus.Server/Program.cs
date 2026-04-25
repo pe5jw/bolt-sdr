@@ -118,6 +118,11 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<TxMetersService>()
 // TxTuneDriver pumps silent mic blocks through WDSP TXA while TUN is on so
 // the post-gen tone actually reaches the ring (no mic uplink during TUN).
 builder.Services.AddHostedService<TxTuneDriver>();
+// PS auto-attenuate timer2code-equivalent: ramps the radio's TX step
+// attenuator (Protocol2 only today) when calcc feedback level lands outside
+// the 128..181 ideal window, so PS has a recovery path on first arm. Idle
+// when PS is off or AutoAttenuate is off — no wire, no engine pokes.
+builder.Services.AddHostedService<PsAutoAttenuateService>();
 
 // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
 // hung login surfaces quickly in the UI.

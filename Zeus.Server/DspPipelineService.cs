@@ -193,6 +193,13 @@ public class DspPipelineService : BackgroundService
         get { lock (_engineLock) return _engine; }
     }
 
+    /// <summary>Snapshot of the active Protocol2 client, or null on P1 / no
+    /// connection. Exposed for the PS auto-attenuate service which needs to
+    /// call <c>SetTxAttenuationDb</c> on the same client this pipeline is
+    /// driving. Non-virtual — auto-attenuate is hard-gated on a P2 connection
+    /// and tests don't exercise it.</summary>
+    public Zeus.Protocol2.Protocol2Client? CurrentP2Client => _p2Client;
+
     private void OpenSynthetic()
     {
         var engine = new SyntheticDspEngine();

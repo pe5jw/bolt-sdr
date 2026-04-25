@@ -85,6 +85,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // needed via the UI. Attenuator 0 dB so the front-end isn't knocked down.
     private bool _preampOn;
     private byte _rxStepAttnDb;
+    // TX step attenuator (0..31 dB) — Thetis network.c:1238-1242 writes the
+    // same value to bytes 57/58/59 of CmdTx (one per ADC tap). The PS
+    // auto-attenuate loop adjusts this when info[4] feedback level lands
+    // outside the 128..181 ideal window so calcc has a chance to converge.
+    // Default 0 matches the radio's power-on state and pihpsdr's untouched
+    // baseline.
+    private byte _txStepAttnDb;
     // PA settings — pushed from RadioService when PaSettingsStore changes or
     // the VFO crosses a band edge. _paEnabled is the global toggle that lands
     // in CmdGeneral[58]; _driveByte is the pre-calibrated drive level for
@@ -590,7 +597,30 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         WriteBeU32(p, 0, _seqCmdTx++);
         p[4] = 1;                 // num_dac
         WriteBeU16(p, 14, _sampleRateKhz);
+        // TX step attenuator — Thetis network.c:1238-1242 writes the same
+        // value into bytes 57 (ADC2), 58 (ADC1), 59 (ADC0). 0..31 dB.
+        // Drives the PS auto-attenuate loop's recovery path when feedback
+        // level lands outside the 128..181 ideal window.
+        p[57] = _txStepAttnDb;
+        p[58] = _txStepAttnDb;
+        p[59] = _txStepAttnDb;
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1026));
+    }
+
+    /// <summary>
+    /// Set the TX step attenuator (0..31 dB) and re-emit the CmdTx packet
+    /// so the radio honours the new value on the next transmit cycle. Bytes
+    /// 57/58/59 — Thetis network.c:1238-1242. Used by the PS auto-attenuate
+    /// loop to ramp feedback level into the 128..181 window when calcc
+    /// rejects fits because the loopback is too hot or too quiet.
+    /// </summary>
+    public void SetTxAttenuationDb(byte db)
+    {
+        if (db > 31) db = 31;
+        if (_txStepAttnDb == db) return;
+        _txStepAttnDb = db;
+        if (_rxTask is not null) SendCmdTx();
+        _log.LogInformation("p2.txAttn db={Db}", db);
     }
 
     private void SendCmdHighPriority(bool run)
