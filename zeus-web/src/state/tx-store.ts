@@ -71,6 +71,8 @@ export type TxMeters = {
 
 export enum AlertKind {
   SwrTrip = 0,
+  TxTimeout = 1,
+  OutOfBand = 2,
 }
 
 export type Alert = {

@@ -41,6 +41,7 @@ import { getAudioClient } from '../audio/audio-client';
 import { useConnectionStore, type WisdomPhase } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
 import { useTxStore } from '../state/tx-store';
+import { useBandPlanStore } from '../state/bandPlan';
 import { warnOnce } from '../util/logger';
 
 const INITIAL_BACKOFF_MS = 1000;
@@ -74,6 +75,10 @@ export const MSG_TYPE_ALERT = 0x13;
 // Operator-visible in the transport bar chip with 50/55 °C warning zones.
 export const MSG_TYPE_PA_TEMP = 0x17;
 const PA_TEMP_BYTES = 1 + 4;
+
+// Band plan changed: 1 type byte + UTF-8 region ID. Server emits when region
+// changes or plan is edited. Client refetches /api/bands/current.
+export const MSG_TYPE_BAND_PLAN_CHANGED = 0x18;
 
 // WDSP wisdom status: 1 type byte + 1 phase byte (0=idle, 1=building, 2=ready).
 // Pushed once on WS attach and again on every transition. The UI disables the
@@ -263,6 +268,10 @@ export function startRealtime(path = '/ws'): () => void {
           const msgBytes = new Uint8Array(ev.data, 2);
           const message = new TextDecoder('utf-8').decode(msgBytes);
           useTxStore.getState().setAlert({ kind, message });
+          return;
+        }
+        if (peekType === MSG_TYPE_BAND_PLAN_CHANGED) {
+          void useBandPlanStore.getState().refresh();
           return;
         }
         warnOnce(

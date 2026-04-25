@@ -130,6 +130,10 @@ builder.Services.AddSingleton<PaSettingsStore>();
 builder.Services.AddSingleton<FilterPresetStore>();
 builder.Services.AddSingleton<QrzService>();
 builder.Services.AddSingleton<LogService>();
+builder.Services.AddSingleton<BandPlanStore>();
+builder.Services.AddSingleton<BandPrefsStore>();
+builder.Services.AddSingleton<BandPlanService>();
+builder.Services.AddSingleton<IBandPlanService>(sp => sp.GetRequiredService<BandPlanService>());
 
 // rotctld (hamlib rotator daemon) client. BackgroundService with persistent
 // TCP and reconnect-on-failure. Singleton so config/state survive across
@@ -181,7 +185,68 @@ var log = app.Services.GetRequiredService<ILogger<Program>>();
     wisdom.PhaseChanged += phase => hub.Broadcast(new WisdomStatusFrame(phase));
 }
 
+// Wire band plan service → hub: every region change or plan edit fires 0x18.
+{
+    var bandPlan = app.Services.GetRequiredService<BandPlanService>();
+    var hub = app.Services.GetRequiredService<StreamingHub>();
+    bandPlan.PlanChanged += () => hub.BroadcastBandPlanChanged(bandPlan.CurrentRegion.Id);
+}
+
 app.MapGet("/api/state", (RadioService r) => r.Snapshot());
+
+// Band plan API ---------------------------------------------------------------
+
+app.MapGet("/api/bands/regions", (BandPlanStore store) =>
+    Results.Ok(store.Regions));
+
+app.MapGet("/api/bands/plan", (string? region, BandPlanService svc) =>
+{
+    var regionId = region ?? svc.CurrentRegion.Id;
+    var plan = svc.ResolvePlan(regionId);
+    return Results.Ok(new BandPlanDto(regionId, plan));
+});
+
+app.MapGet("/api/bands/current", (BandPlanService svc) =>
+    Results.Ok(new
+    {
+        regionId = svc.CurrentRegion.Id,
+        region = svc.CurrentRegion,
+        segments = svc.CurrentPlan,
+        txGuardIgnore = svc.TxGuardIgnore,
+    }));
+
+app.MapPost("/api/bands/current", (BandPlanCurrentSetRequest req, BandPlanService svc) =>
+{
+    svc.SetRegion(req.RegionId);
+    return Results.Ok(new { regionId = svc.CurrentRegion.Id });
+});
+
+app.MapPut("/api/bands/plan", (BandPlanSaveRequest req, BandPlanService svc) =>
+{
+    try
+    {
+        svc.SavePlan(req.RegionId, req.Segments);
+        return Results.Ok(new { regionId = req.RegionId, saved = req.Segments.Count });
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapDelete("/api/bands/plan/{regionId}", (string regionId, BandPlanService svc) =>
+{
+    svc.ResetPlan(regionId);
+    return Results.Ok(new { regionId, reset = true });
+});
+
+app.MapPost("/api/bands/guard", (BandGuardSetRequest req, BandPlanService svc) =>
+{
+    svc.SetTxGuardIgnore(req.Ignore);
+    return Results.Ok(new { txGuardIgnore = req.Ignore });
+});
+
+// ---------------------------------------------------------------------------
 
 // TX diagnostic — exposes the producer/consumer counts for the mic-to-IQ ring
 // so we can verify end-to-end wiring without relying on logging. Safe to leave

@@ -15,12 +15,14 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { PaSettingsPanel } from './PaSettingsPanel';
+import { BandPlanEditor } from './bandplan/BandPlanEditor';
 import { usePaStore } from '../state/pa-store';
 
-type TabId = 'pa';
+type TabId = 'pa' | 'bandplan';
 
 const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'pa', label: 'PA SETTINGS' },
+  { id: 'bandplan', label: 'BAND PLAN' },
 ];
 
 type Props = {
@@ -269,12 +271,16 @@ export function SettingsMenu({ open, onClose }: Props) {
             background: 'var(--bg-1)',
             color: 'var(--fg-1)',
             fontSize: 12,
+            display: 'flex',
+            flexDirection: 'column',
           }}
         >
-          <PaSettingsPanel />
+          {active === 'pa' && <PaSettingsPanel />}
+          {active === 'bandplan' && <BandPlanEditor />}
         </div>
       </div>
 
+      {active === 'pa' && (
       <div
         style={{
           display: 'flex',
@@ -298,6 +304,7 @@ export function SettingsMenu({ open, onClose }: Props) {
           {paInflight ? 'SAVING…' : 'APPLY'}
         </button>
       </div>
+      )}
     </div>
   );
 }

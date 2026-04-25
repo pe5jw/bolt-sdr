@@ -90,6 +90,7 @@ import { useLoggerStore } from './state/logger-store';
 import { useTxStore } from './state/tx-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
+import { BandPlanProvider } from './context/BandPlanContext';
 import type L from 'leaflet';
 import type { QrzStation } from './api/qrz';
 import type { Contact } from './components/design/data';
@@ -522,6 +523,7 @@ export default function App() {
   ]);
 
   return (
+    <BandPlanProvider>
     <WorkspaceContext.Provider value={workspaceCtx}>
     <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
     <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
@@ -946,6 +948,7 @@ export default function App() {
     </div>
     </SpectrumWheelActionsContext.Provider>
     </WorkspaceContext.Provider>
+    </BandPlanProvider>
   );
 }
 

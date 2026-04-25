@@ -277,6 +277,20 @@ public sealed class StreamingHub
         }
     }
 
+    /// <summary>
+    /// Broadcasts a BandPlanChanged (0x18) notification. Payload: type byte +
+    /// UTF-8 region ID. Clients refetch /api/bands/current on receipt.
+    /// </summary>
+    public void BroadcastBandPlanChanged(string regionId)
+    {
+        if (_clients.IsEmpty) return;
+        var regionBytes = System.Text.Encoding.UTF8.GetBytes(regionId);
+        var payload = new byte[1 + regionBytes.Length];
+        payload[0] = (byte)MsgType.BandPlanChanged;
+        regionBytes.CopyTo(payload, 1);
+        foreach (var client in _clients.Values) client.TryEnqueue(payload);
+    }
+
     private sealed class ClientSession
     {
         public Guid Id { get; }
