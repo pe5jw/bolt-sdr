@@ -3,6 +3,11 @@ name: Build Native WDSP Libraries
 on:
   workflow_dispatch:
   push:
+    # Branch scope (not tags): tag pushes don't honor `paths` filters reliably
+    # — a brand-new tag has no "before" SHA, so every path looks like it just
+    # appeared and the filter matches everything. Restricting to branches
+    # keeps tag pushes (e.g. v0.1.0) out of this workflow entirely.
+    branches: [main, develop]
     paths:
       - 'native/**'
       - '.github/workflows/build-native-libs.yml'
