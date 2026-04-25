@@ -62,6 +62,13 @@ public sealed class TxService
     public bool IsMoxOn { get { lock (_sync) return _moxOn; } }
     public bool IsTunOn { get { lock (_sync) return _tunOn; } }
 
+    // TwoTone latch — independent of MOX/TUN. Set by RadioService.SetTwoTone
+    // on every state mutation. TxTuneDriver polls it so the WDSP TXA pump
+    // runs even when no mic uplink is feeding fexchange2 (PostGen mode=1
+    // injects the two-tone excitation regardless of mic input).
+    public bool IsTwoToneOn { get; private set; }
+    internal void SetTwoToneOn(bool on) { IsTwoToneOn = on; }
+
     public DateTime? MoxStartedAt { get { lock (_sync) return _moxStartedAt; } }
     public DateTime? TunStartedAt { get { lock (_sync) return _tunStartedAt; } }
 

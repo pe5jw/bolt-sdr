@@ -539,7 +539,7 @@ app.MapPost("/api/tx/tune-drive", (TuneDriveSetRequest req, RadioService r) =>
 
 // Two-tone test generator (TXA PostGen mode=1). Protocol-agnostic — works
 // on both P1 and P2 because it only touches WDSP TXA, not the wire format.
-app.MapPost("/api/tx/twotone", (TwoToneSetRequest req, RadioService r) =>
+app.MapPost("/api/tx/twotone", (TwoToneSetRequest req, RadioService r, TxService tx) =>
 {
     log.LogInformation(
         "api.tx.twotone enabled={On} f1={F1} f2={F2} mag={Mag}",
@@ -550,7 +550,13 @@ app.MapPost("/api/tx/twotone", (TwoToneSetRequest req, RadioService r) =>
         return Results.BadRequest(new { error = "freq1 must be 50..5000 Hz" });
     if (req.Freq2 is double f2 && (f2 < 50.0 || f2 > 5000.0 || double.IsNaN(f2)))
         return Results.BadRequest(new { error = "freq2 must be 50..5000 Hz" });
-    return Results.Ok(r.SetTwoTone(req));
+    var snap = r.SetTwoTone(req);
+    // Latch into TxService so TxTuneDriver pumps WDSP fexchange2 while
+    // TwoTone is armed even when the mic ingest pump is idle (no MOX/no
+    // mic uplink). Without this latch, PostGen mode=1 has nothing to
+    // shove its excitation into and the radio sees zero IQ.
+    tx.SetTwoToneOn(req.Enabled);
+    return Results.Ok(snap);
 });
 
 // PureSignal master arm + cal-mode. P1 is gated off in the frontend in v1
