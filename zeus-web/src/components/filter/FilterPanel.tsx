@@ -5,50 +5,46 @@
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 //
 // Unified filter panel with favorites. Shows 3 favorite filter presets plus
-// a "..." button to open the full preset selector modal where favorites can
-// be configured.
+// a "..." button that drops down the existing FilterRibbon (full presets +
+// mini-pan + readouts) for the operator to pick from or edit favorites.
 
 import { useCallback, useEffect, useState } from 'react';
 import { useConnectionStore } from '../../state/connection-store';
-import { setFilter, getFilterPresets, getFavoriteFilterSlots, type FilterPresetDto } from '../../api/client';
-import { formatFilterWidth, formatCutOffset } from './filterPresets';
-import { FilterPresetSelector } from './FilterPresetSelector';
+import {
+  setFilter,
+  setFilterAdvancedPaneOpen,
+  getFilterPresets,
+  type FilterPresetDto,
+} from '../../api/client';
+import { useFilterFavoritesStore, useFavoritesForMode } from '../../state/filter-favorites-store';
+
+const RIBBON_OPEN_KEY = 'zeus.filter.advancedPaneOpen';
 
 export function FilterPanel() {
   const mode = useConnectionStore((s) => s.mode);
-  const filterLow = useConnectionStore((s) => s.filterLowHz);
-  const filterHigh = useConnectionStore((s) => s.filterHighHz);
   const filterPresetName = useConnectionStore((s) => s.filterPresetName);
+  const ribbonOpen = useConnectionStore((s) => s.filterAdvancedPaneOpen);
   const applyState = useConnectionStore((s) => s.applyState);
+  const loadFavorites = useFilterFavoritesStore((s) => s.load);
+  const favoriteSlotNames = useFavoritesForMode(mode);
 
-  const [favoritePresets, setFavoritePresets] = useState<FilterPresetDto[]>([]);
-  const [selectorOpen, setSelectorOpen] = useState(false);
+  const [presets, setPresets] = useState<FilterPresetDto[]>([]);
 
-  // Load favorite presets when mode changes
+  useEffect(() => { void loadFavorites(mode); }, [mode, loadFavorites]);
+
   useEffect(() => {
     let cancelled = false;
-
-    Promise.all([
-      getFilterPresets(mode),
-      getFavoriteFilterSlots(mode),
-    ])
-      .then(([allPresets, favoriteSlots]) => {
-        if (!cancelled) {
-          // Filter to only favorites
-          const favorites = allPresets.filter((p) => favoriteSlots.includes(p.slotName));
-          setFavoritePresets(favorites);
-        }
-      })
-      .catch(() => {
-        // Fallback to empty on error
-        if (!cancelled) setFavoritePresets([]);
-      });
-
+    getFilterPresets(mode)
+      .then((list) => { if (!cancelled) setPresets(list); })
+      .catch(() => { if (!cancelled) setPresets([]); });
     return () => { cancelled = true; };
   }, [mode]);
 
+  const favoritePresets: FilterPresetDto[] = favoriteSlotNames
+    .map((name) => presets.find((p) => p.slotName === name))
+    .filter((p): p is FilterPresetDto => Boolean(p));
+
   const activeSlot = filterPresetName ?? null;
-  const widthLabel = formatFilterWidth(filterLow, filterHigh);
 
   const selectPreset = useCallback(
     (slot: FilterPresetDto) => {
@@ -64,55 +60,41 @@ export function FilterPanel() {
     [applyState],
   );
 
-  // FM has no presets — hide filter panel entirely
+  const toggleRibbon = useCallback(() => {
+    const next = !ribbonOpen;
+    useConnectionStore.setState({ filterAdvancedPaneOpen: next });
+    try { window.localStorage.setItem(RIBBON_OPEN_KEY, next ? '1' : '0'); } catch { /* ok */ }
+    setFilterAdvancedPaneOpen(next).catch(() => { /* next state poll reconciles */ });
+  }, [ribbonOpen]);
+
   if (mode === 'FM') return null;
 
   return (
-    <>
-      <div className="ctrl-group filter-bar" style={{ minWidth: 400 }}>
-        <div className="label-xs ctrl-lbl">FILTER</div>
-        <div className="filter-bar__readout" role="group" aria-label="Filter edges and width">
-          <div className="filter-bar__cell filter-bar__cell--lo">
-            <div className="filter-bar__key">LOW CUT</div>
-            <div className="filter-bar__val mono">{formatCutOffset(filterLow)}</div>
-          </div>
-          <div className="filter-bar__cell filter-bar__cell--width">
-            <div className="filter-bar__key">WIDTH</div>
-            <div className="filter-bar__val filter-bar__val--accent mono">{widthLabel}</div>
-          </div>
-          <div className="filter-bar__cell filter-bar__cell--hi">
-            <div className="filter-bar__key">HIGH CUT</div>
-            <div className="filter-bar__val mono">{formatCutOffset(filterHigh)}</div>
-          </div>
-        </div>
-        <div className="btn-row wrap" style={{ gap: 3, width: 400 }}>
-          {favoritePresets.map((slot) => (
-            <button
-              key={slot.slotName}
-              type="button"
-              onClick={() => selectPreset(slot)}
-              className={`btn sm ${activeSlot === slot.slotName ? 'active' : ''}`}
-              title={`${slot.slotName}: ${slot.lowHz >= 0 ? '+' : ''}${slot.lowHz} / ${slot.highHz >= 0 ? '+' : ''}${slot.highHz} Hz`}
-            >
-              {slot.label}
-            </button>
-          ))}
+    <div className="ctrl-group filter-bar" style={{ minWidth: 220 }}>
+      <div className="label-xs ctrl-lbl">FILTER</div>
+      <div className="btn-row wrap" style={{ gap: 3 }}>
+        {favoritePresets.map((slot) => (
           <button
+            key={slot.slotName}
             type="button"
-            onClick={() => setSelectorOpen(true)}
-            className="btn sm"
-            title="Show all filter presets"
-            style={{ marginLeft: 4 }}
+            onClick={() => selectPreset(slot)}
+            className={`btn sm ${activeSlot === slot.slotName ? 'active' : ''}`}
+            title={`${slot.slotName}: ${slot.lowHz >= 0 ? '+' : ''}${slot.lowHz} / ${slot.highHz >= 0 ? '+' : ''}${slot.highHz} Hz`}
           >
-            ⋯
+            {slot.label}
           </button>
-        </div>
+        ))}
+        <button
+          type="button"
+          onClick={toggleRibbon}
+          className={`btn sm ${ribbonOpen ? 'active' : ''}`}
+          title="Open filter panel"
+          aria-expanded={ribbonOpen}
+          style={{ marginLeft: 4 }}
+        >
+          ⋯
+        </button>
       </div>
-
-      <FilterPresetSelector
-        isOpen={selectorOpen}
-        onClose={() => setSelectorOpen(false)}
-      />
-    </>
+    </div>
   );
 }
