@@ -41,10 +41,8 @@ const CAL_STATE_NAMES = [
  * PureSignal + Two-tone control surface. Lives inside the Settings modal
  * (SettingsMenu) and as a standalone dockable panel (PsFlexPanel).
  *
- * Visual style note: amber #FFA028 with alpha for state per project
- * convention (CLAUDE.md). Sliders + form controls are unstyled here so
- * the global CSS variables drive them — keeps the panel coherent with
- * other settings tabs.
+ * Uses the same neutral fg/accent tokens as the other settings tabs;
+ * amber is reserved for the panadapter trace per CLAUDE.md.
  */
 export function PsSettingsPanel() {
   const protocol = useConnectionStore((s) => s.connectedProtocol);
@@ -180,10 +178,10 @@ export function PsSettingsPanel() {
         <div
           style={{
             padding: 10,
-            border: '1px solid rgba(255, 160, 40, 0.4)',
+            border: '1px solid var(--panel-border)',
             borderRadius: 6,
-            background: 'rgba(255, 160, 40, 0.06)',
-            color: '#FFA028',
+            background: 'var(--bg-1)',
+            color: 'var(--fg-2)',
             fontSize: 11,
           }}
         >
@@ -304,7 +302,7 @@ export function PsSettingsPanel() {
               disabled={p1Disabled}
               style={{ marginRight: 4 }}
             />
-            <span style={{ fontSize: 11, color: '#FFA028' }}>Internal coupler</span>
+            <span style={{ fontSize: 11, color: 'var(--fg-1)' }}>Internal coupler</span>
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center' }}>
             <input
@@ -316,7 +314,7 @@ export function PsSettingsPanel() {
               disabled={p1Disabled}
               style={{ marginRight: 4 }}
             />
-            <span style={{ fontSize: 11, color: '#FFA028' }}>External (Bypass)</span>
+            <span style={{ fontSize: 11, color: 'var(--fg-1)' }}>External (Bypass)</span>
           </label>
         </Row>
         <Row label="HW peak">
@@ -365,18 +363,18 @@ export function PsSettingsPanel() {
       <Section title="Read-out">
         <Row label="Feedback">
           <Bar value={feedbackBar} />
-          <span style={{ fontSize: 11, color: '#FFA028', marginLeft: 8 }}>
+          <span style={{ fontSize: 11, color: 'var(--fg-2)', marginLeft: 8 }}>
             {psFeedbackLevel.toFixed(0)} / 256
           </span>
         </Row>
         <Row label="Cal state">
-          <span style={{ fontSize: 11, color: '#FFA028' }}>
+          <span style={{ fontSize: 11, color: 'var(--fg-1)' }}>
             {calStateLabel}
             {psCorrecting ? ' · correcting' : ''}
           </span>
         </Row>
         <Row label="Correction">
-          <span style={{ fontSize: 11, color: '#FFA028' }}>
+          <span style={{ fontSize: 11, color: 'var(--fg-1)' }}>
             {psCorrecting ? `${psCorrectionDb.toFixed(1)} dB` : '—'}
           </span>
         </Row>
@@ -450,7 +448,7 @@ function Section({
           fontWeight: 700,
           letterSpacing: '0.12em',
           textTransform: 'uppercase',
-          color: '#FFA028',
+          color: 'var(--fg-1)',
         }}
       >
         {title}
@@ -527,7 +525,7 @@ function Bar({ value }: { value: number }) {
       style={{
         width: 140,
         height: 8,
-        background: 'rgba(255, 160, 40, 0.12)',
+        background: 'var(--accent-soft)',
         borderRadius: 2,
         overflow: 'hidden',
       }}
@@ -536,7 +534,7 @@ function Bar({ value }: { value: number }) {
         style={{
           width: `${pct}%`,
           height: '100%',
-          background: '#FFA028',
+          background: 'var(--accent)',
           transition: 'width 80ms linear',
         }}
       />
