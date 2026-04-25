@@ -13,10 +13,10 @@ public sealed class DspSettingsStore : IDisposable
     private readonly ILiteCollection<DspSettingsEntry> _entries;
     private readonly ILogger<DspSettingsStore> _log;
 
-    public DspSettingsStore(ILogger<DspSettingsStore> log)
+    public DspSettingsStore(ILogger<DspSettingsStore> log, string? dbPathOverride = null)
     {
         _log = log;
-        var dbPath = GetDatabasePath();
+        var dbPath = dbPathOverride ?? GetDatabasePath();
 
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))

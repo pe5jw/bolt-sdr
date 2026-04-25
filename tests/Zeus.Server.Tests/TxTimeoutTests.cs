@@ -47,13 +47,23 @@ namespace Zeus.Server.Tests;
 /// Drives the <see cref="TxMetersService.EvaluateTimeoutTrip(DateTime)"/> seam
 /// with synthetic timestamps so the tests don't wait 2 minutes of wall-clock.
 /// </summary>
-public class TxTimeoutTests
+public class TxTimeoutTests : IDisposable
 {
-    private static TxMetersService BuildService(out TxService tx)
+    // Per-fixture temp DBs — see ZoomValidationTests for the rationale.
+    private readonly string _dbPath =
+        Path.Combine(Path.GetTempPath(), $"zeus-prefs-txtimeout-{Guid.NewGuid():N}.db");
+
+    public void Dispose()
+    {
+        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { }
+        try { if (File.Exists(_dbPath + ".pa")) File.Delete(_dbPath + ".pa"); } catch { }
+    }
+
+    private TxMetersService BuildService(out TxService tx)
     {
         var loggerFactory = NullLoggerFactory.Instance;
-        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
-        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance);
+        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath);
+        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath + ".pa");
         var radio = new RadioService(loggerFactory, dspStore, paStore);
         var hub = new StreamingHub(new NullLogger<StreamingHub>());
         var pipeline = new DspPipelineService(radio, hub, loggerFactory);

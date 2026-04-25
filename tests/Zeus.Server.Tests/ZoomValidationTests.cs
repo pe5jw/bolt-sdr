@@ -47,12 +47,26 @@ namespace Zeus.Server.Tests;
 /// bouncing against the next state-poll. Service must accept the full
 /// DSP-engine range (1..16) and reject anything outside it.
 /// </summary>
-public class ZoomValidationTests
+public class ZoomValidationTests : IDisposable
 {
-    private static RadioService BuildRadio()
+    // Per-fixture temp DBs so xUnit class-level parallelism can't collide on
+    // the shared zeus-prefs.db (Linux: ~/.local/share/Zeus/zeus-prefs.db).
+    // Without this, parallel construction of LiteDB instances against the
+    // same file races the BsonMapper and intermittently fails LINQ
+    // expression compilation with "Member X not found on BsonMapper".
+    private readonly string _dbPath =
+        Path.Combine(Path.GetTempPath(), $"zeus-prefs-zoom-{Guid.NewGuid():N}.db");
+
+    public void Dispose()
     {
-        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
-        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance);
+        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { }
+        try { if (File.Exists(_dbPath + ".pa")) File.Delete(_dbPath + ".pa"); } catch { }
+    }
+
+    private RadioService BuildRadio()
+    {
+        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath);
+        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath + ".pa");
         return new RadioService(NullLoggerFactory.Instance, dspStore, paStore);
     }
 

@@ -51,9 +51,19 @@ namespace Zeus.Server.Tests;
 /// exercised directly via the internal <c>EvaluateSwrTrip(swr, now)</c>
 /// seam so tests can drive synthetic timestamps without wall-clock delays.
 /// </summary>
-public class TxMetersSwrTripTests
+public class TxMetersSwrTripTests : IDisposable
 {
     private static readonly RadioCalibration Cal = RadioCalibration.HermesLite2;
+
+    // Per-fixture temp DBs — see ZoomValidationTests for the rationale.
+    private readonly string _dbPath =
+        Path.Combine(Path.GetTempPath(), $"zeus-prefs-swrtrip-{Guid.NewGuid():N}.db");
+
+    public void Dispose()
+    {
+        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { }
+        try { if (File.Exists(_dbPath + ".pa")) File.Delete(_dbPath + ".pa"); } catch { }
+    }
 
     // Helper: compute ADC value that yields a specific SWR when FWD = 3 W.
     // SWR = (1 + rho) / (1 - rho) where rho = sqrt(P_ref / P_fwd).
@@ -74,11 +84,11 @@ public class TxMetersSwrTripTests
         return (ushort)Math.Clamp(adc, 0, 4095);
     }
 
-    private static TxMetersService BuildService(out TxService tx, out StreamingHub hub)
+    private TxMetersService BuildService(out TxService tx, out StreamingHub hub)
     {
         var loggerFactory = NullLoggerFactory.Instance;
-        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
-        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance);
+        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath);
+        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath + ".pa");
         var radio = new RadioService(loggerFactory, dspStore, paStore);
         hub = new StreamingHub(new NullLogger<StreamingHub>());
         var pipeline = new DspPipelineService(radio, hub, loggerFactory);

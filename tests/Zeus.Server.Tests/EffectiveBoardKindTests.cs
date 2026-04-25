@@ -32,15 +32,19 @@ public class EffectiveBoardKindTests : IDisposable
     {
         try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { }
         try { if (File.Exists(_dbPath + ".pa")) File.Delete(_dbPath + ".pa"); } catch { }
+        try { if (File.Exists(_dbPath + ".dsp")) File.Delete(_dbPath + ".dsp"); } catch { }
     }
 
-    // Isolated PA store so tests stay hermetic against the prod zeus-prefs.db.
+    // Isolated stores so tests stay hermetic against the prod zeus-prefs.db.
     private PaSettingsStore NewPaStore() =>
         new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath + ".pa");
 
+    private DspSettingsStore NewDspStore() =>
+        new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath + ".dsp");
+
     private RadioService BuildRadio(PreferredRadioStore prefs)
     {
-        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
+        var dspStore = NewDspStore();
         var paStore = NewPaStore();
         return new RadioService(NullLoggerFactory.Instance, dspStore, paStore, preferredRadioStore: prefs);
     }
@@ -91,7 +95,7 @@ public class EffectiveBoardKindTests : IDisposable
         // RadioService is constructed without the preferred-radio store
         // in older callers; EffectiveBoardKind must degrade to
         // ConnectedBoardKind rather than NRE.
-        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
+        var dspStore = NewDspStore();
         var paStore = NewPaStore();
         using var radio = new RadioService(NullLoggerFactory.Instance, dspStore, paStore);
 

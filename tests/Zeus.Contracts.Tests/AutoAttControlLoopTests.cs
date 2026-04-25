@@ -48,12 +48,22 @@ namespace Zeus.Contracts.Tests;
 /// timestamps so we can verify throttling, ramp-up, decay, and the red-lamp
 /// counter without spinning up a Protocol1Client.
 /// </summary>
-public class AutoAttControlLoopTests
+public class AutoAttControlLoopTests : IDisposable
 {
-    private static RadioService MakeService()
+    // Per-fixture temp DBs — see ZoomValidationTests for the rationale.
+    private readonly string _dbPath =
+        Path.Combine(Path.GetTempPath(), $"zeus-prefs-autoatt-{Guid.NewGuid():N}.db");
+
+    public void Dispose()
     {
-        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
-        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance);
+        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { }
+        try { if (File.Exists(_dbPath + ".pa")) File.Delete(_dbPath + ".pa"); } catch { }
+    }
+
+    private RadioService MakeService()
+    {
+        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath);
+        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath + ".pa");
         return new(NullLoggerFactory.Instance, dspStore, paStore);
     }
 
