@@ -35,6 +35,48 @@ long-running project a lot of the DSP heritage traces back to.
   The experience isn't ideal yet and will improve over time.
 - **Radio discovery** on the LAN (Protocol-1 + Protocol-2 broadcast, in parallel)
 
+## Feature tour
+
+Live RX from a Hermes Lite 2 on 20 m, captured through Zeus today
+(2026-04-25):
+
+![Zeus on 20 m, panadapter and waterfall](docs/pics/screenshots/zeus-connected-panadapter.png)
+
+What's visible above:
+
+- **Panadapter** (top half, amber `#FFA028` trace) — live spectrum across
+  ~14.115–14.295 MHz with a half-dozen SSB carriers picked out as peaks.
+  Click anywhere on it to tune; scroll to step the VFO in 500 Hz increments.
+- **Waterfall** (lower half, blue palette) — scrolling history of the same
+  spectrum. The colour palette is selectable (`Blue / Inferno / Viridis`)
+  and the dB range is fixed in this shot.
+- **Top bar** — `RADIO 192.168.100.21:1024 · Disconnect`, rotator status,
+  QRZ engage button, MENU. The VFO A readout (`14.200`) and
+  `MODE / BAND / AGC-T / BW / TX RX` chips are always visible.
+- **Control strip** — modes (LSB/USB/CW/AM/SAM/DSB/FM/DIGL/DIGU),
+  bandwidth presets, custom filter Hz inputs, the FILTER bank, the BAND
+  buttons, FRONT-END (PRE / Auto-attenuator slider), AGC-T slider and
+  AF gain.
+- **Right column** — frequency display (`14.200.000` MHz, click to type,
+  scroll on a digit to step), S-meter showing live `-97 dBm` / S5,
+  great-circle compass, DSP panel (NB / NR / ANF / SNB / NBP) and TX
+  filter / leveler controls.
+- **Bottom row** — Logbook, TX stage meters (idle here — ALC, MIC, EQ,
+  LVLR, CFC, COMP, ALC, ALC GR, OUT), and a transport bar with MOX,
+  TUNE, audio mute, mic level, SPLIT, RIT, SAVE MEM, and PA-temp /
+  link-state chips.
+
+Engage QRZ on a logged contact and the panadapter background swaps in a
+**great-circle world map** centred on your station, with the contact's
+operator portrait pinned over their grid:
+
+![Zeus great-circle map overlay with QRZ portrait](docs/pics/screenshots/zeus-connected-with-map.png)
+
+The amber trace and waterfall stay live on top of the map so you can
+keep watching the band while the geography of the QSO is in front of
+you. The map is interactive — hold **⌥ (Alt)** to zoom and pan; the
+panadapter click-to-tune is paused while you're navigating the map.
+
 ## Download
 
 Grab the latest installer from the **[Releases page](https://github.com/brianbruff/openhpsdr-zeus/releases/latest)**.
