@@ -32,17 +32,27 @@ namespace Zeus.Dsp;
 /// <param name="MaxTxEnvelope"><c>GetPSMaxTX</c> — peak TX envelope
 /// magnitude since the last reset. Used by auto-attenuate to know when to
 /// step the attenuator down.</param>
+/// <param name="CalibrationAttempts">info[5] — cumulative count of completed
+/// calibration fits (calc() invocations that produced a result, regardless
+/// of whether scheck accepted them). Thetis <c>PSForm.cs:1097-1099</c>
+/// gates AutoAttenuate's <c>timer2code</c> on this counter incrementing
+/// (<c>CalibrationAttemptsChanged</c>) — only step the attenuator after
+/// calcc has finished a fit, otherwise the loop changes the envelope mid-
+/// calc and cm jumps trigger info[6]=0x40 (cm changed too much) every
+/// iteration, forcing perpetual LRESET.</param>
 public readonly record struct PsStageMeters(
     float FeedbackLevel,
     byte CalState,
     bool Correcting,
     float CorrectionDb,
-    float MaxTxEnvelope)
+    float MaxTxEnvelope,
+    int CalibrationAttempts)
 {
     public static readonly PsStageMeters Silent = new(
         FeedbackLevel: 0f,
         CalState: 0,
         Correcting: false,
         CorrectionDb: 0f,
-        MaxTxEnvelope: 0f);
+        MaxTxEnvelope: 0f,
+        CalibrationAttempts: 0);
 }

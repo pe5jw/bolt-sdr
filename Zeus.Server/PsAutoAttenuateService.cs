@@ -69,6 +69,22 @@ public sealed class PsAutoAttenuateService : BackgroundService
     private int _currentAttnDb;
     private bool _psWasEnabled;
 
+    // Last-observed info[5] (calcc CalibrationAttempts counter). We only
+    // step the attenuator after calcc finishes a NEW fit — matches Thetis
+    // PSForm.cs:1097-1099 timer2code which gates on
+    // `CalibrationAttemptsChanged`. Stepping on every 100 ms tick instead
+    // makes cm jump mid-fit, scheck flags 0x40, scOK=0, bs_count==2 forces
+    // LRESET, and calcc never converges. Initialize to -1 so the first
+    // observed counter (0 or any value) registers as "new".
+    private int _lastCalibrationAttempts = -1;
+
+    // Rate-limit bucket for diagnostic gate-skip logging. Tick1 runs at 10 Hz;
+    // without rate-limiting a stuck gate would emit 10 lines/sec. 1 s bucket
+    // gives one line per gate-state per second — enough to localise the
+    // failing gate during a 5 s rack key without flooding the log.
+    private long _lastGateLogTickMs;
+    private const long GateLogIntervalMs = 1000;
+
     public PsAutoAttenuateService(
         RadioService radio,
         TxService tx,
@@ -107,6 +123,19 @@ public sealed class PsAutoAttenuateService : BackgroundService
         }
     }
 
+    // Diagnostic — emits one line per second tagging which gate short-
+    // circuited Tick1. Without this the loop is invisible when it returns
+    // early (the only visible signals were `psAutoAttn.armed` and
+    // `psAutoAttn.step`, neither of which fire when a gate fails). Used to
+    // localise the silent-gate symptom on the G2 MkII rack test.
+    private void LogGate(string outcome)
+    {
+        long now = Environment.TickCount64;
+        if (now - _lastGateLogTickMs < GateLogIntervalMs) return;
+        _lastGateLogTickMs = now;
+        _log.LogInformation("psAutoAttn.gate {Outcome}", outcome);
+    }
+
     private void Tick1()
     {
         var s = _radio.Snapshot();
@@ -118,32 +147,48 @@ public sealed class PsAutoAttenuateService : BackgroundService
         if (s.PsEnabled && !_psWasEnabled)
         {
             _currentAttnDb = 0;
+            _lastCalibrationAttempts = -1;
             _log.LogInformation("psAutoAttn.armed reset attn={Db}", _currentAttnDb);
         }
         _psWasEnabled = s.PsEnabled;
 
         // Idle conditions — no telemetry to act on.
-        if (!s.PsEnabled) return;
-        if (!s.PsAutoAttenuate) return;
-        if (!_tx.IsMoxOn && !_tx.IsTwoToneOn) return;
+        if (!s.PsEnabled) { LogGate("skip=PsEnabled-off"); return; }
+        if (!s.PsAutoAttenuate) { LogGate("skip=AutoAttenuate-off"); return; }
+        if (!_tx.IsMoxOn && !_tx.IsTwoToneOn) { LogGate("skip=not-keyed"); return; }
 
         var p2 = _pipe.CurrentP2Client;
-        if (p2 is null) return;     // P1 not yet wired
+        if (p2 is null) { LogGate("skip=p2-null"); return; }
 
         var engine = _pipe.CurrentEngine;
-        if (engine is null) return;
+        if (engine is null) { LogGate("skip=engine-null"); return; }
 
         var psm = engine.GetPsStageMeters();
         int feedback = (int)Math.Round(psm.FeedbackLevel);
 
+        // Thetis-canonical CalibrationAttemptsChanged gate (PSForm.cs:
+        // 1097-1099). info[5] increments on every completed calc(). We
+        // only step the attenuator after a NEW fit, otherwise the loop
+        // changes the envelope mid-fit, cm coefficients jump, scheck
+        // flags 0x40 (cm changed too much), scOK=0, bs_count==2 forces
+        // LRESET, and the state machine spins without ever converging.
+        // First-tick guard: only skip when we have an old value to
+        // compare against AND the counter hasn't moved.
+        if (_lastCalibrationAttempts >= 0 && psm.CalibrationAttempts == _lastCalibrationAttempts)
+        {
+            LogGate($"skip=no-new-calc info5={psm.CalibrationAttempts} fb={feedback}");
+            return;
+        }
+        _lastCalibrationAttempts = psm.CalibrationAttempts;
+
         // info[4] = 0 means calcc hasn't completed a fit yet (state machine
         // is still pre-LCALC). No reading to act on.
-        if (feedback <= 0) return;
+        if (feedback <= 0) { LogGate($"skip=fb-zero psm.fb={psm.FeedbackLevel:F2}"); return; }
         // Already in window — nothing to do.
-        if (feedback >= FeedbackLowThreshold && feedback <= FeedbackHighThreshold) return;
+        if (feedback >= FeedbackLowThreshold && feedback <= FeedbackHighThreshold) { LogGate($"skip=in-window fb={feedback}"); return; }
         // Too quiet AND we're already at zero attenuation — operator must
         // raise drive (Thetis behaviour: timer2code falls through silently).
-        if (feedback < FeedbackLowThreshold && _currentAttnDb <= TxAttnMinDb) return;
+        if (feedback < FeedbackLowThreshold && _currentAttnDb <= TxAttnMinDb) { LogGate($"skip=too-quiet-at-zero fb={feedback}"); return; }
 
         // Compute target step. Thetis PSForm.cs:745:
         //     ddB = 20 * log10(feedback / 152.293)
@@ -157,8 +202,8 @@ public sealed class PsAutoAttenuateService : BackgroundService
         if (newAttn == _currentAttnDb) return;
 
         _log.LogInformation(
-            "psAutoAttn.step feedback={Fb} ddB={DDb:F1} attn {Old}->{New} dB",
-            feedback, ddB, _currentAttnDb, newAttn);
+            "psAutoAttn.step feedback={Fb} info5={Cal} ddB={DDb:F1} attn {Old}->{New} dB",
+            feedback, psm.CalibrationAttempts, ddB, _currentAttnDb, newAttn);
 
         _currentAttnDb = newAttn;
         p2.SetTxAttenuationDb((byte)newAttn);

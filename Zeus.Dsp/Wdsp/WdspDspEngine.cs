@@ -1438,6 +1438,7 @@ public sealed class WdspDspEngine : IDspEngine
         byte calState;
         bool correcting;
         double maxTx;
+        int calibrationAttempts;
         lock (_psLock)
         {
             unsafe
@@ -1450,6 +1451,7 @@ public sealed class WdspDspEngine : IDspEngine
             feedbackRaw = _psInfoBuf[4];
             correcting = _psInfoBuf[14] != 0;
             calState = (byte)Math.Clamp(_psInfoBuf[15], 0, 255);
+            calibrationAttempts = _psInfoBuf[5];
             NativeMethods.GetPSMaxTX(id, out maxTx);
             _psMaxTxEnvelope = maxTx;
         }
@@ -1497,7 +1499,8 @@ public sealed class WdspDspEngine : IDspEngine
             CalState: calState,
             Correcting: correcting,
             CorrectionDb: depthDb,
-            MaxTxEnvelope: (float)maxTx);
+            MaxTxEnvelope: (float)maxTx,
+            CalibrationAttempts: calibrationAttempts);
     }
 
     public void ResetPs()
@@ -1508,9 +1511,21 @@ public sealed class WdspDspEngine : IDspEngine
         if (txa is not int id) return;
         lock (_psLock)
         {
+            // Two-phase reset+restore — matches Thetis PSForm.cs:760-783
+            // (timer2code Monitor → SetNewValues → RestoreOperation) and
+            // pihpsdr's tx_ps_reset → tx_ps_resume pattern (transmitter.c
+            // :2478-2502). Phase 1 clears calcc to LRESET with mancal/
+            // automode zeroed (drops any in-flight fit). Phase 2 restores
+            // the saved Auto/Single mode so calcc autorestarts. Without
+            // phase 2, automode stays 0 and calcc parks at LRESET forever
+            // — which on a Patch-A-gated AutoAttenuate loop means info[5]
+            // never increments past 1 and the loop stalls after one step.
             NativeMethods.SetPSControl(id, 1, 0, 0, 0);
+            int mancal = _psSingle ? 1 : 0;
+            int automode = (_psAuto && !_psSingle) ? 1 : 0;
+            NativeMethods.SetPSControl(id, 0, mancal, automode, 0);
         }
-        _log.LogInformation("wdsp.resetPs");
+        _log.LogInformation("wdsp.resetPs auto={Auto} single={Single}", _psAuto, _psSingle);
     }
 
     public void SavePsCorrection(string path)
