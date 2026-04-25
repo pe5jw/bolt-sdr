@@ -905,6 +905,28 @@ export async function setPsAdvanced(
   );
 }
 
+// PureSignal feedback antenna source. Internal coupler vs External
+// (Bypass). Server enum is 0 (Internal) / 1 (External); the wire DTO
+// uses 'Internal' / 'External' string serialization through System.Text.Json
+// default StringEnumConverter setup.
+export async function setPsFeedbackSource(
+  source: 'internal' | 'external',
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/ps/feedback-source',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        source: source === 'external' ? 'External' : 'Internal',
+      }),
+      signal,
+    },
+    (raw) => raw as RadioStateDto,
+  );
+}
+
 export async function resetPs(signal?: AbortSignal): Promise<void> {
   await jsonFetch('/api/tx/ps/reset', { method: 'POST', signal }, () => null);
 }

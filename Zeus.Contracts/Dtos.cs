@@ -42,6 +42,13 @@ public enum RxMode : byte
     LSB, USB, CWL, CWU, AM, FM, SAM, DSB, DIGL, DIGU,
 }
 
+// PureSignal feedback antenna source. On G2/MkII the wire-format diff
+// between Internal coupler and External (Bypass) is exactly one bit
+// (ALEX_RX_ANTENNA_BYPASS = 0x00000800) in alex0 when xmit && PS armed.
+// pihpsdr's three-way Internal/Ext1/Bypass collapses to two on the wire
+// for this hardware, so Zeus exposes a two-way selector.
+public enum PsFeedbackSource : byte { Internal = 0, External = 1 }
+
 public enum ConnectionStatus { Disconnected, Connecting, Connected, Error }
 
 // Thetis NR-button state: Off = no spectral NR, Anr = NR1 (time-domain LMS),
@@ -129,6 +136,7 @@ public sealed record StateDto(
     // RadioService HW-peak switch overrides on the first ConnectAsync /
     // ConnectP2Async. See PLAN section 7 / hermes.md §7.1.
     double PsHwPeak = 0.4072,
+    PsFeedbackSource PsFeedbackSource = PsFeedbackSource.Internal,
     string PsIntsSpiPreset = "16/256",
     double PsFeedbackLevel = 0.0,   // info[4] read-back, 0..256
     byte PsCalState = 0,            // info[15] enum
@@ -286,6 +294,11 @@ public sealed record PsResetRequest();
 public sealed record PsSaveRequest(string Filename);
 
 public sealed record PsRestoreRequest(string Filename);
+
+// Feedback antenna selector — Internal coupler vs External (Bypass).
+// Sent from the PS settings panel. Affects only the radio-side ALEX bit;
+// the WDSP cal/iqc stages operate on whatever IQ arrives at DDC0/DDC1.
+public sealed record PsFeedbackSourceSetRequest(PsFeedbackSource Source);
 
 // Two-tone test generator (used as PS calibration excitation but works
 // standalone too). Protocol-agnostic.

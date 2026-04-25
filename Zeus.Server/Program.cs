@@ -586,6 +586,17 @@ app.MapPost("/api/tx/ps/advanced", (PsAdvancedSetRequest req, RadioService r) =>
     return Results.Ok(r.SetPsAdvanced(req));
 });
 
+// PS feedback antenna selector. Internal coupler vs External (Bypass).
+// On G2/MkII this flips ALEX_RX_ANTENNA_BYPASS in alex0 during xmit + PS
+// armed. WDSP cal/iqc are unaffected — same DDC0/DDC1 paired feed either
+// way; only the radio routes a different physical signal into DDC0.
+app.MapPost("/api/tx/ps/feedback-source",
+    (PsFeedbackSourceSetRequest req, RadioService r) =>
+{
+    log.LogInformation("api.tx.ps.feedbackSource source={Source}", req.Source);
+    return Results.Ok(r.SetPsFeedbackSource(req));
+});
+
 app.MapPost("/api/tx/ps/reset", (DspPipelineService pipe) =>
 {
     log.LogInformation("api.tx.ps.reset");

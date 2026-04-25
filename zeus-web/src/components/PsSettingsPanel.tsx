@@ -17,6 +17,7 @@ import { useCallback } from 'react';
 import {
   setPs,
   setPsAdvanced,
+  setPsFeedbackSource,
   resetPs,
   setTwoTone,
 } from '../api/client';
@@ -59,6 +60,7 @@ export function PsSettingsPanel() {
   const psAmpDelayNs = useTxStore((s) => s.psAmpDelayNs);
   const psHwPeak = useTxStore((s) => s.psHwPeak);
   const psIntsSpiPreset = useTxStore((s) => s.psIntsSpiPreset);
+  const psFeedbackSourceState = useTxStore((s) => s.psFeedbackSource);
   const psFeedbackLevel = useTxStore((s) => s.psFeedbackLevel);
   const psCalState = useTxStore((s) => s.psCalState);
   const psCorrecting = useTxStore((s) => s.psCorrecting);
@@ -72,6 +74,7 @@ export function PsSettingsPanel() {
   const setPsAmpDelayNs = useTxStore((s) => s.setPsAmpDelayNs);
   const setPsHwPeak = useTxStore((s) => s.setPsHwPeak);
   const setPsIntsSpiPreset = useTxStore((s) => s.setPsIntsSpiPreset);
+  const setPsFeedbackSourceLocal = useTxStore((s) => s.setPsFeedbackSource);
 
   const twoToneOn = useTxStore((s) => s.twoToneOn);
   const twoToneFreq1 = useTxStore((s) => s.twoToneFreq1);
@@ -110,6 +113,18 @@ export function PsSettingsPanel() {
   const onReset = useCallback(() => {
     resetPs().catch(() => {});
   }, []);
+
+  // Feedback antenna source — Internal coupler vs External (Bypass).
+  // Optimistic local set + POST. Rolls back on POST failure so the radio's
+  // alex bit and the UI stay in sync.
+  const onFeedbackSourceChange = useCallback(
+    (next: 'internal' | 'external') => {
+      const prev = psFeedbackSourceState;
+      setPsFeedbackSourceLocal(next);
+      setPsFeedbackSource(next).catch(() => setPsFeedbackSourceLocal(prev));
+    },
+    [psFeedbackSourceState, setPsFeedbackSourceLocal],
+  );
 
   const onTwoToneToggle = useCallback(() => {
     const next = !twoToneOn;
@@ -264,6 +279,40 @@ export function PsSettingsPanel() {
 
       {/* Hardware */}
       <Section title="Hardware">
+        <Row label="Feedback source">
+          {/* Two-way selector: Internal coupler (default) or External
+              (Bypass). On G2/MkII this flips ALEX_RX_ANTENNA_BYPASS in
+              alex0 during xmit + PS armed. WDSP cal/iqc are unaffected;
+              the HW-peak slider below stays shared across sources to
+              match pihpsdr/Thetis. Disabled on P1 because P1 PS isn't
+              wired through yet. */}
+          <label
+            style={{ display: 'inline-flex', alignItems: 'center', marginRight: 12 }}
+          >
+            <input
+              type="radio"
+              name="psFeedbackSource"
+              value="internal"
+              checked={psFeedbackSourceState === 'internal'}
+              onChange={() => onFeedbackSourceChange('internal')}
+              disabled={p1Disabled}
+              style={{ marginRight: 4 }}
+            />
+            <span style={{ fontSize: 11, color: '#FFA028' }}>Internal coupler</span>
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center' }}>
+            <input
+              type="radio"
+              name="psFeedbackSource"
+              value="external"
+              checked={psFeedbackSourceState === 'external'}
+              onChange={() => onFeedbackSourceChange('external')}
+              disabled={p1Disabled}
+              style={{ marginRight: 4 }}
+            />
+            <span style={{ fontSize: 11, color: '#FFA028' }}>External (Bypass)</span>
+          </label>
+        </Row>
         <Row label="HW peak">
           <NumberInput
             value={psHwPeak}

@@ -186,6 +186,7 @@ public sealed class RadioService : IDisposable
             PsMoxDelaySec: ps?.MoxDelaySec ?? 0.2,
             PsLoopDelaySec: ps?.LoopDelaySec ?? 0.0,
             PsAmpDelayNs: ps?.AmpDelayNs ?? 150.0,
+            PsFeedbackSource: ps?.Source ?? PsFeedbackSource.Internal,
             PsIntsSpiPreset: ps?.IntsSpiPreset ?? "16/256");
     }
 
@@ -738,6 +739,34 @@ public sealed class RadioService : IDisposable
             LoopDelaySec = snap.PsLoopDelaySec,
             AmpDelayNs = snap.PsAmpDelayNs,
             IntsSpiPreset = snap.PsIntsSpiPreset,
+            Source = snap.PsFeedbackSource,
+        });
+        return snap;
+    }
+
+    /// <summary>
+    /// Choose Internal vs External feedback antenna for PureSignal.
+    /// Mutates StateDto; DspPipelineService.OnRadioStateChanged forwards
+    /// the bool into the active Protocol2Client where it flips one alex0
+    /// bit on the next CmdHighPriority. WDSP cal/iqc are unaffected — the
+    /// HW-Peak slider stays shared across sources (matches pihpsdr/Thetis).
+    /// </summary>
+    public StateDto SetPsFeedbackSource(PsFeedbackSourceSetRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+        Mutate(s => s with { PsFeedbackSource = req.Source });
+        var snap = Snapshot();
+        // Persist alongside the other PS tuning so it survives a restart.
+        _psStore?.Upsert(new PsSettingsEntry
+        {
+            Auto = snap.PsAuto,
+            Ptol = snap.PsPtol,
+            AutoAttenuate = snap.PsAutoAttenuate,
+            MoxDelaySec = snap.PsMoxDelaySec,
+            LoopDelaySec = snap.PsLoopDelaySec,
+            AmpDelayNs = snap.PsAmpDelayNs,
+            IntsSpiPreset = snap.PsIntsSpiPreset,
+            Source = snap.PsFeedbackSource,
         });
         return snap;
     }

@@ -182,6 +182,12 @@ export type TxState = {
   setPsHwPeak: (p: number) => void;
   psIntsSpiPreset: string;
   setPsIntsSpiPreset: (p: string) => void;
+  // Feedback antenna source — Internal coupler (default) or External
+  // (Bypass). On G2/MkII this flips one ALEX bit; WDSP cal/iqc are
+  // unaffected. The HW-Peak slider stays shared across sources to match
+  // pihpsdr/Thetis behaviour.
+  psFeedbackSource: 'internal' | 'external';
+  setPsFeedbackSource: (s: 'internal' | 'external') => void;
   // Live readout pushed via MsgType.PsMeters (0x18) at 10 Hz when armed.
   psFeedbackLevel: number;
   psCorrectionDb: number;
@@ -298,6 +304,8 @@ export const useTxStore = create<TxState>()(
       setPsHwPeak: (p) => set({ psHwPeak: p }),
       psIntsSpiPreset: '16/256',
       setPsIntsSpiPreset: (p) => set({ psIntsSpiPreset: p }),
+      psFeedbackSource: 'internal',
+      setPsFeedbackSource: (s) => set({ psFeedbackSource: s }),
       psFeedbackLevel: 0,
       psCorrectionDb: 0,
       psCalState: 0,
@@ -340,6 +348,7 @@ export const useTxStore = create<TxState>()(
         psAmpDelayNs: s.psAmpDelayNs,
         psHwPeak: s.psHwPeak,
         psIntsSpiPreset: s.psIntsSpiPreset,
+        psFeedbackSource: s.psFeedbackSource,
         twoToneFreq1: s.twoToneFreq1,
         twoToneFreq2: s.twoToneFreq2,
         twoToneMag: s.twoToneMag,

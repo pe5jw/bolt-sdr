@@ -14,6 +14,7 @@
 // statement and per-component attribution.
 
 using LiteDB;
+using Zeus.Contracts;
 
 namespace Zeus.Server;
 
@@ -92,5 +93,9 @@ public sealed class PsSettingsEntry
     public double LoopDelaySec { get; set; } = 0.0;
     public double AmpDelayNs { get; set; } = 150.0;
     public string IntsSpiPreset { get; set; } = "16/256";
+    // Feedback antenna source — Internal coupler (default) or External
+    // (Bypass). Persisted so an operator who runs an external sniffer
+    // doesn't have to re-pick it every session.
+    public PsFeedbackSource Source { get; set; } = PsFeedbackSource.Internal;
     public DateTime UpdatedUtc { get; set; }
 }

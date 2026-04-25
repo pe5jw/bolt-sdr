@@ -143,6 +143,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // to single-DDC packets and the standard RX demuxer takes over.
     // Volatile because RxLoop reads it across threads.
     private volatile bool _psFeedbackEnabled;
+    // PS feedback source — false=Internal coupler (default), true=External
+    // (Bypass). When externally bypassing, alex0 gains ALEX_RX_ANTENNA_BYPASS
+    // (bit 11) during xmit + PS armed. RxSpecific/TxSpecific are byte-
+    // identical between sources — only this one alex0 bit differs.
+    // Reference: pihpsdr new_protocol.c:1284-1296 alex0 bypass selection.
+    private volatile bool _psFeedbackExternal;
     private const int PsFeedbackBlockSize = 1024;
     private readonly Channel<PsFeedbackFrame> _psFeedbackFrames = Channel.CreateUnbounded<PsFeedbackFrame>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
@@ -339,6 +345,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             SendCmdRx();
             SendCmdHighPriority(run: true);
         }
+    }
+
+    /// <summary>
+    /// Choose between Internal feedback coupler and External (Bypass)
+    /// feedback antenna. Drives <c>ALEX_RX_ANTENNA_BYPASS</c> in alex0
+    /// during xmit + PS armed (pihpsdr new_protocol.c:1284-1296). No
+    /// effect on RxSpecific / TxSpecific buffers.
+    /// </summary>
+    public void SetPsFeedbackSource(bool external)
+    {
+        if (_psFeedbackExternal == external) return;
+        _psFeedbackExternal = external;
+        if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
     public ChannelReader<PsFeedbackFrame> PsFeedbackFrames => _psFeedbackFrames.Reader;
@@ -651,6 +670,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             alex1 |= AlexPsBit;
             if (xmit) alex0 |= AlexPsBit;
         }
+        // External (Bypass) feedback antenna — pihpsdr new_protocol.c:1284-
+        // 1296 ORs ALEX_RX_ANTENNA_BYPASS into alex0 only during xmit when
+        // PS is armed and the operator selected the external path. Internal
+        // coupler leaves this bit clear.
+        if (_psFeedbackEnabled && _psFeedbackExternal && xmit)
+        {
+            alex0 |= AlexRxAntennaBypass;
+        }
         WriteBeU32(p, 1428, alex1);
         WriteBeU32(p, 1432, alex0);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1027));
@@ -692,6 +719,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // PureSignal feedback-coupler enable. OR'd into alex1 always when PS is
     // armed and into alex0 during xmit (pihpsdr new_protocol.c:994-998).
     internal const uint AlexPsBit          = 0x00040000;
+    // PS External (Bypass) antenna select — pihpsdr new_protocol.c:1284-1296
+    // ORs ALEX_RX_ANTENNA_BYPASS into alex0 during xmit + PS armed when the
+    // operator picks the external feedback path. Internal coupler leaves
+    // this bit clear.
+    internal const uint AlexRxAntennaBypass = 0x00000800;
     // Alex1-only: grounds the RX input while keyed so the hot TX field doesn't
     // back-feed into the Mercury ADC (pihpsdr alex.h ANAN7000_RX_GNDonTX).
     private const uint ALEX1_ANAN7000_RX_GNDonTX = 0x00000100;

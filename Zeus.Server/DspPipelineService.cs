@@ -102,6 +102,7 @@ public class DspPipelineService : BackgroundService
     private double _appliedPsAmpDelayNs = 150.0;
     private double _appliedPsHwPeak = 0.4072;
     private string _appliedPsIntsSpiPreset = "16/256";
+    private PsFeedbackSource _appliedPsFeedbackSource = PsFeedbackSource.Internal;
     // TwoTone latched fields (protocol-agnostic, drives PostGen mode=1).
     private bool _appliedTwoToneEnabled;
     private double _appliedTwoToneFreq1 = 700.0;
@@ -380,6 +381,13 @@ public class DspPipelineService : BackgroundService
             // would arrive at the engine after PS shut down.
             if (!s.PsEnabled) DrainPsFeedback();
             _appliedPsEnabled = s.PsEnabled;
+        }
+        if (s.PsFeedbackSource != _appliedPsFeedbackSource)
+        {
+            // Wire-only change — flips ALEX_RX_ANTENNA_BYPASS in alex0 on
+            // the next CmdHighPriority emission. WDSP is unaffected.
+            _p2Client?.SetPsFeedbackSource(s.PsFeedbackSource == PsFeedbackSource.External);
+            _appliedPsFeedbackSource = s.PsFeedbackSource;
         }
     }
 
