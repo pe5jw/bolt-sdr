@@ -593,34 +593,59 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     private void SendCmdTx()
     {
-        var p = ComposeCmdTxBuffer(_seqCmdTx++, (ushort)_sampleRateKhz, _txStepAttnDb);
+        var p = ComposeCmdTxBuffer(_seqCmdTx++, (ushort)_sampleRateKhz, _txStepAttnDb, _paEnabled, _psFeedbackEnabled);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1026));
     }
 
     // Test-seamed Compose for the CmdTx (TxSpecific) packet. Layout per
-    // Thetis network.c (function specific_buffer / fillTxSpecificBuffer
-    // around line 1235) and pihpsdr new_protocol.c new_protocol_tx_specific:
+    // pihpsdr new_protocol.c new_protocol_tx_specific (1502-1594) and
+    // saturnmain.c::saturn_handle_duc_specific:
     //   bytes 0..3   : sequence (BE)
     //   byte  4      : num_dac (1 on G2)
-    //   bytes 14..15 : DAC sample rate kHz (BE)
-    //   byte  57     : ADC2 TX step attenuator (0..31 dB)
-    //   byte  58     : ADC1 TX step attenuator
-    //   byte  59     : ADC0 TX step attenuator
-    // Other bytes are zero on G2 — pihpsdr fills mic-source flags but the
-    // G2 ignores them.
-    internal static byte[] ComposeCmdTxBuffer(uint seq, ushort sampleRateKhz, byte txStepAttnDb)
+    //   bytes 14..15 : DAC sample rate kHz (BE) — Zeus-only; Saturn ignores
+    //   byte  57     : reserved on Saturn (FPGA does not read)
+    //   byte  58     : ADC1 TX step attenuator (TX-DAC reference loopback)
+    //   byte  59     : ADC0 TX step attenuator (PA-coupler feedback)
+    //
+    // pihpsdr's PA-protection / PS asymmetry (new_protocol.c:1540-1547):
+    //   if (xmit && pa_enabled) { p[58]=31; p[59]=31; }   // protect both ADCs
+    //   if (puresignal)         { p[59]=tx->attenuation; } // ONLY byte 59
+    //
+    // Byte 58 is NEVER overridden by PS — the TX-DAC reference ADC needs
+    // its own protection independent of where AutoAttenuate parks the
+    // PA-feedback ADC. If we let PS write to byte 58 too, the first
+    // attenuator step drops the loopback reference in lockstep with the
+    // feedback, leaving the gain ratio uncorrected and starving calcc.
+    //
+    // When PS is OFF we keep the historical Zeus shape (value across
+    // 57/58/59) — operator's normal voice TX has been validated working
+    // with that wire form on G2 MkII, so we don't ship a wire change
+    // beyond the PS-armed window in this patch.
+    internal static byte[] ComposeCmdTxBuffer(uint seq, ushort sampleRateKhz, byte txStepAttnDb, bool paEnabled, bool psEnabled)
     {
         var p = new byte[60];
         WriteBeU32(p, 0, seq);
         p[4] = 1;                 // num_dac
         WriteBeU16(p, 14, sampleRateKhz);
-        // TX step attenuator — Thetis network.c:1238-1242 writes the same
-        // value into bytes 57 (ADC2), 58 (ADC1), 59 (ADC0). 0..31 dB.
-        // Drives the PS auto-attenuate loop's recovery path when feedback
-        // level lands outside the 128..181 ideal window.
-        p[57] = txStepAttnDb;
-        p[58] = txStepAttnDb;
-        p[59] = txStepAttnDb;
+
+        if (psEnabled)
+        {
+            // PS-armed canonical pihpsdr shape: byte 58 holds PA-protection
+            // for the TX-DAC reference; byte 59 takes the dynamic step-att
+            // so calcc can read the post-PA envelope.
+            p[57] = 0;
+            p[58] = paEnabled ? (byte)31 : (byte)0;
+            p[59] = txStepAttnDb;
+        }
+        else
+        {
+            // Historical Zeus shape — preserved so normal voice TX wire
+            // form is unchanged. Revisit when bringing the full pihpsdr
+            // PA-protection invariant to non-PS TX.
+            p[57] = txStepAttnDb;
+            p[58] = txStepAttnDb;
+            p[59] = txStepAttnDb;
+        }
         return p;
     }
 

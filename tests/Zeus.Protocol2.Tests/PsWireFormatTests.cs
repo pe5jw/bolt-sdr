@@ -226,26 +226,58 @@ public class PsWireFormatTests
     }
 
     // ---- CmdTx (TxSpecific) — TX step attenuator wire support for PS
-    // AutoAttenuate. Thetis network.c:1238-1242 writes the same value into
-    // bytes 57/58/59 (ADC2/ADC1/ADC0). Without these PsAutoAttenuate has
-    // nowhere to land its dB ramp.
+    // AutoAttenuate. pihpsdr new_protocol.c:1540-1547 enforces an asymmetric
+    // PA-protection invariant: byte 58 (ADC1 / TX-DAC reference) MUST stay
+    // at 31 dB whenever PA is on, while byte 59 (ADC0 / PA-feedback) is the
+    // ONE byte PS overrides with the operator/auto-attenuator value. When
+    // PS is off Zeus preserves the historical wire shape that voice TX has
+    // been validated against.
 
     [Fact]
-    public void CmdTx_TxStepAttn_LandsInBytes57Through59()
+    public void CmdTx_PsOff_HistoricalShape_TxStepAttnLandsInAllThreeBytes()
     {
         var p = Protocol2Client.ComposeCmdTxBuffer(
-            seq: 1, sampleRateKhz: 48, txStepAttnDb: 17);
+            seq: 1, sampleRateKhz: 48, txStepAttnDb: 17, paEnabled: true, psEnabled: false);
 
+        // PS off: historical Zeus shape — value lands in 57/58/59 verbatim
+        // so normal voice TX wire form is unchanged from the prior release.
         Assert.Equal((byte)17, p[57]);
         Assert.Equal((byte)17, p[58]);
         Assert.Equal((byte)17, p[59]);
     }
 
     [Fact]
-    public void CmdTx_DefaultZeroAttn_LeavesBytes57Through59Clear()
+    public void CmdTx_PsOn_PaOn_PihpsdrAsymmetry_Byte58Stays31_Byte59TakesAttn()
     {
         var p = Protocol2Client.ComposeCmdTxBuffer(
-            seq: 0, sampleRateKhz: 48, txStepAttnDb: 0);
+            seq: 1, sampleRateKhz: 48, txStepAttnDb: 17, paEnabled: true, psEnabled: true);
+
+        // pihpsdr new_protocol.c:1540-1547: byte 58 = 31 (TX-DAC ref
+        // protection, never overridden by PS), byte 59 = operator step-att
+        // (PA-feedback ADC, the only byte PS owns). Byte 57 reserved → 0.
+        Assert.Equal((byte)0, p[57]);
+        Assert.Equal((byte)31, p[58]);
+        Assert.Equal((byte)17, p[59]);
+    }
+
+    [Fact]
+    public void CmdTx_PsOn_PaOff_Byte58Zero_Byte59TakesAttn()
+    {
+        var p = Protocol2Client.ComposeCmdTxBuffer(
+            seq: 1, sampleRateKhz: 48, txStepAttnDb: 17, paEnabled: false, psEnabled: true);
+
+        // PA off: nothing to protect, so byte 58 stays at 0. Byte 59 still
+        // carries the dynamic PS step-att.
+        Assert.Equal((byte)0, p[57]);
+        Assert.Equal((byte)0, p[58]);
+        Assert.Equal((byte)17, p[59]);
+    }
+
+    [Fact]
+    public void CmdTx_DefaultZeroAttn_PsOff_LeavesBytes57Through59Clear()
+    {
+        var p = Protocol2Client.ComposeCmdTxBuffer(
+            seq: 0, sampleRateKhz: 48, txStepAttnDb: 0, paEnabled: true, psEnabled: false);
 
         Assert.Equal((byte)0, p[57]);
         Assert.Equal((byte)0, p[58]);
@@ -256,7 +288,7 @@ public class PsWireFormatTests
     public void CmdTx_PreservesSequenceAndNumDac()
     {
         var p = Protocol2Client.ComposeCmdTxBuffer(
-            seq: 0xCAFEBABE, sampleRateKhz: 192, txStepAttnDb: 5);
+            seq: 0xCAFEBABE, sampleRateKhz: 192, txStepAttnDb: 5, paEnabled: false, psEnabled: false);
 
         // Sequence at byte 0 BE
         Assert.Equal((byte)0xCA, p[0]);
