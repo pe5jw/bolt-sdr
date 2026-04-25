@@ -21,6 +21,21 @@ const LAYOUT_PREF_KEY = 'zeus.layout.mode';
 
 function getStoredLayoutMode(): LayoutMode {
   try {
+    // Check for legacy query string ?layout=flex for backward compatibility
+    if (typeof window !== 'undefined') {
+      const queryLayout = new URLSearchParams(window.location.search).get('layout');
+      if (queryLayout === 'flex') {
+        // Migrate to localStorage preference and remove query param
+        window.localStorage.setItem(LAYOUT_PREF_KEY, 'flex');
+        // Remove query string by updating history without page reload
+        const url = new URL(window.location.href);
+        url.searchParams.delete('layout');
+        window.history.replaceState({}, '', url.toString());
+        return 'flex';
+      }
+    }
+
+    // Check localStorage for stored preference
     const stored = window.localStorage.getItem(LAYOUT_PREF_KEY);
     if (stored === 'flex') return 'flex';
     return 'default';
