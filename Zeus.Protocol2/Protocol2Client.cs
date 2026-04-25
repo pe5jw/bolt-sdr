@@ -517,43 +517,49 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1024));
     }
 
-    private void SendCmdRx()
+    // Static byte composer — pure function over (seq, numAdc, sampleRateKhz,
+    // psEnabled). Exposed internal so wire-format tests don't need a live
+    // socket. SendCmdRx constructs the same bytes and pushes to UDP.
+    internal static byte[] ComposeCmdRxBuffer(uint seq, byte numAdc, ushort sampleRateKhz, bool psEnabled)
     {
         var p = new byte[BufLen];
-        WriteBeU32(p, 0, _seqCmdRx++);
-        // Mirrors pihpsdr new_protocol_receive_specific for the MkII:
-        //   n_adc = 2 (G2 has two physical ADCs), DDC2 enabled by bit 2 in
-        //   the enable mask, and the DDC config block sits at 17 + 2*6 = 29.
-        //   DDC0/1 stay disabled by default — those slots are reserved by
-        //   the radio for the PureSignal / Diversity hardware pair.
-        p[4] = _numAdc;
+        WriteBeU32(p, 0, seq);
+        p[4] = numAdc;
         p[5] = 0;
         p[6] = 0;
         byte ddcEnable = (byte)(1 << G2RxDdc);
 
-        if (_psFeedbackEnabled)
+        if (psEnabled)
         {
-            // pihpsdr new_protocol.c:1611-1630 — when PS is armed, also turn
-            // on DDC0 and lock DDC1 to DDC0 (byte 1363 = 0x02). Both DDCs run
-            // at 192 kHz / 24-bit; DDC0 = TX-mod-IQ tap, DDC1 = feedback IQ.
             ddcEnable |= 0x01;
-            // DDC0 config: <- ADC0, 192 kHz, 24-bit
             p[17] = 0x00;
             WriteBeU16(p, 18, 192);
             p[22] = 24;
-            // DDC1 config: <- ADC <n_adc> (mirrors the PS pair), 192k, 24-bit
-            p[23] = _numAdc;
+            p[23] = numAdc;
             WriteBeU16(p, 24, 192);
             p[28] = 24;
-            // Sync DDC1→DDC0 (paired packet shape on UDP 1035).
             p[1363] = 0x02;
         }
 
         p[7] = ddcEnable;
         int off = 17 + G2RxDdc * 6;
-        p[off + 0] = 0x00;            // DDC2 <- ADC0
-        WriteBeU16(p, off + 1, _sampleRateKhz);
-        p[off + 5] = 24;              // bit depth
+        p[off + 0] = 0x00;
+        WriteBeU16(p, off + 1, sampleRateKhz);
+        p[off + 5] = 24;
+        return p;
+    }
+
+    private void SendCmdRx()
+    {
+        // Mirrors pihpsdr new_protocol_receive_specific for the MkII:
+        //   n_adc = G2 has two physical ADCs; DDC2 enabled by bit 2 in the
+        //   enable mask; the DDC config block sits at 17 + 2*6 = 29. DDC0/1
+        //   stay disabled by default — those slots are reserved by the radio
+        //   for the PureSignal / Diversity hardware pair. When PS is armed,
+        //   ComposeCmdRxBuffer also enables DDC0, configures DDC0/1 at
+        //   192 kHz / 24-bit, and sets byte 1363 = 0x02 to sync DDC1→DDC0
+        //   (pihpsdr new_protocol.c:1611-1630).
+        var p = ComposeCmdRxBuffer(_seqCmdRx++, _numAdc, (ushort)_sampleRateKhz, _psFeedbackEnabled);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1025));
     }
 
@@ -683,7 +689,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private const uint ALEX_TX_RELAY       = 0x08000000;
     // PureSignal feedback-coupler enable. OR'd into alex1 always when PS is
     // armed and into alex0 during xmit (pihpsdr new_protocol.c:994-998).
-    private const uint AlexPsBit           = 0x00040000;
+    internal const uint AlexPsBit          = 0x00040000;
     // Alex1-only: grounds the RX input while keyed so the hot TX field doesn't
     // back-feed into the Mercury ADC (pihpsdr alex.h ANAN7000_RX_GNDonTX).
     private const uint ALEX1_ANAN7000_RX_GNDonTX = 0x00000100;
