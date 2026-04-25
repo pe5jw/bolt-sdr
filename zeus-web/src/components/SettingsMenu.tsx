@@ -16,6 +16,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { PaSettingsPanel } from './PaSettingsPanel';
 import { AboutPanel } from './AboutPanel';
+import { RadioSelector } from './RadioSelector';
 import { usePaStore } from '../state/pa-store';
 
 type TabId = 'pa' | 'about';
@@ -200,6 +201,8 @@ export function SettingsMenu({ open, onClose }: Props) {
           ×
         </button>
       </div>
+
+      <RadioSelector />
 
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <nav
