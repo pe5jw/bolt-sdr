@@ -51,7 +51,7 @@ The server sends a handshake message immediately after the WebSocket upgrade, en
 command:arg1,arg2,...;
 ```
 
-## Supported Commands (Phase 1)
+## Supported Commands (Phase 1 + Phase 2)
 
 ### Frequency Control
 
@@ -70,6 +70,10 @@ command:arg1,arg2,...;
 - `tune:<rx>,<bool>` — Internal tune carrier on/off
 - `drive:<rx>,<0-100>` — TX drive percent
 - `tune_drive:<rx>,<0-100>` — Tune power percent
+
+### AGC (Phase 2)
+
+- `agc_gain:<rx>,<db>` — Set/query AGC gain (synonymous with AGC top, range -20 to 120 dB)
 
 ### Audio
 
@@ -96,14 +100,26 @@ command:arg1,arg2,...;
 
 The server broadcasts these events to all connected clients when radio state changes:
 
+### Frequency & Mode Events
+
 - `vfo:...` — VFO frequency changed (rate-limited)
 - `dds:...` — DDS center changed (rate-limited)
 - `modulation:...` — Mode changed
 - `rx_filter_band:...` — Filter bandwidth changed
 - `tx_frequency:<hz>` — TX frequency (derived from VFO)
 - `if_limits:...` — IF limits (on sample rate change)
+
+### TX Control Events
+
 - `start` — Radio connected
 - `stop` — Radio disconnected
+
+### Meter Events (Phase 2)
+
+- `rx_smeter:<rx>,<chan>,<dbm>` — RX S-meter reading in dBm (rate-limited, approximately 5 Hz)
+- `tx_power:<watts>` — TX forward power in watts (approximately 10 Hz during MOX)
+- `tx_swr:<ratio>` — SWR ratio as decimal (e.g., "1.5" for 1.5:1)
+- `tx_alc:<percent>` — ALC gain reduction as percentage (0-100)
 
 ## Rate Limiting
 
@@ -145,10 +161,11 @@ tx_enable:0,true;
 
 ## Future Phases
 
-**Phase 2 — Digital Mode Support**
-- AGC mode/gain commands
-- Split, RIT, XIT
-- CW message commands
+**Phase 2 — Digital Mode Support** ✅ (Partially Complete)
+- ✅ AGC gain commands
+- ✅ S-meter event broadcasting
+- ✅ TX-meter event broadcasts (power, SWR, ALC)
+- ⏸️ CW message commands (deferred pending CW engine implementation)
 
 **Phase 3 — Binary Streams**
 - IQ streaming (`iq_start`, `iq_stop`, `iq_samplerate`)
@@ -157,7 +174,7 @@ tx_enable:0,true;
 
 **Phase 4 — Polish**
 - Noise reduction commands (NB, NR, ANF, ANC)
-- S-meter event broadcasting
+- Preamp / attenuator commands
 - Spot rendering on panadapter
 - REST API for TCI status/control
 

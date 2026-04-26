@@ -64,6 +64,12 @@ public class DspPipelineService : BackgroundService
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<DspPipelineService> _log;
 
+    /// <summary>
+    /// Raised when an RX S-meter reading is available (approximately 5 Hz).
+    /// Arguments: (channelId, dBm)
+    /// </summary>
+    public event Action<int, double>? RxMeterUpdated;
+
     private readonly object _engineLock = new();
     private IDspEngine? _engine;
     private int _channelId;
@@ -906,6 +912,7 @@ public class DspPipelineService : BackgroundService
             }
             if (!double.IsFinite(dbm)) dbm = -160.0;
             _hub.Broadcast(new RxMeterFrame((float)dbm));
+            RxMeterUpdated?.Invoke(channel, dbm);
         }
     }
 }
