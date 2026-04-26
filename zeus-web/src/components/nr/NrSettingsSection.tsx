@@ -91,8 +91,11 @@ function Nr2Panel() {
         commit();
       }}
     >
-      <div className="nr-settings__row">
-        <label className="nr-settings__label" htmlFor="nr2-run">Run</label>
+      <div
+        className="nr-settings__row"
+        title="EMNR's post-stage comfort-noise injection (post2). Off = raw EMNR output. The NR cycle button is the master on/off; this is a sub-stage of NR2 only."
+      >
+        <label className="nr-settings__label" htmlFor="nr2-run">Post-Process</label>
         <input
           id="nr2-run"
           type="checkbox"
