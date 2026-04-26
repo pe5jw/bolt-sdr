@@ -759,7 +759,6 @@ public class DspPipelineService : BackgroundService
         if (p2 is null) return;
         p2.SetDriveByte(snap.DriveByte);
         p2.SetOcMasks(snap.OcTxMask, snap.OcRxMask);
-        p2.SetOcTuneMask(snap.OcTuneMask);
         p2.SetPaEnabled(snap.PaEnabled);
     }
 

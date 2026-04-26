@@ -715,7 +715,6 @@ public sealed class RadioService : IDisposable
             DriveByte: driveByte,
             OcTxMask: bandCfg.OcTx,
             OcRxMask: bandCfg.OcRx,
-            OcTuneMask: cfg.Global.OcTune,
             PaEnabled: paEnabled));
     }
 

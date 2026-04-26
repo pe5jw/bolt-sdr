@@ -319,12 +319,14 @@ public sealed record PaBandSettingsDto(
 // Globals shared across bands. PaMaxPowerWatts=0 disables the watts
 // conversion path and falls back to the legacy "drive% = raw 0-255 byte"
 // behavior so existing installs behave identically until the user runs
-// a calibration. OcTune is OR'd into the OC byte while TUN is engaged
-// (Thetis: OCtune in `Penny.cs`; piHPSDR: `OCtune<<1` in `old_protocol.c`).
+// a calibration. OC bits during TUN follow the per-band OcTx mask (same
+// as TX) — Thetis behaves this way and the inherited piHPSDR-style
+// "OcTune" override was removed in #124 for hardware-safety reasons (a
+// global override can hand an external amp a confused band-select state
+// during a steady tune carrier and damage finals).
 public sealed record PaGlobalSettingsDto(
     bool PaEnabled = true,
-    int PaMaxPowerWatts = 0,
-    byte OcTune = 0);
+    int PaMaxPowerWatts = 0);
 
 public sealed record PaSettingsDto(
     PaGlobalSettingsDto Global,
