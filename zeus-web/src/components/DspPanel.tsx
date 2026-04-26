@@ -35,7 +35,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import {
   setLevelerMaxGain,
   setNr,
@@ -46,7 +46,7 @@ import {
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
 import { Slider } from './design/Slider';
-import { NrSettingsPopover, type NrPopoverMode } from './nr/NrSettingsPopover';
+import { NrSettingsSection, type NrSettingsMode } from './nr/NrSettingsSection';
 
 // Leveler max-gain slider bounds — matches backend clamp and the HL2
 // community-recommended range. 0.5 dB steps give a useful resolution
@@ -82,9 +82,9 @@ function nrButtonTitle(mode: NrMode): string {
   }
 }
 
-// Right-click on Off opens the NR4 popover so the Phase-2 popover is
-// reachable without first cycling. Mirrors NrControls.tsx behaviour.
-function popoverModeFor(nrMode: NrMode): NrPopoverMode {
+// When NR is Off there's no current mode to configure; default to NR4 so
+// the panel is reachable without first cycling. Mirrors NrControls.tsx.
+function settingsModeFor(nrMode: NrMode): NrSettingsMode {
   if (nrMode === 'Anr' || nrMode === 'Emnr' || nrMode === 'Sbnr') return nrMode;
   return 'Sbnr';
 }
@@ -111,15 +111,6 @@ export function DspPanel() {
   const lvlrLastSent = useRef<number>(levelerMaxGainDb);
   const lvlrPrevOnError = useRef<number>(levelerMaxGainDb);
 
-  const [popover, setPopover] = useState<{ mode: NrPopoverMode; anchor: HTMLElement } | null>(null);
-  const onNrContextMenu = useCallback(
-    (e: React.MouseEvent<HTMLButtonElement>) => {
-      e.preventDefault();
-      const anchor = e.currentTarget;
-      setPopover({ mode: popoverModeFor(nr.nrMode), anchor });
-    },
-    [nr.nrMode],
-  );
   useEffect(
     () => () => {
       inflightAbort.current?.abort();
@@ -247,7 +238,6 @@ export function DspPanel() {
         <button
           type="button"
           onClick={cycleNr}
-          onContextMenu={onNrContextMenu}
           aria-disabled={!connected}
           className={`btn sm ${nrActive ? 'active' : ''}`}
           title={nrButtonTitle(nr.nrMode)}
@@ -296,14 +286,10 @@ export function DspPanel() {
           disabled={!connected}
         />
       </div>
+      {nr.nrMode !== 'Off' && (
+        <NrSettingsSection mode={settingsModeFor(nr.nrMode)} />
+      )}
     </div>
-    {popover != null && (
-      <NrSettingsPopover
-        mode={popover.mode}
-        anchor={popover.anchor}
-        onClose={() => setPopover(null)}
-      />
-    )}
     </>
   );
 }

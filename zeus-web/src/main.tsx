@@ -41,7 +41,7 @@ import './index.css';
 import './styles/tokens.css';
 import './styles/layout.css';
 import './styles/filter-ribbon.css';
-import './styles/nr-popover.css';
+import './styles/nr-settings.css';
 import App from './App.tsx';
 
 const rootEl = document.getElementById('root');

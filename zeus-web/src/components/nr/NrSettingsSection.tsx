@@ -10,16 +10,13 @@
 // option) any later version. See the LICENSE file at the root of this
 // repository for the full text, or https://www.gnu.org/licenses/.
 //
-// Zeus is an independent reimplementation in .NET — not a fork.
-//
-// Right-click popover that exposes per-mode tunables for the NR ribbon
-// (issue #79). Mirrors Thetis's setup form NR2/NR4 sections in a single
-// floating panel anchored to the NR button. NR1 (ANR) doesn't expose any
-// operator-tunable knobs in this iteration — the popover renders an info
-// stub for that mode so the right-click affordance is consistent across
-// all four NR states.
+// Inline NR settings section (issue #79). Renders the per-mode tunables for
+// NR2 (EMNR post2) and NR4 (SBNR) directly in the DSP layout — the floating
+// right-click popover variant proved unreliable to surface on disabled
+// buttons across browsers, so settings live as a normal inline panel
+// matching Thetis's Setup-form pattern.
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   NR2_POST2_DEFAULTS,
   NR4_DEFAULTS,
@@ -29,113 +26,41 @@ import {
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
 
-export type NrPopoverMode = 'Anr' | 'Emnr' | 'Sbnr';
+export type NrSettingsMode = 'Anr' | 'Emnr' | 'Sbnr';
 
-export type NrSettingsPopoverProps = {
-  mode: NrPopoverMode;
-  // Anchor element — popover positions itself adjacent to this DOMRect.
-  anchor: HTMLElement;
-  onClose: () => void;
+export type NrSettingsSectionProps = {
+  mode: NrSettingsMode;
 };
 
-// Returns viewport-clamped { left, top } for a popover near `anchor`.
-// We position below-and-right by default and flip up/left when that
-// would overflow the viewport. Inline `position: fixed` so the
-// popover doesn't get clipped by overflow:hidden ancestors.
-function placePopover(
-  anchor: HTMLElement,
-  popover: HTMLElement,
-): { left: number; top: number } {
-  const a = anchor.getBoundingClientRect();
-  const pw = popover.offsetWidth;
-  const ph = popover.offsetHeight;
-  const margin = 6;
-  let left = a.left;
-  let top = a.bottom + margin;
-  if (left + pw + margin > window.innerWidth) {
-    left = Math.max(margin, window.innerWidth - pw - margin);
-  }
-  if (top + ph + margin > window.innerHeight) {
-    top = Math.max(margin, a.top - ph - margin);
-  }
-  return { left, top };
-}
-
-export function NrSettingsPopover({ mode, anchor, onClose }: NrSettingsPopoverProps) {
-  const popoverRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
-
-  // Reposition on mount + on resize. useLayoutEffect avoids a flash at the
-  // wrong location on first paint.
-  useLayoutEffect(() => {
-    if (popoverRef.current) {
-      setPos(placePopover(anchor, popoverRef.current));
-    }
-    function onResize() {
-      if (popoverRef.current) {
-        setPos(placePopover(anchor, popoverRef.current));
-      }
-    }
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, [anchor]);
-
-  // Close on Escape (capture phase so we beat any inner onKeyDown).
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-      }
-    }
-    window.addEventListener('keydown', onKey, { capture: true });
-    return () => window.removeEventListener('keydown', onKey, { capture: true });
-  }, [onClose]);
-
+export function NrSettingsSection({ mode }: NrSettingsSectionProps) {
   return (
-    <>
-      {/* Transparent backdrop captures outside-click. */}
-      <div className="nr-popover-backdrop" onMouseDown={onClose} />
-      <div
-        ref={popoverRef}
-        className="nr-popover"
-        style={pos != null ? { left: pos.left, top: pos.top } : { visibility: 'hidden' }}
-        // Prevent backdrop's mousedown from firing when clicking inside.
-        onMouseDown={(e) => e.stopPropagation()}
-        onContextMenu={(e) => e.preventDefault()}
-        role="dialog"
-        aria-label={`NR ${mode} settings`}
-      >
-        {mode === 'Anr' && <AnrPanel onClose={onClose} />}
-        {mode === 'Emnr' && <Nr2Panel onClose={onClose} />}
-        {mode === 'Sbnr' && <Nr4Panel onClose={onClose} />}
-      </div>
-    </>
+    <div className="nr-settings" role="region" aria-label={`NR ${mode} settings`}>
+      <h3 className="nr-settings__title">
+        {mode === 'Anr' && 'NR1 — ANR'}
+        {mode === 'Emnr' && 'NR2 — EMNR post2'}
+        {mode === 'Sbnr' && 'NR4 — SBNR'}
+      </h3>
+      {mode === 'Anr' && <AnrPanel />}
+      {mode === 'Emnr' && <Nr2Panel />}
+      {mode === 'Sbnr' && <Nr4Panel />}
+    </div>
   );
 }
 
 // ---------- NR1 (ANR) — no exposed tunables in this iteration. ----------
 
-function AnrPanel({ onClose }: { onClose: () => void }) {
+function AnrPanel() {
   return (
-    <>
-      <h3 className="nr-popover__title">NR1 — ANR</h3>
-      <p className="nr-popover__hint">
-        NR1 (time-domain LMS) has no operator-tunable knobs in Zeus today.
-        Defaults match Thetis: 64 taps, 16-sample delay, gain 1e-4, leakage 0.1.
-      </p>
-      <div className="nr-popover__buttons">
-        <button type="button" className="nr-popover__button" onClick={onClose}>
-          Close
-        </button>
-      </div>
-    </>
+    <p className="nr-settings__hint">
+      NR1 (time-domain LMS) has no operator-tunable knobs in Zeus today.
+      Defaults match Thetis: 64 taps, 16-sample delay, gain 1e-4, leakage 0.1.
+    </p>
   );
 }
 
 // ---------- NR2 (EMNR) post2 comfort-noise tunables. ----------
 
-function Nr2Panel({ onClose }: { onClose: () => void }) {
+function Nr2Panel() {
   const nr = useConnectionStore((s) => s.nr);
   const applyState = useConnectionStore((s) => s.applyState);
 
@@ -157,7 +82,6 @@ function Nr2Panel({ onClose }: { onClose: () => void }) {
       .catch(() => {
         /* state poll will reconcile */
       });
-    onClose();
   }
 
   return (
@@ -167,14 +91,12 @@ function Nr2Panel({ onClose }: { onClose: () => void }) {
         commit();
       }}
     >
-      <h3 className="nr-popover__title">NR2 — EMNR post2</h3>
-
-      <div className="nr-popover__row">
-        <label className="nr-popover__label" htmlFor="nr2-run">Run</label>
+      <div className="nr-settings__row">
+        <label className="nr-settings__label" htmlFor="nr2-run">Run</label>
         <input
           id="nr2-run"
           type="checkbox"
-          className="nr-popover__checkbox"
+          className="nr-settings__checkbox"
           checked={run}
           onChange={(e) => setRun(e.target.checked)}
         />
@@ -185,16 +107,13 @@ function Nr2Panel({ onClose }: { onClose: () => void }) {
       <NumericRow id="nr2-rate" label="Rate" value={rate} step={0.1} min={0} onChange={setRate} />
       <NumericRow id="nr2-taper" label="Taper (bins)" value={taper} step={1} min={0} onChange={setTaper} />
 
-      <p className="nr-popover__hint">
+      <p className="nr-settings__hint">
         Comfort-noise injection masking residual EMNR warble. Defaults: factor 0.15,
         nlevel 0.15, rate 5.0, taper 12. See emnr.c:981–1056.
       </p>
 
-      <div className="nr-popover__buttons">
-        <button type="button" className="nr-popover__button" onClick={onClose}>
-          Cancel
-        </button>
-        <button type="submit" className="nr-popover__button nr-popover__button--primary">
+      <div className="nr-settings__buttons">
+        <button type="submit" className="nr-settings__button nr-settings__button--primary">
           Save
         </button>
       </div>
@@ -204,7 +123,7 @@ function Nr2Panel({ onClose }: { onClose: () => void }) {
 
 // ---------- NR4 (SBNR) tunables. ----------
 
-function Nr4Panel({ onClose }: { onClose: () => void }) {
+function Nr4Panel() {
   const nr = useConnectionStore((s) => s.nr);
   const applyState = useConnectionStore((s) => s.applyState);
 
@@ -230,7 +149,6 @@ function Nr4Panel({ onClose }: { onClose: () => void }) {
       .catch(() => {
         /* state poll will reconcile */
       });
-    onClose();
   }
 
   return (
@@ -240,19 +158,17 @@ function Nr4Panel({ onClose }: { onClose: () => void }) {
         commit();
       }}
     >
-      <h3 className="nr-popover__title">NR4 — SBNR</h3>
-
       <NumericRow id="nr4-reduction" label="Reduction" value={reduction} step={0.5} min={0} max={40} onChange={setReduction} />
       <NumericRow id="nr4-smoothing" label="Smoothing" value={smoothing} step={0.05} min={0} max={1} onChange={setSmoothing} />
       <NumericRow id="nr4-whitening" label="Whitening" value={whitening} step={0.05} min={0} max={1} onChange={setWhitening} />
       <NumericRow id="nr4-rescale" label="Noise Rescale" value={noiseRescale} step={0.5} min={0} max={10} onChange={setNoiseRescale} />
       <NumericRow id="nr4-postthr" label="Post Filter Thr" value={postThr} step={0.5} onChange={setPostThr} />
 
-      <div className="nr-popover__row">
-        <label className="nr-popover__label" htmlFor="nr4-scaling">Noise Scaling</label>
+      <div className="nr-settings__row">
+        <label className="nr-settings__label" htmlFor="nr4-scaling">Noise Scaling</label>
         <select
           id="nr4-scaling"
-          className="nr-popover__select"
+          className="nr-settings__select"
           value={scalingType}
           onChange={(e) => setScalingType(Number(e.target.value))}
         >
@@ -262,11 +178,11 @@ function Nr4Panel({ onClose }: { onClose: () => void }) {
         </select>
       </div>
 
-      <div className="nr-popover__row">
-        <label className="nr-popover__label" htmlFor="nr4-position">Position</label>
+      <div className="nr-settings__row">
+        <label className="nr-settings__label" htmlFor="nr4-position">Position</label>
         <select
           id="nr4-position"
-          className="nr-popover__select"
+          className="nr-settings__select"
           value={position}
           onChange={(e) => setPosition(Number(e.target.value))}
         >
@@ -275,16 +191,13 @@ function Nr4Panel({ onClose }: { onClose: () => void }) {
         </select>
       </div>
 
-      <p className="nr-popover__hint">
+      <p className="nr-settings__hint">
         libspecbleach (sbnr.c). Defaults: reduction 10, others 0, noise rescale 2,
         position 1. Requires Phase 1 libwdsp rebuild — issue #79.
       </p>
 
-      <div className="nr-popover__buttons">
-        <button type="button" className="nr-popover__button" onClick={onClose}>
-          Cancel
-        </button>
-        <button type="submit" className="nr-popover__button nr-popover__button--primary">
+      <div className="nr-settings__buttons">
+        <button type="submit" className="nr-settings__button nr-settings__button--primary">
           Save
         </button>
       </div>
@@ -306,12 +219,12 @@ type NumericRowProps = {
 
 function NumericRow({ id, label, value, step, min, max, onChange }: NumericRowProps) {
   return (
-    <div className="nr-popover__row">
-      <label className="nr-popover__label" htmlFor={id}>{label}</label>
+    <div className="nr-settings__row">
+      <label className="nr-settings__label" htmlFor={id}>{label}</label>
       <input
         id={id}
         type="number"
-        className="nr-popover__input"
+        className="nr-settings__input"
         value={value}
         step={step}
         min={min}
@@ -324,4 +237,3 @@ function NumericRow({ id, label, value, step, min, max, onChange }: NumericRowPr
     </div>
   );
 }
-

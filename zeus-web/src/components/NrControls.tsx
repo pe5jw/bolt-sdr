@@ -43,7 +43,7 @@ import {
   type NrMode,
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
-import { NrSettingsPopover, type NrPopoverMode } from './nr/NrSettingsPopover';
+import { NrSettingsSection, type NrSettingsMode } from './nr/NrSettingsSection';
 
 // NR-button cycle mirrors Thetis: Off → NR1 (ANR, time-domain LMS) → NR2
 // (EMNR, Ephraim–Malah spectral) → NR4 (SBNR, libspecbleach). NR3 (RNNR)
@@ -70,17 +70,17 @@ const DISABLED = '';
 
 function nrButtonTitle(mode: NrMode): string {
   switch (mode) {
-    case 'Off': return 'Noise reduction off (right-click for tunables)';
-    case 'Anr': return 'NR1 (ANR, time-domain LMS) — right-click for tunables';
-    case 'Emnr': return 'NR2 (EMNR, spectral) — right-click for tunables';
-    case 'Sbnr': return 'NR4 (SBNR, libspecbleach) — right-click for tunables';
+    case 'Off': return 'Noise reduction off';
+    case 'Anr': return 'NR1 (ANR, time-domain LMS)';
+    case 'Emnr': return 'NR2 (EMNR, spectral)';
+    case 'Sbnr': return 'NR4 (SBNR, libspecbleach)';
   }
 }
 
-// When the operator right-clicks the NR button while it's Off there's no
-// current mode to configure; default to NR4 so the Phase-2 popover is
-// reachable without first having to cycle the button through.
-function popoverModeFor(nrMode: NrMode): NrPopoverMode {
+// When the operator opens settings while NR is Off there's no current
+// mode to configure; default to NR4 so the panel is reachable without
+// first cycling the button through.
+function settingsModeFor(nrMode: NrMode): NrSettingsMode {
   if (nrMode === 'Anr' || nrMode === 'Emnr' || nrMode === 'Sbnr') return nrMode;
   return 'Sbnr';
 }
@@ -91,19 +91,12 @@ export function NrControls() {
   const applyState = useConnectionStore((s) => s.applyState);
   const connected = useConnectionStore((s) => s.status === 'Connected');
 
-  const [popover, setPopover] = useState<{ mode: NrPopoverMode; anchor: HTMLElement } | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
 
   const inflightAbort = useRef<AbortController | null>(null);
   useEffect(() => () => inflightAbort.current?.abort(), []);
 
-  const onNrContextMenu = useCallback(
-    (e: React.MouseEvent<HTMLButtonElement>) => {
-      e.preventDefault();
-      const anchor = e.currentTarget;
-      setPopover({ mode: popoverModeFor(nr.nrMode), anchor });
-    },
-    [nr.nrMode],
-  );
+  const toggleSettings = useCallback(() => setShowSettings((v) => !v), []);
 
   const send = useCallback(
     (next: NrConfigDto) => {
@@ -172,12 +165,20 @@ export function NrControls() {
       <button
         type="button"
         onClick={cycleNr}
-        onContextMenu={onNrContextMenu}
         aria-disabled={!connected}
         className={`${nrActive ? ACTIVE_BTN : IDLE_BTN} ${DISABLED}`}
         title={nrButtonTitle(nr.nrMode)}
       >
         {NR_LABEL[nr.nrMode]}
+      </button>
+      <button
+        type="button"
+        onClick={toggleSettings}
+        className={`${IDLE_BTN} nr-settings-toggle`}
+        title="Show NR tunables"
+        aria-expanded={showSettings}
+      >
+        ⚙
       </button>
       <button
         type="button"
@@ -207,12 +208,8 @@ export function NrControls() {
         NBP
       </button>
     </div>
-    {popover != null && (
-      <NrSettingsPopover
-        mode={popover.mode}
-        anchor={popover.anchor}
-        onClose={() => setPopover(null)}
-      />
+    {showSettings && (
+      <NrSettingsSection mode={settingsModeFor(nr.nrMode)} />
     )}
     </>
   );
