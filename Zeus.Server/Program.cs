@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -151,6 +158,7 @@ builder.Services.Configure<TciOptions>(builder.Configuration.GetSection("Tci"));
 builder.Services.AddSingleton<SpotManager>();
 builder.Services.AddSingleton<TciServer>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<TciServer>());
+builder.Services.AddSingleton<TciManagementService>();
 
 var app = builder.Build();
 
@@ -331,7 +339,7 @@ app.MapPost("/api/connect/p2", async (ConnectRequest req, DspPipelineService dsp
         96_000 => 96,
         192_000 => 192,
         384_000 => 384,
-        _ => 48,
+        _ => 192,
     };
 
     try
@@ -942,6 +950,23 @@ app.MapPost("/api/rotator/test", async (RotctldTestRequest req, RotctldService r
     if (string.IsNullOrWhiteSpace(req.Host) || req.Port is <= 0 or >= 65536)
         return Results.BadRequest(new { error = "host and port required" });
     var result = await rot.TestAsync(req.Host.Trim(), req.Port, ctx.RequestAborted);
+    return Results.Ok(result);
+});
+
+app.MapGet("/api/tci/status", (TciManagementService tci) => tci.GetStatus());
+
+app.MapPost("/api/tci/config", (TciRuntimeConfig req, TciManagementService tci, HttpContext ctx) =>
+{
+    log.LogInformation("api.tci.config enabled={En} bind={Bind} port={Port}", req.Enabled, req.BindAddress, req.Port);
+    var status = tci.SetConfig(req);
+    return Results.Ok(status);
+});
+
+app.MapPost("/api/tci/test", (TciTestRequest req, TciManagementService tci, HttpContext ctx) =>
+{
+    if (string.IsNullOrWhiteSpace(req.BindAddress) || req.Port is <= 0 or >= 65536)
+        return Results.BadRequest(new { error = "bindAddress and port required" });
+    var result = tci.TestPort(req.BindAddress.Trim(), req.Port);
     return Results.Ok(result);
 });
 
