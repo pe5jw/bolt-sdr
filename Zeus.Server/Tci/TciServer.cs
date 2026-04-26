@@ -66,6 +66,7 @@ public sealed class TciServer : IHostedService, IDisposable
     private readonly RadioService _radio;
     private readonly TxService _tx;
     private readonly DspPipelineService _pipeline;
+    private readonly TxMetersService _txMeters;
     private readonly SpotManager _spots;
     private readonly ILoggerFactory _loggerFactory;
 
@@ -77,6 +78,7 @@ public sealed class TciServer : IHostedService, IDisposable
         RadioService radio,
         TxService tx,
         DspPipelineService pipeline,
+        TxMetersService txMeters,
         SpotManager spots,
         ILoggerFactory loggerFactory)
     {
@@ -85,6 +87,7 @@ public sealed class TciServer : IHostedService, IDisposable
         _radio = radio;
         _tx = tx;
         _pipeline = pipeline;
+        _txMeters = txMeters;
         _spots = spots;
         _loggerFactory = loggerFactory;
     }
@@ -102,6 +105,8 @@ public sealed class TciServer : IHostedService, IDisposable
         _radio.StateChanged += OnRadioStateChanged;
         _radio.Connected += OnRadioConnected;
         _radio.Disconnected += OnRadioDisconnected;
+        _pipeline.RxMeterUpdated += OnRxMeterUpdated;
+        _txMeters.TxMetersUpdated += OnTxMetersUpdated;
         _subscribed = true;
 
         _log.LogInformation("tci.listening bind={Bind} port={Port}", _options.BindAddress, _options.Port);
@@ -115,6 +120,8 @@ public sealed class TciServer : IHostedService, IDisposable
             _radio.StateChanged -= OnRadioStateChanged;
             _radio.Connected -= OnRadioConnected;
             _radio.Disconnected -= OnRadioDisconnected;
+            _pipeline.RxMeterUpdated -= OnRxMeterUpdated;
+            _txMeters.TxMetersUpdated -= OnTxMetersUpdated;
             _subscribed = false;
         }
 
@@ -204,6 +211,26 @@ public sealed class TciServer : IHostedService, IDisposable
     private void OnRadioDisconnected()
     {
         Broadcast(TciProtocol.Command("stop"));
+    }
+
+    private void OnRxMeterUpdated(int channelId, double dbm)
+    {
+        // TCI rx_smeter event: rx_smeter:<rx>,<chan>,<dbm>
+        // Rate-limited to avoid flooding during rapid meter updates
+        BroadcastRateLimited($"rx_smeter:0,{channelId}", TciProtocol.Command("rx_smeter", 0, channelId, (int)Math.Round(dbm)));
+    }
+
+    private void OnTxMetersUpdated(float fwdWatts, float refWatts, float swr, float alcPk, float alcGr)
+    {
+        // TCI TX meter events per ExpertSDR3 spec
+        // tx_power:<watts> — forward power
+        Broadcast(TciProtocol.Command("tx_power", (int)Math.Round(fwdWatts)));
+        // tx_swr:<ratio> — SWR ratio (e.g., 1.5 for 1.5:1)
+        Broadcast(TciProtocol.Command("tx_swr", swr.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)));
+        // tx_alc:<percent> — ALC gain reduction as percentage (0-100)
+        // Convert dB of gain reduction to percentage for TCI
+        int alcPct = alcGr > 0 ? Math.Min(100, (int)Math.Round(alcGr * 10)) : 0;
+        Broadcast(TciProtocol.Command("tx_alc", alcPct));
     }
 
     /// <summary>

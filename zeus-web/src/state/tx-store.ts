@@ -80,11 +80,18 @@ export type TxMeters = {
 
 export enum AlertKind {
   SwrTrip = 0,
+  FrontendUpdate = 1,
 }
+
+export type AlertAction = {
+  label: string;
+  onClick: () => void;
+};
 
 export type Alert = {
   kind: AlertKind;
   message: string;
+  action?: AlertAction;
 };
 
 export type TxState = {
@@ -197,6 +204,14 @@ export type TxState = {
   // pihpsdr/Thetis behaviour.
   psFeedbackSource: 'internal' | 'external';
   setPsFeedbackSource: (s: 'internal' | 'external') => void;
+  // PS-Monitor (issue #121) — operator-facing "Monitor PA output" toggle.
+  // When on AND PS armed AND PS converged, the TX panadapter source flips
+  // from the predistorted TX-IQ analyzer to the PS-feedback analyzer
+  // (post-PA loopback). Default off; not persisted (parity with psEnabled
+  // — viewing preference, resets each session). Hidden / disabled in the
+  // UI on boards with no PS feedback path (e.g. HermesLite2).
+  psMonitorEnabled: boolean;
+  setPsMonitorEnabled: (on: boolean) => void;
   // Live readout pushed via MsgType.PsMeters (0x18) at 10 Hz when armed.
   psFeedbackLevel: number;
   psCorrectionDb: number;
@@ -332,6 +347,8 @@ export const useTxStore = create<TxState>()(
       setPsIntsSpiPreset: (p) => set({ psIntsSpiPreset: p }),
       psFeedbackSource: 'internal',
       setPsFeedbackSource: (s) => set({ psFeedbackSource: s }),
+      psMonitorEnabled: false,
+      setPsMonitorEnabled: (on) => set({ psMonitorEnabled: on }),
       psFeedbackLevel: 0,
       psCorrectionDb: 0,
       psCalState: 0,
