@@ -56,6 +56,7 @@ export default defineConfig({
     VitePWA({
       registerType: 'prompt',
       includeAssets: ['mic-uplink-worklet.js'],
+      injectRegister: null, // We handle registration manually
       manifest: {
         name: 'Zeus',
         short_name: 'Zeus',
