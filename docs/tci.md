@@ -75,6 +75,15 @@ command:arg1,arg2,...;
 
 - `agc_gain:<rx>,<db>` — Set/query AGC gain (synonymous with AGC top, range -20 to 120 dB)
 
+### CW Keyer / Macros (Phase 2 — ack-only stubs)
+
+The following commands are accepted by the dispatcher but currently no-op (logged at debug). Zeus has no CW keyer engine yet; these are present so loggers and contest tools that probe them on connect do not see protocol errors.
+
+- `cw_macros_speed:<wpm>` — Keyer/macro speed
+- `cw_macros:<slot>,<text>` — Store macro text in slot
+- `cw_msg:<text>` — Send arbitrary text as CW
+- `keyer:<bool>` — Enable/disable internal keyer
+
 ### Audio
 
 - `mute:<bool>` — Master mute (stub)
@@ -165,7 +174,7 @@ tx_enable:0,true;
 - ✅ AGC gain commands
 - ✅ S-meter event broadcasting
 - ✅ TX-meter event broadcasts (power, SWR, ALC)
-- ⏸️ CW message commands (deferred pending CW engine implementation)
+- 🟡 CW message / keyer commands (ack-only stubs; functional impl deferred pending CW engine)
 
 **Phase 3 — Binary Streams**
 - IQ streaming (`iq_start`, `iq_stop`, `iq_samplerate`)

@@ -341,6 +341,14 @@ public sealed class TciSession : IDisposable
                     HandleAgcGain(args);
                     break;
 
+                // --- CW keyer / macros (ack-only; no CW engine yet) ---
+                case "cw_macros_speed":
+                case "cw_macros":
+                case "cw_msg":
+                case "keyer":
+                    _log.LogDebug("tci cw command accepted but unimplemented (no CW engine): {Cmd}", command);
+                    break;
+
                 // --- Split / RIT / XIT / Lock (stubs) ---
                 case "split_enable":
                     HandleSplitEnable(args);
