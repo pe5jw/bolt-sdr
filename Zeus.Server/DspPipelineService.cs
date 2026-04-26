@@ -70,6 +70,14 @@ public class DspPipelineService : BackgroundService
     /// </summary>
     public event Action<int, double>? RxMeterUpdated;
 
+    /// <summary>
+    /// Raised on every decoded RX IQ frame, after it has been fed to WDSP.
+    /// Arguments: (receiver, sampleRateHz, interleavedIQ).
+    /// The memory references a pooled buffer and is only valid for the
+    /// duration of the synchronous handler — copy if retention is needed.
+    /// </summary>
+    public event Action<int, int, ReadOnlyMemory<double>>? RxIqAvailable;
+
     private readonly object _engineLock = new();
     private IDspEngine? _engine;
     private int _channelId;
@@ -498,6 +506,7 @@ public class DspPipelineService : BackgroundService
                     int channel;
                     lock (_engineLock) { engine = _engine; channel = _channelId; }
                     engine?.FeedIq(channel, frame.InterleavedSamples.Span);
+                    RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
                 }
             }
             catch (OperationCanceledException) { }
@@ -523,6 +532,7 @@ public class DspPipelineService : BackgroundService
                     int channel;
                     lock (_engineLock) { engine = _engine; channel = _channelId; }
                     engine?.FeedIq(channel, frame.InterleavedSamples.Span);
+                    RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
                 }
             }
             catch (OperationCanceledException) { }

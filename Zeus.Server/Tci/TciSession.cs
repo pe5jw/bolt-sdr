@@ -82,7 +82,31 @@ public sealed class TciSession : IDisposable
     // Track current drive level so we can echo it back on query
     private int _lastDrivePercent = 50;
 
+    // Per-session binary stream subscriptions. Producers (TciServer publish
+    // path) check WantsIqStream(rx) before building/dispatching frames.
+    private readonly object _streamLock = new();
+    private readonly HashSet<int> _iqStreamEnabled = new();
+    private int _iqSampleRate = 48000;
+
     public Guid Id => _id;
+
+    /// <summary>True if this session has subscribed to IQ for the given receiver.</summary>
+    public bool WantsIqStream(int receiver)
+    {
+        lock (_streamLock) return _iqStreamEnabled.Contains(receiver);
+    }
+
+    /// <summary>True if this session has subscribed to IQ for any receiver.</summary>
+    public bool WantsAnyIqStream()
+    {
+        lock (_streamLock) return _iqStreamEnabled.Count > 0;
+    }
+
+    /// <summary>Last client-requested IQ sample rate, clamped to [48000, 384000].</summary>
+    public int IqSampleRate
+    {
+        get { lock (_streamLock) return _iqSampleRate; }
+    }
 
     public TciSession(
         Guid id,
@@ -460,11 +484,19 @@ public sealed class TciSession : IDisposable
                     HandleSpotClear(args);
                     break;
 
-                // --- Binary streams (future) ---
+                // --- Binary streams ---
                 case "iq_start":
+                    HandleIqStart(args);
+                    break;
                 case "iq_stop":
+                    HandleIqStop(args);
+                    break;
+                case "iq_samplerate":
+                    HandleIqSampleRate(args);
+                    break;
                 case "audio_start":
                 case "audio_stop":
+                case "audio_samplerate":
                     _log.LogDebug("tci command not implemented: {Cmd}", command);
                     break;
 
@@ -827,6 +859,54 @@ public sealed class TciSession : IDisposable
     {
         // spot_clear
         _spots.ClearAll();
+    }
+
+    private void HandleIqStart(string[] args)
+    {
+        // iq_start:<rx>,<bool>  — start (true) or stop (false) per-receiver IQ stream
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        bool enable = true;
+        if (args.Length >= 2 && TciProtocol.TryParseBool(args[1], out bool parsed))
+            enable = parsed;
+        SetIqStream(rx, enable);
+    }
+
+    private void HandleIqStop(string[] args)
+    {
+        // iq_stop:<rx>  — alias of iq_start:<rx>,false
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        SetIqStream(rx, false);
+    }
+
+    private void HandleIqSampleRate(string[] args)
+    {
+        // iq_samplerate:<rate>  or  iq_samplerate (query)
+        // Range matches Thetis: [48000, 384000]. Stored on the session; the
+        // actual rate of published frames is the radio's native rate, echoed
+        // back to the client when streaming starts.
+        if (args.Length == 0)
+        {
+            Send(TciProtocol.Command("iq_samplerate", IqSampleRate));
+            return;
+        }
+        if (TciProtocol.TryParseInt(args[0], out int rate))
+        {
+            rate = Math.Clamp(rate, 48000, 384000);
+            lock (_streamLock) _iqSampleRate = rate;
+            Send(TciProtocol.Command("iq_samplerate", rate));
+        }
+    }
+
+    private void SetIqStream(int rx, bool enable)
+    {
+        lock (_streamLock)
+        {
+            if (enable) _iqStreamEnabled.Add(rx);
+            else _iqStreamEnabled.Remove(rx);
+        }
+        Send(TciProtocol.Command("iq_start", rx, enable));
     }
 
     public void Dispose()
