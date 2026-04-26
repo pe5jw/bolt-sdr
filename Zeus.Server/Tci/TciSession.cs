@@ -336,7 +336,20 @@ public sealed class TciSession : IDisposable
                     HandleMonVolume(args);
                     break;
 
-                // --- Split / RIT / XIT ---
+                // --- AGC ---
+                case "agc_gain":
+                    HandleAgcGain(args);
+                    break;
+
+                // --- CW keyer / macros (ack-only; no CW engine yet) ---
+                case "cw_macros_speed":
+                case "cw_macros":
+                case "cw_msg":
+                case "keyer":
+                    _log.LogDebug("tci cw command accepted but unimplemented (no CW engine): {Cmd}", command);
+                    break;
+
+                // --- Split / RIT / XIT / Lock (stubs) ---
                 case "split_enable":
                     HandleSplitEnable(args);
                     break;
@@ -601,6 +614,28 @@ public sealed class TciSession : IDisposable
             Send(TciProtocol.Command("mon_volume", -20));
         }
         // Ignore set — sidetone not implemented
+    }
+
+    private void HandleAgcGain(string[] args)
+    {
+        // agc_gain:<rx>,<db> or agc_gain:<rx> (query)
+        // ExpertSDR3 TCI spec: AGC gain is synonymous with AGC top (max gain)
+        // Range: -20 to 120 dB per Thetis convention
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+
+        if (args.Length == 1)
+        {
+            // Query: echo current AGC top
+            var state = _radio.Snapshot();
+            Send(TciProtocol.Command("agc_gain", rx, (int)state.AgcTopDb));
+        }
+        else if (args.Length >= 2 && TciProtocol.TryParseDouble(args[1], out double db))
+        {
+            // Set AGC top (gain)
+            _radio.SetAgcTop(db);
+            // StateChanged event will broadcast the update to all clients
+        }
     }
 
     private void HandleSplitEnable(string[] args)
