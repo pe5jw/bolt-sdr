@@ -42,8 +42,19 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef, useState } from 'react';
-import { Layout, Model, type IJsonModel, type TabNode, Actions, DockLocation } from 'flexlayout-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Actions,
+  BorderNode,
+  DockLocation,
+  Layout,
+  Model,
+  TabSetNode,
+  type IJsonModel,
+  type ITabSetRenderValues,
+  type TabNode,
+} from 'flexlayout-react';
+import { Plus } from 'lucide-react';
 import 'flexlayout-react/style/dark.css';
 import '../styles/flex-layout.css';
 import { useWorkspace } from './WorkspaceContext';
@@ -68,7 +79,7 @@ export function FlexWorkspace() {
   const { terminatorActive } = useWorkspace();
   const { layout, isLoaded, setLayout, loadFromServer, syncToServerBeforeUnload } = useLayoutStore();
   const [model, setModel] = useState<Model | null>(null);
-  const [showAddPanel, setShowAddPanel] = useState(false);
+  const [targetTabSetId, setTargetTabSetId] = useState<string | null>(null);
   const loadedRef = useRef(false);
 
   useEffect(() => {
@@ -109,28 +120,48 @@ export function FlexWorkspace() {
   };
 
   const addPanel = (panelId: string) => {
-    if (!model) return;
+    if (!model || !targetTabSetId) return;
 
     const panel = PANELS[panelId];
     if (!panel) return;
 
-    // Add to the first tabset we find, or to center if available
-    const firstTabset = model.getFirstTabSet();
-    if (firstTabset) {
-      model.doAction(
-        Actions.addNode(
-          {
-            type: 'tab',
-            name: panel.name,
-            component: panelId,
-          },
-          firstTabset.getId(),
-          DockLocation.CENTER,
-          0, // position at start
-        ),
-      );
-    }
+    model.doAction(
+      Actions.addNode(
+        {
+          type: 'tab',
+          name: panel.name,
+          component: panelId,
+        },
+        targetTabSetId,
+        DockLocation.CENTER,
+        -1,
+        true,
+      ),
+    );
   };
+
+  // Per-tabset "+" button — pushed into each tabset's sticky-button slot so it
+  // sits next to the maximise control. Mirrors Log4YM's pattern; uses the
+  // lucide-react Plus icon so the visual matches.
+  const onRenderTabSet = useCallback(
+    (node: TabSetNode | BorderNode, renderValues: ITabSetRenderValues) => {
+      if (!(node instanceof TabSetNode)) return;
+      const id = node.getId();
+      renderValues.stickyButtons.push(
+        <button
+          key="add-panel"
+          type="button"
+          title="Add panel to this tabset"
+          aria-label="Add panel"
+          className="flexlayout__tab_toolbar_button"
+          onClick={() => setTargetTabSetId(id)}
+        >
+          <Plus size={14} />
+        </button>,
+      );
+    },
+    [],
+  );
 
   if (!model) {
     // Brief loading state while server layout fetch resolves.
@@ -139,45 +170,20 @@ export function FlexWorkspace() {
 
   return (
     <div className={`flex-workspace ${terminatorActive ? 'terminator' : ''}`}>
-      <button
-        type="button"
-        onClick={() => setShowAddPanel(true)}
-        className="add-panel-btn"
-        style={{
-          position: 'absolute',
-          top: 8,
-          right: 8,
-          zIndex: 100,
-          width: 32,
-          height: 32,
-          borderRadius: 'var(--r-sm)',
-          background: 'var(--btn-top)',
-          border: '1px solid var(--line)',
-          color: 'var(--fg-0)',
-          fontSize: 18,
-          fontWeight: 600,
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-        title="Add panel"
-      >
-        +
-      </button>
       <Layout
         model={model}
         factory={factory}
+        onRenderTabSet={onRenderTabSet}
         onModelChange={(updatedModel) => {
           setLayout(updatedModel.toJson() as unknown as Record<string, unknown>);
         }}
       />
       <TerminatorLines active={terminatorActive} />
-      {showAddPanel && (
+      {targetTabSetId && (
         <AddPanelModal
           existingPanels={getExistingPanels()}
           onAdd={addPanel}
-          onClose={() => setShowAddPanel(false)}
+          onClose={() => setTargetTabSetId(null)}
         />
       )}
     </div>
