@@ -45,9 +45,6 @@ import { AttenuatorSlider } from './components/AttenuatorSlider';
 import { AudioToggle } from './components/AudioToggle';
 import { BandButtons } from './components/BandButtons';
 import { ConnectPanel } from './components/ConnectPanel';
-import { DriveSlider } from './components/DriveSlider';
-import { TunePowerSlider } from './components/TunePowerSlider';
-import { MicGainSlider } from './components/MicGainSlider';
 import { MicMeter } from './components/MicMeter';
 import { MobilePttButton } from './components/MobilePttButton';
 import { MobileZoomSlider } from './components/MobileZoomSlider';
@@ -693,15 +690,10 @@ export default function App() {
           <AfGainSlider />
         </div>
         <div className="spacer hide-mobile" style={{ flex: 1 }} />
-        <div className="ctrl-group" style={{ minWidth: 360 }}>
-          <div className="label-xs ctrl-lbl">ZOOM · DRIVE · MIC</div>
+        <div className="ctrl-group hide-mobile" style={{ minWidth: 160 }}>
+          <div className="label-xs ctrl-lbl">ZOOM</div>
           <div className="btn-row" style={{ gap: 10 }}>
-            <div className="hide-mobile" style={{ display: 'contents' }}>
-              <ZoomControl />
-            </div>
-            <DriveSlider />
-            <TunePowerSlider />
-            <MicGainSlider />
+            <ZoomControl />
           </div>
         </div>
       </div>
@@ -914,7 +906,7 @@ export default function App() {
           </div>
 
           <div className="side-slot hide-mobile">
-            <Dockable title="TX Filter" ledOn={false}>
+            <Dockable title="TX" ledOn={false}>
               <TxFilterPanel />
             </Dockable>
           </div>
