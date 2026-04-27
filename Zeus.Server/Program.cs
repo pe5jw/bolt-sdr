@@ -1029,7 +1029,9 @@ app.Map("/ws", async (HttpContext ctx, StreamingHub hub) =>
     await hub.AttachClientAsync(ws, ctx.RequestAborted);
 });
 
-// Display startup banner with version and shutdown instructions
+// Display startup banner with version and shutdown instructions.
+// Suppressed when running as a Windows service (no interactive console session).
+if (Environment.UserInteractive)
 {
     var assembly = System.Reflection.Assembly.GetExecutingAssembly();
     var attr = assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
