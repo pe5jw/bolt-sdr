@@ -1,0 +1,263 @@
+/* Mobile single-column shell. Layout shape from the Zeus Mobile design;
+   colour and type from src/styles/tokens.css. The desktop "body { overflow:
+   hidden }" rule keeps the desktop shell pinned to the viewport — mobile
+   needs a scrolling document, so .m-app sets its own scroll context. */
+
+.m-app {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-app);
+  color: var(--fg-0);
+  font-family: var(--font-sans);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  /* Status-bar / dynamic-island clearance + bottom home-indicator clearance */
+  padding-top: env(safe-area-inset-top, 0);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+/* ── Topbar ────────────────────────────────────────────── */
+.m-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: linear-gradient(180deg, var(--panel-head-top) 0%, var(--panel-head-bot) 100%);
+  border-bottom: 1px solid var(--panel-border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.m-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.m-brand-text {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 3px;
+  color: var(--fg-0);
+}
+.m-conn-chip {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  background: var(--bg-0);
+  border: 1px solid var(--btn-edge);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.m-conn-k { color: var(--fg-3); letter-spacing: 0.5px; }
+.m-conn-v { color: var(--fg-2); }
+.m-conn-chip[data-connected='true'] .m-conn-v { color: var(--accent); }
+
+/* ── Vertical stack ────────────────────────────────────── */
+.m-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+/* ── Section panel ─────────────────────────────────────── */
+.m-section {
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  box-shadow: var(--panel-shadow);
+}
+.m-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: linear-gradient(180deg, var(--panel-head-top) 0%, var(--panel-head-bot) 100%);
+  border-bottom: 1px solid var(--panel-border);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.m-section-led {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  flex-shrink: 0;
+}
+.m-section-label {
+  color: var(--fg-0);
+  font-weight: 600;
+}
+.m-section-meta {
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+}
+.m-section-body {
+  padding: 10px;
+}
+
+/* The VFO is the hero — give it room to breathe and centre the digits.
+   The shared `.freq-display` panel sizes its digits with `clamp(38px, 26cqh, 140px)`
+   (layout.css:607). When dropped into a 34px-tall flex slot the 38 px floor
+   overflows the panel chrome — pin a comfortable mobile height so the digits
+   sit inside the dark blue inset chrome. */
+.m-vfo-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+}
+.m-app .freq-display {
+  min-height: 110px;
+  width: 100%;
+}
+
+/* ── Panadapter + waterfall ────────────────────────────── */
+/* The map-layer + spectrum stack share a single positioned ancestor so the
+   QRZ Leaflet world map can sit behind a transparent waterfall the same way
+   the desktop "hero" panel does (see App.tsx:818-882). */
+.m-pan-stack {
+  position: relative;
+  height: 310px;
+  background: var(--spec-bg);
+}
+.m-map-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+}
+.m-pan-spectrum {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  pointer-events: auto;
+}
+.m-pan,
+.m-wf {
+  position: relative;
+  background: transparent;
+}
+.m-pan { border-bottom: 1px solid var(--panel-border); }
+/* Both child components fill their container via absolute children */
+.m-pan > *,
+.m-wf > * { position: absolute; inset: 0; }
+
+/* When the QRZ map is rendering behind, the panadapter + waterfall
+   containers must paint transparent so the map tiles bleed through. The
+   Panadapter widget's <div class="spectrum-canvas"> sets var(--spec-bg)
+   inline (Panadapter.tsx:196); override for the mobile shell. The Waterfall
+   widget's noise floor is faded inside its WebGL fragment shader by the
+   `transparent` prop we already pass. */
+.m-app .spectrum-canvas { background: transparent !important; }
+
+/* The Panadapter widget brings its own dB scale axis pinned to the left
+   which we keep visible. The Waterfall widget brings two pieces of chrome
+   that don't belong on mobile:
+     • γ contrast slider — hidden, takes the same left rail as the dB scale.
+     • Colormap radios + dB:FIXED chip — hidden per maintainer brief, mobile
+       has no room for palette selection in this iteration. */
+.m-app [aria-label="Waterfall contrast (γ)"] { display: none !important; }
+.m-app [role="radiogroup"][aria-label="Colormap"],
+.m-app [role="radiogroup"][aria-label="Colormap"] + button { display: none !important; }
+/* Pinch-to-zoom: tell the browser we own all touch on the spectrum surface
+   so it doesn't double-tap-zoom or pinch-zoom the document instead of the
+   canvas. usePanTuneGesture handles the multi-pointer math for both pan
+   (Panadapter) and waterfall canvases. */
+.m-app .m-pan canvas,
+.m-app .m-wf canvas { touch-action: none; }
+
+/* The Panadapter section overrides the default 10px body padding so the
+   spectrum + waterfall reach the panel edges. */
+.m-section:has(.m-pan) > .m-section-body { padding: 0; }
+
+/* ── MOX block ─────────────────────────────────────────── */
+.m-mox-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.m-mox-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+/* The mobile-ptt-btn already exists in src/styles/layout.css with mobile
+   sizing; we just want it full-width inside the block. */
+.m-mox-block .mobile-ptt-btn { width: 100%; }
+/* Compact the secondary buttons so three fit comfortably across. */
+.m-mox-row .btn,
+.m-mox-row .tx-btn { width: 100%; padding: 10px 6px; font-size: 13px; }
+
+/* ── Mode + Band ───────────────────────────────────────── */
+.m-modeband {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.m-segmented {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-1);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-lg);
+}
+.m-seg-btn {
+  padding: 9px 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--fg-2);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.4px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+  min-height: 36px;             /* Apple-recommended touch target */
+}
+.m-seg-btn:hover:not([disabled]) { color: var(--fg-0); }
+.m-seg-btn.on {
+  background: var(--accent);
+  color: #06121f;
+  font-weight: 700;
+}
+.m-seg-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+
+/* Wrap the existing BandButtons row so it stays inside the panel and the
+   chunky desktop buttons get a slightly tighter mobile sizing. The exact
+   internal markup of BandButtons is owned by that component; we just give
+   it a flex container that allows wrapping if 10 buttons don't fit one line. */
+.m-band-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.m-band-row > * { flex: 1 1 auto; }
+.m-band-row button { min-width: 38px; padding: 8px 6px; font-size: 12px; }
+
+/* The legacy `.hide-mobile` / `.show-mobile` classes were added for the
+   chrome-only mobile fallback (most widgets hidden, a couple of mobile
+   variants surfaced). Inside the new mobile shell we want each component's
+   *desktop* variant — full band-button row, full mode row, etc. — so we
+   neutralise both legacy classes within .m-app. show-mobile widgets that
+   set `display: none` inline (e.g. the BandButtons dropdown) stay hidden
+   because the inline style still wins. */
+.m-app .hide-mobile { display: revert !important; }
+.m-app .show-mobile { display: none !important; }
+
+/* The hide-mobile band row inside BandButtons brings its own .ctrl-group +
+   .ctrl-lbl chrome that doesn't read well in the mobile section. Hide the
+   redundant "BAND" label and let the .btn-row sit flush. */
+.m-band-row .ctrl-lbl { display: none; }
+.m-band-row .ctrl-group { padding: 0; }

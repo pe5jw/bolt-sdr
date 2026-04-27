@@ -100,6 +100,7 @@ import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
 import { registerServiceWorker } from './service-worker/registerSW';
 import { UpdatePrompt } from './service-worker/UpdatePrompt';
+import { MobileApp, useIsMobileViewport } from './mobile/MobileApp';
 import type L from 'leaflet';
 import type { QrzStation } from './api/qrz';
 import type { Contact } from './components/design/data';
@@ -519,16 +520,19 @@ export default function App() {
     );
   }, [connected]);
 
+  // Mobile viewport (≤900px) reactively tracked. Also honours `?mobile=1` so
+  // the mobile shell can be previewed on a desktop browser without resizing.
+  // The matchMedia listener is mounted in a layout effect so we don't paint
+  // a stale variant after a window resize / device-rotate.
+  const isMobile = useIsMobileViewport();
+
   // Feature flag: layout preference store determines whether to use the
-  // flexlayout-react dockable panel layout. Mobile viewports (≤900px) always
-  // use the fixed grid regardless of the preference — the mobile layout does
-  // not support flexlayout-react.
+  // flexlayout-react dockable panel layout. Mobile shell does not use
+  // flexlayout-react and short-circuits before the desktop tree renders.
   const layoutMode = useLayoutPreferenceStore((s) => s.layoutMode);
   const useFlexLayout = useMemo(() => {
-    if (typeof window === 'undefined') return false;
-    const isMobile = window.matchMedia('(max-width: 900px)').matches;
     return layoutMode === 'flex' && !isMobile;
-  }, [layoutMode]);
+  }, [layoutMode, isMobile]);
 
   // Bundle workspace state into a context so panel components can consume it
   // without prop-drilling through the FlexWorkspace factory.
@@ -581,6 +585,19 @@ export default function App() {
     dspActive, wpm, logbookTitle,
     handleLogQso, engageTerminator, disengageTerminator,
   ]);
+
+  // Mobile viewport short-circuit. All initialization hooks above (realtime,
+  // state poll, keyboard, mic uplink, service worker) have already run, so
+  // the mobile shell inherits the same live data feeds and the same store
+  // state — it just renders a different UI tree. SpectrumWheelActions is
+  // still required because Panadapter depends on the gesture context.
+  if (isMobile) {
+    return (
+      <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
+        <MobileApp />
+      </SpectrumWheelActionsContext.Provider>
+    );
+  }
 
   return (
     <WorkspaceContext.Provider value={workspaceCtx}>
