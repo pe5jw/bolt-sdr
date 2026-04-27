@@ -284,7 +284,7 @@ function MicGate() {
       <div className="m-mic-gate__msg">
         <strong>Microphone unavailable.</strong>{' '}
         {insecure
-          ? 'iOS Safari requires HTTPS for mic access on a LAN IP — open this app via a secure URL.'
+          ? 'Mobile browsers require HTTPS for microphone access. The Zeus server prints an https:// LAN URL at startup — open that one on your phone instead. The first visit will warn that the certificate is self-signed; tap through to proceed.'
           : micError}
       </div>
       {!insecure && (
