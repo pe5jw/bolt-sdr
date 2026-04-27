@@ -44,7 +44,7 @@
 
 // Default flexlayout-react model that replicates the current CSS grid:
 //   left column (75%): hero spectrum (70%) + bottom row [logbook + tx meters] (30%)
-//   right column (25%): VFO + SMeter + QRZ/Azimuth + DSP + CW (stacked)
+//   right column (25%): VFO + SMeter + QRZ/Azimuth + DSP + Step (stacked)
 //
 // Phase 1 — operators who never drag panels see the same screen as today.
 // Weights are approximate; flexlayout distributes remaining space proportionally.
@@ -139,7 +139,7 @@ export const DEFAULT_LAYOUT = {
             type: 'tabset',
             weight: 15,
             children: [
-              { type: 'tab', name: 'CW Keyer', component: 'cw' },
+              { type: 'tab', name: 'Tuning Step', component: 'step' },
             ],
           },
         ],
