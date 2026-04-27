@@ -21,6 +21,11 @@
 
 import { useEffect, useState } from 'react';
 
+// Release date for the version this build ships against. Bump whenever
+// VersionPrefix in Directory.Build.props bumps. ISO 8601 so toLocaleDateString
+// renders sensibly in any locale.
+const RELEASE_DATE_ISO = '2026-04-28';
+
 type VersionInfo = {
   version: string;
   latestVersion?: string;
@@ -97,6 +102,17 @@ export function AboutPanel() {
         <div style={{ marginBottom: 12 }}>
           <span style={{ color: 'var(--fg-2)', marginRight: 8 }}>Version:</span>
           <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{versionInfo.version}</span>
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <span style={{ color: 'var(--fg-2)', marginRight: 8 }}>Released:</span>
+          <span style={{ color: 'var(--fg-1)', fontWeight: 600 }}>
+            {new Date(RELEASE_DATE_ISO).toLocaleDateString(undefined, {
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+            })}
+          </span>
         </div>
 
         {versionInfo.latestVersion && (
