@@ -340,13 +340,18 @@ public sealed record PaSettingsSetRequest(
 // explicit pick ("Auto" = no override); `Connected` is what discovery found
 // on the wire ("Unknown" when nothing's connected); `Effective` is the board
 // whose defaults the PA / per-band tables seed from. Discovery wins whenever
-// a radio is actually connected — the preference is a before-connect hint.
+// a radio is actually connected **unless** `OverrideDetection` is true — the
+// preference is normally a before-connect hint, but with override it forces
+// specific board behavior even when a different board is detected.
 public sealed record RadioSelectionDto(
     string Preferred,
     string Connected,
-    string Effective);
+    string Effective,
+    bool OverrideDetection);
 
-public sealed record RadioSelectionSetRequest(string Preferred);
+public sealed record RadioSelectionSetRequest(
+    string Preferred,
+    bool? OverrideDetection);
 
 // ---- PureSignal request records ----
 // PsControlSetRequest = master arm (Enabled) + mode (Auto vs Single).
