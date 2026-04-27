@@ -215,6 +215,25 @@ if(WDSP_WITH_NR4)
         endif()
     endif()
 
+    # vcpkg fallback: vcpkg's FFTW3Config.cmake exposes only FFTW3::fftw3
+    # (double precision) even though its fftw3 port builds fftw3f.lib
+    # alongside. Find the single-precision library file directly — the
+    # vcpkg toolchain has already augmented CMake's library search paths
+    # to cover the installed tree. fftw3.h is the same header for all
+    # three precisions, so we re-link FFTW3::fftw3 just to inherit its
+    # INTERFACE_INCLUDE_DIRECTORIES.
+    if(NOT _fftw3f_found)
+        find_library(FFTW3F_LIBRARY NAMES fftw3f libfftw3f-3 libfftw3f)
+        if(FFTW3F_LIBRARY)
+            target_link_libraries(specbleach PRIVATE ${FFTW3F_LIBRARY})
+            if(TARGET FFTW3::fftw3)
+                target_link_libraries(specbleach PRIVATE FFTW3::fftw3)
+            endif()
+            set(_fftw3f_found TRUE)
+            message(STATUS "FFTW3f found via find_library: ${FFTW3F_LIBRARY}")
+        endif()
+    endif()
+
     if(NOT _fftw3f_found AND APPLE)
         foreach(_prefix /opt/homebrew/opt/fftw /usr/local/opt/fftw)
             if(EXISTS ${_prefix}/include/fftw3.h)
