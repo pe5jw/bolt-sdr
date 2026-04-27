@@ -76,7 +76,7 @@ import { ZoomControl } from './components/ZoomControl';
 import { useSwUpdatePrompt } from './pwa/useSwUpdatePrompt';
 import { AzimuthMap } from './components/design/AzimuthMap';
 import { CONTACTS, bandOf } from './components/design/data';
-import { CwKeyer } from './components/design/CwKeyer';
+import { TuningStepWidget } from './components/TuningStepWidget';
 import { Dockable } from './components/design/Dockable';
 import { DspPanel } from './components/DspPanel';
 import { TxFilterPanel } from './components/TxFilterPanel';
@@ -887,7 +887,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Side stack — Freq, S-Meter, QRZ, DSP, CW (and Map when QRZ off) */}
+        {/* Side stack — Freq, S-Meter, QRZ, DSP, Step (and Map when QRZ off) */}
         <div className="side-stack">
           <div className="side-slot">
             <Dockable title="Frequency · VFO" ledOn>
@@ -955,8 +955,8 @@ export default function App() {
           </div>
 
           <div className="side-slot hide-mobile">
-            <Dockable title={`CW Keyer · ${wpm} WPM`} ledOn={mode === 'CWU' || mode === 'CWL'}>
-              <CwKeyer wpm={wpm} setWpm={setWpm} />
+            <Dockable title="Tuning Step" ledOn>
+              <TuningStepWidget />
             </Dockable>
           </div>
         </div>
