@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { setMode, type RxMode } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useQrzStore } from '../state/qrz-store';
+import { useTxStore } from '../state/tx-store';
 import { VfoDisplay } from '../components/VfoDisplay';
 import { SMeterLive } from '../components/SMeterLive';
 import { Panadapter } from '../components/Panadapter';
@@ -212,6 +213,7 @@ export function MobileApp() {
         </Section>
 
         <div className="m-mox-block">
+          <MicGate />
           <MobilePttButton />
           <div className="m-mox-row">
             <TunButton />
@@ -234,6 +236,67 @@ export function MobileApp() {
           </div>
         </Section>
       </main>
+    </div>
+  );
+}
+
+// Mic permission gate. useMicUplink() in App.tsx kicks getUserMedia at mount
+// — that call falls outside any user gesture, and on iOS Safari over plain
+// HTTP-on-LAN-IP the origin isn't a secure context either, so the call is
+// silently rejected. Surfaces the error and offers an "Allow microphone"
+// button that re-requests permission FROM the user gesture, where Safari
+// will actually present the prompt. Reloads on success so the existing
+// uplink hook picks up the granted permission cleanly.
+function MicGate() {
+  const micError = useTxStore((s) => s.micError);
+  const [granting, setGranting] = useState(false);
+
+  if (!micError) return null;
+
+  // Non-secure-context detection. Localhost is treated as secure even over
+  // HTTP, but a LAN IP like 192.168.x.y over plain HTTP fails this and is
+  // unrecoverable without an HTTPS scheme.
+  const insecure =
+    typeof window !== 'undefined' && window.isSecureContext === false;
+
+  const onAllow = async () => {
+    setGranting(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Tear the temp stream down — useMicUplink will open its own once we
+      // reload. Holding it would tie up the mic.
+      for (const t of stream.getTracks()) t.stop();
+      useTxStore.getState().setMicError(null);
+      // Reload so useMicUplink's mount-effect re-runs with permission
+      // already granted; in-place retry would need plumbing the hook to
+      // accept a reset token.
+      window.location.reload();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      useTxStore.getState().setMicError(msg);
+    } finally {
+      setGranting(false);
+    }
+  };
+
+  return (
+    <div className="m-mic-gate" role="alert">
+      <div className="m-mic-gate__msg">
+        <strong>Microphone unavailable.</strong>{' '}
+        {insecure
+          ? 'iOS Safari requires HTTPS for mic access on a LAN IP — open this app via a secure URL.'
+          : micError}
+      </div>
+      {!insecure && (
+        <button
+          type="button"
+          className="m-mic-gate__btn"
+          onClick={onAllow}
+          disabled={granting}
+        >
+          {granting ? 'Requesting…' : 'Allow microphone'}
+        </button>
+      )}
     </div>
   );
 }
