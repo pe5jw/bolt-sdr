@@ -557,15 +557,15 @@ public sealed class WdspDspEngine : IDspEngine
             case NrMode.Emnr:
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
-                NativeMethods.SetRXAEMNRgainMethod(channelId, NrDefaults.EmnrGainMethod);
-                NativeMethods.SetRXAEMNRnpeMethod(channelId, NrDefaults.EmnrNpeMethod);
-                NativeMethods.SetRXAEMNRaeRun(channelId, NrDefaults.EmnrAeRun);
-                NativeMethods.SetRXAEMNRPosition(channelId, NrDefaults.Position);
+                // Core EMNR algorithm selectors (gain method, NPE method, AE
+                // filter) plus the optional Trained-method T1/T2 tuning. All
+                // operator-tunable; null fields fall back to NrDefaults so the
+                // engine state stays Thetis-equivalent when nothing's set yet.
+                ApplyNr2Core(channelId, cfg);
                 // post2 comfort-noise injection. emnr.c:981–1023 generates a
                 // smoothed noise floor that masks residual EMNR warble — the
                 // psychoacoustic mechanism behind Thetis's noticeably smoother
-                // NR2 hiss. Operator-tunable values come from cfg; null falls
-                // back to the Thetis-derived NrDefaults baseline.
+                // NR2 hiss.
                 ApplyNr2Post2(channelId, cfg);
                 NativeMethods.SetRXAEMNRRun(channelId, 1);
                 break;
@@ -638,6 +638,29 @@ public sealed class WdspDspEngine : IDspEngine
             cfg.NbMode, scaledThreshold);
     }
 
+    // NR2 (EMNR) core algorithm selectors. Pushed on every NR config update
+    // (not just at NrMode-switch time) so the operator can change Gain Method
+    // / NPE Method / AE Filter from the inline panel and see effect without a
+    // mode cycle. T1/T2 are unconditionally written when GainMethod=3 — WDSP
+    // only consults them in the Trained-gain code path (emnr.c:1226–1276).
+    private static void ApplyNr2Core(int channelId, NrConfig cfg)
+    {
+        int gainMethod = cfg.EmnrGainMethod ?? NrDefaults.EmnrGainMethod;
+        int npeMethod = cfg.EmnrNpeMethod ?? NrDefaults.EmnrNpeMethod;
+        bool aeRun = cfg.EmnrAeRun ?? (NrDefaults.EmnrAeRun != 0);
+
+        NativeMethods.SetRXAEMNRgainMethod(channelId, gainMethod);
+        NativeMethods.SetRXAEMNRnpeMethod(channelId, npeMethod);
+        NativeMethods.SetRXAEMNRaeRun(channelId, aeRun ? 1 : 0);
+        NativeMethods.SetRXAEMNRPosition(channelId, NrDefaults.Position);
+
+        if (gainMethod == 3)
+        {
+            NativeMethods.SetRXAEMNRtrainZetaThresh(channelId, cfg.EmnrTrainT1 ?? NrDefaults.EmnrTrainT1);
+            NativeMethods.SetRXAEMNRtrainT2(channelId, cfg.EmnrTrainT2 ?? NrDefaults.EmnrTrainT2);
+        }
+    }
+
     // NR2 (EMNR) post2 comfort-noise tunables. Configures all five params
     // before flipping post2Run so the post-processing stage starts coherent.
     // Null fields fall back to NrDefaults so the operator's "leave it default"
@@ -705,14 +728,22 @@ public sealed class WdspDspEngine : IDspEngine
         public const int EmnrAeRun = 1;
         public const int Position = 1;
 
-        // post2 defaults sourced from Thetis radio.cs slider initialisation
-        // and emnr.c:1026–1056 parameter ranges. UI sliders (factor/nlevel/
-        // taper) are 0..100 in Thetis and divided by 100 before SetRXA*; the
-        // 15-on-the-slider Thetis defaults arrive at WDSP as 0.15 / 12. See
-        // docs/prd/11-nr2-gap-plan.md §2a.
+        // Thetis Setup → DSP "Trained" T1/T2 NUDs (setup.designer.cs:43244,
+        // 43276). Defaults match Thetis exactly; only consulted by WDSP when
+        // EmnrGainMethod=3 (Trained gain method).
+        public const double EmnrTrainT1 = -0.5;
+        public const double EmnrTrainT2 = 2.0;
+
+        // post2 defaults sourced from Thetis radio.cs:2103/2122/2160 (raw
+        // NumericUpDown values 0..100, default 15/15/12). The /100 scaling
+        // happens INSIDE WDSP at emnr.c:1035/1042/1050, so the wire value is
+        // the Thetis slider raw — not the post-divide internal value WDSP
+        // ends up storing. (post2Rate has no /100 in WDSP, so 5.0 is correct
+        // as-is.) Earlier Zeus defaults of 0.15 were 100× too small once WDSP
+        // divided again, leaving comfort-noise effectively silent.
         public const int EmnrPost2Run = 1;
-        public const double EmnrPost2Factor = 0.15;
-        public const double EmnrPost2Nlevel = 0.15;
+        public const double EmnrPost2Factor = 15.0;
+        public const double EmnrPost2Nlevel = 15.0;
         public const double EmnrPost2Rate = 5.0;
         public const int EmnrPost2Taper = 12;
 
@@ -724,7 +755,13 @@ public sealed class WdspDspEngine : IDspEngine
         public const double Nr4SmoothingFactor = 0.0;
         public const double Nr4WhiteningFactor = 0.0;
         public const double Nr4NoiseRescale = 2.0;
-        public const double Nr4PostFilterThreshold = 0.0;
+        // Thetis Setup → DSP "SNRthresh" NUD default (setup.designer.cs:42132).
+        // The radio.cs field-init is 0.0 but Setup pushes the NUD value (-10) at
+        // first paint, so the operator's effective default is -10. WDSP's own
+        // create_sbnr also seeds -10 (sbnr.c:84), so the ON-startup state in
+        // Thetis is -10 across the board. Aligning here gives Zeus the same
+        // first-run behaviour.
+        public const double Nr4PostFilterThreshold = -10.0;
         public const int Nr4NoiseScalingType = 0;
         public const int Nr4Position = 1;
 

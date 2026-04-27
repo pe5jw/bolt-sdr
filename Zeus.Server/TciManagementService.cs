@@ -46,15 +46,16 @@ namespace Zeus.Server;
 /// <summary>
 /// Management service for TCI server configuration and status reporting.
 /// Since TCI uses Kestrel port binding (configured at startup), runtime
-/// changes require app restart. This service persists config changes to
-/// a local JSON file and reports current status including port availability.
+/// changes require app restart. This service persists config changes via
+/// TciConfigStore (LiteDB) and reports current status including port
+/// availability.
 /// </summary>
 public sealed class TciManagementService
 {
     private readonly ILogger<TciManagementService> _log;
     private readonly TciServer _tciServer;
     private readonly TciOptions _startupOptions;
-    private readonly string _configPath;
+    private readonly TciConfigStore _store;
 
     // In-memory pending config (what the user wants for next restart)
     private TciRuntimeConfig _pendingConfig;
@@ -63,24 +64,20 @@ public sealed class TciManagementService
         ILogger<TciManagementService> log,
         TciServer tciServer,
         IOptions<TciOptions> options,
-        IHostEnvironment env)
+        TciConfigStore store)
     {
         _log = log;
         _tciServer = tciServer;
         _startupOptions = options.Value;
+        _store = store;
 
-        // Persist config in app data directory
-        var dataPath = Path.Combine(env.ContentRootPath, "App_Data");
-        Directory.CreateDirectory(dataPath);
-        _configPath = Path.Combine(dataPath, "tci-config.json");
-
-        // Load or initialize pending config
-        _pendingConfig = LoadPersistedConfig() ?? new TciRuntimeConfig
-        {
-            Enabled = _startupOptions.Enabled,
-            BindAddress = _startupOptions.BindAddress,
-            Port = _startupOptions.Port,
-        };
+        // Load or initialize pending config from the persisted store. When
+        // nothing is persisted yet, mirror the startup options so a "no
+        // change" GetStatus() reports RequiresRestart=false.
+        _pendingConfig = _store.Get() ?? new TciRuntimeConfig(
+            Enabled: _startupOptions.Enabled,
+            BindAddress: _startupOptions.BindAddress,
+            Port: _startupOptions.Port);
     }
 
     public TciStatus GetStatus()
@@ -124,17 +121,22 @@ public sealed class TciManagementService
     public TciStatus SetConfig(TciRuntimeConfig config)
     {
         // Validate and normalize
-        var normalized = new TciRuntimeConfig
-        {
-            Enabled = config.Enabled,
-            BindAddress = string.IsNullOrWhiteSpace(config.BindAddress)
+        var normalized = new TciRuntimeConfig(
+            Enabled: config.Enabled,
+            BindAddress: string.IsNullOrWhiteSpace(config.BindAddress)
                 ? "127.0.0.1"
                 : config.BindAddress.Trim(),
-            Port = config.Port is > 0 and < 65536 ? config.Port : 40001,
-        };
+            Port: config.Port is > 0 and < 65536 ? config.Port : 40001);
 
         _pendingConfig = normalized;
-        PersistConfig(normalized);
+        try
+        {
+            _store.Set(normalized);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "tci.config.persist failed");
+        }
 
         _log.LogInformation(
             "tci.config.updated enabled={Enabled} bind={Bind} port={Port} (restart required)",
@@ -194,34 +196,4 @@ public sealed class TciManagementService
         }
     }
 
-    private TciRuntimeConfig? LoadPersistedConfig()
-    {
-        try
-        {
-            if (!File.Exists(_configPath)) return null;
-            var json = File.ReadAllText(_configPath);
-            return System.Text.Json.JsonSerializer.Deserialize<TciRuntimeConfig>(json);
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "tci.config.load failed, using defaults");
-            return null;
-        }
-    }
-
-    private void PersistConfig(TciRuntimeConfig config)
-    {
-        try
-        {
-            var json = System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions
-            {
-                WriteIndented = true
-            });
-            File.WriteAllText(_configPath, json);
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "tci.config.persist failed");
-        }
-    }
 }

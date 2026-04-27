@@ -76,7 +76,7 @@ import { ZoomControl } from './components/ZoomControl';
 import { useSwUpdatePrompt } from './pwa/useSwUpdatePrompt';
 import { AzimuthMap } from './components/design/AzimuthMap';
 import { CONTACTS, bandOf } from './components/design/data';
-import { CwKeyer } from './components/design/CwKeyer';
+import { TuningStepWidget } from './components/TuningStepWidget';
 import { Dockable } from './components/design/Dockable';
 import { DspPanel } from './components/DspPanel';
 import { TxFilterPanel } from './components/TxFilterPanel';
@@ -100,6 +100,7 @@ import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
 import { registerServiceWorker } from './service-worker/registerSW';
 import { UpdatePrompt } from './service-worker/UpdatePrompt';
+import { MobileApp, useIsMobileViewport } from './mobile/MobileApp';
 import type L from 'leaflet';
 import type { QrzStation } from './api/qrz';
 import type { Contact } from './components/design/data';
@@ -519,16 +520,19 @@ export default function App() {
     );
   }, [connected]);
 
+  // Mobile viewport (≤900px) reactively tracked. Also honours `?mobile=1` so
+  // the mobile shell can be previewed on a desktop browser without resizing.
+  // The matchMedia listener is mounted in a layout effect so we don't paint
+  // a stale variant after a window resize / device-rotate.
+  const isMobile = useIsMobileViewport();
+
   // Feature flag: layout preference store determines whether to use the
-  // flexlayout-react dockable panel layout. Mobile viewports (≤900px) always
-  // use the fixed grid regardless of the preference — the mobile layout does
-  // not support flexlayout-react.
+  // flexlayout-react dockable panel layout. Mobile shell does not use
+  // flexlayout-react and short-circuits before the desktop tree renders.
   const layoutMode = useLayoutPreferenceStore((s) => s.layoutMode);
   const useFlexLayout = useMemo(() => {
-    if (typeof window === 'undefined') return false;
-    const isMobile = window.matchMedia('(max-width: 900px)').matches;
     return layoutMode === 'flex' && !isMobile;
-  }, [layoutMode]);
+  }, [layoutMode, isMobile]);
 
   // Bundle workspace state into a context so panel components can consume it
   // without prop-drilling through the FlexWorkspace factory.
@@ -582,6 +586,19 @@ export default function App() {
     handleLogQso, engageTerminator, disengageTerminator,
   ]);
 
+  // Mobile viewport short-circuit. All initialization hooks above (realtime,
+  // state poll, keyboard, mic uplink, service worker) have already run, so
+  // the mobile shell inherits the same live data feeds and the same store
+  // state — it just renders a different UI tree. SpectrumWheelActions is
+  // still required because Panadapter depends on the gesture context.
+  if (isMobile) {
+    return (
+      <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
+        <MobileApp />
+      </SpectrumWheelActionsContext.Provider>
+    );
+  }
+
   return (
     <WorkspaceContext.Provider value={workspaceCtx}>
     <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
@@ -614,7 +631,7 @@ export default function App() {
             </svg>
           </div>
           <div className="brand-text">
-            <div className="brand-name mono">ZEUS</div>
+            <div className="brand-name mono">OpenHpsdr Zeus</div>
             <div className="brand-sub label-xs hide-mobile">HERMES LITE 2 · 0.1–54 MHz</div>
           </div>
         </div>
@@ -870,7 +887,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Side stack — Freq, S-Meter, QRZ, DSP, CW (and Map when QRZ off) */}
+        {/* Side stack — Freq, S-Meter, QRZ, DSP, Step (and Map when QRZ off) */}
         <div className="side-stack">
           <div className="side-slot">
             <Dockable title="Frequency · VFO" ledOn>
@@ -885,13 +902,17 @@ export default function App() {
             </Dockable>
           </div>
 
-          {terminatorActive ? (
+          {/* QRZ.com Lookup sits under the S-Meter when the operator has
+              the QRZ button engaged. Only renders while terminator is
+              active — when QRZ is off the slot collapses and DSP moves
+              up, matching the operator's "QRZ on demand" workflow. */}
+          {terminatorActive && (
             <div className="side-slot grow hide-mobile">
               <Dockable
                 title="QRZ.com Lookup"
                 ledOn={!!contact}
                 key={'qrz-' + lookupKey}
-                className={terminatorActive ? 't1000-panel' : ''}
+                className="t1000-panel"
                 actions={
                   <form
                     onSubmit={onCallsignSubmit}
@@ -917,12 +938,6 @@ export default function App() {
                 />
               </Dockable>
             </div>
-          ) : (
-            <div className="side-slot hide-mobile">
-              <Dockable title="Great-Circle Map" ledOn={!!contact}>
-                <AzimuthMap target={contact} myGrid="EM48" />
-              </Dockable>
-            </div>
           )}
 
           <div className="side-slot hide-mobile">
@@ -937,14 +952,27 @@ export default function App() {
             </Dockable>
           </div>
 
+          {/* Tuning Step — taller in classic mode + button row wraps so
+              all step values stay visible without horizontal overflow. */}
+          <div className="side-slot side-slot--tuning-step hide-mobile">
+            <Dockable title="Tuning Step" ledOn>
+              <TuningStepWidget />
+            </Dockable>
+          </div>
+
+          {/* Great-Circle Map sits at the bottom of the side stack now
+              that QRZ has moved to the bottom row alongside the Logbook.
+              Always visible. */}
           <div className="side-slot hide-mobile">
-            <Dockable title={`CW Keyer · ${wpm} WPM`} ledOn={mode === 'CWU' || mode === 'CWL'}>
-              <CwKeyer wpm={wpm} setWpm={setWpm} />
+            <Dockable title="Great-Circle Map" ledOn={!!contact}>
+              <AzimuthMap target={contact} myGrid="EM48" />
             </Dockable>
           </div>
         </div>
 
-        {/* Bottom row — Logbook + TX Stage Meters on desktop; big PTT on mobile. */}
+        {/* Bottom row — Logbook + TX Stage Meters on desktop; big PTT on
+            mobile. (QRZ Lookup lives in the side-stack under the S-Meter
+            when terminator is engaged.) */}
         <div className="bottom-row">
           <div className="bottom-slot hide-mobile">
             <Dockable title={logbookTitle} ledOn actions={logbookActions}>
