@@ -45,6 +45,7 @@
 using System.Net;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Contracts;
 using Zeus.Dsp;
 using Zeus.Dsp.Wdsp;
@@ -83,6 +84,27 @@ var tciSection = builder.Configuration.GetSection("Tci");
 var tciEnabled = tciSection.GetValue<bool>("Enabled");
 var tciBindAddress = tciSection.GetValue<string?>("BindAddress") ?? "0.0.0.0";
 var tciPort = tciSection.GetValue<int?>("Port") ?? 40001;
+
+// Persisted runtime override (LiteDB). The TCI management API queues changes
+// here because Kestrel's listener can only be wired before host build; we
+// pick those changes up on the next start. Falls back to appsettings when
+// nothing has ever been persisted.
+TciRuntimeConfig? persistedTci = null;
+try
+{
+    using var bootstrapTciStore = new TciConfigStore(NullLogger<TciConfigStore>.Instance);
+    persistedTci = bootstrapTciStore.Get();
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"tci.config.bootstrap-load failed: {ex.Message}");
+}
+if (persistedTci is not null)
+{
+    tciEnabled = persistedTci.Enabled;
+    tciBindAddress = persistedTci.BindAddress;
+    tciPort = persistedTci.Port;
+}
 
 builder.WebHost.ConfigureKestrel(k =>
 {
@@ -162,6 +184,20 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<RotctldService>())
 // for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),
 // and SDR display tools. Disabled by default; enable via appsettings.json Tci:Enabled=true.
 builder.Services.Configure<TciOptions>(builder.Configuration.GetSection("Tci"));
+// PostConfigure applies the persisted runtime override (set via /api/tci/config
+// in a previous session) on top of appsettings, so in-process services see the
+// same Enabled/Bind/Port values that Kestrel just bound to.
+if (persistedTci is not null)
+{
+    var pendingTci = persistedTci;
+    builder.Services.PostConfigure<TciOptions>(o =>
+    {
+        o.Enabled = pendingTci.Enabled;
+        o.BindAddress = pendingTci.BindAddress;
+        o.Port = pendingTci.Port;
+    });
+}
+builder.Services.AddSingleton<TciConfigStore>();
 builder.Services.AddSingleton<SpotManager>();
 builder.Services.AddSingleton<TciServer>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<TciServer>());
