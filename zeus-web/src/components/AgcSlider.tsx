@@ -65,7 +65,7 @@ export function AgcSlider() {
   // Slider thumb edits the user baseline (agcTopDb); the displayed number shows
   // the effective AGC on the DSP so the user can watch the auto ramp.
   const sliderValue = dragValue ?? userAgc;
-  const effective = Math.max(MIN, Math.min(MAX, sliderValue + offsetDb));
+  const effective = Math.round(Math.max(MIN, Math.min(MAX, sliderValue + offsetDb)));
 
   const inflightAbort = useRef<AbortController | null>(null);
   const latestSent = useRef<number>(userAgc);
