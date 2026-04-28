@@ -56,8 +56,14 @@ import {
   setMicGain,
   type RadioInfoDto,
 } from '../api/client';
+import {
+  BOARD_LABELS,
+  updateRadioSelection,
+  type BoardKind,
+} from '../api/radio';
 import { getAudioClient } from '../audio/audio-client';
 import { useConnectionStore } from '../state/connection-store';
+import { useRadioStore } from '../state/radio-store';
 import { useTxStore } from '../state/tx-store';
 import {
   useConnectStore,
@@ -72,6 +78,19 @@ const DEFAULT_SAMPLE_RATE = 192_000;
 const RETRY_THRESHOLD = 2;
 const IPV4_RE = /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)$/;
 const SAMPLE_RATES: SampleRate[] = [48_000, 96_000, 192_000, 384_000];
+
+// Same set as the Settings RadioSelector, in the same order. Auto first so
+// the default Manual-mode connect behaviour is "let discovery decide".
+const MANUAL_BOARD_OPTIONS: ReadonlyArray<BoardKind> = [
+  'Auto',
+  'HermesLite2',
+  'OrionMkII',
+  'Orion',
+  'Angelia',
+  'Hermes',
+  'Metis',
+  'Griffin',
+];
 
 function endpointFor(r: RadioInfoDto): string {
   if (!r.ipAddress) return '';
@@ -139,6 +158,8 @@ export function ConnectPanel() {
   const [manualPort, setManualPort] = useState(manualFormDefaults.port);
   const [manualProtocol, setManualProtocol] = useState<ProtocolChoice>(manualFormDefaults.protocol);
   const [manualSampleRate, setManualSampleRate] = useState<SampleRate>(manualFormDefaults.sampleRate);
+  // Older persisted ManualFormDefaults predate the board field — coalesce to Auto.
+  const [manualBoard, setManualBoard] = useState<BoardKind>(manualFormDefaults.board ?? 'Auto');
   const [manualSave, setManualSave] = useState(true);
   const [manualError, setManualError] = useState<string | null>(null);
 
@@ -239,6 +260,7 @@ export function ConnectPanel() {
       const protocol: ProtocolChoice = override?.protocol ?? manualProtocol;
       const sampleRate: SampleRate = (override?.sampleRate as SampleRate | undefined)
         ?? manualSampleRate;
+      const board: BoardKind = override?.board ?? manualBoard;
       const label = override?.label;
 
       if (!IPV4_RE.test(ip)) {
@@ -254,6 +276,21 @@ export function ConnectPanel() {
       setInflight(true);
       setManualError(null);
       try {
+        // Apply the operator's board choice BEFORE opening the socket so
+        // RadioService.ConnectedBoardKind resolves correctly on the very
+        // first packet — otherwise PA defaults / drive-byte / ATT would
+        // briefly use the auto-detected board until Settings was used to
+        // flip the override. 'Auto' clears any prior override.
+        const overrideOn = board !== 'Auto';
+        try {
+          await updateRadioSelection(board, overrideOn);
+          await useRadioStore.getState().load();
+        } catch (selErr) {
+          // Don't block the connect on selection-PUT failure; surface it
+          // alongside any subsequent connect error.
+          setManualError(`Board override: ${errorMessage(selErr)}`);
+        }
+
         if (protocol === 'P2') {
           await apiConnectP2({ endpoint: ep, sampleRate });
           const fresh = await fetchState();
@@ -269,9 +306,9 @@ export function ConnectPanel() {
         setLastConnectedEndpoint(ep);
         applyPostConnectEffects();
         if (manualSave || override) {
-          saveEndpoint({ label, ip, port, protocol, sampleRate });
+          saveEndpoint({ label, ip, port, protocol, sampleRate, board });
         }
-        setManualFormDefaults({ ip, port, protocol, sampleRate, label: '' });
+        setManualFormDefaults({ ip, port, protocol, sampleRate, board, label: '' });
       } catch (err) {
         setManualError(errorMessage(err));
       } finally {
@@ -279,7 +316,7 @@ export function ConnectPanel() {
       }
     },
     [
-      manualIp, manualPort, manualProtocol, manualSampleRate,
+      manualIp, manualPort, manualProtocol, manualSampleRate, manualBoard,
       manualSave, applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setInflight,
       setLastConnectedEndpoint, saveEndpoint, setManualFormDefaults,
     ],
@@ -606,6 +643,8 @@ export function ConnectPanel() {
             setProtocol={setManualProtocol}
             sampleRate={manualSampleRate}
             setSampleRate={setManualSampleRate}
+            board={manualBoard}
+            setBoard={setManualBoard}
             save={manualSave}
             setSave={setManualSave}
             error={manualError}
@@ -619,6 +658,7 @@ export function ConnectPanel() {
               setManualPort(e.port);
               setManualProtocol(e.protocol);
               setManualSampleRate(e.sampleRate);
+              setManualBoard(e.board ?? 'Auto');
               touchEndpoint(e.id);
               void handleManualConnect(e);
             }}
@@ -636,6 +676,7 @@ interface ManualModeProps {
   port: number; setPort: (v: number) => void;
   protocol: ProtocolChoice; setProtocol: (v: ProtocolChoice) => void;
   sampleRate: SampleRate; setSampleRate: (v: SampleRate) => void;
+  board: BoardKind; setBoard: (v: BoardKind) => void;
   save: boolean; setSave: (v: boolean) => void;
   error: string | null;
   onConnect: () => void;
@@ -746,6 +787,42 @@ function ManualMode(p: ManualModeProps) {
         </label>
       </div>
 
+      <label style={fieldLabelStyle}>
+        <span className="label-xs" style={{ color: 'var(--fg-2)' }}>
+          Radio type
+        </span>
+        <select
+          value={p.board}
+          onChange={(e) => p.setBoard(e.target.value as BoardKind)}
+          style={inputStyle}
+          title={
+            p.board === 'Auto'
+              ? 'Auto-detect: discovery picks the board.'
+              : 'Override active: Zeus will treat this radio as the selected board, ignoring auto-detection. Wrong choice can produce wrong drive levels — use only if you know your hardware combination is misreported (e.g. Anvelina + ANAN 200D PA).'
+          }
+        >
+          {MANUAL_BOARD_OPTIONS.map((b) => (
+            <option key={b} value={b}>
+              {BOARD_LABELS[b]}
+            </option>
+          ))}
+        </select>
+        {p.board !== 'Auto' && (
+          <span
+            className="label-xs"
+            style={{
+              color: 'var(--tx)',
+              fontSize: 10,
+              letterSpacing: 0,
+              textTransform: 'none',
+              marginTop: 2,
+            }}
+          >
+            Override active — discovery result will be ignored.
+          </span>
+        )}
+      </label>
+
       <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--fg-2)' }}>
         <input
           type="checkbox"
@@ -831,6 +908,19 @@ function ManualMode(p: ManualModeProps) {
                       {isLast && (
                         <span className="chip accent" style={{ marginLeft: 6 }}>
                           <span className="v">LAST</span>
+                        </span>
+                      )}
+                      {e.board && e.board !== 'Auto' && (
+                        <span
+                          className="chip"
+                          style={{
+                            marginLeft: 6,
+                            background: 'var(--tx-soft)',
+                            borderColor: 'var(--tx)',
+                          }}
+                          title={`Board override: ${BOARD_LABELS[e.board]}`}
+                        >
+                          <span className="v">{BOARD_LABELS[e.board]}</span>
                         </span>
                       )}
                     </span>
