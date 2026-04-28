@@ -63,35 +63,76 @@ export const TX_FIXED_DB_MAX = 20;
 
 const STORAGE_KEY = 'zeus.display.dbRange';
 const TX_STORAGE_KEY = 'zeus.display.txDbRange';
-const CONTRAST_STORAGE_KEY = 'zeus.display.contrast';
+const WF_STORAGE_KEY = 'zeus.display.wfDbRange';
+const PAN_BG_KEY = 'zeus.display.panBackground';
+const BG_IMAGE_KEY = 'zeus.display.backgroundImage';
+const BG_FIT_KEY = 'zeus.display.backgroundImageFit';
 
-// Allowed range for the waterfall gamma. Outside this band the display
-// either flattens to a single colour (very low) or clips weak signal to
-// black (very high). Default 1.0 = identity.
-export const CONTRAST_MIN = 0.5;
-export const CONTRAST_MAX = 4.0;
-export const CONTRAST_DEFAULT = 1.0;
+// Panadapter background mode. 'basic' = no overlay (current QRZ-off
+// look). 'beam-map' = world-map overlay with terminator lines and beam
+// chrome (current QRZ-on look). 'image' = user-supplied still image
+// behind a transparent panadapter / waterfall.
+export type PanBackgroundMode = 'basic' | 'beam-map' | 'image';
 
-function readSavedContrast(): number {
+// CSS background-size mapping for the image background.
+// 'fit' → contain (entire image visible, may letterbox)
+// 'fill' → cover (fills the panel, may crop)
+// 'stretch' → 100% 100% (distorts to fit exactly)
+export type BackgroundImageFit = 'fit' | 'fill' | 'stretch';
+
+function readPanBackground(): PanBackgroundMode {
   try {
-    if (typeof localStorage === 'undefined') return CONTRAST_DEFAULT;
-    const raw = localStorage.getItem(CONTRAST_STORAGE_KEY);
-    if (!raw) return CONTRAST_DEFAULT;
-    const v = Number(raw);
-    if (!Number.isFinite(v) || v < CONTRAST_MIN || v > CONTRAST_MAX) return CONTRAST_DEFAULT;
-    return v;
+    if (typeof localStorage === 'undefined') return 'basic';
+    const raw = localStorage.getItem(PAN_BG_KEY);
+    if (raw === 'basic' || raw === 'beam-map' || raw === 'image') return raw;
+    return 'basic';
   } catch {
-    return CONTRAST_DEFAULT;
+    return 'basic';
+  }
+}
+function writePanBackground(v: PanBackgroundMode): void {
+  try { if (typeof localStorage !== 'undefined') localStorage.setItem(PAN_BG_KEY, v); } catch { /* quota */ }
+}
+
+function readBackgroundImage(): string | null {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(BG_IMAGE_KEY);
+    return raw && raw.startsWith('data:image/') ? raw : null;
+  } catch {
+    return null;
+  }
+}
+function writeBackgroundImage(dataUrl: string | null): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    if (dataUrl == null) {
+      localStorage.removeItem(BG_IMAGE_KEY);
+    } else {
+      localStorage.setItem(BG_IMAGE_KEY, dataUrl);
+    }
+    return true;
+  } catch {
+    // Image too big for localStorage quota — caller should warn the user.
+    return false;
   }
 }
 
-function writeSavedContrast(v: number): void {
+// Default to 'fill' (cover): matches the Beam Map's full-bleed look so
+// portrait / square images fill the wide panadapter without letterboxing.
+// Users who want the whole image visible can pick 'fit' explicitly.
+function readBackgroundImageFit(): BackgroundImageFit {
   try {
-    if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(CONTRAST_STORAGE_KEY, String(v));
+    if (typeof localStorage === 'undefined') return 'fill';
+    const raw = localStorage.getItem(BG_FIT_KEY);
+    if (raw === 'fit' || raw === 'fill' || raw === 'stretch') return raw;
+    return 'fill';
   } catch {
-    // quota / private mode — silently accept
+    return 'fill';
   }
+}
+function writeBackgroundImageFit(v: BackgroundImageFit): void {
+  try { if (typeof localStorage !== 'undefined') localStorage.setItem(BG_FIT_KEY, v); } catch { /* quota */ }
 }
 
 function readSavedRange(): { dbMin: number; dbMax: number } {
@@ -147,6 +188,32 @@ function writeSavedTxRange(txDbMin: number, txDbMax: number): void {
   }
 }
 
+function readSavedWfRange(): { wfDbMin: number; wfDbMax: number } {
+  try {
+    if (typeof localStorage === 'undefined') return { wfDbMin: FIXED_DB_MIN, wfDbMax: FIXED_DB_MAX };
+    const raw = localStorage.getItem(WF_STORAGE_KEY);
+    if (!raw) return { wfDbMin: FIXED_DB_MIN, wfDbMax: FIXED_DB_MAX };
+    const parsed = JSON.parse(raw);
+    const wfDbMin = typeof parsed?.wfDbMin === 'number' ? parsed.wfDbMin : FIXED_DB_MIN;
+    const wfDbMax = typeof parsed?.wfDbMax === 'number' ? parsed.wfDbMax : FIXED_DB_MAX;
+    if (!(wfDbMin < wfDbMax) || !Number.isFinite(wfDbMin) || !Number.isFinite(wfDbMax)) {
+      return { wfDbMin: FIXED_DB_MIN, wfDbMax: FIXED_DB_MAX };
+    }
+    return { wfDbMin, wfDbMax };
+  } catch {
+    return { wfDbMin: FIXED_DB_MIN, wfDbMax: FIXED_DB_MAX };
+  }
+}
+
+function writeSavedWfRange(wfDbMin: number, wfDbMax: number): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(WF_STORAGE_KEY, JSON.stringify({ wfDbMin, wfDbMax }));
+  } catch {
+    // quota exceeded / private mode — accept silently.
+  }
+}
+
 // Exponential smoothing constant for the auto-range tracker. 0.1 trades
 // flicker resistance for responsiveness — band-change artifacts fade over
 // ~30 frames at 30 Hz (~1 s).
@@ -163,15 +230,13 @@ const MIN_SPAN_DB = 20;
 
 export type DisplaySettingsState = {
   autoRange: boolean;
-  // Panadapter dB window. Driven by the DbScale gesture (manual) and/or the
-  // AUTO toggle (EMA-tracked). The waterfall has its own window — see
-  // wfDbMin/wfDbMax below — so dragging the panadapter scale no longer
-  // affects waterfall brightness.
+  // Panadapter dB window. Driven by the DbScale gesture (manual) and/or
+  // the AUTO toggle (EMA-tracked).
   dbMin: number;
   dbMax: number;
-  // Waterfall dB window. Always EMA-tracks the wfDb percentiles so the
-  // colour mapping stays sensible across band-condition changes; the
-  // operator's only direct knob on the waterfall is the contrast (γ) slider.
+  // Waterfall dB window. Independent of the panadapter so the operator
+  // can darken/brighten the waterfall colour mapping without disturbing
+  // the panadapter's noise-floor view. Driven by its own DbScale slider.
   wfDbMin: number;
   wfDbMax: number;
   // Separate dB range for TX panadapter (rendered during MOX/TUN). Thetis
@@ -179,13 +244,19 @@ export type DisplaySettingsState = {
   txDbMin: number;
   txDbMax: number;
   colormap: ColormapId;
-  contrast: number;
+  // Panadapter background overlay mode + (optional) user image. See the
+  // PanBackgroundMode and BackgroundImageFit types above. The image is
+  // stored as a data:URL inside localStorage; setBackgroundImage returns
+  // false if the browser refused the write (quota exceeded).
+  panBackground: PanBackgroundMode;
+  backgroundImage: string | null;
+  backgroundImageFit: BackgroundImageFit;
+  setPanBackground: (v: PanBackgroundMode) => void;
+  setBackgroundImage: (dataUrl: string | null) => boolean;
+  setBackgroundImageFit: (v: BackgroundImageFit) => void;
   setAutoRange: (v: boolean) => void;
   setColormap: (id: ColormapId) => void;
-  setContrast: (gamma: number) => void;
   updateAutoRange: (wfDb: Float32Array) => void;
-  // Always-on EMA tracker for the waterfall window.
-  updateWfRange: (wfDb: Float32Array) => void;
   // Shift dbMin and dbMax together by `deltaDb`. Used by the draggable dB
   // scale overlay on the panadapter with content-follows-finger semantics:
   // drag DOWN raises both limits so the trace slides DOWN on the canvas.
@@ -193,23 +264,41 @@ export type DisplaySettingsState = {
   shiftDbRange: (deltaDb: number) => void;
   // Same as shiftDbRange but for the TX-specific range.
   shiftTxDbRange: (deltaDb: number) => void;
+  // Same as shiftDbRange but for the waterfall's independent range.
+  shiftWfDbRange: (deltaDb: number) => void;
 };
 
 const DB_ABS_LIMIT = 200;
 
 const initialRange = readSavedRange();
 const initialTxRange = readSavedTxRange();
+const initialWfRange = readSavedWfRange();
 
 export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) => ({
   autoRange: false,
   dbMin: initialRange.dbMin,
   dbMax: initialRange.dbMax,
-  wfDbMin: FIXED_DB_MIN,
-  wfDbMax: FIXED_DB_MAX,
+  wfDbMin: initialWfRange.wfDbMin,
+  wfDbMax: initialWfRange.wfDbMax,
   txDbMin: initialTxRange.txDbMin,
   txDbMax: initialTxRange.txDbMax,
   colormap: 'blue',
-  contrast: readSavedContrast(),
+  panBackground: readPanBackground(),
+  backgroundImage: readBackgroundImage(),
+  backgroundImageFit: readBackgroundImageFit(),
+  setPanBackground: (panBackground) => {
+    writePanBackground(panBackground);
+    set({ panBackground });
+  },
+  setBackgroundImage: (dataUrl) => {
+    const ok = writeBackgroundImage(dataUrl);
+    set({ backgroundImage: ok ? dataUrl : get().backgroundImage });
+    return ok;
+  },
+  setBackgroundImageFit: (backgroundImageFit) => {
+    writeBackgroundImageFit(backgroundImageFit);
+    set({ backgroundImageFit });
+  },
   setAutoRange: (autoRange) => {
     if (autoRange) {
       set({ autoRange: true });
@@ -222,11 +311,6 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     }
   },
   setColormap: (colormap) => set({ colormap }),
-  setContrast: (gamma) => {
-    const clamped = Math.max(CONTRAST_MIN, Math.min(CONTRAST_MAX, gamma));
-    set({ contrast: clamped });
-    writeSavedContrast(clamped);
-  },
   shiftDbRange: (deltaDb) => {
     // While AUTO is on, the live dbMin/dbMax are EMA-smoothed band-tracking
     // outputs (often messy floats and a tighter span than the user's saved
@@ -248,6 +332,13 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     set({ txDbMin: nextMin, txDbMax: nextMax });
     writeSavedTxRange(nextMin, nextMax);
   },
+  shiftWfDbRange: (deltaDb) => {
+    const { wfDbMin, wfDbMax } = get();
+    const nextMin = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, wfDbMin + deltaDb));
+    const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, wfDbMax + deltaDb));
+    set({ wfDbMin: nextMin, wfDbMax: nextMax });
+    writeSavedWfRange(nextMin, nextMax);
+  },
   updateAutoRange: (wfDb) => {
     if (!get().autoRange || wfDb.length === 0) return;
     const [p5, p95] = percentiles(wfDb);
@@ -262,22 +353,6 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     set({
       dbMin: dbMin * (1 - SMOOTHING) + targetMin * SMOOTHING,
       dbMax: dbMax * (1 - SMOOTHING) + targetMax * SMOOTHING,
-    });
-  },
-  updateWfRange: (wfDb) => {
-    if (wfDb.length === 0) return;
-    const [p5, p95] = percentiles(wfDb);
-    let targetMin = p5 - AUTO_FLOOR_MARGIN_DB;
-    let targetMax = p95 + AUTO_CEIL_MARGIN_DB;
-    if (targetMax - targetMin < MIN_SPAN_DB) {
-      const mid = 0.5 * (targetMin + targetMax);
-      targetMin = mid - MIN_SPAN_DB / 2;
-      targetMax = mid + MIN_SPAN_DB / 2;
-    }
-    const { wfDbMin, wfDbMax } = get();
-    set({
-      wfDbMin: wfDbMin * (1 - SMOOTHING) + targetMin * SMOOTHING,
-      wfDbMax: wfDbMax * (1 - SMOOTHING) + targetMax * SMOOTHING,
     });
   },
 }));

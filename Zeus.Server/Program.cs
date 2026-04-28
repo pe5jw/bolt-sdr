@@ -45,6 +45,7 @@
 using System.Net;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Contracts;
 using Zeus.Dsp;
 using Zeus.Dsp.Wdsp;
@@ -69,6 +70,12 @@ builder.Services.Configure<JsonOptions>(o =>
 // on the LAN (doc 01 §Deployment: local single-user, same LAN as radio).
 // ZEUS_PORT overrides the default (used by the /run skill's portOffset).
 var zeusPort = int.TryParse(Environment.GetEnvironmentVariable("ZEUS_PORT"), out var zp) ? zp : 6060;
+var zeusHttpsPort = LanCertificate.GetHttpsPort();
+// HTTPS bind for mobile-browser parity. Browsers refuse getUserMedia on a
+// non-secure context, which kills mic-uplink TX from any phone reaching
+// the server by LAN IP. The cert is auto-managed; first visit on each
+// device shows the standard "Not secure" warning.
+var lanCert = LanCertificate.GetOrCreate();
 
 // Resolve TCI bind settings from configuration before DI builds, because Kestrel's
 // listeners have to be declared now. TCI shares Kestrel (rather than a separate
@@ -78,9 +85,31 @@ var tciEnabled = tciSection.GetValue<bool>("Enabled");
 var tciBindAddress = tciSection.GetValue<string?>("BindAddress") ?? "0.0.0.0";
 var tciPort = tciSection.GetValue<int?>("Port") ?? 40001;
 
+// Persisted runtime override (LiteDB). The TCI management API queues changes
+// here because Kestrel's listener can only be wired before host build; we
+// pick those changes up on the next start. Falls back to appsettings when
+// nothing has ever been persisted.
+TciRuntimeConfig? persistedTci = null;
+try
+{
+    using var bootstrapTciStore = new TciConfigStore(NullLogger<TciConfigStore>.Instance);
+    persistedTci = bootstrapTciStore.Get();
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"tci.config.bootstrap-load failed: {ex.Message}");
+}
+if (persistedTci is not null)
+{
+    tciEnabled = persistedTci.Enabled;
+    tciBindAddress = persistedTci.BindAddress;
+    tciPort = persistedTci.Port;
+}
+
 builder.WebHost.ConfigureKestrel(k =>
 {
     k.ListenAnyIP(zeusPort);
+    k.ListenAnyIP(zeusHttpsPort, l => l.UseHttps(lanCert));
     if (tciEnabled)
     {
         if (tciBindAddress is "0.0.0.0" or "*" or "")
@@ -155,12 +184,40 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<RotctldService>())
 // for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),
 // and SDR display tools. Disabled by default; enable via appsettings.json Tci:Enabled=true.
 builder.Services.Configure<TciOptions>(builder.Configuration.GetSection("Tci"));
+// PostConfigure applies the persisted runtime override (set via /api/tci/config
+// in a previous session) on top of appsettings, so in-process services see the
+// same Enabled/Bind/Port values that Kestrel just bound to.
+if (persistedTci is not null)
+{
+    var pendingTci = persistedTci;
+    builder.Services.PostConfigure<TciOptions>(o =>
+    {
+        o.Enabled = pendingTci.Enabled;
+        o.BindAddress = pendingTci.BindAddress;
+        o.Port = pendingTci.Port;
+    });
+}
+builder.Services.AddSingleton<TciConfigStore>();
 builder.Services.AddSingleton<SpotManager>();
 builder.Services.AddSingleton<TciServer>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<TciServer>());
 builder.Services.AddSingleton<TciManagementService>();
 
 var app = builder.Build();
+
+// Surface the HTTPS endpoints up front so the operator can pick one for
+// their phone. iOS Safari + Chrome on Android both refuse getUserMedia on
+// non-secure origins, so the mobile shell hard-requires this URL.
+{
+    var lanIps = LanCertificate.GetLanIps();
+    var startupLog = app.Services.GetRequiredService<ILogger<Program>>();
+    startupLog.LogInformation(
+        "Zeus listening:  http://localhost:{HttpPort}   https://localhost:{HttpsPort}{LanLines}",
+        zeusPort, zeusHttpsPort,
+        lanIps.Count == 0
+            ? string.Empty
+            : "   (LAN: " + string.Join(", ", lanIps.Select(ip => $"https://{ip}:{zeusHttpsPort}")) + ")");
+}
 
 // Initialize QrzService to restore stored credentials (silent login)
 var qrzService = app.Services.GetRequiredService<QrzService>();
@@ -184,6 +241,24 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 var log = app.Services.GetRequiredService<ILogger<Program>>();
+
+// WDSP NR2 EMNR fopen()s "zetaHat.bin" and "calculus" by bare relative name
+// (native/wdsp/emnr.c:215,397). Anchor cwd to the assembly dir so those files
+// — copied next to the binary by Zeus.Server.csproj — are reachable. Without
+// this, WDSP silently falls through to the compiled-in CzetaHat / GG / GGS
+// fallback tables; numerically equivalent today, but won't pick up a future
+// retrained .bin without a libwdsp rebuild.
+{
+    var baseDir = AppContext.BaseDirectory;
+    Directory.SetCurrentDirectory(baseDir);
+    var zetaPath = Path.Combine(baseDir, "zetaHat.bin");
+    var calcPath = Path.Combine(baseDir, "calculus");
+    log.LogInformation(
+        "wdsp.nr2.models cwd={Cwd} zetaHat.bin={ZetaState} calculus={CalcState}",
+        baseDir,
+        File.Exists(zetaPath) ? "loaded" : "missing→compiled-fallback",
+        File.Exists(calcPath) ? "loaded" : "missing→compiled-fallback");
+}
 
 // Wire wisdom initializer → hub so every phase change is broadcast to all
 // connected clients. Seed the hub's cached phase with whatever the
@@ -505,6 +580,12 @@ app.MapPost("/api/auto-att", (AutoAttSetRequest req, RadioService r) =>
     return r.SetAutoAtt(req.Enabled);
 });
 
+app.MapPost("/api/auto-agc", (AutoAgcSetRequest req, RadioService r) =>
+{
+    log.LogInformation("api.auto-agc enabled={Enabled}", req.Enabled);
+    return r.SetAutoAgc(req.Enabled);
+});
+
 app.MapPost("/api/tx/mox", (MoxSetRequest req, TxService tx) =>
 {
     log.LogInformation("api.tx.mox on={On}", req.On);
@@ -689,6 +770,21 @@ app.MapPost("/api/rx/nr2/post2", (Nr2Post2ConfigSetRequest req, RadioService r) 
         "api.rx.nr2.post2 run={Run} factor={Factor} nlevel={Nlevel} rate={Rate} taper={Taper}",
         req.Post2Run, req.Post2Factor, req.Post2Nlevel, req.Post2Rate, req.Post2Taper);
     return Results.Ok(r.SetNr2Post2(req));
+});
+
+app.MapPost("/api/rx/nr2/core", (Nr2CoreConfigSetRequest req, RadioService r) =>
+{
+    log.LogInformation(
+        "api.rx.nr2.core gainMethod={Gm} npeMethod={Npm} aeRun={Ae} trainT1={T1} trainT2={T2}",
+        req.GainMethod, req.NpeMethod, req.AeRun, req.TrainT1, req.TrainT2);
+    try
+    {
+        return Results.Ok(r.SetNr2Core(req));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
 });
 
 app.MapPost("/api/rx/nr4", (Nr4ConfigSetRequest req, RadioService r) =>
@@ -1033,6 +1129,37 @@ app.Map("/ws", async (HttpContext ctx, StreamingHub hub) =>
     using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
     await hub.AttachClientAsync(ws, ctx.RequestAborted);
 });
+
+// Display startup banner with version and shutdown instructions.
+// Suppressed when running as a Windows service (no interactive console session).
+if (Environment.UserInteractive)
+{
+    var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+    var attr = assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+        .FirstOrDefault() as System.Reflection.AssemblyInformationalVersionAttribute;
+    var version = attr?.InformationalVersion ?? "unknown";
+
+    Console.WriteLine();
+    Console.WriteLine("═══════════════════════════════════════════════════════════════");
+    Console.WriteLine("  Zeus — OpenHPSDR Protocol 1 / Protocol 2 Client");
+    Console.WriteLine($"  Version: {version}");
+    Console.WriteLine("  Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors");
+    Console.WriteLine("  Licensed under GPL-2.0-or-later");
+    Console.WriteLine("═══════════════════════════════════════════════════════════════");
+    Console.WriteLine();
+    Console.WriteLine($"  Server listening on: http://localhost:{zeusPort}");
+    if (tciEnabled)
+        Console.WriteLine($"  TCI listening on:    {tciBindAddress}:{tciPort}");
+    Console.WriteLine();
+    Console.WriteLine("  Open your web browser and navigate to the server address above.");
+    Console.WriteLine();
+    Console.WriteLine("  To STOP the server:");
+    Console.WriteLine("    • Press Ctrl+C in this console window, or");
+    Console.WriteLine("    • Close this console window");
+    Console.WriteLine();
+    Console.WriteLine("  Server starting...");
+    Console.WriteLine();
+}
 
 app.Run();
 

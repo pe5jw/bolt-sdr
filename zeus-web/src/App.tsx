@@ -55,7 +55,11 @@ import { ConnectPanel } from './components/ConnectPanel';
 import { MicMeter } from './components/MicMeter';
 import { MobilePttButton } from './components/MobilePttButton';
 import { MobileZoomSlider } from './components/MobileZoomSlider';
+import { ZoomControl } from './components/ZoomControl';
 import { ModeBandwidth } from './components/ModeBandwidth';
+import { ModeFavorites } from './components/toolbar/ModeFavorites';
+import { BandFavorites } from './components/toolbar/BandFavorites';
+import { StepFavorites } from './components/toolbar/StepFavorites';
 import { FilterPanel } from './components/filter/FilterPanel';
 import { FilterRibbon, useFilterRibbonOpenSync } from './components/filter/FilterRibbon';
 import { MoxButton } from './components/MoxButton';
@@ -72,11 +76,10 @@ import { OverdriveIndicator, TxStageMeters } from './components/TxStageMeters';
 import { TunButton } from './components/TunButton';
 import { VfoDisplay } from './components/VfoDisplay';
 import { Waterfall } from './components/Waterfall';
-import { ZoomControl } from './components/ZoomControl';
 import { useSwUpdatePrompt } from './pwa/useSwUpdatePrompt';
 import { AzimuthMap } from './components/design/AzimuthMap';
 import { CONTACTS, bandOf } from './components/design/data';
-import { CwKeyer } from './components/design/CwKeyer';
+import { TuningStepWidget } from './components/TuningStepWidget';
 import { Dockable } from './components/design/Dockable';
 import { DspPanel } from './components/DspPanel';
 import { TxFilterPanel } from './components/TxFilterPanel';
@@ -96,10 +99,12 @@ import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
 import { useTxStore } from './state/tx-store';
 import { useLayoutPreferenceStore } from './state/layout-preference-store';
+import { useDisplaySettingsStore } from './state/display-settings-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
 import { registerServiceWorker } from './service-worker/registerSW';
 import { UpdatePrompt } from './service-worker/UpdatePrompt';
+import { MobileApp, useIsMobileViewport } from './mobile/MobileApp';
 import type L from 'leaflet';
 import type { QrzStation } from './api/qrz';
 import type { Contact } from './components/design/data';
@@ -224,8 +229,17 @@ export default function App() {
 
   // --- Design-mock state (QRZ, DSP grid toggles, CW WPM, memories) ---
   const [callsign, setCallsign] = useState('');
-  const [terminatorActive, setTerminatorActive] = useState(true);
-  // While 'M' is held and QRZ is engaged, the spectrum canvas stack goes
+  // Panadapter background is now driven by the Display settings panel
+  // (display-settings-store): 'basic' | 'beam-map' | 'image'. terminatorActive
+  // (= map + terminator chrome visible) is derived from 'beam-map'; imageMode
+  // is derived from 'image' + a loaded image.
+  const panBackground = useDisplaySettingsStore((s) => s.panBackground);
+  const backgroundImage = useDisplaySettingsStore((s) => s.backgroundImage);
+  const backgroundImageFit = useDisplaySettingsStore((s) => s.backgroundImageFit);
+  const terminatorActive = panBackground === 'beam-map';
+  const imageMode = panBackground === 'image' && !!backgroundImage;
+  const bgActive = terminatorActive || imageMode;
+  // While 'M' is held and the map is showing, the spectrum canvas stack goes
   // pointer-events:none and the Leaflet map underneath takes drag/zoom input.
   // Click-to-tune is suspended for the duration of the modifier.
   const [mapModifier, setMapModifier] = useState(false);
@@ -356,18 +370,19 @@ export default function App() {
     },
   }), []);
 
-  const engageTerminator = useCallback((cs?: string) => {
+  // QRZ is now passively engaged whenever the user has it configured (see
+  // qrzActive below) — there is no separate engage/disengage step. Submitting
+  // a callsign just runs a lookup; the contact card / chips render off the
+  // resulting `contact` regardless of what's drawn behind the panadapter.
+  const runQrzLookup = useCallback((cs?: string) => {
     const target = (cs ?? callsign).toUpperCase();
     setCallsign(target);
-    setTerminatorActive(true);
     setEnriching(true);
     setLookupKey((k) => k + 1);
     setBeamOverrideDeg(null);
     setBeamInputStr('');
     const qrz = useQrzStore.getState();
     if (qrz.connected && qrz.hasXmlSubscription) {
-      // Real QRZ lookup. The store updates lastLookup on success; the enriching
-      // scan animation keeps playing until the promise settles.
       qrz.lookup(target).finally(() => setEnriching(false));
     } else {
       // Design-mock fallback: CONTACTS lookup is synchronous; just run the scan
@@ -375,11 +390,6 @@ export default function App() {
       setTimeout(() => setEnriching(false), 700);
     }
   }, [callsign]);
-
-  const disengageTerminator = useCallback(() => {
-    setTerminatorActive(false);
-    setEnriching(false);
-  }, []);
 
   // `/` focuses the callsign input so the operator can type a call and hit Enter.
   useEffect(() => {
@@ -432,7 +442,7 @@ export default function App() {
 
   const onCallsignSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    engageTerminator();
+    runQrzLookup();
   };
 
   const bandLabel = bandOf(vfoHz);
@@ -519,16 +529,19 @@ export default function App() {
     );
   }, [connected]);
 
+  // Mobile viewport (≤900px) reactively tracked. Also honours `?mobile=1` so
+  // the mobile shell can be previewed on a desktop browser without resizing.
+  // The matchMedia listener is mounted in a layout effect so we don't paint
+  // a stale variant after a window resize / device-rotate.
+  const isMobile = useIsMobileViewport();
+
   // Feature flag: layout preference store determines whether to use the
-  // flexlayout-react dockable panel layout. Mobile viewports (≤900px) always
-  // use the fixed grid regardless of the preference — the mobile layout does
-  // not support flexlayout-react.
+  // flexlayout-react dockable panel layout. Mobile shell does not use
+  // flexlayout-react and short-circuits before the desktop tree renders.
   const layoutMode = useLayoutPreferenceStore((s) => s.layoutMode);
   const useFlexLayout = useMemo(() => {
-    if (typeof window === 'undefined') return false;
-    const isMobile = window.matchMedia('(max-width: 900px)').matches;
     return layoutMode === 'flex' && !isMobile;
-  }, [layoutMode]);
+  }, [layoutMode, isMobile]);
 
   // Bundle workspace state into a context so panel components can consume it
   // without prop-drilling through the FlexWorkspace factory.
@@ -542,6 +555,11 @@ export default function App() {
     callsign,
     setCallsign,
     terminatorActive,
+    imageMode,
+    bgActive,
+    panBackground,
+    backgroundImage,
+    backgroundImageFit,
     enriching,
     lookupKey,
     contact,
@@ -561,8 +579,7 @@ export default function App() {
     dist,
     heroTitle,
     csInputRef,
-    engageTerminator,
-    disengageTerminator,
+    runQrzLookup,
     onCallsignSubmit,
     submitBeam,
     handleLogQso,
@@ -573,14 +590,29 @@ export default function App() {
     logbookActions,
   }), [
     connected, moxOn, tunOn, mode, vfoHz,
-    callsign, terminatorActive, enriching, lookupKey, contact,
+    callsign, terminatorActive, imageMode, bgActive, panBackground,
+    backgroundImage, backgroundImageFit,
+    enriching, lookupKey, contact,
     qrzLookupError, qrzActive, mapAvailable, mapInteractive, effectiveHome,
     beamOverrideDeg, beamInputStr, rotLiveAz, sp, lp, dist,
     // heroTitle and logbookActions are ReactNodes (new objects each render);
     // their underlying primitive deps are already above, so omit them here.
     dspActive, wpm, logbookTitle,
-    handleLogQso, engageTerminator, disengageTerminator,
+    handleLogQso, runQrzLookup,
   ]);
+
+  // Mobile viewport short-circuit. All initialization hooks above (realtime,
+  // state poll, keyboard, mic uplink, service worker) have already run, so
+  // the mobile shell inherits the same live data feeds and the same store
+  // state — it just renders a different UI tree. SpectrumWheelActions is
+  // still required because Panadapter depends on the gesture context.
+  if (isMobile) {
+    return (
+      <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
+        <MobileApp />
+      </SpectrumWheelActionsContext.Provider>
+    );
+  }
 
   return (
     <WorkspaceContext.Provider value={workspaceCtx}>
@@ -614,7 +646,7 @@ export default function App() {
             </svg>
           </div>
           <div className="brand-text">
-            <div className="brand-name mono">ZEUS</div>
+            <div className="brand-name mono">OpenHpsdr Zeus</div>
             <div className="brand-sub label-xs hide-mobile">HERMES LITE 2 · 0.1–54 MHz</div>
           </div>
         </div>
@@ -671,15 +703,6 @@ export default function App() {
 
         <button
           type="button"
-          className={`btn qrz-btn hide-mobile ${terminatorActive ? 'active' : ''}`}
-          onClick={() => (terminatorActive ? disengageTerminator() : engageTerminator())}
-        >
-          <span className="led on" style={{ marginRight: 6 }} />
-          {terminatorActive ? 'QRZ ENGAGED' : 'Engage QRZ'}
-        </button>
-
-        <button
-          type="button"
           className="btn"
           onClick={() => setSettingsOpen(true)}
           title="Open settings menu"
@@ -691,9 +714,13 @@ export default function App() {
       {/* Control strip — real wired controls rebuilt into the design's chassis */}
       <div className="control-strip">
         <div className="hide-mobile" style={{ display: 'contents' }}>
-          <ModeBandwidth />
+          <ModeFavorites />
+          <span className="strip-divider" aria-hidden="true" />
           <FilterPanel />
-          <BandButtons />
+          <span className="strip-divider" aria-hidden="true" />
+          <BandFavorites />
+          <span className="strip-divider" aria-hidden="true" />
+          <StepFavorites />
         </div>
         <div className="show-mobile" style={{ display: 'none', gap: 8 }}>
           <ModeBandwidth />
@@ -716,12 +743,6 @@ export default function App() {
           <AfGainSlider />
         </div>
         <div className="spacer hide-mobile" style={{ flex: 1 }} />
-        <div className="ctrl-group hide-mobile" style={{ minWidth: 160 }}>
-          <div className="label-xs ctrl-lbl">ZOOM</div>
-          <div className="btn-row" style={{ gap: 10 }}>
-            <ZoomControl />
-          </div>
-        </div>
       </div>
 
       <AlertBanner />
@@ -737,8 +758,9 @@ export default function App() {
             and the `has-filter-ribbon` class is absent, so the workspace
             collapses to its original two-row layout. */}
         <FilterRibbon />
-        {/* Hero — spectrum + waterfall with QRZ world-map layer */}
-        <div className={`panel hero ${terminatorActive ? 'qrz-mode' : ''} ${mapInteractive ? 'map-mode' : ''}`}>
+        {/* Hero — spectrum + waterfall over an optional background overlay
+            (Beam Map or user image), driven by display-settings-store. */}
+        <div className={`panel hero ${bgActive ? 'bg-active' : ''} ${mapInteractive ? 'map-mode' : ''}`}>
           <div className="panel-head">
             <span className={`dot ${moxOn || tunOn ? 'tx' : 'on'}`} />
             <span className="title">{heroTitle}</span>
@@ -796,9 +818,16 @@ export default function App() {
                 <span className="v">+ −</span>
               </span>
             )}
+            <ZoomControl />
             <HzPerPixelChip />
           </div>
           <div className="panel-body hero-body">
+            {imageMode && (
+              <div
+                className={`image-layer ${backgroundImageFit}`}
+                style={{ backgroundImage: `url(${backgroundImage})` }}
+              />
+            )}
             <div className={`map-layer ${terminatorActive ? 'visible' : ''}`}>
               <LeafletMapErrorBoundary
                 onError={(error) => {
@@ -861,7 +890,7 @@ export default function App() {
               }}
             >
               {connected && <Panadapter />}
-              {connected && <Waterfall transparent={terminatorActive} />}
+              {connected && <Waterfall transparent={bgActive} />}
             </div>
             {/* Mobile vertical zoom slider — hidden on desktop via CSS */}
             <div className="show-mobile" style={{ display: 'none' }}>
@@ -870,7 +899,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Side stack — Freq, S-Meter, QRZ, DSP, CW (and Map when QRZ off) */}
+        {/* Side stack — Freq, S-Meter, QRZ, DSP, Step (and Map when QRZ off) */}
         <div className="side-stack">
           <div className="side-slot">
             <Dockable title="Frequency · VFO" ledOn>
@@ -885,13 +914,16 @@ export default function App() {
             </Dockable>
           </div>
 
-          {terminatorActive ? (
+          {/* QRZ.com Lookup is visible whenever QRZ is configured (XML
+              subscription + station home loaded). When QRZ is not
+              configured the slot collapses and DSP moves up. */}
+          {qrzActive && (
             <div className="side-slot grow hide-mobile">
               <Dockable
                 title="QRZ.com Lookup"
                 ledOn={!!contact}
                 key={'qrz-' + lookupKey}
-                className={terminatorActive ? 't1000-panel' : ''}
+                className="t1000-panel"
                 actions={
                   <form
                     onSubmit={onCallsignSubmit}
@@ -917,12 +949,6 @@ export default function App() {
                 />
               </Dockable>
             </div>
-          ) : (
-            <div className="side-slot hide-mobile">
-              <Dockable title="Great-Circle Map" ledOn={!!contact}>
-                <AzimuthMap target={contact} myGrid="EM48" />
-              </Dockable>
-            </div>
           )}
 
           <div className="side-slot hide-mobile">
@@ -937,14 +963,27 @@ export default function App() {
             </Dockable>
           </div>
 
+          {/* Tuning Step — taller in classic mode + button row wraps so
+              all step values stay visible without horizontal overflow. */}
+          <div className="side-slot side-slot--tuning-step hide-mobile">
+            <Dockable title="Tuning Step" ledOn>
+              <TuningStepWidget />
+            </Dockable>
+          </div>
+
+          {/* Great-Circle Map sits at the bottom of the side stack now
+              that QRZ has moved to the bottom row alongside the Logbook.
+              Always visible. */}
           <div className="side-slot hide-mobile">
-            <Dockable title={`CW Keyer · ${wpm} WPM`} ledOn={mode === 'CWU' || mode === 'CWL'}>
-              <CwKeyer wpm={wpm} setWpm={setWpm} />
+            <Dockable title="Great-Circle Map" ledOn={!!contact}>
+              <AzimuthMap target={contact} myGrid="EM48" />
             </Dockable>
           </div>
         </div>
 
-        {/* Bottom row — Logbook + TX Stage Meters on desktop; big PTT on mobile. */}
+        {/* Bottom row — Logbook + TX Stage Meters on desktop; big PTT on
+            mobile. (QRZ Lookup lives in the side-stack under the S-Meter
+            when terminator is engaged.) */}
         <div className="bottom-row">
           <div className="bottom-slot hide-mobile">
             <Dockable title={logbookTitle} ledOn actions={logbookActions}>

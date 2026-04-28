@@ -43,8 +43,8 @@
 // License for details.
 
 // Default flexlayout-react model that replicates the current CSS grid:
-//   left column (75%): hero spectrum (70%) + bottom row [logbook + tx meters] (30%)
-//   right column (25%): VFO + SMeter + QRZ/Azimuth + DSP + CW (stacked)
+//   left column (75%): hero spectrum (70%) + bottom row [QRZ + logbook + tx meters] (30%)
+//   right column (25%): VFO + SMeter + DSP + Azimuth + Step (stacked)
 //
 // Phase 1 — operators who never drag panels see the same screen as today.
 // Weights are approximate; flexlayout distributes remaining space proportionally.
@@ -79,20 +79,27 @@ export const DEFAULT_LAYOUT = {
             ],
           },
           {
-            // Bottom row: logbook + TX meters side by side
+            // Bottom row: QRZ lookup + logbook + TX meters side by side
             type: 'row',
             weight: 28,
             children: [
               {
                 type: 'tabset',
-                weight: 60,
+                weight: 30,
+                children: [
+                  { type: 'tab', name: 'QRZ Lookup', component: 'qrz' },
+                ],
+              },
+              {
+                type: 'tabset',
+                weight: 40,
                 children: [
                   { type: 'tab', name: 'Logbook', component: 'logbook' },
                 ],
               },
               {
                 type: 'tabset',
-                weight: 40,
+                weight: 30,
                 children: [
                   { type: 'tab', name: 'TX Stage Meters', component: 'txmeters' },
                 ],
@@ -108,7 +115,7 @@ export const DEFAULT_LAYOUT = {
         children: [
           {
             type: 'tabset',
-            weight: 15,
+            weight: 21,
             children: [
               { type: 'tab', name: 'Frequency · VFO', component: 'vfo' },
             ],
@@ -122,14 +129,6 @@ export const DEFAULT_LAYOUT = {
           },
           {
             type: 'tabset',
-            weight: 40,
-            children: [
-              { type: 'tab', name: 'QRZ Lookup', component: 'qrz' },
-              { type: 'tab', name: 'Azimuth Map', component: 'azimuth' },
-            ],
-          },
-          {
-            type: 'tabset',
             weight: 15,
             children: [
               { type: 'tab', name: 'DSP', component: 'dsp' },
@@ -137,9 +136,16 @@ export const DEFAULT_LAYOUT = {
           },
           {
             type: 'tabset',
+            weight: 40,
+            children: [
+              { type: 'tab', name: 'Azimuth Map', component: 'azimuth' },
+            ],
+          },
+          {
+            type: 'tabset',
             weight: 15,
             children: [
-              { type: 'tab', name: 'CW Keyer', component: 'cw' },
+              { type: 'tab', name: 'Tuning Step', component: 'step' },
             ],
           },
         ],
