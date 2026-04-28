@@ -121,6 +121,18 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
 
   const presets = useMemo(() => mergePresets(mode, serverPresets), [mode, serverPresets]);
 
+  // PRESETS grid order: F-slots ascending by passband width, then VAR1, VAR2.
+  // The local table is descending (5.0k → 1.0k); operators read narrow-to-wide
+  // more naturally, and pinning VAR slots to the end keeps drag targets stable
+  // even when their stored widths change.
+  const sortedPresets = useMemo(() => {
+    const fSlots = presets.filter((p) => !p.isVar).slice().sort((a, b) => {
+      return Math.abs(a.highHz - a.lowHz) - Math.abs(b.highHz - b.lowHz);
+    });
+    const varSlots = presets.filter((p) => p.isVar);
+    return [...fSlots, ...varSlots];
+  }, [presets]);
+
   const selectPreset = useCallback((slot: FilterPresetSlot) => {
     useConnectionStore.setState({
       filterLowHz: slot.lowHz,
@@ -138,22 +150,25 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
     setFilterAdvancedPaneOpen(false).catch(() => {});
   }, []);
 
-  // CUSTOM Lo/Hi inputs — armed against VAR1.
-  const var1 = presets.find((p) => p.slotName === 'VAR1');
-  const var1Active = filterPresetName === 'VAR1';
-  const seedLow = var1Active ? filterLow : (var1?.lowHz ?? filterLow);
-  const seedHigh = var1Active ? filterHigh : (var1?.highHz ?? filterHigh);
-  const seedAbs = signedToAbs(mode, seedLow, seedHigh);
+  // CUSTOM Lo/Hi inputs always mirror the live filter, so clicking any
+  // preset (F1..F10 or VAR1/VAR2) immediately repaints the entry fields
+  // with that slot's actual lo/hi. Where edits LAND is a separate question:
+  //   - VAR1 active → write to VAR1
+  //   - VAR2 active → write to VAR2
+  //   - F1..F10 active → fall back to VAR1 (F-slots are Thetis defaults
+  //     and must never be overwritten; freeform edits land in VAR1).
+  const activeVarSlot: 'VAR1' | 'VAR2' = filterPresetName === 'VAR2' ? 'VAR2' : 'VAR1';
+  const seedAbs = signedToAbs(mode, filterLow, filterHigh);
   const [loDraft, setLoDraft] = useState<string>(String(seedAbs.lo));
   const [hiDraft, setHiDraft] = useState<string>(String(seedAbs.hi));
 
-  // Reseed the drafts when the source values change (mode flip, VAR1 override
-  // edit elsewhere, server reconciliation).
+  // Reseed the drafts when the live filter changes (preset click, mode flip,
+  // server reconciliation). The CUSTOM inputs always reflect what's playing.
   useEffect(() => {
-    const abs = signedToAbs(mode, seedLow, seedHigh);
+    const abs = signedToAbs(mode, filterLow, filterHigh);
     setLoDraft(String(abs.lo));
     setHiDraft(String(abs.hi));
-  }, [mode, seedLow, seedHigh]);
+  }, [mode, filterLow, filterHigh]);
 
   const commitCustom = useCallback(async () => {
     const loAbs = Number.parseInt(loDraft, 10);
@@ -161,19 +176,23 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
     if (!Number.isFinite(loAbs) || !Number.isFinite(hiAbs)) return;
     const { low, high } = absToSigned(mode, loAbs, hiAbs);
     if (high <= low + 50) return;
+    // Writes land on the currently-active VAR slot. F1..F10 are Thetis
+    // defaults and never get overwritten — when one is active the edit falls
+    // back to VAR1 (set by activeVarSlot above).
+    const target = activeVarSlot;
     useConnectionStore.setState({
       filterLowHz: low,
       filterHighHz: high,
-      filterPresetName: 'VAR1',
+      filterPresetName: target,
     });
     try {
-      await setFilter(low, high, 'VAR1').then(applyState);
-      await setFilterPresetOverride(mode, 'VAR1', low, high);
-      // Refresh preset list so VAR1 chip shows the new values.
+      await setFilter(low, high, target).then(applyState);
+      await setFilterPresetOverride(mode, target, low, high);
+      // Refresh preset list so the VAR chip shows the new values.
       const fresh = await getFilterPresets(mode);
       setServerPresets(fresh);
     } catch { /* next state poll reconciles */ }
-  }, [loDraft, hiDraft, mode, applyState]);
+  }, [loDraft, hiDraft, mode, applyState, activeVarSlot]);
 
   const onCustomKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') e.currentTarget.blur();
@@ -250,7 +269,7 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
         <div className="filter-ribbon__presets">
           <div className="filter-ribbon__section-label">PRESETS</div>
           <div className="filter-ribbon__preset-grid">
-            {presets.map((slot) => {
+            {sortedPresets.map((slot) => {
               const slotWidth = Math.abs(slot.highHz - slot.lowHz);
               const isActive = filterPresetName === slot.slotName
                 || (Math.abs(slotWidth - currentWidth) <= 20 && !slot.isVar);
@@ -273,7 +292,7 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
             })}
           </div>
 
-          <div className="filter-ribbon__section-label">CUSTOM</div>
+          <div className="filter-ribbon__section-label">CUSTOM · {activeVarSlot}</div>
           <div className="filter-ribbon__custom-row">
             <input
               type="number"
