@@ -701,11 +701,11 @@ public sealed class RadioService : IDisposable
 
     /// <summary>
     /// Auto-AGC control loop. Estimates the band noise floor from a sliding
-    /// window of S-meter samples and trims AgcOffsetDb so the floor lands near
-    /// ReferenceFloorDbm — mirroring Thetis, where AGC-T is calibrated to the
-    /// noise floor rather than chasing the live signal. Slew-limited and
-    /// asymmetrically capped (more headroom to cut gain than to add it) so a
-    /// quiet band can't ramp the WDSP max-gain cap into clipping territory.
+    /// window of S-meter samples and chooses an absolute effective AGC-T that
+    /// places that floor near TargetAudioDb at the WDSP output, then derives
+    /// AgcOffsetDb = target − AgcTopDb so the same noise floor converges to
+    /// the same effective value regardless of where the user parked the
+    /// slider baseline. Slew-limited so adjustments are inaudibly gradual.
     /// </summary>
     internal void HandleRxMeterForAutoAgc(double signalDbm, long nowMs)
     {
@@ -745,13 +745,18 @@ public sealed class RadioService : IDisposable
                 if (v < noiseFloor) noiseFloor = v;
             }
 
-            // Quiet band → headroom to add gain. Noisy band → cut gain harder.
-            // Asymmetric caps prevent the runaway-loud failure mode.
-            const double ReferenceFloorDbm = -110.0;
-            const double MaxOffsetUp = 10.0;
-            const double MaxOffsetDown = 20.0;
-            double desiredOffset = Math.Clamp(
-                ReferenceFloorDbm - noiseFloor, -MaxOffsetDown, MaxOffsetUp);
+            // Auto-AGC chooses an *absolute* effective AGC-T from the noise
+            // floor: place the band noise at TargetAudioDb after WDSP's
+            // max-gain stage, so a quiet band lands at ~80 dB and a noisy
+            // band lands at ~50 dB regardless of where the user parked the
+            // slider baseline. The offset is whatever it takes to reach that
+            // absolute target on top of the current AgcTopDb baseline.
+            const double TargetAudioDb = -40.0;     // desired audio-output noise level
+            const double MinEffectiveAgcT = 20.0;
+            const double MaxEffectiveAgcT = 100.0;
+            double targetEffective = Math.Clamp(
+                TargetAudioDb - noiseFloor, MinEffectiveAgcT, MaxEffectiveAgcT);
+            double desiredOffset = targetEffective - _state.AgcTopDb;
 
             double delta = desiredOffset - _agcOffsetDb;
             if (Math.Abs(delta) < 0.5) return;
