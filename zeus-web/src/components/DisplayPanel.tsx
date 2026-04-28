@@ -22,6 +22,7 @@
 import { useLayoutPreferenceStore, type LayoutMode } from '../state/layout-preference-store';
 import { useLayoutStore } from '../state/layout-store';
 import { BackgroundSettingsPanel } from './BackgroundSettingsPanel';
+import { TraceColorPanel } from './TraceColorPanel';
 
 export function DisplayPanel() {
   const layoutMode = useLayoutPreferenceStore((s) => s.layoutMode);
@@ -44,6 +45,8 @@ export function DisplayPanel() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <BackgroundSettingsPanel />
+
+      <TraceColorPanel />
 
       <section>
         <h3 style={{

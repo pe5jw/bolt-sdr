@@ -67,6 +67,16 @@ const WF_STORAGE_KEY = 'zeus.display.wfDbRange';
 const PAN_BG_KEY = 'zeus.display.panBackground';
 const BG_IMAGE_KEY = 'zeus.display.backgroundImage';
 const BG_FIT_KEY = 'zeus.display.backgroundImageFit';
+const RX_TRACE_COLOR_KEY = 'zeus.display.rxTraceColor';
+
+// Default RX panadapter trace colour — warm amber, matching the original
+// hardcoded constant in gl/panadapter.ts. Operators can pick another colour
+// from the Display tab; the choice is persisted to localStorage.
+export const DEFAULT_RX_TRACE_COLOR = '#FFA028';
+
+function isHexColor(v: unknown): v is string {
+  return typeof v === 'string' && /^#[0-9A-Fa-f]{6}$/.test(v);
+}
 
 // Panadapter background mode. 'basic' = no overlay (current QRZ-off
 // look). 'beam-map' = world-map overlay with terminator lines and beam
@@ -133,6 +143,19 @@ function readBackgroundImageFit(): BackgroundImageFit {
 }
 function writeBackgroundImageFit(v: BackgroundImageFit): void {
   try { if (typeof localStorage !== 'undefined') localStorage.setItem(BG_FIT_KEY, v); } catch { /* quota */ }
+}
+
+function readRxTraceColor(): string {
+  try {
+    if (typeof localStorage === 'undefined') return DEFAULT_RX_TRACE_COLOR;
+    const raw = localStorage.getItem(RX_TRACE_COLOR_KEY);
+    return isHexColor(raw) ? raw.toUpperCase() : DEFAULT_RX_TRACE_COLOR;
+  } catch {
+    return DEFAULT_RX_TRACE_COLOR;
+  }
+}
+function writeRxTraceColor(v: string): void {
+  try { if (typeof localStorage !== 'undefined') localStorage.setItem(RX_TRACE_COLOR_KEY, v); } catch { /* quota */ }
 }
 
 function readSavedRange(): { dbMin: number; dbMax: number } {
@@ -251,9 +274,13 @@ export type DisplaySettingsState = {
   panBackground: PanBackgroundMode;
   backgroundImage: string | null;
   backgroundImageFit: BackgroundImageFit;
+  // RX panadapter trace colour as #RRGGBB. Drives both the sharp trace line
+  // and the fill underneath in gl/panadapter.ts (kept in lockstep).
+  rxTraceColor: string;
   setPanBackground: (v: PanBackgroundMode) => void;
   setBackgroundImage: (dataUrl: string | null) => boolean;
   setBackgroundImageFit: (v: BackgroundImageFit) => void;
+  setRxTraceColor: (v: string) => void;
   setAutoRange: (v: boolean) => void;
   setColormap: (id: ColormapId) => void;
   updateAutoRange: (wfDb: Float32Array) => void;
@@ -286,6 +313,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   panBackground: readPanBackground(),
   backgroundImage: readBackgroundImage(),
   backgroundImageFit: readBackgroundImageFit(),
+  rxTraceColor: readRxTraceColor(),
   setPanBackground: (panBackground) => {
     writePanBackground(panBackground);
     set({ panBackground });
@@ -298,6 +326,12 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   setBackgroundImageFit: (backgroundImageFit) => {
     writeBackgroundImageFit(backgroundImageFit);
     set({ backgroundImageFit });
+  },
+  setRxTraceColor: (v) => {
+    if (!isHexColor(v)) return;
+    const norm = v.toUpperCase();
+    writeRxTraceColor(norm);
+    set({ rxTraceColor: norm });
   },
   setAutoRange: (autoRange) => {
     if (autoRange) {
