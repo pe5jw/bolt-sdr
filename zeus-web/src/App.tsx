@@ -55,6 +55,7 @@ import { ConnectPanel } from './components/ConnectPanel';
 import { MicMeter } from './components/MicMeter';
 import { MobilePttButton } from './components/MobilePttButton';
 import { MobileZoomSlider } from './components/MobileZoomSlider';
+import { ZoomControl } from './components/ZoomControl';
 import { ModeBandwidth } from './components/ModeBandwidth';
 import { ModeFavorites } from './components/toolbar/ModeFavorites';
 import { BandFavorites } from './components/toolbar/BandFavorites';
@@ -75,7 +76,6 @@ import { OverdriveIndicator, TxStageMeters } from './components/TxStageMeters';
 import { TunButton } from './components/TunButton';
 import { VfoDisplay } from './components/VfoDisplay';
 import { Waterfall } from './components/Waterfall';
-import { ZoomControl } from './components/ZoomControl';
 import { useSwUpdatePrompt } from './pwa/useSwUpdatePrompt';
 import { AzimuthMap } from './components/design/AzimuthMap';
 import { CONTACTS, bandOf } from './components/design/data';
@@ -712,8 +712,11 @@ export default function App() {
       <div className="control-strip">
         <div className="hide-mobile" style={{ display: 'contents' }}>
           <ModeFavorites />
+          <span className="strip-divider" aria-hidden="true" />
           <FilterPanel />
+          <span className="strip-divider" aria-hidden="true" />
           <BandFavorites />
+          <span className="strip-divider" aria-hidden="true" />
           <StepFavorites />
         </div>
         <div className="show-mobile" style={{ display: 'none', gap: 8 }}>
@@ -737,12 +740,6 @@ export default function App() {
           <AfGainSlider />
         </div>
         <div className="spacer hide-mobile" style={{ flex: 1 }} />
-        <div className="ctrl-group hide-mobile" style={{ minWidth: 160 }}>
-          <div className="label-xs ctrl-lbl">ZOOM</div>
-          <div className="btn-row" style={{ gap: 10 }}>
-            <ZoomControl />
-          </div>
-        </div>
       </div>
 
       <AlertBanner />
@@ -817,6 +814,7 @@ export default function App() {
                 <span className="v">+ −</span>
               </span>
             )}
+            <ZoomControl />
             <HzPerPixelChip />
           </div>
           <div className="panel-body hero-body">

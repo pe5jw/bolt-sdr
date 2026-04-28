@@ -138,6 +138,23 @@
 .btn-row { display: flex; gap: 3px; align-items: center; }
 .btn-row.wrap { flex-wrap: wrap; width: 290px; }
 
+/* Thin vertical separator between control-strip groups
+   (Mode | Filter | Band | Step). Faded at top/bottom so it
+   blends with the panel chrome instead of clipping hard. */
+.strip-divider {
+  align-self: stretch;
+  width: 1px;
+  margin: 6px 4px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    var(--panel-edge) 20%,
+    var(--panel-edge) 80%,
+    transparent 100%
+  );
+  flex: 0 0 auto;
+}
+
 /* TuningStepWidget — auto-fit grid of equal-width step buttons. Each
    button stays at least 56px wide; when the panel is too narrow to fit
    all 13 buttons in a single row at that floor, the row wraps. Wide
