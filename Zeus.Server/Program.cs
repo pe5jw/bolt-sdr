@@ -872,15 +872,18 @@ app.MapPut("/api/pa-settings", (PaSettingsSetRequest req, PaSettingsStore store,
 
 // Radio selection — operator preference seeding, with discovery as the
 // tiebreaker. Preferred=="Auto" removes the override (stored as absence,
-// not a sentinel enum value). Effective = Connected when connected,
-// Preferred when not, Unknown otherwise.
+// not a sentinel enum value). Effective = Connected when connected (which
+// may itself be overridden if OverrideDetection is true), Preferred when
+// not connected, Unknown otherwise.
 app.MapGet("/api/radio/selection", (PreferredRadioStore prefs, RadioService radio) =>
 {
     var preferred = prefs.Get();
+    var overrideDetection = prefs.GetOverrideDetection();
     return Results.Ok(new RadioSelectionDto(
         Preferred: preferred?.ToString() ?? "Auto",
         Connected: radio.ConnectedBoardKind.ToString(),
-        Effective: radio.EffectiveBoardKind.ToString()));
+        Effective: radio.EffectiveBoardKind.ToString(),
+        OverrideDetection: overrideDetection));
 });
 
 app.MapPut("/api/radio/selection", (RadioSelectionSetRequest req, PreferredRadioStore prefs, RadioService radio) =>
@@ -903,11 +906,13 @@ app.MapPut("/api/radio/selection", (RadioSelectionSetRequest req, PreferredRadio
         return Results.BadRequest(new { error = $"unknown board '{req.Preferred}'" });
     }
 
-    prefs.Set(chosen);
+    prefs.Set(chosen, req.OverrideDetection);
+    var overrideDetection = prefs.GetOverrideDetection();
     return Results.Ok(new RadioSelectionDto(
         Preferred: chosen?.ToString() ?? "Auto",
         Connected: radio.ConnectedBoardKind.ToString(),
-        Effective: radio.EffectiveBoardKind.ToString()));
+        Effective: radio.EffectiveBoardKind.ToString(),
+        OverrideDetection: overrideDetection));
 });
 
 static HpsdrBoardKind? ParseBoardKind(string? raw)
