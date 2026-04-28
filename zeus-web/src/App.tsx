@@ -99,6 +99,7 @@ import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
 import { useTxStore } from './state/tx-store';
 import { useLayoutPreferenceStore } from './state/layout-preference-store';
+import { useDisplaySettingsStore } from './state/display-settings-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
 import { registerServiceWorker } from './service-worker/registerSW';
@@ -228,8 +229,17 @@ export default function App() {
 
   // --- Design-mock state (QRZ, DSP grid toggles, CW WPM, memories) ---
   const [callsign, setCallsign] = useState('');
-  const [terminatorActive, setTerminatorActive] = useState(true);
-  // While 'M' is held and QRZ is engaged, the spectrum canvas stack goes
+  // Panadapter background is now driven by the Display settings panel
+  // (display-settings-store): 'basic' | 'beam-map' | 'image'. terminatorActive
+  // (= map + terminator chrome visible) is derived from 'beam-map'; imageMode
+  // is derived from 'image' + a loaded image.
+  const panBackground = useDisplaySettingsStore((s) => s.panBackground);
+  const backgroundImage = useDisplaySettingsStore((s) => s.backgroundImage);
+  const backgroundImageFit = useDisplaySettingsStore((s) => s.backgroundImageFit);
+  const terminatorActive = panBackground === 'beam-map';
+  const imageMode = panBackground === 'image' && !!backgroundImage;
+  const bgActive = terminatorActive || imageMode;
+  // While 'M' is held and the map is showing, the spectrum canvas stack goes
   // pointer-events:none and the Leaflet map underneath takes drag/zoom input.
   // Click-to-tune is suspended for the duration of the modifier.
   const [mapModifier, setMapModifier] = useState(false);
@@ -360,18 +370,19 @@ export default function App() {
     },
   }), []);
 
-  const engageTerminator = useCallback((cs?: string) => {
+  // QRZ is now passively engaged whenever the user has it configured (see
+  // qrzActive below) — there is no separate engage/disengage step. Submitting
+  // a callsign just runs a lookup; the contact card / chips render off the
+  // resulting `contact` regardless of what's drawn behind the panadapter.
+  const runQrzLookup = useCallback((cs?: string) => {
     const target = (cs ?? callsign).toUpperCase();
     setCallsign(target);
-    setTerminatorActive(true);
     setEnriching(true);
     setLookupKey((k) => k + 1);
     setBeamOverrideDeg(null);
     setBeamInputStr('');
     const qrz = useQrzStore.getState();
     if (qrz.connected && qrz.hasXmlSubscription) {
-      // Real QRZ lookup. The store updates lastLookup on success; the enriching
-      // scan animation keeps playing until the promise settles.
       qrz.lookup(target).finally(() => setEnriching(false));
     } else {
       // Design-mock fallback: CONTACTS lookup is synchronous; just run the scan
@@ -379,11 +390,6 @@ export default function App() {
       setTimeout(() => setEnriching(false), 700);
     }
   }, [callsign]);
-
-  const disengageTerminator = useCallback(() => {
-    setTerminatorActive(false);
-    setEnriching(false);
-  }, []);
 
   // `/` focuses the callsign input so the operator can type a call and hit Enter.
   useEffect(() => {
@@ -436,7 +442,7 @@ export default function App() {
 
   const onCallsignSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    engageTerminator();
+    runQrzLookup();
   };
 
   const bandLabel = bandOf(vfoHz);
@@ -549,6 +555,11 @@ export default function App() {
     callsign,
     setCallsign,
     terminatorActive,
+    imageMode,
+    bgActive,
+    panBackground,
+    backgroundImage,
+    backgroundImageFit,
     enriching,
     lookupKey,
     contact,
@@ -568,8 +579,7 @@ export default function App() {
     dist,
     heroTitle,
     csInputRef,
-    engageTerminator,
-    disengageTerminator,
+    runQrzLookup,
     onCallsignSubmit,
     submitBeam,
     handleLogQso,
@@ -580,13 +590,15 @@ export default function App() {
     logbookActions,
   }), [
     connected, moxOn, tunOn, mode, vfoHz,
-    callsign, terminatorActive, enriching, lookupKey, contact,
+    callsign, terminatorActive, imageMode, bgActive, panBackground,
+    backgroundImage, backgroundImageFit,
+    enriching, lookupKey, contact,
     qrzLookupError, qrzActive, mapAvailable, mapInteractive, effectiveHome,
     beamOverrideDeg, beamInputStr, rotLiveAz, sp, lp, dist,
     // heroTitle and logbookActions are ReactNodes (new objects each render);
     // their underlying primitive deps are already above, so omit them here.
     dspActive, wpm, logbookTitle,
-    handleLogQso, engageTerminator, disengageTerminator,
+    handleLogQso, runQrzLookup,
   ]);
 
   // Mobile viewport short-circuit. All initialization hooks above (realtime,
@@ -691,15 +703,6 @@ export default function App() {
 
         <button
           type="button"
-          className={`btn qrz-btn hide-mobile ${terminatorActive ? 'active' : ''}`}
-          onClick={() => (terminatorActive ? disengageTerminator() : engageTerminator())}
-        >
-          <span className="led on" style={{ marginRight: 6 }} />
-          {terminatorActive ? 'QRZ ENGAGED' : 'Engage QRZ'}
-        </button>
-
-        <button
-          type="button"
           className="btn"
           onClick={() => setSettingsOpen(true)}
           title="Open settings menu"
@@ -755,8 +758,9 @@ export default function App() {
             and the `has-filter-ribbon` class is absent, so the workspace
             collapses to its original two-row layout. */}
         <FilterRibbon />
-        {/* Hero — spectrum + waterfall with QRZ world-map layer */}
-        <div className={`panel hero ${terminatorActive ? 'qrz-mode' : ''} ${mapInteractive ? 'map-mode' : ''}`}>
+        {/* Hero — spectrum + waterfall over an optional background overlay
+            (Beam Map or user image), driven by display-settings-store. */}
+        <div className={`panel hero ${bgActive ? 'bg-active' : ''} ${mapInteractive ? 'map-mode' : ''}`}>
           <div className="panel-head">
             <span className={`dot ${moxOn || tunOn ? 'tx' : 'on'}`} />
             <span className="title">{heroTitle}</span>
@@ -818,6 +822,12 @@ export default function App() {
             <HzPerPixelChip />
           </div>
           <div className="panel-body hero-body">
+            {imageMode && (
+              <div
+                className={`image-layer ${backgroundImageFit}`}
+                style={{ backgroundImage: `url(${backgroundImage})` }}
+              />
+            )}
             <div className={`map-layer ${terminatorActive ? 'visible' : ''}`}>
               <LeafletMapErrorBoundary
                 onError={(error) => {
@@ -880,7 +890,7 @@ export default function App() {
               }}
             >
               {connected && <Panadapter />}
-              {connected && <Waterfall transparent={terminatorActive} />}
+              {connected && <Waterfall transparent={bgActive} />}
             </div>
             {/* Mobile vertical zoom slider — hidden on desktop via CSS */}
             <div className="show-mobile" style={{ display: 'none' }}>
@@ -904,11 +914,10 @@ export default function App() {
             </Dockable>
           </div>
 
-          {/* QRZ.com Lookup sits under the S-Meter when the operator has
-              the QRZ button engaged. Only renders while terminator is
-              active — when QRZ is off the slot collapses and DSP moves
-              up, matching the operator's "QRZ on demand" workflow. */}
-          {terminatorActive && (
+          {/* QRZ.com Lookup is visible whenever QRZ is configured (XML
+              subscription + station home loaded). When QRZ is not
+              configured the slot collapses and DSP moves up. */}
+          {qrzActive && (
             <div className="side-slot grow hide-mobile">
               <Dockable
                 title="QRZ.com Lookup"
