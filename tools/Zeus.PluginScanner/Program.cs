@@ -6,55 +6,89 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        Console.WriteLine("Zeus VST Plugin Scanner");
+        Console.WriteLine("=======================");
+        Console.WriteLine();
+
+        var skipDefaults = args.Any(a => a == "--no-defaults" || a == "-N");
+        var customRoots = args.Where(a => !a.StartsWith('-')).Select(ExpandPath).ToList();
+
         var roots = new List<string>();
 
-        if (args.Length > 0)
+        if (!skipDefaults)
         {
-            roots.AddRange(args);
-        }
-        else
-        {
-            Console.WriteLine("Zeus VST Plugin Scanner");
-            Console.WriteLine("=======================");
-            Console.WriteLine();
-            Console.WriteLine("Enter the folder to scan. The scanner walks subfolders recursively,");
-            Console.WriteLine("so point at the parent directory that contains your plugins.");
-            Console.WriteLine();
-            Console.Write("Plugin folder path: ");
-            var path = Console.ReadLine()?.Trim();
-
-            if (string.IsNullOrEmpty(path))
+            var defaults = DefaultPluginPaths.ForCurrentPlatform();
+            if (defaults.Count > 0)
             {
-                Console.Error.WriteLine("No path provided. Exiting.");
-                return 1;
+                Console.WriteLine($"Auto-included standard plugin paths for {OSName()}:");
+                foreach (var p in defaults)
+                {
+                    Console.WriteLine($"  {p}");
+                }
+                roots.AddRange(defaults);
+                Console.WriteLine();
             }
-
-            path = Environment.ExpandEnvironmentVariables(path);
-            if (path.StartsWith("~/", StringComparison.Ordinal) || path == "~")
+            else
             {
-                path = path.Replace("~", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), StringComparison.Ordinal);
+                Console.WriteLine($"No standard plugin paths exist on this system for {OSName()}.");
+                Console.WriteLine();
             }
-
-            roots.Add(path);
         }
 
+        if (customRoots.Count > 0)
+        {
+            Console.WriteLine("Additional folders from command line:");
+            foreach (var p in customRoots)
+            {
+                Console.WriteLine($"  {p}");
+            }
+            roots.AddRange(customRoots);
+            Console.WriteLine();
+        }
+        else if (Console.IsInputRedirected == false)
+        {
+            Console.WriteLine("Add another folder to scan? (Plugins often live in vendor subfolders.)");
+            Console.Write("Path (Enter to skip): ");
+            var input = Console.ReadLine()?.Trim();
+            if (!string.IsNullOrEmpty(input))
+            {
+                roots.Add(ExpandPath(input));
+            }
+            Console.WriteLine();
+        }
+
+        if (roots.Count == 0)
+        {
+            Console.Error.WriteLine("No paths to scan. Provide a folder as argv or via the prompt.");
+            return 1;
+        }
+
+        var existing = new List<string>();
         foreach (var root in roots)
         {
-            if (!Directory.Exists(root))
+            if (Directory.Exists(root))
             {
-                Console.Error.WriteLine($"Path does not exist or is not a directory: {root}");
-                return 2;
+                existing.Add(root);
             }
+            else
+            {
+                Console.WriteLine($"  (skipping — not a directory) {root}");
+            }
+        }
+
+        if (existing.Count == 0)
+        {
+            Console.Error.WriteLine("None of the supplied paths exist. Exiting.");
+            return 2;
         }
 
         IBinaryHeaderSniffer sniffer = new BinaryHeaderSniffer();
         IPluginScanner scanner = new Zeus.PluginHost.Discovery.PluginScanner(sniffer);
 
-        Console.WriteLine();
-        Console.WriteLine($"Scanning {roots.Count} root(s) recursively...");
+        Console.WriteLine($"Scanning {existing.Count} root(s) recursively...");
         var startedAt = DateTime.UtcNow;
 
-        var manifests = await scanner.ScanAsync(roots);
+        var manifests = await scanner.ScanAsync(existing);
 
         var elapsed = DateTime.UtcNow - startedAt;
 
@@ -99,5 +133,23 @@ internal static class Program
         }
 
         return 0;
+    }
+
+    private static string ExpandPath(string path)
+    {
+        path = Environment.ExpandEnvironmentVariables(path);
+        if (path.StartsWith("~/", StringComparison.Ordinal) || path == "~")
+        {
+            path = path.Replace("~", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), StringComparison.Ordinal);
+        }
+        return path;
+    }
+
+    private static string OSName()
+    {
+        if (OperatingSystem.IsLinux()) return "Linux";
+        if (OperatingSystem.IsWindows()) return "Windows";
+        if (OperatingSystem.IsMacOS()) return "macOS";
+        return "this platform";
     }
 }
