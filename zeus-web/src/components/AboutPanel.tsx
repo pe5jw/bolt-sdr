@@ -95,7 +95,7 @@ export function AboutPanel() {
           color: 'var(--fg-0)',
         }}
       >
-        About Zeus
+        About OpenHPSDR Zeus
       </h3>
 
       <div style={{ marginBottom: 20 }}>
@@ -188,7 +188,7 @@ export function AboutPanel() {
 
       <div style={{ marginBottom: 20, paddingTop: 20, borderTop: '1px solid var(--panel-border)' }}>
         <p style={{ margin: '0 0 12px 0', lineHeight: 1.6, color: 'var(--fg-1)' }}>
-          Zeus is a cross-platform SDR client for OpenHPSDR Protocol-1 and Protocol-2 radios.
+          OpenHPSDR Zeus is a cross-platform SDR client for OpenHPSDR Protocol-1 and Protocol-2 radios.
         </p>
         <p style={{ margin: '0 0 12px 0', lineHeight: 1.6, color: 'var(--fg-2)' }}>
           Copyright © 2025-2026 Brian Keating (EI6LF), Douglas J. Cerrato (KB2UKA), and
