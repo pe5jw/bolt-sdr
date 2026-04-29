@@ -1069,6 +1069,16 @@ public class DspPipelineService : BackgroundService
         int audioSampleCount = engine.ReadAudio(channel, audioBuf);
         if (audioSampleCount > 0)
         {
+            // VST plugin-host seam — RX side, between WDSP audio drain and
+            // hub broadcast (docs/proposals/vst-host.md). Phase 1: the chain
+            // is always disabled inside the engine, so ProcessRxVstChain
+            // short-circuits on a volatile-bool read and returns false —
+            // `audioBuf` is bit-identical to the seam-absent flow. Phase 2
+            // wires the out-of-process VST sidecar via Zeus.PluginHost (DI
+            // in Zeus.Server) and routes audio through the loaded chain.
+            engine.ProcessRxVstChain(
+                audioBuf.AsSpan(0, audioSampleCount), audioSampleCount, AudioOutputRateHz);
+
             var audioFrame = new AudioFrame(
                 Seq: ++_audioSeq,
                 TsUnixMs: nowMs,

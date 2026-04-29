@@ -247,4 +247,33 @@ public interface IDspEngine : IDisposable
     /// classic-mode shape; the panel layout depends on it). No-op when no TXA
     /// is open or on Synthetic.</summary>
     void SetCfcConfig(CfcConfig cfg);
+
+    // ----------------- VST plugin-host seam (Phase 1 — no chain wired) -----
+    // Hooks the optional out-of-process VST plugin chain into the RX and TX
+    // signal paths. Phase 1 ships the seam only: the chain is null/disabled,
+    // every call returns false immediately and the caller proceeds with the
+    // original buffer. Phase 2 will route audio to the Zeus.PluginHost
+    // sidecar; the wiring lives in Zeus.Server, not here. Keeping the engines
+    // free of any PluginHost dependency makes the seam safe to land before
+    // the host project builds.
+
+    /// <summary>Process an RX audio block through the optional plugin chain.
+    /// Phase 1: chain is null or bypassed; this returns immediately and the
+    /// caller proceeds with <paramref name="audio"/> unchanged. Future phases
+    /// route through the out-of-process VST sidecar.
+    ///
+    /// Returns <c>true</c> if the block was processed (caller should treat
+    /// <paramref name="audio"/> as the new buffer); <c>false</c> if bypassed
+    /// (caller can use the original buffer with zero overhead).
+    ///
+    /// <paramref name="frames"/> is the sample count (mono);
+    /// <paramref name="audio"/>.Length must equal <paramref name="frames"/>.
+    /// </summary>
+    bool ProcessRxVstChain(Span<float> audio, int frames, int sampleRateHz);
+
+    /// <summary>Process a TX audio block post-Leveler, pre-CFC. Same contract
+    /// as <see cref="ProcessRxVstChain"/>. On the P1 profile
+    /// <paramref name="sampleRateHz"/> is 48000; on P2 it is 192000 — pass
+    /// through faithfully.</summary>
+    bool ProcessTxVstChain(Span<float> audio, int frames, int sampleRateHz);
 }

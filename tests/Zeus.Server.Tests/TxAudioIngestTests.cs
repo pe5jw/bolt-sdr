@@ -116,6 +116,8 @@ public class TxAudioIngestTests
         public void SavePsCorrection(string path) { }
         public void RestorePsCorrection(string path) { }
         public void SetCfcConfig(CfcConfig cfg) { }
+        public bool ProcessRxVstChain(Span<float> audio, int frames, int sampleRateHz) => false;
+        public bool ProcessTxVstChain(Span<float> audio, int frames, int sampleRateHz) => false;
         public void Dispose() { }
     }
 
