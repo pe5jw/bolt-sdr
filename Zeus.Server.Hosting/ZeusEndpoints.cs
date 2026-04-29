@@ -335,12 +335,17 @@ public static class ZeusEndpoints
             return Results.Ok(new { moxOn = tx.IsMoxOn });
         });
 
-        // Mic-gain: +N dB (0..20), scales WDSP TXA panel-gain-1 per Thetis audio.cs:218-224
-        // (linear gain = 10^(db/20)). Clamp before applying so the UI can't push the
-        // chain outside the PRD's 0..+20 dB window.
+        // Mic-gain: N dB in [-40, +10], scales WDSP TXA panel-gain-1 the same
+        // way Thetis does (console.cs:28805 setAudioMicGain → Audio.MicPreamp =
+        // 10^(db/20) → cmaster.CMSetTXAPanelGain1). The negative range is the
+        // important half: browser getUserMedia mics typically peak around
+        // -10..-15 dBFS, which over-drives WDSP TXA + ALC and prints as
+        // splatter on the air; without an attenuator the operator has nowhere
+        // to back off. Range matches Thetis's MicGainMin/Max defaults
+        // (console.cs:19151 = -40, :19163 = +10).
         app.MapPost("/api/mic-gain", (MicGainSetRequest req, DspPipelineService pipe) =>
         {
-            int db = Math.Clamp(req.Db, 0, 20);
+            int db = Math.Clamp(req.Db, -40, 10);
             double gain = Math.Pow(10.0, db / 20.0);
             pipe.CurrentEngine?.SetTxPanelGain(gain);
             return Results.Ok(new { micGainDb = db });
