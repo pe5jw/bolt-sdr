@@ -1054,6 +1054,14 @@ public static class ZeusEndpoints
                 return Results.BadRequest(new { error = "slot index out of range" });
             if (string.IsNullOrWhiteSpace(req.Path))
                 return Results.BadRequest(new { error = "path is required" });
+            // Phase 3 only loads VST3 — Vestige-based VST2 hosting is Phase 5.
+            // Reject non-VST3 paths up-front so operators get a clear message
+            // rather than the raw "is not a module directory" SDK error.
+            if (!req.Path.EndsWith(".vst3", StringComparison.OrdinalIgnoreCase))
+                return Results.BadRequest(new
+                {
+                    error = "only VST3 plugins are supported in this build (VST2/CLAP coming later)",
+                });
             try
             {
                 var outcome = await svc.LoadSlotAsync(idx, req.Path, ctx.RequestAborted);

@@ -64,6 +64,7 @@ export type VstHostSlotDetail = {
 
 export type VstHostCatalogEntry = {
   filePath: string;
+  bundlePath: string | null;
   displayName: string;
   format: string;
   platform: string;
@@ -208,6 +209,7 @@ function parseCatalogEntry(raw: unknown): VstHostCatalogEntry {
   const o = (raw ?? {}) as Record<string, unknown>;
   return {
     filePath: asString(o.filePath),
+    bundlePath: typeof o.bundlePath === 'string' ? o.bundlePath : null,
     displayName: asString(o.displayName),
     format: asString(o.format),
     platform: asString(o.platform),

@@ -42,15 +42,17 @@ function resetStore(catalogPreloaded = true) {
       ? [
           {
             filePath: '/p/eq.vst3',
+            bundlePath: null,
             displayName: 'AwesomeEQ',
-            format: 'VST3',
+            format: 'Vst3',
             platform: 'Linux',
             bitness: 'X64',
           },
           {
             filePath: '/p/comp.vst3',
+            bundlePath: null,
             displayName: 'BigComp',
-            format: 'VST3',
+            format: 'Vst3',
             platform: 'Linux',
             bitness: 'X64',
           },

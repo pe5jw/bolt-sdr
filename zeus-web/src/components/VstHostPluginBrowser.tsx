@@ -212,12 +212,28 @@ export function VstHostPluginBrowser({ open, targetSlot, onClose }: Props) {
                   {entry.filePath}
                 </div>
               </div>
-              {targetSlot !== null ? (
+              {entry.format !== 'Vst3' ? (
+                <span
+                  title="Only VST3 plugins load in this build. VST2 support comes in a later phase."
+                  style={{
+                    color: 'var(--fg-3)',
+                    fontSize: 10,
+                    padding: '2px 6px',
+                    border: '1px solid var(--panel-border)',
+                    borderRadius: 2,
+                  }}
+                >
+                  {entry.format.toUpperCase()} (not yet supported)
+                </span>
+              ) : targetSlot !== null ? (
                 <button
                   type="button"
                   className="btn sm"
                   onClick={async () => {
-                    await loadSlot(targetSlot, entry.filePath);
+                    // VST3 bundles: send the .vst3 directory, not the inner
+                    // .so. The SDK Module::create expects the bundle path.
+                    const path = entry.bundlePath ?? entry.filePath;
+                    await loadSlot(targetSlot, path);
                     onClose();
                   }}
                 >
