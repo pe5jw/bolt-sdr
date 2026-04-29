@@ -79,3 +79,148 @@ public sealed record LogLineMessage(string Text)
         return new LogLineMessage(System.Text.Encoding.UTF8.GetString(payload));
     }
 }
+
+/// <summary>
+/// Host -> sidecar plugin load request. Payload is u32 LE pathLen + UTF-8 path.
+/// The path is an absolute filesystem location of a VST3 bundle directory or
+/// single .vst3 file (platform-dependent).
+/// </summary>
+public sealed record LoadPluginRequest(string Path)
+{
+    public byte[] Encode()
+    {
+        var pathBytes = System.Text.Encoding.UTF8.GetBytes(Path);
+        var buf = new byte[4 + pathBytes.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0, 4),
+            (uint)pathBytes.Length);
+        pathBytes.CopyTo(buf, 4);
+        return buf;
+    }
+
+    public static LoadPluginRequest Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length < 4)
+        {
+            throw new ArgumentException(
+                "LoadPluginRequest payload must contain at least the u32 length prefix");
+        }
+        var len = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(0, 4));
+        if (payload.Length != 4 + (int)len)
+        {
+            throw new ArgumentException(
+                $"LoadPluginRequest payload length {payload.Length} != " +
+                $"4 + {len}");
+        }
+        var path = System.Text.Encoding.UTF8.GetString(
+            payload.Slice(4, (int)len));
+        return new LoadPluginRequest(path);
+    }
+}
+
+/// <summary>
+/// Sidecar -> host plugin load result. <see cref="Status"/> = 0 ok with
+/// <see cref="Name"/>/<see cref="Vendor"/>/<see cref="Version"/> populated;
+/// non-zero with <see cref="Error"/> populated. Status codes mirror the wire
+/// spec:
+///   0 ok, 1 file-not-found, 2 not-a-vst3, 3 no-audio-effect-class,
+///   4 activate-failed, 5 other.
+/// </summary>
+public sealed record LoadPluginResult(
+    byte Status,
+    string? Name,
+    string? Vendor,
+    string? Version,
+    string? Error)
+{
+    public byte[] Encode()
+    {
+        var ms = new System.IO.MemoryStream();
+        ms.WriteByte(Status);
+        if (Status == 0)
+        {
+            WriteLengthPrefixedString(ms, Name ?? string.Empty);
+            WriteLengthPrefixedString(ms, Vendor ?? string.Empty);
+            WriteLengthPrefixedString(ms, Version ?? string.Empty);
+        }
+        else
+        {
+            WriteLengthPrefixedString(ms, Error ?? string.Empty);
+        }
+        return ms.ToArray();
+    }
+
+    public static LoadPluginResult Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length < 1)
+        {
+            throw new ArgumentException("LoadPluginResult payload must be at least 1 byte");
+        }
+        var status = payload[0];
+        var cursor = 1;
+        if (status == 0)
+        {
+            var name    = ReadLengthPrefixedString(payload, ref cursor);
+            var vendor  = ReadLengthPrefixedString(payload, ref cursor);
+            var version = ReadLengthPrefixedString(payload, ref cursor);
+            return new LoadPluginResult(0, name, vendor, version, null);
+        }
+        var err = ReadLengthPrefixedString(payload, ref cursor);
+        return new LoadPluginResult(status, null, null, null, err);
+    }
+
+    private static void WriteLengthPrefixedString(System.IO.Stream s, string value)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+        Span<byte> len = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(len, (uint)bytes.Length);
+        s.Write(len);
+        s.Write(bytes, 0, bytes.Length);
+    }
+
+    private static string ReadLengthPrefixedString(
+        ReadOnlySpan<byte> input, ref int cursor)
+    {
+        if (input.Length < cursor + 4)
+        {
+            throw new ArgumentException(
+                "LoadPluginResult: truncated string length prefix");
+        }
+        var len = BinaryPrimitives.ReadUInt32LittleEndian(
+            input.Slice(cursor, 4));
+        if (input.Length < cursor + 4 + (int)len)
+        {
+            throw new ArgumentException(
+                "LoadPluginResult: truncated string body");
+        }
+        var value = System.Text.Encoding.UTF8.GetString(
+            input.Slice(cursor + 4, (int)len));
+        cursor += 4 + (int)len;
+        return value;
+    }
+}
+
+/// <summary>Host -> sidecar plugin unload request. Empty payload.</summary>
+public sealed record UnloadPluginRequest
+{
+    public static readonly UnloadPluginRequest Instance = new();
+    public byte[] Encode() => Array.Empty<byte>();
+}
+
+/// <summary>
+/// Sidecar -> host plugin unload result. <see cref="Status"/>:
+/// 0 ok, 1 no-plugin-loaded (the unload was a no-op), 5 other.
+/// </summary>
+public sealed record UnloadPluginResult(byte Status)
+{
+    public byte[] Encode() => new[] { Status };
+
+    public static UnloadPluginResult Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 1)
+        {
+            throw new ArgumentException(
+                $"UnloadPluginResult payload must be 1 byte, got {payload.Length}");
+        }
+        return new UnloadPluginResult(payload[0]);
+    }
+}

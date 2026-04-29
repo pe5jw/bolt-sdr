@@ -57,7 +57,53 @@ public interface IPluginHost
     /// length == frames.</param>
     /// <param name="frames">Sample count. Phase 1 is fixed at 256.</param>
     bool TryProcess(ReadOnlySpan<float> input, Span<float> output, int frames);
+
+    /// <summary>
+    /// Load a VST3 plugin in the sidecar at <paramref name="path"/>. The
+    /// path is an absolute filesystem location of a VST3 bundle (Linux:
+    /// directory ending in <c>.vst3</c>, single-file <c>.so</c> inside;
+    /// macOS: bundle directory; Windows: file).
+    /// </summary>
+    /// <returns>An outcome with <see cref="LoadPluginOutcome.Ok"/> set
+    /// when the plugin loaded successfully — <see cref="LoadPluginOutcome.Info"/>
+    /// then carries the plugin's name / vendor / version. Otherwise
+    /// <see cref="LoadPluginOutcome.Error"/> contains a diagnostic
+    /// message; the sidecar is still alive and the audio path falls
+    /// back to pass-through.</returns>
+    Task<LoadPluginOutcome> LoadPluginAsync(string path, CancellationToken ct = default);
+
+    /// <summary>
+    /// Unload the currently-loaded plugin (if any). Idempotent — a no-op
+    /// when no plugin is loaded. After this returns, <see cref="CurrentPlugin"/>
+    /// is null and <see cref="TryProcess"/> rounds-trips through the
+    /// pass-through path again.
+    /// </summary>
+    Task UnloadPluginAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Most recent successfully-loaded plugin, or null if no plugin is
+    /// currently loaded. Reset to null when <see cref="UnloadPluginAsync"/>
+    /// completes or <see cref="StopAsync"/> tears down the sidecar.
+    /// </summary>
+    LoadedPluginInfo? CurrentPlugin { get; }
 }
+
+/// <summary>
+/// Identifying metadata for a successfully-loaded plugin. Copied from
+/// the VST3 class info + factory info on the sidecar side.
+/// </summary>
+public sealed record LoadedPluginInfo(string Name, string Vendor, string Version);
+
+/// <summary>
+/// Outcome of <see cref="IPluginHost.LoadPluginAsync"/>. <see cref="Ok"/>
+/// is true on a successful load; <see cref="Info"/> is non-null then.
+/// On failure <see cref="Error"/> describes what went wrong (e.g. file
+/// not found, not a VST3, no audio-effect class, activate failed).
+/// </summary>
+public sealed record LoadPluginOutcome(
+    bool Ok,
+    LoadedPluginInfo? Info,
+    string? Error);
 
 /// <summary>
 /// Tiny logging shim. Avoids pulling Microsoft.Extensions.Logging.Abstractions

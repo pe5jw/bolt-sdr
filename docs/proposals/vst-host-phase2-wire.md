@@ -11,8 +11,10 @@ corrupt audio with no runtime warning. If you change anything, bump the
 `protocolVersion` field in the Hello message and update both implementations
 in the same commit.
 
-Phase 2 only delivers a working pass-through round-trip. Plugin loading,
-parameter messages, and per-block latency tightening are Phase 3.
+Phase 2 entry delivered the pass-through round-trip; Phase 2 real (this
+revision) adds VST3 plugin loading + dispatch through the audio loop.
+Parameter messages, GUI, presets, and per-block latency tightening are
+Phase 3.
 
 ## 1. Naming
 
@@ -157,15 +159,19 @@ Maximum payload is 1 MiB (defensive cap; Phase 2 messages are all <100 B).
 
 ### 4.3 Phase 2 message types
 
-| Tag | Name      | Direction       | Payload                                |
-| --: | --------- | --------------- | -------------------------------------- |
-|  01 | Hello     | sidecar -> host | u32 protoVer, u32 sampleRate, u32 framesPerBlock, u32 channels |
-|  02 | HelloAck  | host -> sidecar | (none)                                 |
-|  03 | Heartbeat | bidirectional   | (none, optional in Phase 2)            |
-|  04 | Goodbye   | host -> sidecar | (none)                                 |
-|  05 | LogLine   | sidecar -> host | UTF-8 bytes (plain text)               |
+| Tag | Name               | Direction       | Payload                                |
+| --: | ------------------ | --------------- | -------------------------------------- |
+|  01 | Hello              | sidecar -> host | u32 protoVer, u32 sampleRate, u32 framesPerBlock, u32 channels |
+|  02 | HelloAck           | host -> sidecar | (none)                                 |
+|  03 | Heartbeat          | bidirectional   | (none, optional in Phase 2)            |
+|  04 | Goodbye            | host -> sidecar | (none)                                 |
+|  05 | LogLine            | sidecar -> host | UTF-8 bytes (plain text)               |
+|  10 | LoadPlugin         | host -> sidecar | u32 pathLen + UTF-8 path bytes         |
+|  11 | LoadPluginResult   | sidecar -> host | u8 status, then per-status fields      |
+|  12 | UnloadPlugin       | host -> sidecar | (none)                                 |
+|  13 | UnloadPluginResult | sidecar -> host | u8 status                              |
 
-All multi-byte integers are little-endian.
+All multi-byte integers are little-endian. UTF-8 strings everywhere.
 
 `Hello` payload (16 bytes):
 
@@ -177,8 +183,52 @@ The sidecar sends `Hello` immediately after connecting. The host validates,
 sends `HelloAck`, and the sidecar then enters its audio loop. If the host
 rejects (e.g. version mismatch), it closes the socket and the sidecar exits.
 
-Plugin lifecycle messages (`LoadPlugin`, `SetParam`, `GetState`, `SetState`)
-are reserved for Phase 3 and intentionally absent here.
+`LoadPlugin` payload:
+
+```
+[pathLength u32 LE][UTF-8 path bytes]
+```
+
+Path is an absolute filesystem path to the VST3 bundle directory or single
+file. The sidecar resolves the path, walks the factory's class infos, and
+instantiates the first class with category `"Audio Module Class"`
+(`kVstAudioEffectClass`). A successful load replaces any previously-loaded
+plugin atomically (the audio thread sees the new pointer via atomic
+acquire-load).
+
+`LoadPluginResult` payload:
+
+```
+status u8
+  status == 0 (ok):
+    [nameLen u32 LE][UTF-8 name][vendorLen u32 LE][UTF-8 vendor][versionLen u32 LE][UTF-8 version]
+  status != 0 (error):
+    [errLen u32 LE][UTF-8 error message]
+```
+
+Status codes:
+
+| Status | Meaning                                                |
+| -----: | ------------------------------------------------------ |
+|      0 | ok                                                     |
+|      1 | file-not-found                                         |
+|      2 | not-a-vst3 (Module::create rejected the bundle)        |
+|      3 | no-audio-effect-class (factory has no `kVstAudioEffectClass`) |
+|      4 | activate-failed (initialize / setActive / setProcessing tresult != ok) |
+|      5 | other / unspecified                                    |
+
+`UnloadPlugin` is empty payload.
+
+`UnloadPluginResult` payload is a single status byte:
+
+| Status | Meaning                                                |
+| -----: | ------------------------------------------------------ |
+|      0 | ok                                                     |
+|      1 | no-plugin-loaded (the unload was a no-op)              |
+|      5 | other / unspecified                                    |
+
+Plugin chains, parameter automation, GUI, and presets are reserved for
+Phase 3+ and intentionally absent here.
 
 ## 5. Lifecycle
 
@@ -264,6 +314,13 @@ run.
 - Heartbeat is optional. Phase 3 enforces 1 Hz with a deadman timer for
   the silent-sidecar case (sidecar deadlocked but not exited).
 - No realtime scheduling priority. Phase 4 will pin the audio thread.
+- VST3 only — CLAP / VST2 are deferred to Phase 4 and Phase 5.
+- Single-slot plugin: one loaded plugin per host. Phase 6 adds a chain
+  with reorder + per-slot bypass.
+- No GUI. The plugin's parameter values are accessible only via the
+  sidecar's HostApplication helper; no editor window is opened.
+- No parameter automation, no preset save/restore. Phase 3 brings these
+  in once the chain UX shape is decided.
 
 ## 7. Error handling matrix (Phase 2)
 

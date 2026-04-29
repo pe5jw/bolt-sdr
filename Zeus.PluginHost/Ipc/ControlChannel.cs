@@ -28,11 +28,15 @@ namespace Zeus.PluginHost.Ipc;
 /// </summary>
 public enum ControlTag : byte
 {
-    Hello     = 0x01,
-    HelloAck  = 0x02,
-    Heartbeat = 0x03,
-    Goodbye   = 0x04,
-    LogLine   = 0x05,
+    Hello              = 0x01,
+    HelloAck           = 0x02,
+    Heartbeat          = 0x03,
+    Goodbye            = 0x04,
+    LogLine            = 0x05,
+    LoadPlugin         = 0x10,
+    LoadPluginResult   = 0x11,
+    UnloadPlugin       = 0x12,
+    UnloadPluginResult = 0x13,
 }
 
 /// <summary>

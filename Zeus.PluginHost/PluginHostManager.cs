@@ -61,6 +61,23 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
     // serialize at the manager level.
     private readonly SemaphoreSlim _txGate = new(1, 1);
 
+    // Plugin lifecycle: control-plane I/O is synchronous and serialized
+    // by this gate. Held across the LoadPlugin/UnloadPlugin send + the
+    // matching reply receive so two concurrent callers can't interleave
+    // their request/response pairs on the shared ControlChannel.
+    private readonly SemaphoreSlim _controlGate = new(1, 1);
+
+    // Most recent successfully-loaded plugin info (or null if none).
+    private LoadedPluginInfo? _currentPlugin;
+
+    /// <summary>
+    /// Default LoadPlugin timeout: VST3 module load can be slow on first
+    /// call (the SDK lazily resolves a few symbols, the plugin itself
+    /// may run validate code in its factory). 10 s is generous; the
+    /// caller can supply a tighter CancellationToken if they want.
+    /// </summary>
+    public TimeSpan LoadPluginTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
     private bool _disposed;
 
     /// <summary>Re-broadcast of <see cref="SidecarProcess.Exited"/>.</summary>
@@ -240,6 +257,24 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
     /// <inheritdoc />
     public async Task StopAsync(CancellationToken ct)
     {
+        // Auto-unload the active plugin (if any) BEFORE we tear the
+        // sidecar down. Best-effort: a dead sidecar can't reply to
+        // UnloadPlugin, and that's fine — the kernel will reap it.
+        try
+        {
+            if (_currentPlugin != null)
+            {
+                using var unloadCts = CancellationTokenSource
+                    .CreateLinkedTokenSource(ct);
+                unloadCts.CancelAfter(TimeSpan.FromMilliseconds(500));
+                await UnloadPluginAsync(unloadCts.Token).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            // Sidecar may be dead — fall through to teardown.
+        }
+
         SidecarProcess? proc;
         ControlChannel? channel;
         ShmRing? h2sRing;
@@ -252,6 +287,7 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
         lock (_gate)
         {
             if (_disposed) return;
+            _currentPlugin = null;
             proc           = _process;
             channel        = _control;
             h2sRing        = _h2sRing;
@@ -399,6 +435,179 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
         }
     }
 
+    /// <inheritdoc />
+    public LoadedPluginInfo? CurrentPlugin
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _currentPlugin;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<LoadPluginOutcome> LoadPluginAsync(
+        string path, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        if (string.IsNullOrEmpty(path))
+        {
+            return new LoadPluginOutcome(false, null, "path is empty");
+        }
+
+        ControlChannel channel;
+        lock (_gate)
+        {
+            if (!IsRunning || _control == null)
+            {
+                return new LoadPluginOutcome(false, null,
+                    "plugin host is not running");
+            }
+            channel = _control;
+        }
+
+        await _controlGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            // If a plugin is already loaded, the wire spec lets us re-Load
+            // (the sidecar's Load() unloads + reloads atomically), but we
+            // pass through Unload first to keep CurrentPlugin honest while
+            // the new load is in flight.
+            if (_currentPlugin != null)
+            {
+                try
+                {
+                    await UnloadPluginInternalAsync(channel, ct).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Best-effort. If unload failed the sidecar is in an
+                    // unknown state; still try the Load below.
+                }
+            }
+
+            var req = new LoadPluginRequest(path);
+            await channel.SendAsync(ControlTag.LoadPlugin, req.Encode(), ct)
+                .ConfigureAwait(false);
+
+            using var loadCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            loadCts.CancelAfter(LoadPluginTimeout);
+            var frame = await ReceiveExpected(channel,
+                ControlTag.LoadPluginResult, loadCts.Token).ConfigureAwait(false);
+            if (frame == null)
+            {
+                return new LoadPluginOutcome(false, null,
+                    "sidecar closed before LoadPluginResult");
+            }
+            var result = LoadPluginResult.Decode(frame.Value.Payload);
+            if (result.Status == 0)
+            {
+                var info = new LoadedPluginInfo(
+                    result.Name ?? string.Empty,
+                    result.Vendor ?? string.Empty,
+                    result.Version ?? string.Empty);
+                lock (_gate)
+                {
+                    _currentPlugin = info;
+                }
+                _log.LogInformation(
+                    $"PluginHostManager: loaded plugin name='{info.Name}' " +
+                    $"vendor='{info.Vendor}' version='{info.Version}'");
+                return new LoadPluginOutcome(true, info, null);
+            }
+            _log.LogWarning(
+                $"PluginHostManager: LoadPlugin failed status={result.Status} " +
+                $"error='{result.Error}'");
+            return new LoadPluginOutcome(false, null,
+                result.Error ?? $"LoadPlugin failed (status={result.Status})");
+        }
+        finally
+        {
+            _controlGate.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task UnloadPluginAsync(CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        ControlChannel? channel;
+        lock (_gate)
+        {
+            channel = _control;
+            if (channel == null || !channel.IsConnected)
+            {
+                _currentPlugin = null;
+                return;
+            }
+        }
+
+        await _controlGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await UnloadPluginInternalAsync(channel, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _controlGate.Release();
+        }
+    }
+
+    // Caller is expected to hold _controlGate. Sends the unload request,
+    // awaits the reply, and clears _currentPlugin regardless of status
+    // (status==1 means "no plugin loaded" which is an idempotent success
+    // for our purposes).
+    private async Task UnloadPluginInternalAsync(
+        ControlChannel channel, CancellationToken ct)
+    {
+        await channel.SendAsync(ControlTag.UnloadPlugin,
+            ReadOnlyMemory<byte>.Empty, ct).ConfigureAwait(false);
+        using var unloadCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        unloadCts.CancelAfter(TimeSpan.FromSeconds(2));
+        var frame = await ReceiveExpected(channel,
+            ControlTag.UnloadPluginResult, unloadCts.Token).ConfigureAwait(false);
+        lock (_gate)
+        {
+            _currentPlugin = null;
+        }
+        if (frame != null)
+        {
+            var result = UnloadPluginResult.Decode(frame.Value.Payload);
+            if (result.Status != 0 && result.Status != 1)
+            {
+                _log.LogWarning(
+                    $"PluginHostManager: UnloadPlugin status={result.Status}");
+            }
+        }
+    }
+
+    // Receive the next ControlChannel frame, skipping over Heartbeat /
+    // LogLine messages that arrive interleaved with the request/reply
+    // pair we are awaiting. Phase 2 frequency is low enough that this
+    // simple drain is safe; Phase 3 will move the reads to a dedicated
+    // background pump.
+    private static async Task<ControlFrame?> ReceiveExpected(
+        ControlChannel channel, ControlTag expected, CancellationToken ct)
+    {
+        while (true)
+        {
+            var frame = await channel.ReceiveAsync(ct).ConfigureAwait(false);
+            if (frame == null) return null;
+            if (frame.Value.Tag == expected) return frame;
+            // Heartbeat / LogLine / unrelated tags: keep draining.
+            if (frame.Value.Tag == ControlTag.Heartbeat ||
+                frame.Value.Tag == ControlTag.LogLine)
+            {
+                continue;
+            }
+            // Unexpected tag — surface as an error rather than spinning.
+            throw new System.IO.IOException(
+                $"PluginHostManager: expected {expected}, got {frame.Value.Tag}");
+        }
+    }
+
     private void OnSidecarExited(object? sender, SidecarExitedEventArgs e)
     {
         _log.LogWarning(
@@ -415,6 +624,9 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
                 // We just null the slot so IsRunning flips immediately.
                 _process = null;
             }
+            // Loaded plugin (if any) cannot survive a sidecar exit; the
+            // next Start cycle will need a fresh Load.
+            _currentPlugin = null;
         }
 
         // Bump backoff hint for any caller that wants to space restarts.
@@ -459,6 +671,7 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
         }
         _disposed = true;
         _txGate.Dispose();
+        _controlGate.Dispose();
     }
 
     public async ValueTask DisposeAsync()
@@ -474,6 +687,7 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
         }
         _disposed = true;
         _txGate.Dispose();
+        _controlGate.Dispose();
     }
 
     // ---- Phase 2 fixed geometry ----------------------------------------
