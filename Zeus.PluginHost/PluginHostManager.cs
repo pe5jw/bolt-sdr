@@ -18,10 +18,12 @@
 // IsRunning flips to false.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Zeus.PluginHost.Chain;
 using Zeus.PluginHost.Ipc;
 using Zeus.PluginHost.Native;
 
@@ -67,8 +69,16 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
     // their request/response pairs on the shared ControlChannel.
     private readonly SemaphoreSlim _controlGate = new(1, 1);
 
-    // Most recent successfully-loaded plugin info (or null if none).
-    private LoadedPluginInfo? _currentPlugin;
+    // Slot table. Always sized to ChainConstants.MaxSlots; empty slots
+    // have ChainSlot.Plugin == null. Replaced wholesale (immutable record
+    // semantics) when a slot transitions; the public Slots property
+    // returns a snapshot of this array.
+    private readonly ChainSlot[] _slots = new ChainSlot[ChainConstants.MaxSlots];
+
+    // Master enable. False == bit-identical pass-through regardless of
+    // slot population. Stored under _gate for snapshot consistency with
+    // Slots; the sidecar is the source of truth.
+    private bool _chainEnabled;
 
     /// <summary>
     /// Default LoadPlugin timeout: VST3 module load can be slow on first
@@ -108,6 +118,16 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
                 $"BlockHeader layout drift — C# and C++ must agree on 64 bytes " +
                 $"(got {actualSize}). See Zeus.PluginHost/Ipc/BlockHeader.cs and " +
                 $"openhpsdr-zeus-plughost/src/audio/block_format.h.");
+        }
+
+        // Slot table starts as 8 empty slots. The C++ side does the same.
+        for (int i = 0; i < _slots.Length; i++)
+        {
+            _slots[i] = new ChainSlot(
+                Index: i,
+                Plugin: null,
+                Bypass: false,
+                Parameters: Array.Empty<PluginParameter>());
         }
     }
 
@@ -257,17 +277,35 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
     /// <inheritdoc />
     public async Task StopAsync(CancellationToken ct)
     {
-        // Auto-unload the active plugin (if any) BEFORE we tear the
-        // sidecar down. Best-effort: a dead sidecar can't reply to
-        // UnloadPlugin, and that's fine — the kernel will reap it.
+        // Auto-unload every loaded slot BEFORE tearing the sidecar down.
+        // Best-effort: a dead sidecar can't reply, and the kernel reaps
+        // its mappings either way.
         try
         {
-            if (_currentPlugin != null)
+            int[] occupied;
+            lock (_gate)
+            {
+                var indices = new List<int>();
+                for (int i = 0; i < _slots.Length; i++)
+                {
+                    if (_slots[i].Plugin != null) indices.Add(i);
+                }
+                occupied = indices.ToArray();
+            }
+            foreach (var i in occupied)
             {
                 using var unloadCts = CancellationTokenSource
                     .CreateLinkedTokenSource(ct);
                 unloadCts.CancelAfter(TimeSpan.FromMilliseconds(500));
-                await UnloadPluginAsync(unloadCts.Token).ConfigureAwait(false);
+                try
+                {
+                    await UnloadSlotAsync(i, unloadCts.Token)
+                        .ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Sidecar may be dead between iterations — keep going.
+                }
             }
         }
         catch
@@ -287,7 +325,15 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
         lock (_gate)
         {
             if (_disposed) return;
-            _currentPlugin = null;
+            for (int i = 0; i < _slots.Length; i++)
+            {
+                _slots[i] = new ChainSlot(
+                    Index: i,
+                    Plugin: null,
+                    Bypass: false,
+                    Parameters: Array.Empty<PluginParameter>());
+            }
+            _chainEnabled = false;
             proc           = _process;
             channel        = _control;
             h2sRing        = _h2sRing;
@@ -442,16 +488,65 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
         {
             lock (_gate)
             {
-                return _currentPlugin;
+                return _slots[0].Plugin;
             }
         }
     }
 
     /// <inheritdoc />
-    public async Task<LoadPluginOutcome> LoadPluginAsync(
+    public int MaxChainSlots => ChainConstants.MaxSlots;
+
+    /// <inheritdoc />
+    public bool IsChainEnabled
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _chainEnabled;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<ChainSlot> Slots
+    {
+        get
+        {
+            lock (_gate)
+            {
+                // Snapshot copy — caller mustn't see live mutations.
+                var copy = new ChainSlot[_slots.Length];
+                Array.Copy(_slots, copy, _slots.Length);
+                return copy;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<LoadPluginOutcome> LoadPluginAsync(
         string path, CancellationToken ct = default)
+        => LoadSlotAsync(0, path, ct);
+
+    /// <inheritdoc />
+    public Task UnloadPluginAsync(CancellationToken ct = default)
+        => UnloadSlotAsync(0, ct);
+
+    // -- Phase 3a slot APIs ----------------------------------------------
+
+    /// <inheritdoc />
+    public async Task<LoadPluginOutcome> LoadSlotAsync(
+        int slotIdx, string path, CancellationToken ct = default)
     {
         ThrowIfDisposed();
+        if (slotIdx < 0 || slotIdx >= ChainConstants.MaxSlots)
+        {
+            // Surface invalid-slot uniformly with a status==6 outcome. The
+            // sidecar would reply the same way, but failing fast on the
+            // host side avoids burning a control round-trip.
+            return new LoadPluginOutcome(false, null,
+                $"slot index out of range (0..{ChainConstants.MaxSlots - 1}): {slotIdx}");
+        }
         if (string.IsNullOrEmpty(path))
         {
             return new LoadPluginOutcome(false, null, "path is empty");
@@ -471,37 +566,38 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
         await _controlGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            // If a plugin is already loaded, the wire spec lets us re-Load
-            // (the sidecar's Load() unloads + reloads atomically), but we
-            // pass through Unload first to keep CurrentPlugin honest while
-            // the new load is in flight.
-            if (_currentPlugin != null)
+            // If a plugin is already in this slot, unload it first so
+            // CurrentPlugin / Slots[i].Plugin are honest while the new
+            // load is in flight.
+            bool slotOccupied;
+            lock (_gate) { slotOccupied = _slots[slotIdx].Plugin != null; }
+            if (slotOccupied)
             {
                 try
                 {
-                    await UnloadPluginInternalAsync(channel, ct).ConfigureAwait(false);
+                    await UnloadSlotInternalAsync(channel, (byte)slotIdx, ct)
+                        .ConfigureAwait(false);
                 }
                 catch
                 {
-                    // Best-effort. If unload failed the sidecar is in an
-                    // unknown state; still try the Load below.
+                    // Best-effort.
                 }
             }
 
-            var req = new LoadPluginRequest(path);
-            await channel.SendAsync(ControlTag.LoadPlugin, req.Encode(), ct)
+            var req = new SlotLoadPluginRequest((byte)slotIdx, path);
+            await channel.SendAsync(ControlTag.SlotLoadPlugin, req.Encode(), ct)
                 .ConfigureAwait(false);
 
             using var loadCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             loadCts.CancelAfter(LoadPluginTimeout);
             var frame = await ReceiveExpected(channel,
-                ControlTag.LoadPluginResult, loadCts.Token).ConfigureAwait(false);
+                ControlTag.SlotLoadPluginResult, loadCts.Token).ConfigureAwait(false);
             if (frame == null)
             {
                 return new LoadPluginOutcome(false, null,
-                    "sidecar closed before LoadPluginResult");
+                    "sidecar closed before SlotLoadPluginResult");
             }
-            var result = LoadPluginResult.Decode(frame.Value.Payload);
+            var result = SlotLoadPluginResult.Decode(frame.Value.Payload);
             if (result.Status == 0)
             {
                 var info = new LoadedPluginInfo(
@@ -510,16 +606,21 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
                     result.Version ?? string.Empty);
                 lock (_gate)
                 {
-                    _currentPlugin = info;
+                    var prev = _slots[slotIdx];
+                    _slots[slotIdx] = prev with
+                    {
+                        Plugin = info,
+                        Parameters = Array.Empty<PluginParameter>(),
+                    };
                 }
                 _log.LogInformation(
-                    $"PluginHostManager: loaded plugin name='{info.Name}' " +
+                    $"PluginHostManager: slot {slotIdx} loaded plugin name='{info.Name}' " +
                     $"vendor='{info.Vendor}' version='{info.Version}'");
                 return new LoadPluginOutcome(true, info, null);
             }
             _log.LogWarning(
-                $"PluginHostManager: LoadPlugin failed status={result.Status} " +
-                $"error='{result.Error}'");
+                $"PluginHostManager: slot {slotIdx} LoadPlugin failed " +
+                $"status={result.Status} error='{result.Error}'");
             return new LoadPluginOutcome(false, null,
                 result.Error ?? $"LoadPlugin failed (status={result.Status})");
         }
@@ -530,16 +631,26 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
     }
 
     /// <inheritdoc />
-    public async Task UnloadPluginAsync(CancellationToken ct = default)
+    public async Task UnloadSlotAsync(int slotIdx, CancellationToken ct = default)
     {
         ThrowIfDisposed();
+        if (slotIdx < 0 || slotIdx >= ChainConstants.MaxSlots)
+        {
+            throw new ArgumentOutOfRangeException(nameof(slotIdx),
+                $"must be in 0..{ChainConstants.MaxSlots - 1}");
+        }
         ControlChannel? channel;
         lock (_gate)
         {
             channel = _control;
             if (channel == null || !channel.IsConnected)
             {
-                _currentPlugin = null;
+                var prev = _slots[slotIdx];
+                _slots[slotIdx] = prev with
+                {
+                    Plugin = null,
+                    Parameters = Array.Empty<PluginParameter>(),
+                };
                 return;
             }
         }
@@ -547,7 +658,8 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
         await _controlGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await UnloadPluginInternalAsync(channel, ct).ConfigureAwait(false);
+            await UnloadSlotInternalAsync(channel, (byte)slotIdx, ct)
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -555,31 +667,252 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
         }
     }
 
-    // Caller is expected to hold _controlGate. Sends the unload request,
-    // awaits the reply, and clears _currentPlugin regardless of status
-    // (status==1 means "no plugin loaded" which is an idempotent success
-    // for our purposes).
-    private async Task UnloadPluginInternalAsync(
-        ControlChannel channel, CancellationToken ct)
+    private async Task UnloadSlotInternalAsync(
+        ControlChannel channel, byte slotIdx, CancellationToken ct)
     {
-        await channel.SendAsync(ControlTag.UnloadPlugin,
-            ReadOnlyMemory<byte>.Empty, ct).ConfigureAwait(false);
+        var req = new SlotUnloadPluginRequest(slotIdx);
+        await channel.SendAsync(ControlTag.SlotUnloadPlugin, req.Encode(), ct)
+            .ConfigureAwait(false);
         using var unloadCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         unloadCts.CancelAfter(TimeSpan.FromSeconds(2));
         var frame = await ReceiveExpected(channel,
-            ControlTag.UnloadPluginResult, unloadCts.Token).ConfigureAwait(false);
+            ControlTag.SlotUnloadPluginResult, unloadCts.Token).ConfigureAwait(false);
         lock (_gate)
         {
-            _currentPlugin = null;
+            var prev = _slots[slotIdx];
+            _slots[slotIdx] = prev with
+            {
+                Plugin = null,
+                Parameters = Array.Empty<PluginParameter>(),
+            };
         }
         if (frame != null)
         {
-            var result = UnloadPluginResult.Decode(frame.Value.Payload);
+            var result = SlotUnloadPluginResult.Decode(frame.Value.Payload);
             if (result.Status != 0 && result.Status != 1)
             {
                 _log.LogWarning(
-                    $"PluginHostManager: UnloadPlugin status={result.Status}");
+                    $"PluginHostManager: slot {slotIdx} Unload status={result.Status}");
             }
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task SetSlotBypassAsync(
+        int slotIdx, bool bypass, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        if (slotIdx < 0 || slotIdx >= ChainConstants.MaxSlots)
+        {
+            throw new ArgumentOutOfRangeException(nameof(slotIdx));
+        }
+        ControlChannel channel;
+        lock (_gate)
+        {
+            if (!IsRunning || _control == null)
+            {
+                throw new InvalidOperationException("plugin host is not running");
+            }
+            channel = _control;
+        }
+        await _controlGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var req = new SlotSetBypassRequest((byte)slotIdx, bypass);
+            await channel.SendAsync(ControlTag.SlotSetBypass, req.Encode(), ct)
+                .ConfigureAwait(false);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(2));
+            var frame = await ReceiveExpected(channel,
+                ControlTag.SlotSetBypassResult, cts.Token).ConfigureAwait(false);
+            if (frame == null) return;
+            var result = SlotSetBypassResult.Decode(frame.Value.Payload);
+            if (result.Status == 0)
+            {
+                lock (_gate)
+                {
+                    var prev = _slots[slotIdx];
+                    _slots[slotIdx] = prev with { Bypass = bypass };
+                }
+            }
+            else
+            {
+                _log.LogWarning(
+                    $"PluginHostManager: slot {slotIdx} SetBypass status={result.Status}");
+            }
+        }
+        finally
+        {
+            _controlGate.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<PluginParameter>> ListSlotParametersAsync(
+        int slotIdx, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        if (slotIdx < 0 || slotIdx >= ChainConstants.MaxSlots)
+        {
+            throw new ArgumentOutOfRangeException(nameof(slotIdx));
+        }
+        ControlChannel channel;
+        lock (_gate)
+        {
+            if (!IsRunning || _control == null)
+            {
+                return Array.Empty<PluginParameter>();
+            }
+            channel = _control;
+        }
+        await _controlGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var req = new SlotListParamsRequest((byte)slotIdx);
+            await channel.SendAsync(ControlTag.SlotListParams, req.Encode(), ct)
+                .ConfigureAwait(false);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+            var frame = await ReceiveExpected(channel,
+                ControlTag.SlotParamListResult, cts.Token).ConfigureAwait(false);
+            if (frame == null) return Array.Empty<PluginParameter>();
+            var result = SlotParamListResult.Decode(frame.Value.Payload);
+            if (result.Status != 0)
+            {
+                if (result.Status != 1)
+                {
+                    _log.LogWarning(
+                        $"PluginHostManager: slot {slotIdx} ListParams " +
+                        $"status={result.Status}");
+                }
+                return Array.Empty<PluginParameter>();
+            }
+            var list = new List<PluginParameter>(result.Parameters.Count);
+            foreach (var p in result.Parameters)
+            {
+                list.Add(new PluginParameter(
+                    p.Id, p.Name, p.Units,
+                    p.DefaultValue, p.CurrentValue, p.StepCount,
+                    (ParameterFlags)p.Flags));
+            }
+            // Cache the latest snapshot on the slot so consumers reading
+            // ChainSlot.Parameters don't have to round-trip again.
+            lock (_gate)
+            {
+                var prev = _slots[slotIdx];
+                _slots[slotIdx] = prev with { Parameters = list };
+            }
+            return list;
+        }
+        finally
+        {
+            _controlGate.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task SetSlotParameterAsync(
+        int slotIdx, uint paramId, double normalizedValue,
+        CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        if (slotIdx < 0 || slotIdx >= ChainConstants.MaxSlots)
+        {
+            throw new ArgumentOutOfRangeException(nameof(slotIdx));
+        }
+        ControlChannel channel;
+        lock (_gate)
+        {
+            if (!IsRunning || _control == null)
+            {
+                throw new InvalidOperationException("plugin host is not running");
+            }
+            channel = _control;
+        }
+        await _controlGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var req = new SlotSetParamRequest((byte)slotIdx, paramId, normalizedValue);
+            await channel.SendAsync(ControlTag.SlotSetParam, req.Encode(), ct)
+                .ConfigureAwait(false);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(2));
+            var frame = await ReceiveExpected(channel,
+                ControlTag.SlotSetParamResult, cts.Token).ConfigureAwait(false);
+            if (frame == null) return;
+            var result = SlotSetParamResult.Decode(frame.Value.Payload);
+            if (result.Status != 0)
+            {
+                _log.LogWarning(
+                    $"PluginHostManager: slot {slotIdx} SetParam id={paramId} " +
+                    $"status={result.Status}");
+                return;
+            }
+            // Update the cached parameter list with the actual value (some
+            // plugins quantise). If the parameter isn't in the cache, the
+            // operator probably hasn't called ListSlotParametersAsync yet
+            // — leave the cache alone.
+            lock (_gate)
+            {
+                var prev = _slots[slotIdx];
+                if (prev.Parameters.Count > 0)
+                {
+                    var copy = new List<PluginParameter>(prev.Parameters.Count);
+                    foreach (var p in prev.Parameters)
+                    {
+                        copy.Add(p.Id == paramId
+                            ? p with { CurrentValue = result.ActualValue }
+                            : p);
+                    }
+                    _slots[slotIdx] = prev with { Parameters = copy };
+                }
+            }
+        }
+        finally
+        {
+            _controlGate.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task SetChainEnabledAsync(
+        bool enabled, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        ControlChannel channel;
+        lock (_gate)
+        {
+            if (!IsRunning || _control == null)
+            {
+                throw new InvalidOperationException("plugin host is not running");
+            }
+            channel = _control;
+        }
+        await _controlGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var req = new SetChainEnabledRequest(enabled);
+            await channel.SendAsync(ControlTag.SetChainEnabled, req.Encode(), ct)
+                .ConfigureAwait(false);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(2));
+            var frame = await ReceiveExpected(channel,
+                ControlTag.SetChainEnabledResult, cts.Token).ConfigureAwait(false);
+            if (frame == null) return;
+            var result = SetChainEnabledResult.Decode(frame.Value.Payload);
+            if (result.Status == 0)
+            {
+                lock (_gate) { _chainEnabled = enabled; }
+            }
+            else
+            {
+                _log.LogWarning(
+                    $"PluginHostManager: SetChainEnabled status={result.Status}");
+            }
+        }
+        finally
+        {
+            _controlGate.Release();
         }
     }
 
@@ -624,9 +957,17 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
                 // We just null the slot so IsRunning flips immediately.
                 _process = null;
             }
-            // Loaded plugin (if any) cannot survive a sidecar exit; the
-            // next Start cycle will need a fresh Load.
-            _currentPlugin = null;
+            // Loaded plugins (if any) cannot survive a sidecar exit; the
+            // next Start cycle will need a fresh Load on every slot.
+            for (int i = 0; i < _slots.Length; i++)
+            {
+                _slots[i] = new ChainSlot(
+                    Index: i,
+                    Plugin: null,
+                    Bypass: false,
+                    Parameters: Array.Empty<PluginParameter>());
+            }
+            _chainEnabled = false;
         }
 
         // Bump backoff hint for any caller that wants to space restarts.

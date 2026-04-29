@@ -1,15 +1,21 @@
-// IPluginHost.cs — Phase 1 contract for the out-of-process plugin sidecar.
+// IPluginHost.cs — contract for the out-of-process plugin sidecar.
 //
 // See docs/proposals/vst-host.md for the full architecture decision record.
-// In Phase 1 the sidecar is a pass-through: blocks fed via TryProcess come
-// back unchanged after a round-trip through the shared-memory ring. The
-// SIGKILL-during-TX acceptance gate is the load-bearing test — when the
-// sidecar dies, IsRunning must flip to false and TryProcess must return
-// false so the caller can fall through to the bypass path.
+// Phase 2 (real) loaded one plugin in the sidecar via LoadPluginAsync;
+// Phase 3a expands that to an 8-slot serial chain with master enable,
+// per-slot bypass, and parameter introspection. The single-slot
+// LoadPluginAsync / UnloadPluginAsync / CurrentPlugin API stays valid as
+// a slot-0 alias so existing call sites continue to work unchanged.
+//
+// The SIGKILL-during-TX acceptance gate is the load-bearing test — when
+// the sidecar dies, IsRunning must flip to false and TryProcess must
+// return false so the caller can fall through to the bypass path.
 
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Zeus.PluginHost.Chain;
 
 namespace Zeus.PluginHost;
 
@@ -81,11 +87,64 @@ public interface IPluginHost
     Task UnloadPluginAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// Most recent successfully-loaded plugin, or null if no plugin is
-    /// currently loaded. Reset to null when <see cref="UnloadPluginAsync"/>
-    /// completes or <see cref="StopAsync"/> tears down the sidecar.
+    /// Most recent successfully-loaded plugin in slot 0, or null if slot 0
+    /// is empty. Convenience wrapper kept for backwards compatibility with
+    /// the single-slot Phase 2 API; equivalent to <c>Slots[0].Plugin</c>.
     /// </summary>
     LoadedPluginInfo? CurrentPlugin { get; }
+
+    // ----- Phase 3a: chain API -----------------------------------------
+
+    /// <summary>Maximum number of slots in the chain. Phase 3a == 8.</summary>
+    int MaxChainSlots { get; }
+
+    /// <summary>
+    /// Master enable. When false, every block fed through <see cref="TryProcess"/>
+    /// is bit-identical pass-through regardless of which slots are loaded.
+    /// </summary>
+    bool IsChainEnabled { get; }
+
+    /// <summary>
+    /// Snapshot of all <see cref="MaxChainSlots"/> slots. Index <c>i</c>
+    /// always lives at <c>Slots[i]</c>; empty slots have null
+    /// <see cref="ChainSlot.Plugin"/>. The returned list is immutable —
+    /// changes are observed by re-reading this property.
+    /// </summary>
+    IReadOnlyList<ChainSlot> Slots { get; }
+
+    /// <summary>
+    /// Load a plugin into <paramref name="slotIdx"/>. Reload semantics
+    /// match <see cref="LoadPluginAsync"/>: an existing plugin in the
+    /// slot is unloaded first.
+    /// </summary>
+    Task<LoadPluginOutcome> LoadSlotAsync(
+        int slotIdx, string path, CancellationToken ct = default);
+
+    /// <summary>Unload the plugin in <paramref name="slotIdx"/>. Idempotent.</summary>
+    Task UnloadSlotAsync(int slotIdx, CancellationToken ct = default);
+
+    /// <summary>Set per-slot bypass. Bypassed slots are skipped on the audio thread.</summary>
+    Task SetSlotBypassAsync(int slotIdx, bool bypass, CancellationToken ct = default);
+
+    /// <summary>
+    /// Walk the plugin's IEditController and return its parameter list.
+    /// Empty list when no plugin is loaded or the plugin has no controller.
+    /// </summary>
+    Task<IReadOnlyList<PluginParameter>> ListSlotParametersAsync(
+        int slotIdx, CancellationToken ct = default);
+
+    /// <summary>
+    /// Set one parameter on the slot's plugin. <paramref name="normalizedValue"/>
+    /// is clamped to [0,1] on the sidecar side. Some plugins quantise the
+    /// value; the cached <see cref="ChainSlot.Parameters"/> is updated to
+    /// match the value the plugin actually accepted.
+    /// </summary>
+    Task SetSlotParameterAsync(
+        int slotIdx, uint paramId, double normalizedValue,
+        CancellationToken ct = default);
+
+    /// <summary>Toggle the master chain enable.</summary>
+    Task SetChainEnabledAsync(bool enabled, CancellationToken ct = default);
 }
 
 /// <summary>

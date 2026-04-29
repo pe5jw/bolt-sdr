@@ -224,3 +224,427 @@ public sealed record UnloadPluginResult(byte Status)
         return new UnloadPluginResult(payload[0]);
     }
 }
+
+// =====================================================================
+// Phase 3a — slot-aware chain operations.
+// =====================================================================
+
+/// <summary>
+/// Host -> sidecar slot-aware load. Payload: u8 slotIdx + u32 LE pathLen
+/// + UTF-8 path bytes.
+/// </summary>
+public sealed record SlotLoadPluginRequest(byte SlotIdx, string Path)
+{
+    public byte[] Encode()
+    {
+        var pathBytes = System.Text.Encoding.UTF8.GetBytes(Path);
+        var buf = new byte[1 + 4 + pathBytes.Length];
+        buf[0] = SlotIdx;
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(1, 4),
+            (uint)pathBytes.Length);
+        pathBytes.CopyTo(buf, 5);
+        return buf;
+    }
+
+    public static SlotLoadPluginRequest Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length < 5)
+        {
+            throw new ArgumentException(
+                "SlotLoadPluginRequest payload must contain at least 5 bytes");
+        }
+        var slot = payload[0];
+        var len = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(1, 4));
+        if (payload.Length != 5 + (int)len)
+        {
+            throw new ArgumentException(
+                $"SlotLoadPluginRequest payload length {payload.Length} != " +
+                $"5 + {len}");
+        }
+        var path = System.Text.Encoding.UTF8.GetString(
+            payload.Slice(5, (int)len));
+        return new SlotLoadPluginRequest(slot, path);
+    }
+}
+
+/// <summary>
+/// Sidecar -> host slot-aware load result. Status codes:
+///   0 ok, 1 file-not-found, 2 not-a-vst3, 3 no-audio-effect-class,
+///   4 activate-failed, 5 other, 6 invalid-slot-index.
+/// On status==0: name/vendor/version follow. On non-zero: error string.
+/// </summary>
+public sealed record SlotLoadPluginResult(
+    byte SlotIdx,
+    byte Status,
+    string? Name,
+    string? Vendor,
+    string? Version,
+    string? Error)
+{
+    public byte[] Encode()
+    {
+        var ms = new System.IO.MemoryStream();
+        ms.WriteByte(SlotIdx);
+        ms.WriteByte(Status);
+        if (Status == 0)
+        {
+            WriteLengthPrefixedString(ms, Name ?? string.Empty);
+            WriteLengthPrefixedString(ms, Vendor ?? string.Empty);
+            WriteLengthPrefixedString(ms, Version ?? string.Empty);
+        }
+        else
+        {
+            WriteLengthPrefixedString(ms, Error ?? string.Empty);
+        }
+        return ms.ToArray();
+    }
+
+    public static SlotLoadPluginResult Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length < 2)
+        {
+            throw new ArgumentException(
+                "SlotLoadPluginResult payload must be at least 2 bytes");
+        }
+        var slot = payload[0];
+        var status = payload[1];
+        var cursor = 2;
+        if (status == 0)
+        {
+            var name    = ReadLengthPrefixedString(payload, ref cursor);
+            var vendor  = ReadLengthPrefixedString(payload, ref cursor);
+            var version = ReadLengthPrefixedString(payload, ref cursor);
+            return new SlotLoadPluginResult(slot, 0, name, vendor, version, null);
+        }
+        var err = ReadLengthPrefixedString(payload, ref cursor);
+        return new SlotLoadPluginResult(slot, status, null, null, null, err);
+    }
+
+    internal static void WriteLengthPrefixedString(System.IO.Stream s, string value)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+        Span<byte> len = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(len, (uint)bytes.Length);
+        s.Write(len);
+        s.Write(bytes, 0, bytes.Length);
+    }
+
+    internal static string ReadLengthPrefixedString(
+        ReadOnlySpan<byte> input, ref int cursor)
+    {
+        if (input.Length < cursor + 4)
+        {
+            throw new ArgumentException(
+                "SlotLoadPluginResult: truncated string length prefix");
+        }
+        var len = BinaryPrimitives.ReadUInt32LittleEndian(
+            input.Slice(cursor, 4));
+        if (input.Length < cursor + 4 + (int)len)
+        {
+            throw new ArgumentException(
+                "SlotLoadPluginResult: truncated string body");
+        }
+        var value = System.Text.Encoding.UTF8.GetString(
+            input.Slice(cursor + 4, (int)len));
+        cursor += 4 + (int)len;
+        return value;
+    }
+}
+
+/// <summary>Host -> sidecar slot unload. Payload: u8 slotIdx.</summary>
+public sealed record SlotUnloadPluginRequest(byte SlotIdx)
+{
+    public byte[] Encode() => new[] { SlotIdx };
+
+    public static SlotUnloadPluginRequest Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 1)
+        {
+            throw new ArgumentException(
+                $"SlotUnloadPluginRequest payload must be 1 byte, got {payload.Length}");
+        }
+        return new SlotUnloadPluginRequest(payload[0]);
+    }
+}
+
+/// <summary>
+/// Sidecar -> host slot unload result. Status codes:
+///   0 ok, 1 no-plugin-loaded, 5 other, 6 invalid-slot-index.
+/// </summary>
+public sealed record SlotUnloadPluginResult(byte SlotIdx, byte Status)
+{
+    public byte[] Encode() => new[] { SlotIdx, Status };
+
+    public static SlotUnloadPluginResult Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 2)
+        {
+            throw new ArgumentException(
+                $"SlotUnloadPluginResult payload must be 2 bytes, got {payload.Length}");
+        }
+        return new SlotUnloadPluginResult(payload[0], payload[1]);
+    }
+}
+
+/// <summary>Host -> sidecar bypass toggle. Payload: u8 slot + u8 bypass.</summary>
+public sealed record SlotSetBypassRequest(byte SlotIdx, bool Bypass)
+{
+    public byte[] Encode() => new[] { SlotIdx, (byte)(Bypass ? 1 : 0) };
+
+    public static SlotSetBypassRequest Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 2)
+        {
+            throw new ArgumentException(
+                $"SlotSetBypassRequest payload must be 2 bytes, got {payload.Length}");
+        }
+        return new SlotSetBypassRequest(payload[0], payload[1] != 0);
+    }
+}
+
+/// <summary>
+/// Sidecar -> host bypass result. Status codes:
+///   0 ok, 5 other, 6 invalid-slot-index.
+/// </summary>
+public sealed record SlotSetBypassResult(byte SlotIdx, byte Status)
+{
+    public byte[] Encode() => new[] { SlotIdx, Status };
+
+    public static SlotSetBypassResult Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 2)
+        {
+            throw new ArgumentException(
+                $"SlotSetBypassResult payload must be 2 bytes, got {payload.Length}");
+        }
+        return new SlotSetBypassResult(payload[0], payload[1]);
+    }
+}
+
+/// <summary>Host -> sidecar master enable. Payload: u8 enabled.</summary>
+public sealed record SetChainEnabledRequest(bool Enabled)
+{
+    public byte[] Encode() => new[] { (byte)(Enabled ? 1 : 0) };
+
+    public static SetChainEnabledRequest Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 1)
+        {
+            throw new ArgumentException(
+                $"SetChainEnabledRequest payload must be 1 byte, got {payload.Length}");
+        }
+        return new SetChainEnabledRequest(payload[0] != 0);
+    }
+}
+
+/// <summary>Sidecar -> host master enable result. Status: 0 ok, 5 other.</summary>
+public sealed record SetChainEnabledResult(byte Status)
+{
+    public byte[] Encode() => new[] { Status };
+
+    public static SetChainEnabledResult Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 1)
+        {
+            throw new ArgumentException(
+                $"SetChainEnabledResult payload must be 1 byte, got {payload.Length}");
+        }
+        return new SetChainEnabledResult(payload[0]);
+    }
+}
+
+/// <summary>Host -> sidecar list-parameters request. Payload: u8 slotIdx.</summary>
+public sealed record SlotListParamsRequest(byte SlotIdx)
+{
+    public byte[] Encode() => new[] { SlotIdx };
+
+    public static SlotListParamsRequest Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 1)
+        {
+            throw new ArgumentException(
+                $"SlotListParamsRequest payload must be 1 byte, got {payload.Length}");
+        }
+        return new SlotListParamsRequest(payload[0]);
+    }
+}
+
+/// <summary>
+/// One element of a parameter-list reply. Mirrors the C++ ParamInfo struct
+/// and the wire-spec layout (u32 paramId, u32+utf8 name, u32+utf8 units,
+/// f64 default, f64 current, i32 stepCount, u8 flags).
+/// </summary>
+public sealed record SlotParamWire(
+    uint Id,
+    string Name,
+    string Units,
+    double DefaultValue,
+    double CurrentValue,
+    int StepCount,
+    byte Flags);
+
+/// <summary>
+/// Sidecar -> host parameter list. Status codes:
+///   0 ok, 1 no-plugin-loaded, 5 other, 6 invalid-slot-index,
+///   7 controller-unavailable.
+/// On 0: paramCount + that many serialised parameters follow.
+/// </summary>
+public sealed record SlotParamListResult(
+    byte SlotIdx,
+    byte Status,
+    System.Collections.Generic.IReadOnlyList<SlotParamWire> Parameters)
+{
+    public byte[] Encode()
+    {
+        var ms = new System.IO.MemoryStream();
+        ms.WriteByte(SlotIdx);
+        ms.WriteByte(Status);
+        if (Status == 0)
+        {
+            Span<byte> u32 = stackalloc byte[4];
+            Span<byte> f64 = stackalloc byte[8];
+            BinaryPrimitives.WriteUInt32LittleEndian(u32, (uint)Parameters.Count);
+            ms.Write(u32);
+            foreach (var p in Parameters)
+            {
+                BinaryPrimitives.WriteUInt32LittleEndian(u32, p.Id);
+                ms.Write(u32);
+                SlotLoadPluginResult.WriteLengthPrefixedString(ms, p.Name);
+                SlotLoadPluginResult.WriteLengthPrefixedString(ms, p.Units);
+                BinaryPrimitives.WriteDoubleLittleEndian(f64, p.DefaultValue);
+                ms.Write(f64);
+                BinaryPrimitives.WriteDoubleLittleEndian(f64, p.CurrentValue);
+                ms.Write(f64);
+                BinaryPrimitives.WriteInt32LittleEndian(u32, p.StepCount);
+                ms.Write(u32);
+                ms.WriteByte(p.Flags);
+            }
+        }
+        return ms.ToArray();
+    }
+
+    public static SlotParamListResult Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length < 2)
+        {
+            throw new ArgumentException(
+                "SlotParamListResult payload must be at least 2 bytes");
+        }
+        var slot = payload[0];
+        var status = payload[1];
+        if (status != 0)
+        {
+            return new SlotParamListResult(slot, status,
+                System.Array.Empty<SlotParamWire>());
+        }
+        var cursor = 2;
+        if (payload.Length < cursor + 4)
+        {
+            throw new ArgumentException(
+                "SlotParamListResult: truncated paramCount");
+        }
+        var count = BinaryPrimitives.ReadUInt32LittleEndian(
+            payload.Slice(cursor, 4));
+        cursor += 4;
+        var list = new System.Collections.Generic.List<SlotParamWire>(
+            (int)count);
+        for (uint i = 0; i < count; i++)
+        {
+            if (payload.Length < cursor + 4)
+                throw new ArgumentException("truncated paramId");
+            var id = BinaryPrimitives.ReadUInt32LittleEndian(
+                payload.Slice(cursor, 4));
+            cursor += 4;
+            var name = SlotLoadPluginResult.ReadLengthPrefixedString(
+                payload, ref cursor);
+            var units = SlotLoadPluginResult.ReadLengthPrefixedString(
+                payload, ref cursor);
+            if (payload.Length < cursor + 8)
+                throw new ArgumentException("truncated defaultValue");
+            var defaultValue = BinaryPrimitives.ReadDoubleLittleEndian(
+                payload.Slice(cursor, 8));
+            cursor += 8;
+            if (payload.Length < cursor + 8)
+                throw new ArgumentException("truncated currentValue");
+            var currentValue = BinaryPrimitives.ReadDoubleLittleEndian(
+                payload.Slice(cursor, 8));
+            cursor += 8;
+            if (payload.Length < cursor + 4)
+                throw new ArgumentException("truncated stepCount");
+            var stepCount = BinaryPrimitives.ReadInt32LittleEndian(
+                payload.Slice(cursor, 4));
+            cursor += 4;
+            if (payload.Length < cursor + 1)
+                throw new ArgumentException("truncated flags");
+            var flags = payload[cursor];
+            cursor += 1;
+            list.Add(new SlotParamWire(
+                id, name, units, defaultValue, currentValue, stepCount, flags));
+        }
+        return new SlotParamListResult(slot, status, list);
+    }
+}
+
+/// <summary>
+/// Host -> sidecar set-parameter request. Payload: u8 slot + u32 paramId
+/// + f64 normalized.
+/// </summary>
+public sealed record SlotSetParamRequest(byte SlotIdx, uint ParamId, double Normalized)
+{
+    public byte[] Encode()
+    {
+        var buf = new byte[1 + 4 + 8];
+        buf[0] = SlotIdx;
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(1, 4), ParamId);
+        BinaryPrimitives.WriteDoubleLittleEndian(buf.AsSpan(5, 8), Normalized);
+        return buf;
+    }
+
+    public static SlotSetParamRequest Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 13)
+        {
+            throw new ArgumentException(
+                $"SlotSetParamRequest payload must be 13 bytes, got {payload.Length}");
+        }
+        var slot = payload[0];
+        var id = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(1, 4));
+        var v = BinaryPrimitives.ReadDoubleLittleEndian(payload.Slice(5, 8));
+        return new SlotSetParamRequest(slot, id, v);
+    }
+}
+
+/// <summary>
+/// Sidecar -> host set-parameter result. Status codes:
+///   0 ok, 1 no-plugin-loaded, 5 other, 6 invalid-slot-index,
+///   7 controller-unavailable.
+/// <see cref="ActualValue"/> carries the value the plugin actually accepted
+/// after clamp/quantise (NaN on error).
+/// </summary>
+public sealed record SlotSetParamResult(
+    byte SlotIdx, uint ParamId, byte Status, double ActualValue)
+{
+    public byte[] Encode()
+    {
+        var buf = new byte[1 + 4 + 1 + 8];
+        buf[0] = SlotIdx;
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(1, 4), ParamId);
+        buf[5] = Status;
+        BinaryPrimitives.WriteDoubleLittleEndian(buf.AsSpan(6, 8), ActualValue);
+        return buf;
+    }
+
+    public static SlotSetParamResult Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 14)
+        {
+            throw new ArgumentException(
+                $"SlotSetParamResult payload must be 14 bytes, got {payload.Length}");
+        }
+        var slot = payload[0];
+        var id = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(1, 4));
+        var status = payload[5];
+        var v = BinaryPrimitives.ReadDoubleLittleEndian(payload.Slice(6, 8));
+        return new SlotSetParamResult(slot, id, status, v);
+    }
+}

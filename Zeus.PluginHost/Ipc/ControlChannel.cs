@@ -24,19 +24,31 @@ using System.Threading.Tasks;
 namespace Zeus.PluginHost.Ipc;
 
 /// <summary>
-/// Phase 2 message tag — wire-shared with C++ <c>ControlMessageTag</c>.
+/// Phase 2 / 3a message tag — wire-shared with C++ <c>ControlMessageTag</c>.
 /// </summary>
 public enum ControlTag : byte
 {
-    Hello              = 0x01,
-    HelloAck           = 0x02,
-    Heartbeat          = 0x03,
-    Goodbye            = 0x04,
-    LogLine            = 0x05,
-    LoadPlugin         = 0x10,
-    LoadPluginResult   = 0x11,
-    UnloadPlugin       = 0x12,
-    UnloadPluginResult = 0x13,
+    Hello                  = 0x01,
+    HelloAck               = 0x02,
+    Heartbeat              = 0x03,
+    Goodbye                = 0x04,
+    LogLine                = 0x05,
+    LoadPlugin             = 0x10,
+    LoadPluginResult       = 0x11,
+    UnloadPlugin           = 0x12,
+    UnloadPluginResult     = 0x13,
+    SlotLoadPlugin         = 0x14,
+    SlotLoadPluginResult   = 0x15,
+    SlotUnloadPlugin       = 0x16,
+    SlotUnloadPluginResult = 0x17,
+    SlotSetBypass          = 0x18,
+    SlotSetBypassResult    = 0x19,
+    SetChainEnabled        = 0x1A,
+    SetChainEnabledResult  = 0x1B,
+    SlotListParams         = 0x20,
+    SlotParamListResult    = 0x21,
+    SlotSetParam           = 0x22,
+    SlotSetParamResult     = 0x23,
 }
 
 /// <summary>

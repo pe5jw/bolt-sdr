@@ -1,20 +1,23 @@
-# VST Plugin Host — Phase 2 IPC Wire Spec
+# VST Plugin Host — Phase 2 / 3a IPC Wire Spec
 
-Status: pinned (Phase 2 entry)
+Status: pinned (Phase 3a additions)
 Branch: `VST-Experimental` (Zeus) / `main` (openhpsdr-zeus-plughost)
 Companion ADR: `docs/proposals/vst-host.md`
 
 This document pins the cross-process IPC contract between the Zeus .NET host
-(`Zeus.PluginHost`) and the C++ sidecar (`zeus-plughost`) for Phase 2. Both
-ends MUST agree on every detail in this file; drift here will silently
-corrupt audio with no runtime warning. If you change anything, bump the
+(`Zeus.PluginHost`) and the C++ sidecar (`zeus-plughost`). Both ends MUST
+agree on every detail in this file; drift here will silently corrupt
+audio with no runtime warning. If you change anything, bump the
 `protocolVersion` field in the Hello message and update both implementations
 in the same commit.
 
-Phase 2 entry delivered the pass-through round-trip; Phase 2 real (this
-revision) adds VST3 plugin loading + dispatch through the audio loop.
-Parameter messages, GUI, presets, and per-block latency tightening are
-Phase 3.
+Phase 2 entry delivered the pass-through round-trip; Phase 2 real added
+VST3 plugin loading + dispatch through the audio loop; Phase 3a (this
+revision) adds an 8-slot serial chain with master enable, per-slot
+bypass, and parameter introspection. The single-slot Phase 2 messages
+(0x10..0x13) remain valid as slot-0 aliases. Native plugin GUI, TX path
+wiring, browser UI, and persistence are deliberately excluded here and
+land in later waves.
 
 ## 1. Naming
 
@@ -159,17 +162,29 @@ Maximum payload is 1 MiB (defensive cap; Phase 2 messages are all <100 B).
 
 ### 4.3 Phase 2 message types
 
-| Tag | Name               | Direction       | Payload                                |
-| --: | ------------------ | --------------- | -------------------------------------- |
-|  01 | Hello              | sidecar -> host | u32 protoVer, u32 sampleRate, u32 framesPerBlock, u32 channels |
-|  02 | HelloAck           | host -> sidecar | (none)                                 |
-|  03 | Heartbeat          | bidirectional   | (none, optional in Phase 2)            |
-|  04 | Goodbye            | host -> sidecar | (none)                                 |
-|  05 | LogLine            | sidecar -> host | UTF-8 bytes (plain text)               |
-|  10 | LoadPlugin         | host -> sidecar | u32 pathLen + UTF-8 path bytes         |
-|  11 | LoadPluginResult   | sidecar -> host | u8 status, then per-status fields      |
-|  12 | UnloadPlugin       | host -> sidecar | (none)                                 |
-|  13 | UnloadPluginResult | sidecar -> host | u8 status                              |
+| Tag | Name                   | Direction       | Payload                                |
+| --: | ---------------------- | --------------- | -------------------------------------- |
+|  01 | Hello                  | sidecar -> host | u32 protoVer, u32 sampleRate, u32 framesPerBlock, u32 channels |
+|  02 | HelloAck               | host -> sidecar | (none)                                 |
+|  03 | Heartbeat              | bidirectional   | (none, optional in Phase 2)            |
+|  04 | Goodbye                | host -> sidecar | (none)                                 |
+|  05 | LogLine                | sidecar -> host | UTF-8 bytes (plain text)               |
+|  10 | LoadPlugin             | host -> sidecar | u32 pathLen + UTF-8 path bytes (slot-0 alias) |
+|  11 | LoadPluginResult       | sidecar -> host | u8 status, then per-status fields      |
+|  12 | UnloadPlugin           | host -> sidecar | (none) (slot-0 alias)                  |
+|  13 | UnloadPluginResult     | sidecar -> host | u8 status                              |
+|  14 | SlotLoadPlugin         | host -> sidecar | u8 slot + u32 pathLen + UTF-8 path     |
+|  15 | SlotLoadPluginResult   | sidecar -> host | u8 slot + u8 status + per-status fields |
+|  16 | SlotUnloadPlugin       | host -> sidecar | u8 slot                                |
+|  17 | SlotUnloadPluginResult | sidecar -> host | u8 slot + u8 status                    |
+|  18 | SlotSetBypass          | host -> sidecar | u8 slot + u8 bypass                    |
+|  19 | SlotSetBypassResult    | sidecar -> host | u8 slot + u8 status                    |
+|  1A | SetChainEnabled        | host -> sidecar | u8 enabled                             |
+|  1B | SetChainEnabledResult  | sidecar -> host | u8 status                              |
+|  20 | SlotListParams         | host -> sidecar | u8 slot                                |
+|  21 | SlotParamListResult    | sidecar -> host | u8 slot + u8 status [+ paramCount + params on status==0] |
+|  22 | SlotSetParam           | host -> sidecar | u8 slot + u32 paramId + f64 normalized |
+|  23 | SlotSetParamResult     | sidecar -> host | u8 slot + u32 paramId + u8 status + f64 actual |
 
 All multi-byte integers are little-endian. UTF-8 strings everywhere.
 
@@ -229,6 +244,127 @@ Status codes:
 
 Plugin chains, parameter automation, GUI, and presets are reserved for
 Phase 3+ and intentionally absent here.
+
+### 4.4 Phase 3a additions: chain, bypass, parameter introspection
+
+The single-slot messages 0x10..0x13 remain valid; they are slot-0 aliases
+of the new 0x14..0x17 family. The .NET `LoadPluginAsync(path)` /
+`UnloadPluginAsync()` API still works and now internally targets slot 0.
+
+#### `SlotLoadPlugin` (0x14, host -> sidecar)
+
+Payload:
+
+```
+[slotIdx u8][pathLen u32 LE][UTF-8 path bytes]
+```
+
+`slotIdx` is in the range `[0, kMaxSlots-1]` (8 in Phase 3a). Out-of-range
+values yield status 6 in the reply. Reload semantics match 0x10: an
+existing plugin in the slot is unloaded before the new one becomes
+visible to the audio thread.
+
+#### `SlotLoadPluginResult` (0x15, sidecar -> host)
+
+Payload:
+
+```
+[slotIdx u8][status u8]
+  status == 0:
+    [nameLen u32 LE][UTF-8 name][vendorLen u32 LE][UTF-8 vendor][versionLen u32 LE][UTF-8 version]
+  status != 0:
+    [errLen u32 LE][UTF-8 error message]
+```
+
+Status codes:
+
+| Status | Meaning                                                        |
+| -----: | -------------------------------------------------------------- |
+|      0 | ok                                                             |
+|      1 | file-not-found                                                 |
+|      2 | not-a-vst3                                                     |
+|      3 | no-audio-effect-class                                          |
+|      4 | activate-failed                                                |
+|      5 | other                                                          |
+|      6 | invalid-slot-index                                             |
+
+#### `SlotUnloadPlugin` (0x16, host -> sidecar)
+
+Payload: `[slotIdx u8]`.
+
+#### `SlotUnloadPluginResult` (0x17, sidecar -> host)
+
+Payload: `[slotIdx u8][status u8]`. Statuses: 0 ok, 1 no-plugin-loaded,
+5 other, 6 invalid-slot-index.
+
+#### `SlotSetBypass` (0x18, host -> sidecar)
+
+Payload: `[slotIdx u8][bypass u8]` (0=run, 1=bypass). Bypassed slots are
+skipped on the audio thread; the running buffer simply moves to the next
+slot. Reply: `0x19 SlotSetBypassResult` `[slotIdx u8][status u8]`.
+
+#### `SetChainEnabled` (0x1A, host -> sidecar)
+
+Payload: `[enabled u8]` (0=master off, 1=master on). When master is off
+the audio thread does a single memcpy from input to output regardless of
+slot population — bit-identical pass-through. Reply: `0x1B
+SetChainEnabledResult` `[status u8]`.
+
+#### `SlotListParams` (0x20, host -> sidecar)
+
+Payload: `[slotIdx u8]`. The sidecar walks the plugin's IEditController.
+
+#### `SlotParamListResult` (0x21, sidecar -> host)
+
+Payload:
+
+```
+[slotIdx u8][status u8]
+  status == 0:
+    [paramCount u32 LE]
+    repeat paramCount times:
+      [paramId u32 LE]
+      [nameLen u32 LE][UTF-8 name]
+      [unitsLen u32 LE][UTF-8 units]
+      [defaultValue f64 LE]   (normalized 0..1)
+      [currentValue f64 LE]   (normalized 0..1)
+      [stepCount i32 LE]      (0 = continuous, >0 = stepped/list)
+      [flags u8]
+        bit0 = isReadOnly
+        bit1 = isAutomatable
+        bit2 = isHidden
+        bit3 = isList (enum-style)
+```
+
+Statuses: 0 ok, 1 no-plugin-loaded, 5 other, 6 invalid-slot-index,
+7 controller-unavailable.
+
+#### `SlotSetParam` (0x22, host -> sidecar)
+
+Payload: `[slotIdx u8][paramId u32 LE][normalized f64 LE]`. The sidecar
+clamps `normalized` to `[0,1]` before calling
+`IEditController::setParamNormalized`.
+
+#### `SlotSetParamResult` (0x23, sidecar -> host)
+
+Payload: `[slotIdx u8][paramId u32 LE][status u8][actualValue f64 LE]`.
+`actualValue` is what the plugin reports back via
+`getParamNormalized` after the set (some plugins quantise / clamp). On a
+non-zero status, `actualValue` is unspecified (typically NaN).
+
+Statuses: 0 ok, 1 no-plugin-loaded, 5 other, 6 invalid-slot-index,
+7 controller-unavailable.
+
+### 4.5 Threading note for parameter changes
+
+VST3 strictly recommends that parameter changes flow through
+`IParameterChanges` on the audio thread inside `ProcessData`. Phase 3a
+deliberately bypasses that and calls `IEditController::setParamNormalized`
+directly from the control thread. This matches what most simple hosts do
+for non-realtime parameter tweaks; the controller object is required by
+the VST3 spec to be reentrant relative to the audio-thread `IComponent`.
+A future phase that adds parameter automation lanes will need to revisit
+this.
 
 ## 5. Lifecycle
 
@@ -315,8 +451,10 @@ run.
   the silent-sidecar case (sidecar deadlocked but not exited).
 - No realtime scheduling priority. Phase 4 will pin the audio thread.
 - VST3 only — CLAP / VST2 are deferred to Phase 4 and Phase 5.
-- Single-slot plugin: one loaded plugin per host. Phase 6 adds a chain
-  with reorder + per-slot bypass.
+- Single-slot plugin: one loaded plugin per host. Phase 3a (the
+  current revision of this doc) raises the cap to 8 serial slots with
+  master enable + per-slot bypass + parameter introspection. Reorder
+  UI and persisted state come in a later wave.
 - No GUI. The plugin's parameter values are accessible only via the
   sidecar's HostApplication helper; no editor window is opened.
 - No parameter automation, no preset save/restore. Phase 3 brings these
