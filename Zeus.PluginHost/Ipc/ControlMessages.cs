@@ -648,3 +648,159 @@ public sealed record SlotSetParamResult(
         return new SlotSetParamResult(slot, id, status, v);
     }
 }
+
+// =====================================================================
+// Phase 3 GUI: native plugin editor windows (Linux X11 this wave).
+// =====================================================================
+
+/// <summary>Host -> sidecar request to open a slot's editor. Payload: u8 slot.</summary>
+public sealed record SlotShowEditorRequest(byte SlotIdx)
+{
+    public byte[] Encode() => new[] { SlotIdx };
+
+    public static SlotShowEditorRequest Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 1)
+        {
+            throw new ArgumentException(
+                $"SlotShowEditorRequest payload must be 1 byte, got {payload.Length}");
+        }
+        return new SlotShowEditorRequest(payload[0]);
+    }
+}
+
+/// <summary>
+/// Sidecar -> host editor-show result. Status codes:
+///   0 ok (Width/Height populated),
+///   1 no-plugin-loaded,
+///   2 plugin-has-no-editor,
+///   3 platform-not-supported,
+///   4 attach-failed,
+///   5 other,
+///   6 invalid-slot-index,
+///   7 gui-thread-init-failed.
+/// </summary>
+public sealed record SlotShowEditorResult(
+    byte SlotIdx, byte Status, uint Width, uint Height)
+{
+    public byte[] Encode()
+    {
+        if (Status == 0)
+        {
+            var buf = new byte[2 + 4 + 4];
+            buf[0] = SlotIdx;
+            buf[1] = Status;
+            BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(2, 4), Width);
+            BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(6, 4), Height);
+            return buf;
+        }
+        return new[] { SlotIdx, Status };
+    }
+
+    public static SlotShowEditorResult Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length < 2)
+        {
+            throw new ArgumentException(
+                "SlotShowEditorResult payload must be at least 2 bytes");
+        }
+        var slot   = payload[0];
+        var status = payload[1];
+        if (status == 0)
+        {
+            if (payload.Length != 2 + 4 + 4)
+            {
+                throw new ArgumentException(
+                    "SlotShowEditorResult ok payload must be 10 bytes");
+            }
+            var w = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(2, 4));
+            var h = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(6, 4));
+            return new SlotShowEditorResult(slot, 0, w, h);
+        }
+        return new SlotShowEditorResult(slot, status, 0, 0);
+    }
+}
+
+/// <summary>Host -> sidecar request to close a slot's editor. Payload: u8 slot.</summary>
+public sealed record SlotHideEditorRequest(byte SlotIdx)
+{
+    public byte[] Encode() => new[] { SlotIdx };
+
+    public static SlotHideEditorRequest Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 1)
+        {
+            throw new ArgumentException(
+                $"SlotHideEditorRequest payload must be 1 byte, got {payload.Length}");
+        }
+        return new SlotHideEditorRequest(payload[0]);
+    }
+}
+
+/// <summary>
+/// Sidecar -> host editor-hide result. Status codes:
+///   0 ok, 1 no-editor-open, 5 other, 6 invalid-slot-index.
+/// </summary>
+public sealed record SlotHideEditorResult(byte SlotIdx, byte Status)
+{
+    public byte[] Encode() => new[] { SlotIdx, Status };
+
+    public static SlotHideEditorResult Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 2)
+        {
+            throw new ArgumentException(
+                $"SlotHideEditorResult payload must be 2 bytes, got {payload.Length}");
+        }
+        return new SlotHideEditorResult(payload[0], payload[1]);
+    }
+}
+
+/// <summary>
+/// Sidecar -> host async event: the editor window for a slot was closed
+/// (window-manager DELETE button or plugin-driven close). Not a reply
+/// to any pending request — dispatch via event handler.
+/// </summary>
+public sealed record EditorClosedEvent(byte SlotIdx)
+{
+    public byte[] Encode() => new[] { SlotIdx };
+
+    public static EditorClosedEvent Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 1)
+        {
+            throw new ArgumentException(
+                $"EditorClosedEvent payload must be 1 byte, got {payload.Length}");
+        }
+        return new EditorClosedEvent(payload[0]);
+    }
+}
+
+/// <summary>
+/// Sidecar -> host async event: the plugin asked the host to resize its
+/// editor window. Informational — the host doesn't need to reply.
+/// </summary>
+public sealed record EditorResizedEvent(byte SlotIdx, uint Width, uint Height)
+{
+    public byte[] Encode()
+    {
+        var buf = new byte[1 + 4 + 4];
+        buf[0] = SlotIdx;
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(1, 4), Width);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(5, 4), Height);
+        return buf;
+    }
+
+    public static EditorResizedEvent Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 9)
+        {
+            throw new ArgumentException(
+                $"EditorResizedEvent payload must be 9 bytes, got {payload.Length}");
+        }
+        var slot = payload[0];
+        var w = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(1, 4));
+        var h = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(5, 4));
+        return new EditorResizedEvent(slot, w, h);
+    }
+}

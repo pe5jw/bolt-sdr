@@ -16,6 +16,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Zeus.PluginHost.Chain;
+using Zeus.PluginHost.Ipc;
 
 namespace Zeus.PluginHost;
 
@@ -145,7 +146,56 @@ public interface IPluginHost
 
     /// <summary>Toggle the master chain enable.</summary>
     Task SetChainEnabledAsync(bool enabled, CancellationToken ct = default);
+
+    // ----- Phase 3 GUI: native editor windows (Linux X11 this wave) ----
+
+    /// <summary>
+    /// Open the slot's plugin editor as a native window in the sidecar
+    /// process. Idempotent: a second call with the editor already open
+    /// returns a successful outcome carrying the current width/height.
+    /// </summary>
+    /// <returns>
+    /// <see cref="EditorOpenOutcome.Ok"/> true on success with
+    /// <see cref="EditorOpenOutcome.Width"/> /
+    /// <see cref="EditorOpenOutcome.Height"/> set; otherwise an error
+    /// string in <see cref="EditorOpenOutcome.Error"/>.
+    /// </returns>
+    Task<EditorOpenOutcome> ShowSlotEditorAsync(
+        int slotIdx, CancellationToken ct = default);
+
+    /// <summary>
+    /// Close the slot's editor window. Returns true if an editor was
+    /// open (and is now closed), false if no editor was open.
+    /// </summary>
+    Task<bool> HideSlotEditorAsync(
+        int slotIdx, CancellationToken ct = default);
+
+    /// <summary>
+    /// Raised when the sidecar reports an editor window has been closed
+    /// (window-manager close button OR plugin-driven OR auto-close on
+    /// slot unload). Asynchronous — fired from the control reader path.
+    /// </summary>
+    event EventHandler<EditorClosedEventArgs>? SlotEditorClosed;
+
+    /// <summary>
+    /// Raised when the sidecar reports an editor was resized at the
+    /// plugin's request. Informational — the host UI may track this for
+    /// diagnostics but no acknowledgement is expected.
+    /// </summary>
+    event EventHandler<EditorResizedEventArgs>? SlotEditorResized;
 }
+
+/// <summary>
+/// Outcome of <see cref="IPluginHost.ShowSlotEditorAsync"/>.
+/// On success <see cref="Ok"/> is true and <see cref="Width"/> /
+/// <see cref="Height"/> carry the editor's pixel size. On failure
+/// <see cref="Error"/> describes what went wrong.
+/// </summary>
+public sealed record EditorOpenOutcome(
+    bool Ok,
+    int? Width,
+    int? Height,
+    string? Error);
 
 /// <summary>
 /// Identifying metadata for a successfully-loaded plugin. Copied from

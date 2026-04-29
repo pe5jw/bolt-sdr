@@ -93,6 +93,12 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
     /// <summary>Re-broadcast of <see cref="SidecarProcess.Exited"/>.</summary>
     public event EventHandler<SidecarExitedEventArgs>? SidecarExited;
 
+    /// <inheritdoc />
+    public event EventHandler<EditorClosedEventArgs>? SlotEditorClosed;
+
+    /// <inheritdoc />
+    public event EventHandler<EditorResizedEventArgs>? SlotEditorResized;
+
     /// <summary>Current sidecar PID, or null if no sidecar is running.</summary>
     public int? CurrentProcessId
     {
@@ -233,6 +239,10 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
             await channel.SendAsync(ControlTag.HelloAck, ReadOnlyMemory<byte>.Empty, ct)
                 .ConfigureAwait(false);
 
+            // Wire the channel's async editor events through as our own.
+            channel.EditorClosed  += OnChannelEditorClosed;
+            channel.EditorResized += OnChannelEditorResized;
+
             lock (_gate)
             {
                 _process        = proc;
@@ -359,6 +369,12 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
         {
             try { cts.Cancel(); } catch { }
             cts.Dispose();
+        }
+
+        if (channel != null)
+        {
+            channel.EditorClosed  -= OnChannelEditorClosed;
+            channel.EditorResized -= OnChannelEditorResized;
         }
 
         // Send Goodbye if the channel is up; tolerate any failure.
@@ -875,6 +891,106 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
     }
 
     /// <inheritdoc />
+    public async Task<EditorOpenOutcome> ShowSlotEditorAsync(
+        int slotIdx, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        if (slotIdx < 0 || slotIdx >= ChainConstants.MaxSlots)
+        {
+            return new EditorOpenOutcome(false, null, null,
+                $"slot index out of range (0..{ChainConstants.MaxSlots - 1}): {slotIdx}");
+        }
+        ControlChannel channel;
+        lock (_gate)
+        {
+            if (!IsRunning || _control == null)
+            {
+                return new EditorOpenOutcome(false, null, null,
+                    "plugin host is not running");
+            }
+            channel = _control;
+        }
+        await _controlGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var req = new SlotShowEditorRequest((byte)slotIdx);
+            await channel.SendAsync(ControlTag.SlotShowEditor, req.Encode(), ct)
+                .ConfigureAwait(false);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(3));
+            var frame = await ReceiveExpected(channel,
+                ControlTag.SlotShowEditorResult, cts.Token).ConfigureAwait(false);
+            if (frame == null)
+            {
+                return new EditorOpenOutcome(false, null, null,
+                    "sidecar closed before SlotShowEditorResult");
+            }
+            var result = SlotShowEditorResult.Decode(frame.Value.Payload);
+            if (result.Status == 0)
+            {
+                return new EditorOpenOutcome(true,
+                    (int)result.Width, (int)result.Height, null);
+            }
+            string err = result.Status switch
+            {
+                1 => "no-plugin-loaded",
+                2 => "plugin-has-no-editor",
+                3 => "platform-not-supported",
+                4 => "attach-failed",
+                5 => "other",
+                6 => "invalid-slot-index",
+                7 => "gui-thread-init-failed",
+                _ => $"status={result.Status}",
+            };
+            _log.LogWarning(
+                $"PluginHostManager: slot {slotIdx} ShowEditor status={result.Status}");
+            return new EditorOpenOutcome(false, null, null, err);
+        }
+        finally
+        {
+            _controlGate.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> HideSlotEditorAsync(
+        int slotIdx, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        if (slotIdx < 0 || slotIdx >= ChainConstants.MaxSlots)
+        {
+            throw new ArgumentOutOfRangeException(nameof(slotIdx));
+        }
+        ControlChannel channel;
+        lock (_gate)
+        {
+            if (!IsRunning || _control == null)
+            {
+                return false;
+            }
+            channel = _control;
+        }
+        await _controlGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var req = new SlotHideEditorRequest((byte)slotIdx);
+            await channel.SendAsync(ControlTag.SlotHideEditor, req.Encode(), ct)
+                .ConfigureAwait(false);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(3));
+            var frame = await ReceiveExpected(channel,
+                ControlTag.SlotHideEditorResult, cts.Token).ConfigureAwait(false);
+            if (frame == null) return false;
+            var result = SlotHideEditorResult.Decode(frame.Value.Payload);
+            return result.Status == 0;
+        }
+        finally
+        {
+            _controlGate.Release();
+        }
+    }
+
+    /// <inheritdoc />
     public async Task SetChainEnabledAsync(
         bool enabled, CancellationToken ct = default)
     {
@@ -918,9 +1034,10 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
 
     // Receive the next ControlChannel frame, skipping over Heartbeat /
     // LogLine messages that arrive interleaved with the request/reply
-    // pair we are awaiting. Phase 2 frequency is low enough that this
-    // simple drain is safe; Phase 3 will move the reads to a dedicated
-    // background pump.
+    // pair we are awaiting. Async editor events (0x34 / 0x35) are
+    // dispatched via the channel's event API and skipped. Phase 3 GUI
+    // wave will likely move the reads to a dedicated background pump
+    // so async events don't depend on a sync request being in flight.
     private static async Task<ControlFrame?> ReceiveExpected(
         ControlChannel channel, ControlTag expected, CancellationToken ct)
     {
@@ -935,10 +1052,25 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
             {
                 continue;
             }
+            // Async editor events arrive unsolicited — dispatch + skip.
+            if (channel.DispatchAsyncIfApplicable(frame.Value))
+            {
+                continue;
+            }
             // Unexpected tag — surface as an error rather than spinning.
             throw new System.IO.IOException(
                 $"PluginHostManager: expected {expected}, got {frame.Value.Tag}");
         }
+    }
+
+    private void OnChannelEditorClosed(object? sender, EditorClosedEventArgs e)
+    {
+        SlotEditorClosed?.Invoke(this, e);
+    }
+
+    private void OnChannelEditorResized(object? sender, EditorResizedEventArgs e)
+    {
+        SlotEditorResized?.Invoke(this, e);
     }
 
     private void OnSidecarExited(object? sender, SidecarExitedEventArgs e)

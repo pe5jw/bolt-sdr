@@ -355,7 +355,80 @@ non-zero status, `actualValue` is unspecified (typically NaN).
 Statuses: 0 ok, 1 no-plugin-loaded, 5 other, 6 invalid-slot-index,
 7 controller-unavailable.
 
-### 4.5 Threading note for parameter changes
+### 4.5 Phase 3 GUI: native plugin editor window (Linux X11)
+
+The 0x30 family lets the host open the plugin's native editor as a
+top-level X11 window in the sidecar process. Wave 6+ extends the same
+shape to Windows (HWND) and macOS (NSView) once the operator moves to
+those platforms; the wire format below is platform-agnostic and stays
+unchanged when the cross-platform code lands.
+
+The sidecar runs ONE dedicated GUI thread per process (lazy init on
+first `SlotShowEditor`). The audio thread is unchanged — it never calls
+X11, never blocks on the GUI thread, never holds GUI-related locks.
+Control-thread requests post work to the GUI thread via a thread-safe
+queue and synchronously wait up to 1 s for a reply before forwarding
+the result frame back to the host.
+
+#### `SlotShowEditor` (0x30, host -> sidecar)
+
+Payload: `[slotIdx u8]`. Idempotent — calling while an editor is
+already open for the slot is a no-op that returns the current width /
+height.
+
+#### `SlotShowEditorResult` (0x31, sidecar -> host, sync reply to 0x30)
+
+Payload:
+
+```
+[slotIdx u8][status u8]
+  status == 0:
+    [width u32 LE][height u32 LE]
+```
+
+Status codes:
+
+| Status | Meaning                                                 |
+| -----: | ------------------------------------------------------- |
+|      0 | ok                                                      |
+|      1 | no-plugin-loaded                                        |
+|      2 | plugin-has-no-editor (controller->createView returned null) |
+|      3 | platform-not-supported (view doesn't accept X11EmbedWindowID) |
+|      4 | attach-failed (view->attached returned non-OK)         |
+|      5 | other                                                   |
+|      6 | invalid-slot-index                                      |
+|      7 | gui-thread-init-failed (display open failed, etc.)     |
+
+#### `SlotHideEditor` (0x32, host -> sidecar)
+
+Payload: `[slotIdx u8]`.
+
+#### `SlotHideEditorResult` (0x33, sidecar -> host, sync reply to 0x32)
+
+Payload: `[slotIdx u8][status u8]`. Status codes:
+
+| Status | Meaning                                                 |
+| -----: | ------------------------------------------------------- |
+|      0 | ok                                                      |
+|      1 | no-editor-open (the hide was a no-op)                  |
+|      5 | other                                                   |
+|      6 | invalid-slot-index                                      |
+
+#### `EditorClosed` (0x34, sidecar -> host, ASYNC event)
+
+Payload: `[slotIdx u8]`. Fired when the window-manager close button
+fires (ClientMessage / WM_DELETE_WINDOW) OR the plugin asks to close.
+This is NOT a reply to any request — it arrives unsolicited and the
+host's control-channel reader must dispatch it to an event handler,
+not to a pending awaiter.
+
+#### `EditorResized` (0x35, sidecar -> host, ASYNC event)
+
+Payload: `[slotIdx u8][width u32 LE][height u32 LE]`. Fired when the
+plugin's `IPlugFrame::resizeView` succeeds and the X11 window has been
+resized. Informational — the host doesn't need to acknowledge.
+
+### 4.6 Threading note for parameter changes
 
 VST3 strictly recommends that parameter changes flow through
 `IParameterChanges` on the audio thread inside `ProcessData`. Phase 3a

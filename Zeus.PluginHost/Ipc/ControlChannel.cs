@@ -49,6 +49,12 @@ public enum ControlTag : byte
     SlotParamListResult    = 0x21,
     SlotSetParam           = 0x22,
     SlotSetParamResult     = 0x23,
+    SlotShowEditor         = 0x30,
+    SlotShowEditorResult   = 0x31,
+    SlotHideEditor         = 0x32,
+    SlotHideEditorResult   = 0x33,
+    EditorClosed           = 0x34,
+    EditorResized          = 0x35,
 }
 
 /// <summary>
@@ -72,6 +78,48 @@ public sealed class ControlChannel : IDisposable
 
     /// <summary>True once a sidecar has connected and the stream is ready.</summary>
     public bool IsConnected => _stream != null && !_disposed;
+
+    /// <summary>
+    /// Async event: the sidecar closed an editor window (window-manager
+    /// DELETE button OR plugin-driven). Raised whenever a 0x34
+    /// EditorClosed frame is dispatched via <see cref="DispatchAsyncIfApplicable"/>
+    /// (typically from the request/reply pump in PluginHostManager).
+    /// </summary>
+    public event EventHandler<EditorClosedEventArgs>? EditorClosed;
+
+    /// <summary>
+    /// Async event: the plugin asked to resize the editor window and
+    /// the sidecar honored it. Informational.
+    /// </summary>
+    public event EventHandler<EditorResizedEventArgs>? EditorResized;
+
+    /// <summary>
+    /// Returns true and dispatches via <see cref="EditorClosed"/> /
+    /// <see cref="EditorResized"/> when the frame's tag is one of the
+    /// async editor events; returns false for any other tag (caller is
+    /// then responsible for dispatch, e.g. matching to a sync awaiter).
+    /// </summary>
+    public bool DispatchAsyncIfApplicable(in ControlFrame frame)
+    {
+        switch (frame.Tag)
+        {
+            case ControlTag.EditorClosed:
+            {
+                var ev = EditorClosedEvent.Decode(frame.Payload);
+                EditorClosed?.Invoke(this, new EditorClosedEventArgs(ev.SlotIdx));
+                return true;
+            }
+            case ControlTag.EditorResized:
+            {
+                var ev = EditorResizedEvent.Decode(frame.Payload);
+                EditorResized?.Invoke(this, new EditorResizedEventArgs(
+                    ev.SlotIdx, (int)ev.Width, (int)ev.Height));
+                return true;
+            }
+            default:
+                return false;
+        }
+    }
 
     /// <summary>Path of the AF_UNIX socket the host bound.</summary>
     public string SocketPath => _socketPath;
@@ -237,3 +285,24 @@ public sealed class ControlChannel : IDisposable
 
 /// <summary>One received control frame: tag plus payload bytes.</summary>
 public readonly record struct ControlFrame(ControlTag Tag, byte[] Payload);
+
+/// <summary>Async event payload from the sidecar: editor for slot was closed.</summary>
+public sealed class EditorClosedEventArgs : EventArgs
+{
+    public int SlotIdx { get; }
+    public EditorClosedEventArgs(int slotIdx) { SlotIdx = slotIdx; }
+}
+
+/// <summary>Async event payload from the sidecar: editor for slot was resized.</summary>
+public sealed class EditorResizedEventArgs : EventArgs
+{
+    public int SlotIdx { get; }
+    public int Width   { get; }
+    public int Height  { get; }
+    public EditorResizedEventArgs(int slotIdx, int width, int height)
+    {
+        SlotIdx = slotIdx;
+        Width   = width;
+        Height  = height;
+    }
+}
