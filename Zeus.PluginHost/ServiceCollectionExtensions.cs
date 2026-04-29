@@ -8,6 +8,7 @@
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Zeus.PluginHost.Discovery;
 
 namespace Zeus.PluginHost;
 
@@ -15,7 +16,9 @@ public static class ServiceCollectionExtensions
 {
     /// <summary>
     /// Register <see cref="IPluginHost"/> backed by
-    /// <see cref="PluginHostManager"/> as a singleton.
+    /// <see cref="PluginHostManager"/> as a singleton, plus the
+    /// discovery-side <see cref="IBinaryHeaderSniffer"/> and
+    /// <see cref="IPluginScanner"/> services.
     /// </summary>
     /// <remarks>
     /// Do NOT call this from <c>Zeus.Server/Program.cs</c> in Phase 1.
@@ -25,6 +28,8 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddZeusPluginHost(this IServiceCollection services)
     {
         services.TryAddSingleton<IPluginHost, PluginHostManager>();
+        services.TryAddSingleton<IBinaryHeaderSniffer, BinaryHeaderSniffer>();
+        services.TryAddSingleton<IPluginScanner, PluginScanner>();
         return services;
     }
 }
