@@ -52,16 +52,18 @@ import {
   type ZoomLevel,
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import { useTxStore } from '../state/tx-store';
 
-// Matches the pan-drag gesture step in use-pan-tune-gesture.ts. If that
-// becomes user-settable, lift this into a shared setting.
-const TUNE_STEP_HZ = 500;
+// The arrow-key tune step follows the operator's TuningStepWidget choice
+// (toolbar-favorites-store.stepHz). Read at event time inside bumpTune so
+// it picks up changes without re-mounting the hook.
 const MAX_HZ = 60_000_000;
 
-function snapHz(hz: number): number {
+function snapHz(hz: number, step: number): number {
   if (!Number.isFinite(hz)) return 0;
-  const snapped = Math.round(hz / TUNE_STEP_HZ) * TUNE_STEP_HZ;
+  const s = Math.max(1, step);
+  const snapped = Math.round(hz / s) * s;
   return Math.min(MAX_HZ, Math.max(0, snapped));
 }
 
@@ -74,7 +76,7 @@ function isEditableTarget(el: EventTarget | null): boolean {
 
 /**
  * Window-scoped arrow-key shortcuts:
- *   ←/→ nudge the VFO down/up by TUNE_STEP_HZ
+ *   ←/→ nudge the VFO down/up by the operator's selected tune step
  *   ↑/↓ step zoom in/out by one level
  *   Space (press-and-hold) keys MOX; release drops back to RX.
  *
@@ -112,7 +114,8 @@ export function useKeyboardShortcuts() {
       // Accumulate from the queued value so held-down arrows step cleanly
       // rather than re-reading the (potentially stale) store each frame.
       const base = pendingHz ?? useConnectionStore.getState().vfoHz;
-      const next = snapHz(base + direction * TUNE_STEP_HZ);
+      const step = useToolbarFavoritesStore.getState().stepHz;
+      const next = snapHz(base + direction * step, step);
       useConnectionStore.setState({ vfoHz: next });
       pendingHz = next;
       if (pendingRaf === 0) pendingRaf = requestAnimationFrame(flushTune);
