@@ -77,7 +77,6 @@ import { TunButton } from './components/TunButton';
 import { VfoDisplay } from './components/VfoDisplay';
 import { Waterfall } from './components/Waterfall';
 import { useSwUpdatePrompt } from './pwa/useSwUpdatePrompt';
-import { AzimuthMap } from './components/design/AzimuthMap';
 import { CONTACTS, bandOf } from './components/design/data';
 import { TuningStepWidget } from './components/TuningStepWidget';
 import { Dockable } from './components/design/Dockable';
@@ -996,14 +995,6 @@ export default function App() {
             </Dockable>
           </div>
 
-          {/* Great-Circle Map sits at the bottom of the side stack now
-              that QRZ has moved to the bottom row alongside the Logbook.
-              Always visible. */}
-          <div className="side-slot hide-mobile">
-            <Dockable title="Great-Circle Map" ledOn={!!contact}>
-              <AzimuthMap target={contact} myGrid="EM48" />
-            </Dockable>
-          </div>
         </div>
 
         {/* Bottom row — Logbook + TX Stage Meters on desktop; big PTT on
