@@ -11,7 +11,7 @@
 //   - the row chrome (label + numeric readout + click-to-select handler)
 
 import { useRef, useState, type CSSProperties } from 'react';
-import { GripVertical, X } from 'lucide-react';
+import { GripVertical, Settings, X } from 'lucide-react';
 import { METER_CATALOG } from './meterCatalog';
 import type { MetersWidgetInstance } from './metersConfig';
 import { useMeterReading } from './useMeterReading';
@@ -81,35 +81,54 @@ export function MeterWidget({
   const rowStyle: CSSProperties = {
     display: 'flex',
     flexDirection: 'column',
-    gap: 4,
-    padding: '4px 8px 6px',
     height: '100%',
     boxSizing: 'border-box',
-    background: selected ? 'var(--bg-2)' : 'var(--bg-1)',
-    border: `1px solid ${selected ? 'var(--accent)' : hovered ? 'var(--panel-border)' : 'transparent'}`,
+    background: 'var(--bg-1)',
+    border: `1px solid ${selected ? 'var(--accent)' : hovered ? 'var(--panel-border)' : 'rgba(0,0,0,0.4)'}`,
     borderRadius: 'var(--r-sm)',
     cursor: 'pointer',
     overflow: 'hidden',
-    transition: 'background var(--dur-fast), border-color var(--dur-fast)',
+    boxShadow: selected
+      ? '0 0 0 1px var(--accent), inset 0 1px 0 var(--panel-hl-top)'
+      : 'inset 0 1px 0 var(--panel-hl-top), 0 1px 2px rgba(0,0,0,0.3)',
+    transition: 'border-color var(--dur-fast), box-shadow var(--dur-fast)',
   };
   const headStyle: CSSProperties = {
     display: 'flex',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    gap: 8,
+    alignItems: 'center',
+    gap: 6,
+    padding: '3px 6px',
+    background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
+    borderBottom: '1px solid var(--panel-border)',
+    flexShrink: 0,
   };
   const labelStyle: CSSProperties = {
     fontSize: 10,
     textTransform: 'uppercase',
     letterSpacing: '0.08em',
-    color: 'var(--fg-2)',
-    fontFamily: 'var(--font-mono)',
+    color: 'var(--fg-1)',
+    fontFamily: 'var(--font-sans)',
+    fontWeight: 500,
   };
   const valueStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: 11,
     color: 'var(--fg-1)',
     fontFamily: 'var(--font-mono)',
     fontVariantNumeric: 'tabular-nums',
+  };
+  const iconBtnBase: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 16,
+    height: 16,
+    borderRadius: 'var(--r-xs)',
+    color: 'var(--fg-3)',
+    background: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    flexShrink: 0,
+    transition: 'color var(--dur-fast), background var(--dur-fast)',
   };
 
   // Body geometry varies per widget kind; centre the dial and sparkline.
@@ -188,7 +207,6 @@ export function MeterWidget({
             display: 'inline-flex',
             alignItems: 'center',
             color: 'var(--fg-3)',
-            marginRight: 2,
             // The grip element itself is the react-draggable handle; we must
             // NOT stop mousedown propagation here or RGL never sees it.
             // Click stopPropagation IS still needed so the parent's onClick
@@ -198,10 +216,48 @@ export function MeterWidget({
         >
           <GripVertical size={12} />
         </span>
-        <span style={{ ...labelStyle, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
-        <span style={valueStyle}>
-          {formatReadout(def.unit, value)} <span style={{ color: 'var(--fg-3)' }}>{def.unit}</span>
+        <span
+          style={{
+            ...labelStyle,
+            flex: 1,
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {label}
         </span>
+        <span style={valueStyle}>
+          {formatReadout(def.unit, value)}{' '}
+          <span style={{ color: 'var(--fg-3)' }}>{def.unit}</span>
+        </span>
+        <button
+          type="button"
+          aria-label={`Configure ${label}`}
+          title="Configure"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect();
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{
+            ...iconBtnBase,
+            color: selected ? 'var(--accent)' : 'var(--fg-3)',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = 'var(--accent)';
+            e.currentTarget.style.background = 'var(--bg-2)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = selected
+              ? 'var(--accent)'
+              : 'var(--fg-3)';
+            e.currentTarget.style.background = 'transparent';
+          }}
+        >
+          <Settings size={12} />
+        </button>
         {onRemove ? (
           <button
             type="button"
@@ -215,20 +271,7 @@ export function MeterWidget({
             // near the X starts a drag) AND prevent the parent card's
             // onClick from firing.
             onMouseDown={(e) => e.stopPropagation()}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 16,
-              height: 16,
-              marginLeft: 4,
-              borderRadius: 'var(--r-xs)',
-              color: 'var(--fg-3)',
-              background: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              flexShrink: 0,
-            }}
+            style={iconBtnBase}
             onMouseEnter={(e) => {
               e.currentTarget.style.color = 'var(--tx)';
               e.currentTarget.style.background = 'var(--bg-2)';
@@ -242,7 +285,16 @@ export function MeterWidget({
           </button>
         ) : null}
       </div>
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          padding: '6px 8px 8px',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'center',
+        }}
+      >
         {body}
       </div>
     </div>

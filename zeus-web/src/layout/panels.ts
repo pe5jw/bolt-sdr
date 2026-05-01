@@ -101,6 +101,15 @@ export interface PanelDef {
    *  per-instance config blob. Default false (single-instance, current
    *  behaviour for every panel except `meters`). */
   multiInstance?: boolean;
+  /** When true, PanelTile skips rendering TileChrome and the
+   *  workspace-tile-body wrapper. The panel body fills the tile and is
+   *  responsible for drawing its own header (if any). It must include an
+   *  element with class `.workspace-tile-header` so react-grid-layout can
+   *  pick up dragging, and a `.workspace-tile-close` button wired to the
+   *  injected `onRemove` prop. Useful for panels that already manage rich
+   *  toolbars (Meters has gear / library / settings drawers; Panadapter has
+   *  band/zoom/cursor strip; Azimuth has SP/LP toggles). */
+  headerless?: boolean;
 }
 
 // Panel registry: maps component-id strings (used in the flexlayout JSON model)
@@ -219,6 +228,7 @@ export const PANELS: Record<string, PanelDef> = {
     tags: ['meters', 'rx', 'tx', 'signal', 'power', 'agc', 'alc', 'configurable'],
     component: MetersPanel,
     multiInstance: true,
+    headerless: true,
   },
 };
 

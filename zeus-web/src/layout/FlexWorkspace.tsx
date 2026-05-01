@@ -207,6 +207,17 @@ interface PanelTileProps {
 function PanelTile({ tile, onRemove }: PanelTileProps) {
   const def = PANELS[tile.panelId];
   if (!def) return null;
+  // Headerless panels own their entire tile surface and draw their own
+  // header (if any). They MUST include an element with class
+  // `.workspace-tile-header` so RGL drag picks up, and a
+  // `.workspace-tile-close` button bound to the injected onRemove.
+  if (def.headerless) {
+    return (
+      <div className="workspace-tile workspace-tile--headerless">
+        <PanelBody tile={tile} onRemove={onRemove} />
+      </div>
+    );
+  }
   return (
     <div className="workspace-tile">
       <TileChrome title={def.name} onRemove={onRemove} />
@@ -217,11 +228,17 @@ function PanelTile({ tile, onRemove }: PanelTileProps) {
   );
 }
 
-function PanelBody({ tile }: { tile: WorkspaceTile }) {
+function PanelBody({
+  tile,
+  onRemove,
+}: {
+  tile: WorkspaceTile;
+  onRemove?: () => void;
+}) {
   // Per-tile config-bound rendering for multi-instance / configurable
   // panels. Single-instance panels just render their component as-is.
   if (tile.panelId === 'meters') {
-    return <MetersTileBody tile={tile} />;
+    return <MetersTileBody tile={tile} onRemove={onRemove} />;
   }
   const def = PANELS[tile.panelId];
   if (!def) return null;
@@ -229,7 +246,13 @@ function PanelBody({ tile }: { tile: WorkspaceTile }) {
   return <Component />;
 }
 
-function MetersTileBody({ tile }: { tile: WorkspaceTile }) {
+function MetersTileBody({
+  tile,
+  onRemove,
+}: {
+  tile: WorkspaceTile;
+  onRemove?: () => void;
+}) {
   const updateTileInstanceConfig = useLayoutStore(
     (s) => s.updateTileInstanceConfig,
   );
@@ -243,5 +266,7 @@ function MetersTileBody({ tile }: { tile: WorkspaceTile }) {
     },
     [tile.uid, updateTileInstanceConfig],
   );
-  return <MetersPanel config={config} setConfig={setConfig} />;
+  return (
+    <MetersPanel config={config} setConfig={setConfig} onRemove={onRemove} />
+  );
 }

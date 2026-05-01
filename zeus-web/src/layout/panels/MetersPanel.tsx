@@ -22,7 +22,14 @@
 // translateX use the existing --dur-fast / --dur-med tokens.
 
 import { useCallback, useMemo, useState, type CSSProperties } from 'react';
-import { Settings, ChevronLeft, ChevronRight, X, Trash2 } from 'lucide-react';
+import {
+  Settings,
+  ChevronLeft,
+  ChevronRight,
+  X,
+  Trash2,
+  GripVertical,
+} from 'lucide-react';
 import {
   ResponsiveGridLayout,
   useContainerWidth,
@@ -65,9 +72,19 @@ interface MetersPanelProps {
    *  rename UX (the v1 workspace doesn't use this — see all-panels plan §10
    *  Q3). MetersPanel still owns the in-header title editor. */
   renameTab?: (name: string) => void;
+  /** Tile-removal hook. Injected by PanelTile because Meters opts out of
+   *  the default TileChrome (panels.ts → headerless: true) and renders its
+   *  own close X. Falls back to no-op when the panel is mounted standalone
+   *  (tests, design previews). */
+  onRemove?: () => void;
 }
 
-export function MetersPanel({ config, setConfig, renameTab }: MetersPanelProps) {
+export function MetersPanel({
+  config,
+  setConfig,
+  renameTab,
+  onRemove,
+}: MetersPanelProps) {
   const effectiveConfig = config ?? EMPTY_METERS_CONFIG;
   const effectiveSet = setConfig ?? noop;
   return (
@@ -75,6 +92,7 @@ export function MetersPanel({ config, setConfig, renameTab }: MetersPanelProps) 
       config={effectiveConfig}
       setConfig={effectiveSet}
       renameTab={renameTab}
+      onRemove={onRemove}
     />
   );
 }
@@ -85,12 +103,14 @@ interface MetersPanelInnerProps {
   config: MetersPanelConfig;
   setConfig: (next: MetersPanelConfig) => void;
   renameTab?: (name: string) => void;
+  onRemove?: () => void;
 }
 
 export function MetersPanelInner({
   config,
   setConfig,
   renameTab,
+  onRemove,
 }: MetersPanelInnerProps) {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
@@ -205,16 +225,13 @@ export function MetersPanelInner({
     if (renameTab) renameTab(trimmed);
   }, [titleDraft, title, config, setConfig, renameTab]);
 
-  const headerStyle: CSSProperties = {
-    height: 24,
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '0 8px',
-    background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
-    borderBottom: '1px solid var(--panel-border)',
-    flexShrink: 0,
-  };
+  // The Meters tile is registered with PanelDef.headerless = true, so
+  // PanelTile skips the default TileChrome. The header below takes over
+  // that role: the wrapping element carries class `workspace-tile-header`
+  // (so RGL drag still works) and the right-side X carries
+  // `workspace-tile-close` (drag-cancel selector). Buttons in between
+  // (gear / chevrons) stop mousedown propagation so a click on them
+  // doesn't initiate a drag.
   const headerBtnStyle: CSSProperties = {
     display: 'inline-flex',
     alignItems: 'center',
@@ -236,6 +253,7 @@ export function MetersPanelInner({
     cursor: 'text',
     userSelect: 'none',
   };
+  const stopDrag = (e: React.MouseEvent) => e.stopPropagation();
 
   return (
     <div
@@ -249,14 +267,24 @@ export function MetersPanelInner({
         background: 'var(--bg-0)',
       }}
     >
-      {/* Header */}
-      <div style={headerStyle}>
+      {/* Header — see PanelDef.headerless wiring above. The class
+          `workspace-tile-header` makes this strip the RGL drag handle for
+          the surrounding tile. */}
+      <div className="workspace-tile-header">
+        <span
+          className="workspace-tile-drag-handle"
+          aria-hidden="true"
+          title="Drag to reposition"
+        >
+          <GripVertical size={12} />
+        </span>
         <button
           type="button"
           aria-label={libraryOpen ? 'Close meter library' : 'Open meter library'}
           aria-pressed={libraryOpen}
           title={libraryOpen ? 'Close library' : 'Add meters'}
           onClick={() => setLibraryOpen((o) => !o)}
+          onMouseDown={stopDrag}
           style={headerBtnStyle}
           data-testid="meters-library-toggle"
         >
@@ -268,6 +296,7 @@ export function MetersPanelInner({
             aria-label="Collapse drawer"
             title="Collapse drawer"
             onClick={() => setLibraryOpen(false)}
+            onMouseDown={stopDrag}
             style={headerBtnStyle}
           >
             <ChevronLeft size={14} />
@@ -280,6 +309,7 @@ export function MetersPanelInner({
             value={titleDraft}
             onChange={(e) => setTitleDraft(e.target.value)}
             onBlur={commitTitle}
+            onMouseDown={stopDrag}
             onKeyDown={(e) => {
               if (e.key === 'Enter') commitTitle();
               else if (e.key === 'Escape') {
@@ -298,7 +328,8 @@ export function MetersPanelInner({
           />
         ) : (
           <span
-            style={titleStyle}
+            className="workspace-tile-title"
+            style={{ cursor: 'text' }}
             onDoubleClick={() => {
               setTitleDraft(title);
               setEditingTitle(true);
@@ -314,9 +345,26 @@ export function MetersPanelInner({
             aria-label="Close settings"
             title="Close settings"
             onClick={() => setSelectedUid(null)}
+            onMouseDown={stopDrag}
             style={headerBtnStyle}
           >
             <ChevronRight size={14} />
+          </button>
+        ) : null}
+        {onRemove ? (
+          <button
+            type="button"
+            className="workspace-tile-close"
+            aria-label={`Remove ${title}`}
+            title="Remove panel"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <X size={12} />
           </button>
         ) : null}
       </div>
