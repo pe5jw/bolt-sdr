@@ -58,15 +58,49 @@ import { PsFlexPanel } from './panels/PsFlexPanel';
 import { BandPanel } from './panels/BandPanel';
 import { ModePanel } from './panels/ModePanel';
 import { StepPanel } from './panels/StepPanel';
+import { MetersPanel } from './panels/MetersPanel';
 
 export type PanelCategory = 'spectrum' | 'vfo' | 'meters' | 'dsp' | 'log' | 'tools' | 'controls';
+
+/** Human-friendly category labels for the Add Panel modal's left rail. The
+ *  rail shows these in a fixed order; "All" is rendered separately as a
+ *  passthrough chip. */
+export const PANEL_CATEGORIES: ReadonlyArray<PanelCategory> = [
+  'spectrum',
+  'vfo',
+  'meters',
+  'dsp',
+  'log',
+  'tools',
+  'controls',
+];
+export const PANEL_CATEGORY_LABELS: Record<PanelCategory, string> = {
+  spectrum: 'Spectrum',
+  vfo: 'VFO',
+  meters: 'Meters',
+  dsp: 'DSP',
+  log: 'Log',
+  tools: 'Tools',
+  controls: 'Controls',
+};
+
+/** Most panels render with no props — the workspace tile renders them as
+ *  `<def.component />`. Multi-instance panels with per-instance config
+ *  (just `meters` today) take a typed prop pair instead; `PanelTile` knows
+ *  to switch on `def.id === 'meters'` for that wiring. */
+export type PanelComponentProps = Record<string, never>;
 
 export interface PanelDef {
   id: string;
   name: string;
   category: PanelCategory;
   tags: string[];
-  component: ComponentType;
+  component: ComponentType<PanelComponentProps>;
+  /** When true, the Add Panel modal allows duplicates and the workspace
+   *  store mints a unique tile uid per instance so each tile holds its own
+   *  per-instance config blob. Default false (single-instance, current
+   *  behaviour for every panel except `meters`). */
+  multiInstance?: boolean;
 }
 
 // Panel registry: maps component-id strings (used in the flexlayout JSON model)
@@ -159,14 +193,14 @@ export const PANELS: Record<string, PanelDef> = {
   },
   band: {
     id: 'band',
-    name: 'Band Buttons',
+    name: 'Band',
     category: 'controls',
     tags: ['band', 'frequency', 'hf', 'tuning'],
     component: BandPanel,
   },
   mode: {
     id: 'mode',
-    name: 'Mode Buttons',
+    name: 'Mode',
     category: 'controls',
     tags: ['mode', 'modulation', 'ssb', 'cw', 'am', 'fm'],
     component: ModePanel,
@@ -178,4 +212,13 @@ export const PANELS: Record<string, PanelDef> = {
     tags: ['step', 'tuning', 'frequency', 'increment'],
     component: StepPanel,
   },
+  meters: {
+    id: 'meters',
+    name: 'Meters',
+    category: 'meters',
+    tags: ['meters', 'rx', 'tx', 'signal', 'power', 'agc', 'alc', 'configurable'],
+    component: MetersPanel,
+    multiInstance: true,
+  },
 };
+

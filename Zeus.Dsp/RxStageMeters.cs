@@ -42,28 +42,52 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
-import './index.css';
-import './styles/tokens.css';
-import './styles/layout.css';
-import './styles/filter-ribbon.css';
-import './styles/toolbar-favorites.css';
-import './styles/nr-settings.css';
-import './styles/meters-grid.css';
-import './styles/all-panels.css';
-import App from './App.tsx';
-import { installFetchInterceptor } from './serverUrl';
+namespace Zeus.Dsp;
 
-// Capacitor / standalone-host builds set localStorage["zeus.serverUrl"]
-// to a LAN address; on plain web this is a no-op (relative paths).
-installFetchInterceptor();
-
-const rootEl = document.getElementById('root');
-if (!rootEl) throw new Error('root element missing');
-
-createRoot(rootEl).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+/// <summary>
+/// Per-tick RXA stage readings sampled from the WDSP metering ring. Indices
+/// match Thetis <c>rxaMeterType</c> (RXA.h:47-57): signal peak/avg, ADC
+/// peak/avg, AGC gain, AGC envelope peak/avg.
+///
+/// Units (all uncalibrated — caller applies the per-board offset before
+/// putting them on the wire):
+/// <list type="bullet">
+///   <item><c>SignalPk</c> / <c>SignalAv</c>: dBm, RXA_S_PK / RXA_S_AV</item>
+///   <item><c>AdcPk</c> / <c>AdcAv</c>: dBFS, RXA_ADC_PK / RXA_ADC_AV</item>
+///   <item><c>AgcGain</c>: signed dB (positive = AGC is boosting),
+///         RXA_AGC_GAIN</item>
+///   <item><c>AgcEnvPk</c> / <c>AgcEnvAv</c>: dBm, RXA_AGC_PK / RXA_AGC_AV</item>
+/// </list>
+///
+/// Sign convention for <c>AgcGain</c> deliberately differs from
+/// <see cref="TxStageMeters"/>'s <c>*Gr</c> fields. WDSP's RXA AGC genuinely
+/// swings both ways: positive when boosting a weak signal, negative when
+/// cutting a hot one. Storing the signed value preserves operator
+/// information; flipping to a one-sided "reduction" scale would lose the
+/// "AGC is boosting +30 dB on weak SSB" reading the operator wants.
+///
+/// Sentinel: when a meter index hasn't been ticked (channel state &lt; 1
+/// or the WDSP worker thread hasn't run yet), <c>GetRXAMeter</c> returns
+/// approximately −400 ("meter didn't run") — see
+/// <c>docs/lessons/wdsp-init-gotchas.md</c>. The value passes through
+/// unchanged into <see cref="RxStageMeters"/> and downstream into the
+/// wire frame; the frontend treats values ≤ −200 as "bypassed".
+/// </summary>
+public readonly record struct RxStageMeters(
+    float SignalPk,
+    float SignalAv,
+    float AdcPk,
+    float AdcAv,
+    float AgcGain,
+    float AgcEnvPk,
+    float AgcEnvAv)
+{
+    public static readonly RxStageMeters Silent = new(
+        SignalPk: -200f,
+        SignalAv: -200f,
+        AdcPk: -200f,
+        AdcAv: -200f,
+        AgcGain: 0f,
+        AgcEnvPk: -200f,
+        AgcEnvAv: -200f);
+}
