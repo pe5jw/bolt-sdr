@@ -424,10 +424,20 @@ public sealed class VstHostHostedService : IHostedService, IDisposable
         var slotDtos = new List<PlugHostSlotSnapshot>(slots.Count);
         for (int i = 0; i < slots.Count; i++)
         {
+            // Path is only known to us, not to PluginHostManager.Slots — pull
+            // it from our own _slotPaths cache so the frontend's
+            // hasNativeEditor check (which gates the EDIT/CLOSE buttons by
+            // file extension) works against snapshot refreshes too. Before
+            // this the snapshot endpoint omitted path entirely; the next
+            // SignalR-driven refresh after a slot was loaded would silently
+            // wipe the path field and the operator's editor buttons would
+            // disappear (sidecar / audio unaffected — pure UI gating bug).
+            string? path = null;
+            lock (_stateLock) { _slotPaths.TryGetValue(i, out path); }
             slotDtos.Add(new PlugHostSlotSnapshot(
                 Index: slots[i].Index,
                 Plugin: slots[i].Plugin is { } p
-                    ? new PlugHostPluginSnapshot(p.Name, p.Vendor, p.Version)
+                    ? new PlugHostPluginSnapshot(p.Name, p.Vendor, p.Version, path ?? string.Empty)
                     : null,
                 Bypass: slots[i].Bypass,
                 ParameterCount: slots[i].Parameters.Count));
@@ -638,7 +648,7 @@ public sealed class VstHostHostedService : IHostedService, IDisposable
 // REST DTOs
 // --------------------------------------------------------------------
 
-public sealed record PlugHostPluginSnapshot(string Name, string Vendor, string Version);
+public sealed record PlugHostPluginSnapshot(string Name, string Vendor, string Version, string Path);
 
 public sealed record PlugHostSlotSnapshot(
     int Index,
