@@ -94,7 +94,7 @@ export type VstHostStoreState = {
   removeSearchPath: (path: string) => Promise<void>;
 
   // SignalR-driven event ingest. Called from ws-client when an
-  // 0x19 VstHostEvent frame is decoded.
+  // 0x1A VstHostEvent frame is decoded.
   applyEvent: (tag: string) => void;
 
   clearNotice: () => void;

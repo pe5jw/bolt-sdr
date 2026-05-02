@@ -5,7 +5,7 @@
 // re-fetch /api/plughost/state, refresh a single slot, or show a
 // transient notification (e.g. sidecarExited).
 //
-// Wire format: [0x19][utf8 payload, max 256 bytes]. No phase byte, no
+// Wire format: [0x1A][utf8 payload, max 256 bytes]. No phase byte, no
 // length prefix beyond what the WS message itself carries — the
 // client-side decoder reads bytes 1..end as the UTF-8 string. Keeping
 // the frame deliberately minimal: Wave 6a only needs the tag-and-args

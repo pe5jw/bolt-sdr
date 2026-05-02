@@ -77,7 +77,6 @@ import { TunButton } from './components/TunButton';
 import { VfoDisplay } from './components/VfoDisplay';
 import { Waterfall } from './components/Waterfall';
 import { useSwUpdatePrompt } from './pwa/useSwUpdatePrompt';
-import { AzimuthMap } from './components/design/AzimuthMap';
 import { CONTACTS, bandOf } from './components/design/data';
 import { TuningStepWidget } from './components/TuningStepWidget';
 import { Dockable } from './components/design/Dockable';
@@ -102,6 +101,7 @@ import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
 import { useTxStore } from './state/tx-store';
 import { useLayoutPreferenceStore } from './state/layout-preference-store';
+import { useLayoutStore } from './state/layout-store';
 import { useDisplaySettingsStore } from './state/display-settings-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
@@ -767,6 +767,19 @@ export default function App() {
           <div className="label-xs ctrl-lbl">AF</div>
           <AfGainSlider />
         </div>
+        {useFlexLayout && (
+          <div className="ctrl-group hide-mobile">
+            <div className="label-xs ctrl-lbl">PANEL</div>
+            <button
+              type="button"
+              className="btn sm"
+              onClick={() => useLayoutStore.getState().setAddPanelOpen(true)}
+              title="Add panel to workspace"
+            >
+              + Add
+            </button>
+          </div>
+        )}
         <div className="spacer hide-mobile" style={{ flex: 1 }} />
       </div>
 
@@ -996,14 +1009,6 @@ export default function App() {
             </Dockable>
           </div>
 
-          {/* Great-Circle Map sits at the bottom of the side stack now
-              that QRZ has moved to the bottom row alongside the Logbook.
-              Always visible. */}
-          <div className="side-slot hide-mobile">
-            <Dockable title="Great-Circle Map" ledOn={!!contact}>
-              <AzimuthMap target={contact} myGrid="EM48" />
-            </Dockable>
-          </div>
         </div>
 
         {/* Bottom row — Logbook + TX Stage Meters on desktop; big PTT on

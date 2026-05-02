@@ -50,6 +50,8 @@ import './styles/layout.css';
 import './styles/filter-ribbon.css';
 import './styles/toolbar-favorites.css';
 import './styles/nr-settings.css';
+import './styles/meters-grid.css';
+import './styles/all-panels.css';
 import App from './App.tsx';
 import { installFetchInterceptor } from './serverUrl';
 
