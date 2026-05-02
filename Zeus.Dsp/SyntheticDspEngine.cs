@@ -120,10 +120,11 @@ public sealed class SyntheticDspEngine : IDspEngine
     }
 
     public const int MinZoomLevel = 1;
-    // Cap at 16× — at AnalyzerFftSize=16384 that leaves 1024 bins after the
-    // centre clip, comfortably above typical pan widths. Beyond 16 the bin
-    // count starts crowding the pixel column count.
-    public const int MaxZoomLevel = 16;
+    // Cap at 32× — at AnalyzerFftSize=16384 that leaves 512 bins after the
+    // centre clip, below typical pan pixel widths so the trace softens at
+    // 32× but stays usable for narrow-signal hunting (CW). Bump
+    // AnalyzerFftSize to 32768 if 32× sharpness becomes a problem.
+    public const int MaxZoomLevel = 32;
 
     internal static void ValidateZoomLevel(int level)
     {

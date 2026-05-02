@@ -155,7 +155,7 @@ public sealed class WdspDspEngine : IDspEngine
         // Single-writer on the pipeline thread + word-sized read on the worker = safe
         // without a lock (worst case: one extra frame at the old setting on toggle).
         public volatile NbMode CurrentNbMode = NbMode.Off;
-        // Zoom level (1/2/4/8). Changing it re-calls SetAnalyzer with shifted
+        // Zoom level (1..32). Changing it re-calls SetAnalyzer with shifted
         // fscLin/fscHin; the worker's Spectrum0 and the pixel drain's GetPixels
         // take this lock so they never interleave with an in-flight reconfig.
         public int ZoomLevel = 1;

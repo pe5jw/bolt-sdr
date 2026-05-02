@@ -148,12 +148,13 @@ export const NR4_DEFAULTS = {
 
 export const NR4_ALGO_LABELS = ['Algo 1', 'Algo 2', 'Algo 3'] as const;
 
-// Integer 1..8. Backend accepts up to 16 (SyntheticDspEngine.MaxZoomLevel)
-// but anything past 8 doesn't visibly narrow the span further at current
-// pan widths — capping the slider here keeps the control honest.
+// Integer 1..32. Matches the backend cap (SyntheticDspEngine.MaxZoomLevel).
+// At 32× the WDSP analyzer's centre-clipped bin count drops below typical
+// pan pixel widths, softening the trace — usable for narrow-signal (CW)
+// hunting even if not pixel-sharp.
 export type ZoomLevel = number;
 export const ZOOM_MIN: ZoomLevel = 1;
-export const ZOOM_MAX: ZoomLevel = 8;
+export const ZOOM_MAX: ZoomLevel = 32;
 
 export type RadioStateDto = {
   status: ConnectionStatus;
