@@ -124,7 +124,11 @@ public sealed class TxMetersService : BackgroundService
     private readonly TxService _tx;
     private readonly DspPipelineService _pipe;
     private readonly ILogger<TxMetersService> _log;
-    private readonly RadioCalibration _cal = RadioCalibration.HermesLite2;
+    // Per-board calibration is resolved at sample time via
+    // RadioCalibrations.For(_radio.ConnectedBoardKind). Mirrors the
+    // PaDefaults.GetPaGainDb dispatch seam (per CLAUDE.md, do not
+    // special-case inside ComputeMeters). See RadioCalibrations for the
+    // dispatch table and the OrionMkII / ANAN-8000D caveat.
 
     private readonly object _sync = new();
     private double _fwdAdc;
@@ -299,7 +303,8 @@ public sealed class TxMetersService : BackgroundService
                 {
                     double fwdAdc, refAdc;
                     lock (_sync) { fwdAdc = _fwdAdc; refAdc = _refAdc; }
-                    var (fwdW, refW, swrVal) = ComputeMeters(fwdAdc, refAdc, _cal);
+                    var cal = RadioCalibrations.For(_radio.ConnectedBoardKind);
+                    var (fwdW, refW, swrVal) = ComputeMeters(fwdAdc, refAdc, cal);
                     swr = swrVal;
                     // Stage meters are published by WdspDspEngine.ProcessTxBlock;
                     // may lag the first TX block by a few ticks at MOX-on, which
