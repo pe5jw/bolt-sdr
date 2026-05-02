@@ -95,7 +95,9 @@ import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
 import { useMicUplink } from './audio/use-mic-uplink';
 import { fetchState } from './api/client';
+import { BOARD_LABELS } from './api/radio';
 import { useConnectionStore } from './state/connection-store';
+import { useRadioStore } from './state/radio-store';
 import { useQrzStore } from './state/qrz-store';
 import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
@@ -134,6 +136,21 @@ export default function App() {
   const tunOn = useTxStore((s) => s.tunOn);
   const filterRibbonOpen = useConnectionStore((s) => s.filterAdvancedPaneOpen);
   const connected = status === 'Connected';
+  // Brand sub label in the topbar reflects what discovery actually saw on
+  // the wire (selection.connected), not the operator's preferred override —
+  // showing "ANAN G2" when an HL2 is plugged in would just confuse anyone
+  // reading the topbar to confirm what they're talking to. Falls back to
+  // a neutral "NOT CONNECTED" when nothing is on the wire yet.
+  const radioConnected = useRadioStore((s) => s.selection.connected);
+  const radioLoad = useRadioStore((s) => s.load);
+  // Reload on mount AND every time the wire connection flips to Connected.
+  // Clicking Connect on a discovered radio doesn't refresh radio-store on
+  // its own (only the manual-connect path does), so without this the
+  // brand-sub label keeps showing "NOT CONNECTED" until the next page load.
+  useEffect(() => { radioLoad(); }, [radioLoad, connected]);
+  const brandSub = radioConnected !== 'Unknown'
+    ? BOARD_LABELS[radioConnected].toUpperCase()
+    : 'NOT CONNECTED';
 
   useKeyboardShortcuts();
   useMicUplink();
@@ -680,7 +697,7 @@ export default function App() {
           </div>
           <div className="brand-text">
             <div className="brand-name mono">OpenHpsdr Zeus</div>
-            <div className="brand-sub label-xs hide-mobile">HERMES LITE 2 · 0.1–54 MHz</div>
+            <div className="brand-sub label-xs hide-mobile">{brandSub}</div>
           </div>
         </div>
 
