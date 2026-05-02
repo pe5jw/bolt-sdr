@@ -65,9 +65,21 @@ internal static class ControlFrame
         TxFreq = 0x02,
         RxFreq = 0x04,
         DriveFilter = 0x12,
-        // Extended RX attenuator (both bare HPSDR and HL2 firmware gain).
-        // Protocol-1 writes these under C0=0x14.
+        // Extended RX attenuator + (HL2 only) PureSignal enable bit and LNA
+        // mode. Protocol-1 writes these under C0=0x14, the wire-byte
+        // encoding of register 0x0a (= 0x0a << 1). For bare HPSDR /
+        // ANAN-class radios the payload is just the legacy step-attenuator
+        // byte in C4. For HL2 the same address frame also carries the
+        // puresignal_run bit in C2 bit 6 (mi0bot networkproto1.c:1102) and
+        // the user_dig_out nibble in C3, plus an extended C4 attenuator
+        // range (0x40 | (60-Db)) — see WriteAttenuatorPayload.
         Attenuator = 0x14,
+        // Predistortion config register 0x2b (HL2 PureSignal). C0 wire byte
+        // = 0x2b << 1 = 0x56. bits [31:24] = predistortion subindex (C1),
+        // bits [19:16] = predistortion value (C2 [3:0]). PR #119 review
+        // documents the common encoding mistake of placing the value in
+        // C2 [7:4] — do NOT shift it left.
+        Predistortion = 0x56,
     }
 
     /// <summary>
@@ -96,7 +108,23 @@ internal static class ControlFrame
         // anything. Selected by MOX: TX mask during transmit, RX mask otherwise
         // (piHPSDR `old_protocol.c:1884-1904`).
         byte UserOcTxMask = 0,
-        byte UserOcRxMask = 0);
+        byte UserOcRxMask = 0,
+        // PureSignal enable for HL2 — wire-side bit 0x0a[22] = C2 bit 6 of
+        // the C0=0x14 (Attenuator) frame, and a duplicate copy at the
+        // Predistortion subindex. Set when the operator arms PS via
+        // PsToggleButton; ignored on non-HL2 boards. Issue #172.
+        bool PsEnabled = false,
+        // PureSignal predistortion value (0..15) and subindex (0..255) —
+        // written via the Predistortion (0x2b) register frame. Defaults
+        // mirror the WDSP `calcc` initial state: subindex 0, value 0
+        // (= "PS off, identity correction"). Sent as a paired write when
+        // PsEnabled flips. Issue #172.
+        byte PsPredistortionValue = 0,
+        byte PsPredistortionSubindex = 0,
+        // Number of receivers minus 1, packed into Config C4 [5:3]. Default
+        // 0 (single RX); HL2 PS uses 1 (= 2 receivers, paired DDC0/DDC1
+        // layout). mi0bot networkproto1.c:973 — `C4 |= (nddc - 1) << 3`.
+        byte NumReceiversMinusOne = 0);
 
     /// <summary>
     /// Write the 5 C&amp;C bytes for <paramref name="register"/> given the current
@@ -143,6 +171,10 @@ internal static class ControlFrame
                 WriteAttenuatorPayload(cc[1..], in state);
                 break;
 
+            case CcRegister.Predistortion:
+                WritePredistortionPayload(cc[1..], in state);
+                break;
+
             default:
                 cc[1] = cc[2] = cc[3] = cc[4] = 0;
                 break;
@@ -166,6 +198,34 @@ internal static class ControlFrame
         c14[1] = 0;   // C2
         c14[2] = 0;   // C3
         c14[3] = c4;
+
+        // HL2 PureSignal: register 0x0a bit 22 = puresignal_run. Bit 22 lives
+        // in C2 bit 6 (22 - 16 = 6) of this same C0=0x14 frame. mi0bot
+        // networkproto1.c:1102 — `C2 = (line_in_gain & 0b00011111) |
+        // ((puresignal_run & 1) << 6);`. Other boards (Hermes / ANAN-class)
+        // have their PS-enable bit elsewhere on the wire (Protocol 2's
+        // ALEX_PS_BIT) so we only flip C2[6] when we know we're talking to
+        // an HL2. Issue #172. PR #119 placed this in C3 — that bug is the
+        // canonical regression to guard.
+        if (s.Board == HpsdrBoardKind.HermesLite2 && s.PsEnabled)
+        {
+            c14[1] |= 1 << 6;   // C2 bit 6 = puresignal_run
+        }
+    }
+
+    private static void WritePredistortionPayload(Span<byte> c14, in CcState s)
+    {
+        // HL2 register 0x2b (C0 wire byte 0x56). Per the HL2 protocol doc:
+        //   bits [31:24] = predistortion subindex  → C1 (whole byte)
+        //   bits [19:16] = predistortion value      → C2 [3:0] (low nibble)
+        // PR #119 placed the value in C2 [7:4] — that's bits [23:20], which
+        // are reserved. Do NOT shift the value left. mi0bot's clsHardwareSpecific
+        // / cmaster.cs writes via the same address space, with the value
+        // word in the low nibble of C2.
+        c14[0] = s.PsPredistortionSubindex;            // C1
+        c14[1] = (byte)(s.PsPredistortionValue & 0x0F); // C2 [3:0]; high nibble = reserved (0)
+        c14[2] = 0;                                     // C3
+        c14[3] = 0;                                     // C4
     }
 
     private static void WriteConfigPayload(Span<byte> c14, in CcState s)
@@ -201,8 +261,12 @@ internal static class ControlFrame
         c14[2] = c3;
 
         // C4: Alex TX antenna [1:0] = 0 (RX-only MVP), duplex [2] = 1 (always, per
-        // old_protocol.c:2661), N-1 receivers at [5:3] = 0 (we always use 1 RX).
+        // old_protocol.c:2661), N-1 receivers at [5:3]. mi0bot
+        // networkproto1.c:973 — `C4 |= (nddc - 1) << 3`. Single-RX default
+        // is 0; HL2 PS armed bumps to 1 (= 2 receivers, paired DDC0/DDC1
+        // layout). Capped at 7 by the 3-bit field.
         byte c4 = 1 << 2;
+        c4 |= (byte)((s.NumReceiversMinusOne & 0x07) << 3);
         c14[3] = c4;
     }
 
