@@ -26,12 +26,17 @@ import { usePaStore } from '../state/pa-store';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Overdrive indicator (re-exported so App.tsx can keep wiring it as the
-// Dockable's `actions` slot). The detector itself is unchanged from the
-// previous implementation — fires on hard digital clip at ≥ 0 dBFS on
-// either the mic ADC or the post-DSP TX output, with a short hold so a
-// single transient produces a visible flash.
+// Dockable's `actions` slot). Fires when the mic ADC or post-DSP TX output
+// peak exceeds 0 dBFS by a small margin, with a short hold so a single
+// transient produces a visible flash.
+//
+// The +2 dB margin above 0 dBFS keeps the indicator from co-tripping with
+// the MIC meter the moment its bar saturates at the 0 dBFS axis ceiling
+// (post-panel-gain TXA_MIC_PK; same source value the MIC row renders).
+// Operators want a real "you're driving past clean" cue, not a duplicate
+// of the mic-meter peg.
 // ────────────────────────────────────────────────────────────────────────────
-const OVERDRIVE_CLIP_DBFS = 0;
+const OVERDRIVE_CLIP_DBFS = 2;
 const OVERDRIVE_HOLD_MS = 250;
 const BYPASSED_DBFS_THRESHOLD = -200;
 
@@ -69,12 +74,12 @@ function useOverdrive(): OverdriveState {
 
 function overdriveTooltip(s: OverdriveState): string {
   const triggers: string[] = [];
-  if (s.mic) triggers.push('mic clipping (≥ 0 dBFS)');
-  if (s.out) triggers.push('TX output clipping (≥ 0 dBFS)');
+  if (s.mic) triggers.push(`mic clipping (≥ +${OVERDRIVE_CLIP_DBFS} dBFS)`);
+  if (s.out) triggers.push(`TX output clipping (≥ +${OVERDRIVE_CLIP_DBFS} dBFS)`);
   if (s.tripped) {
     return `Overdrive: ${triggers.join(' + ')}. Reduce mic gain or drive.`;
   }
-  return 'Overdrive detector — flashes when mic input or TX output reaches 0 dBFS (digital clip).';
+  return `Overdrive detector — flashes when mic input or TX output exceeds +${OVERDRIVE_CLIP_DBFS} dBFS (≥ 2 dB past the MIC meter ceiling).`;
 }
 
 export function OverdriveIndicator() {
