@@ -156,6 +156,19 @@ public sealed class TxMetersService : BackgroundService
     // throttle itself down to the 2 Hz PA cadence without a separate timer.
     private DateTime _lastPaTempBroadcastAtUtc = DateTime.MinValue;
 
+    // Diagnostic counters for the 1 Hz tx.meters.diag log emitted while
+    // MOX/TUN is on. Bumped under _sync from OnTelemetry / OnTelemetryRaw /
+    // ApplyPaTempSmoothed; reset under _sync after each emit. The "last"
+    // values capture the most recent raw sample on each axis so a quiet
+    // tick (count=0) still shows the last value the radio sent.
+    private uint _diagFwdSlotCount;
+    private uint _diagRefSlotCount;
+    private uint _diagPaTempSlotCount;
+    private ushort _diagLastFwdAin1;
+    private ushort _diagLastFwdAin0;
+    private ushort _diagLastRefAin0;
+    private DateTime _lastDiagLogAtUtc = DateTime.MinValue;
+
     public TxMetersService(StreamingHub hub, RadioService radio, TxService tx, DspPipelineService pipe, ILogger<TxMetersService> log)
     {
         _hub = hub;
@@ -214,10 +227,22 @@ public sealed class TxMetersService : BackgroundService
                 // with the same α as FWD/REF so the UI sees a stable reading
                 // instead of ADC jitter.
                 ApplyPaTempSmoothed(reading.Ain0);
+                lock (_sync)
+                {
+                    _diagFwdSlotCount++;
+                    _diagPaTempSlotCount++;
+                    _diagLastFwdAin1 = reading.Ain1;
+                    _diagLastFwdAin0 = reading.Ain0;
+                }
                 break;
             case C0AddrAlexRef:
                 ApplySmoothed(ref _refAdc, reading.Ain0);
                 TrackPeak(ref _refAdcPeak, reading.Ain0);
+                lock (_sync)
+                {
+                    _diagRefSlotCount++;
+                    _diagLastRefAin0 = reading.Ain0;
+                }
                 break;
             default:
                 // Other echo slots (ADC bias, exciter/temp) aren't part of the
@@ -228,13 +253,21 @@ public sealed class TxMetersService : BackgroundService
     }
 
     // Overload kept for unit tests that want to drive both axes simultaneously
-    // without constructing two TelemetryReading structs.
+    // without constructing two TelemetryReading structs. Also the P2 ingress
+    // point — both axes arrive in the same hi-priority status packet.
     internal void OnTelemetryRaw(ushort fwdAdc, ushort refAdc)
     {
         ApplySmoothed(ref _fwdAdc, fwdAdc);
         ApplySmoothed(ref _refAdc, refAdc);
         TrackPeak(ref _fwdAdcPeak, fwdAdc);
         TrackPeak(ref _refAdcPeak, refAdc);
+        lock (_sync)
+        {
+            _diagFwdSlotCount++;
+            _diagRefSlotCount++;
+            _diagLastFwdAin1 = fwdAdc;
+            _diagLastRefAin0 = refAdc;
+        }
     }
 
     // Hold the highest raw ADC seen since the last publish-tick reset. Called
@@ -324,7 +357,8 @@ public sealed class TxMetersService : BackgroundService
                 double swr = 1.0;
                 if (mox)
                 {
-                    double fwdAdc, refAdc;
+                    double fwdAdc, refAdc, fwdAdcSmoothed, refAdcSmoothed;
+                    ushort fwdAdcPeak, refAdcPeak;
                     lock (_sync)
                     {
                         // Use the peak ADC seen since the previous publish
@@ -335,8 +369,12 @@ public sealed class TxMetersService : BackgroundService
                         // the smoothed value if no new sample arrived in
                         // this tick (radio quiescence) so the bar doesn't
                         // collapse to zero between hi-pri packets.
-                        fwdAdc = _fwdAdcPeak > 0 ? _fwdAdcPeak : _fwdAdc;
-                        refAdc = _refAdcPeak > 0 ? _refAdcPeak : _refAdc;
+                        fwdAdcPeak = _fwdAdcPeak;
+                        refAdcPeak = _refAdcPeak;
+                        fwdAdcSmoothed = _fwdAdc;
+                        refAdcSmoothed = _refAdc;
+                        fwdAdc = fwdAdcPeak > 0 ? fwdAdcPeak : _fwdAdc;
+                        refAdc = refAdcPeak > 0 ? refAdcPeak : _refAdc;
                         _fwdAdcPeak = 0;
                         _refAdcPeak = 0;
                     }
@@ -348,6 +386,14 @@ public sealed class TxMetersService : BackgroundService
                     // reads as "Silent" (−∞ level / 0 GR) — UI treats as empty.
                     var stage = _pipe.CurrentEngine?.GetTxStageMeters() ?? TxStageMeters.Silent;
                     frame = BuildFrame((float)fwdW, (float)refW, (float)swr, stage);
+
+                    EmitTxMetersDiag(
+                        DateTime.UtcNow,
+                        fwdAdc, refAdc,
+                        fwdAdcSmoothed, refAdcSmoothed,
+                        fwdAdcPeak, refAdcPeak,
+                        fwdW, refW, swr,
+                        cal);
 
                     if (EvaluateSwrTrip(swr, DateTime.UtcNow) is { } tripReason)
                     {
@@ -421,6 +467,59 @@ public sealed class TxMetersService : BackgroundService
         {
             _log.LogWarning(ex, "tx.meters broadcast loop exited with error");
         }
+    }
+
+    // Once-per-second diagnostic line emitted while MOX/TUN is on. Captures
+    // raw + smoothed + peak ADC for both axes, the per-second telemetry slot
+    // counts, and the watts/SWR the meter just published. Purpose: tell us
+    // whether the radio is sending FWD/REF samples at all, what raw ADC
+    // values they carry, and whether the calibration math is what's
+    // collapsing the reading to ~0 W. INFO level so operators can capture it
+    // without enabling debug logging; silent during RX.
+    private void EmitTxMetersDiag(
+        DateTime nowUtc,
+        double fwdAdc, double refAdc,
+        double fwdAdcSmoothed, double refAdcSmoothed,
+        ushort fwdAdcPeak, ushort refAdcPeak,
+        double fwdW, double refW, double swr,
+        RadioCalibration cal)
+    {
+        if (nowUtc - _lastDiagLogAtUtc < TimeSpan.FromSeconds(1)) return;
+        uint fwdCount, refCount, paTempCount;
+        ushort lastFwdAin1, lastFwdAin0, lastRefAin0;
+        bool seenFwdRef, seenPaTemp;
+        double paTempAdcLast;
+        lock (_sync)
+        {
+            fwdCount = _diagFwdSlotCount;
+            refCount = _diagRefSlotCount;
+            paTempCount = _diagPaTempSlotCount;
+            lastFwdAin1 = _diagLastFwdAin1;
+            lastFwdAin0 = _diagLastFwdAin0;
+            lastRefAin0 = _diagLastRefAin0;
+            seenFwdRef = _seenSample;
+            seenPaTemp = _seenPaTempSample;
+            paTempAdcLast = _paTempAdc;
+            _diagFwdSlotCount = 0;
+            _diagRefSlotCount = 0;
+            _diagPaTempSlotCount = 0;
+        }
+        _lastDiagLogAtUtc = nowUtc;
+        _log.LogInformation(
+            "tx.meters.diag board={Board} cal=bridge{Bridge:F2}/ref{Ref:F1}/off{Off} " +
+            "fwdSlot/s={FwdCount} refSlot/s={RefCount} paTempSlot/s={PaTempCount} " +
+            "lastFwdAin1={LastFwdAin1} lastFwdAin0={LastFwdAin0} lastRefAin0={LastRefAin0} " +
+            "fwdAdcSm={FwdSm:F0} refAdcSm={RefSm:F0} fwdAdcPk={FwdPk} refAdcPk={RefPk} " +
+            "fwdAdcUsed={FwdUsed:F0} refAdcUsed={RefUsed:F0} " +
+            "fwdW={FwdW:F2} refW={RefW:F2} swr={Swr:F2} " +
+            "seenFwdRef={SeenFR} seenPaTemp={SeenPT} paTempAdc={PaTempAdc:F0}",
+            _radio.ConnectedBoardKind, cal.BridgeVolt, cal.RefVoltage, cal.AdcCalOffset,
+            fwdCount, refCount, paTempCount,
+            lastFwdAin1, lastFwdAin0, lastRefAin0,
+            fwdAdcSmoothed, refAdcSmoothed, fwdAdcPeak, refAdcPeak,
+            fwdAdc, refAdc,
+            fwdW, refW, swr,
+            seenFwdRef, seenPaTemp, paTempAdcLast);
     }
 
     /// <summary>
@@ -562,11 +661,18 @@ public sealed class TxMetersService : BackgroundService
             _seenPaTempSample = false;
             _seenSample = false;
             _swrAboveThresholdSince = null;
+            _diagFwdSlotCount = 0;
+            _diagRefSlotCount = 0;
+            _diagPaTempSlotCount = 0;
+            _diagLastFwdAin1 = 0;
+            _diagLastFwdAin0 = 0;
+            _diagLastRefAin0 = 0;
         }
         // Reset the broadcast throttle so the next connection's first
         // sample fires a PaTempFrame immediately instead of waiting out
         // the previous session's 500 ms window.
         _lastPaTempBroadcastAtUtc = DateTime.MinValue;
+        _lastDiagLogAtUtc = DateTime.MinValue;
     }
 
     /// <summary>
@@ -603,6 +709,11 @@ public sealed class TxMetersService : BackgroundService
             _refAdcPeak = 0;
             _seenSample = false;
             _swrAboveThresholdSince = null;
+            _diagFwdSlotCount = 0;
+            _diagRefSlotCount = 0;
+            _diagLastFwdAin1 = 0;
+            _diagLastRefAin0 = 0;
         }
+        _lastDiagLogAtUtc = DateTime.MinValue;
     }
 }
