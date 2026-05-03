@@ -64,6 +64,23 @@ internal static class ControlFrame
         Config = 0x00,
         TxFreq = 0x02,
         RxFreq = 0x04,
+        // RX2 NCO (DDC1). HL2-doc address 0x03 → wire byte 0x06. mi0bot
+        // 4-DDC layout for HL2: DDC1 holds RX2 / second-receiver freq,
+        // unrelated to PS. Zeus has no split-VFO so this just mirrors
+        // VfoAHz; harmless when DDC1 isn't being audio-routed.
+        RxFreq2 = 0x06,
+        // RX3 NCO (DDC2). HL2-doc address 0x04 → wire byte 0x08.
+        // mi0bot's HL2 4-DDC layout uses DDC2 as the **PureSignal RX
+        // feedback** stream (post-PA tap, fed to pscc as the "rx" arg).
+        // mi0bot networkproto1.c case 5 / WriteMainLoop_HL2: NCO = TX
+        // frequency. cmaster.cs:8537 routes psrx=2 when tot=5 (MOX+PS).
+        RxFreq3 = 0x08,
+        // RX4 NCO (DDC3). HL2-doc address 0x05 → wire byte 0x0a.
+        // mi0bot's HL2 4-DDC layout uses DDC3 as the **PureSignal TX
+        // reference** stream (TX-DAC loopback / clean modulator, fed to
+        // pscc as the "tx" arg). NCO = TX frequency. cmaster.cs:8538
+        // routes pstx=3 when tot=5.
+        RxFreq4 = 0x0a,
         DriveFilter = 0x12,
         // Extended RX attenuator + (HL2 only) PureSignal enable bit and LNA
         // mode. Protocol-1 writes these under C0=0x14, the wire-byte
@@ -74,6 +91,18 @@ internal static class ControlFrame
         // the user_dig_out nibble in C3, plus an extended C4 attenuator
         // range (0x40 | (60-Db)) — see WriteAttenuatorPayload.
         Attenuator = 0x14,
+        // ADC assignments + TX step attenuator. HL2-doc address 0x0e →
+        // wire byte 0x1c. C1 carries P1_adc_cntrl bits [7:0] — per-RX
+        // ADC source selector, 2 bits per RX (RX0 → bits[1:0],
+        // RX1 → bits[3:2], …). Mi0bot networkproto1.c case 4 +
+        // netInterface.c:917-930. For HL2 PureSignal during TX,
+        // cntrl1 = 4 (= bits[3:2] = 1) routes DDC1 onto ADC1 (the
+        // dedicated PA-coupler feedback ADC) so pscc sees the post-PA
+        // signal. Without this register, HL2 leaves DDC1 on ADC0 and
+        // pscc never converges (binfo[6]=0x0001 NaN cascade). C2 carries
+        // bits [13:8] (zero for HL2 — only RX0..RX3 used), C3 = ADC TX
+        // step attenuator (we leave 0).
+        AdcRouting = 0x1c,
         // Predistortion config register 0x2b (HL2 PureSignal). C0 wire byte
         // = 0x2b << 1 = 0x56. bits [31:24] = predistortion subindex (C1),
         // bits [19:16] = predistortion value (C2 [3:0]). PR #119 review
@@ -146,7 +175,15 @@ internal static class ControlFrame
 
             case CcRegister.RxFreq:
             case CcRegister.TxFreq:
+            case CcRegister.RxFreq2:
+            case CcRegister.RxFreq3:
+            case CcRegister.RxFreq4:
                 // Frequency payload is a BE uint32 in C1..C4 (doc 02 §4 "Frequency payload").
+                // All five frequency registers (TxFreq + four RX NCOs) carry the
+                // same VfoAHz here — Zeus has no separate TX VFO. During HL2
+                // PS+MOX, mi0bot tunes DDC2 and DDC3 to TX freq, which is the
+                // operator-tuned freq for SSB; for CW, EffectiveLoHz is already
+                // baked into VfoAHz upstream in RadioService.SetVfo.
                 BinaryPrimitives.WriteUInt32BigEndian(cc[1..5], (uint)state.VfoAHz);
                 break;
 
@@ -169,6 +206,10 @@ internal static class ControlFrame
 
             case CcRegister.Attenuator:
                 WriteAttenuatorPayload(cc[1..], in state);
+                break;
+
+            case CcRegister.AdcRouting:
+                WriteAdcRoutingPayload(cc[1..], in state);
                 break;
 
             case CcRegister.Predistortion:
@@ -211,6 +252,25 @@ internal static class ControlFrame
         {
             c14[1] |= 1 << 6;   // C2 bit 6 = puresignal_run
         }
+    }
+
+    private static void WriteAdcRoutingPayload(Span<byte> c14, in CcState s)
+    {
+        // HL2 register 0x0e (C0 wire byte 0x1c). C1 carries the
+        // P1_adc_cntrl byte = per-RX ADC source selector packed 2 bits per
+        // RX (RX0 → bits[1:0], RX1 → bits[3:2], RX2 → bits[5:4],
+        // RX3 → bits[7:6]). 0 = ADC0 (main antenna), 1 = ADC1 (HL2's
+        // dedicated PA-coupler feedback ADC). For HL2 PureSignal during
+        // TX, mi0bot sets cntrl1=4 (= bits[3:2]=1) so DDC1 sources ADC1
+        // and pscc sees the post-PA signal. Outside PS+MOX, all RX → ADC0.
+        // C2 carries cntrl2 (RX4..RX6 — HL2 only has 4 DDCs in this
+        // codepath, leave 0). C3 = ADC[0].tx_step_attn (Zeus drives TX
+        // attenuation through the dedicated 0x14 path, leave 0 here).
+        bool psActive = s.PsEnabled && s.Mox && s.Board == HpsdrBoardKind.HermesLite2;
+        c14[0] = psActive ? (byte)0x04 : (byte)0;  // C1: cntrl1
+        c14[1] = 0;                                 // C2: cntrl2 (high bits of P1_adc_cntrl)
+        c14[2] = 0;                                 // C3: tx_step_attn (unused here)
+        c14[3] = 0;                                 // C4: reserved
     }
 
     private static void WritePredistortionPayload(Span<byte> c14, in CcState s)

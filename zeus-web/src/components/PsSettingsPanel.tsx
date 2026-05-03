@@ -65,12 +65,14 @@ export function PsSettingsPanel() {
   // feedback receiver. On HL2 we hide the toggle entirely. We key on the
   // CONNECTED board (not preferred) so a user who explicitly selects G2
   // while no radio is attached still sees the control as a preview, but
-  // a live HL2 connection cleanly drops it. Same gate hides the
-  // Internal-vs-External feedback source selector — HL2 has only the
-  // external coupler path so the binary is degenerate.
+  // a live HL2 connection cleanly drops it. The Internal-vs-External
+  // feedback source selector remains visible on every board (including
+  // HL2) — even though HL2 currently routes only through the external
+  // coupler path, an operator running HL2 + future amp setup may want
+  // the option exposed.
   const connectedBoard = useRadioStore((s) => s.selection.connected);
   const psMonitorSupported = connectedBoard !== HL2_BOARD_ID;
-  const feedbackSourceSelectorSupported = connectedBoard !== HL2_BOARD_ID;
+  const feedbackSourceSelectorSupported = true;
 
   const psEnabled = useTxStore((s) => s.psEnabled);
   const psMonitorEnabled = useTxStore((s) => s.psMonitorEnabled);
