@@ -323,6 +323,17 @@ public sealed class PsAutoAttenuateService : BackgroundService
     // re-target on the next eligible tick.
     private void TickAutoCalHwPeak(StateDto s, IDspEngine engine)
     {
+        // 2026-05-03: disabled. mi0bot has no hw_peak auto-cal — operator-tuned
+        // only (PSForm.cs:815-831 txtPSpeak.TextChanged → SetPSHWPeak). Auto-cal
+        // pinned env/hw_peak ≈ 0.98 and starved calcc.c LCOLLECT bins 0..13, so
+        // info[5] CalibrationAttempts never incremented and PS stuck in COLLECT.
+        // See docs/puresignal.hl2.md (D1) for the full diagnosis. The original
+        // body is preserved below so this is a one-line revert if the diagnosis
+        // is wrong; flagged for maintainer review per CLAUDE.md (defaults +
+        // UX behaviour are red-light).
+        return;
+        // (rest of method preserved below for easy revert)
+#pragma warning disable CS0162 // Unreachable code detected
         // Don't fight the HL2 timer2code dance — SetNewValues / RestoreOperation
         // are mid-disable; firing SetPsAdvanced now would race the in-flight
         // SetPSControl(reset=1)/(re-arm) sequence.
@@ -353,6 +364,7 @@ public sealed class PsAutoAttenuateService : BackgroundService
             env, current, target);
         _radio.SetPsAdvanced(new PsAdvancedSetRequest(HwPeak: target));
         _lastAutoCalTickMs = now;
+#pragma warning restore CS0162
     }
 
     // mi0bot timer2code HL2 path (PSForm.cs:728-815). Three states cycle at
