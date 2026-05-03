@@ -391,6 +391,26 @@ export function PsSettingsPanel() {
               *
             </span>
           ) : null}
+          {/* mi0bot ref: PSForm.cs:991-994 btnDefaultPeaks_Click →
+              SetDefaultPeaks → psdefpeak (PSForm.cs:371-381) writes
+              HardwareSpecific.PSDefaultPeak (clsHardwareSpecific.cs:303-328)
+              into txtPSpeak. One-click reset to the per-board factory default
+              for operators who've drifted off and want to start over.
+              Disabled when already at the default — no point re-pushing the
+              same value through this button (the field's onCommit covers
+              the deliberate re-push case). */}
+          <button
+            type="button"
+            className="btn sm"
+            disabled={psHwPeak === psHwPeakDefault}
+            title={`Reset HW peak to per-board default ${psHwPeakDefault.toFixed(4)}`}
+            onClick={() => {
+              setPsHwPeak(psHwPeakDefault);
+              pushAdvanced({ hwPeak: psHwPeakDefault });
+            }}
+          >
+            Default
+          </button>
         </Row>
         {/* mi0bot ref: PSForm.cs:624 GetPSMaxTX → PSForm.designer.cs
             txtGetPSpeak readout. Read-only; the operator dials HW peak
