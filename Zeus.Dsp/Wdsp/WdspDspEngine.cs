@@ -155,7 +155,7 @@ public sealed class WdspDspEngine : IDspEngine
         // Single-writer on the pipeline thread + word-sized read on the worker = safe
         // without a lock (worst case: one extra frame at the old setting on toggle).
         public volatile NbMode CurrentNbMode = NbMode.Off;
-        // Zoom level (1/2/4/8). Changing it re-calls SetAnalyzer with shifted
+        // Zoom level (1..32). Changing it re-calls SetAnalyzer with shifted
         // fscLin/fscHin; the worker's Spectrum0 and the pixel drain's GetPixels
         // take this lock so they never interleave with an in-flight reconfig.
         public int ZoomLevel = 1;
@@ -282,6 +282,71 @@ public sealed class WdspDspEngine : IDspEngine
     // Drop alongside the wdsp.psSeed log once PS is confirmed stable.
     private int _psInfoLogCounter;
 
+    // VST plugin-host seam. Wave 6a wires the out-of-process plugin sidecar
+    // through Zeus.Server's PluginHostManager via the
+    // <see cref="VstChainHandler"/> delegate below. ProcessRxVstChain /
+    // ProcessTxMicVstChain read the volatile-bool flag first; if it is
+    // false the seam short-circuits with a single boolean read — no
+    // virtual dispatch into the host, no IPC.
+    // Volatile so the host wiring can flip it without taking a lock on the
+    // audio thread; no struct tearing concerns for a single bool.
+    private volatile bool _vstChainEnabled;
+
+    // The handler — wired by Zeus.Server at startup once PluginHostManager
+    // is in DI. Never accessed under _txaLock so the audio thread doesn't
+    // serialise with handler installation; null check is the trivial guard.
+    // We deliberately do NOT take a hard reference to PluginHost from
+    // Zeus.Dsp; the delegate keeps that boundary clean.
+    private VstChainHandler? _vstChainHandler;
+
+    // Wave 6a entry points — Zeus.Server's PluginHost wiring flips the flag
+    // when a chain becomes available, and installs the handler delegate at
+    // process start. `internal` so they stay out of the IDspEngine surface;
+    // the host integration sits one layer up. Also exercised by
+    // Zeus.Dsp.Tests via InternalsVisibleTo to assert the bypass path is
+    // bit-identical to the seam-absent path.
+    internal void SetVstChainEnabled(bool enabled) => _vstChainEnabled = enabled;
+    internal bool VstChainEnabled => _vstChainEnabled;
+    internal void SetVstChainHandler(VstChainHandler? handler) => _vstChainHandler = handler;
+    internal VstChainHandler? VstChainHandler => _vstChainHandler;
+
+    // TX Monitor — private RXA channel that demodulates the post-CFIR / post-
+    // RSMPOUT TX IQ (the wire signal about to hit the radio) back to mono
+    // baseband audio at 48 kHz, so the operator can audition the full TX chain
+    // (mic → EQ → Leveler → VST → CFC → ALC → bandpass) at the actual TX
+    // bandwidth profile, with or without keying. Equivalent to Thetis MON,
+    // implemented as a parallel demod rather than a tap inside TXA so the
+    // bandwidth filter shape is honoured exactly.
+    //
+    // The channel is opened lazily on first SetTxMonitorEnabled(true) once
+    // OpenTxChannel has chosen the IQ rate (48 kHz P1 / 192 kHz P2). It stays
+    // open for the engine lifetime; toggling monitor off just stops feeding
+    // and stops draining. Mode + filter are synced from SetTxMode/SetTxFilter
+    // so the audition matches the on-air bandwidth.
+    //
+    // _monitorRequested is the operator's intent (REST toggle); _monitorChannelId
+    // becomes non-null once the channel is actually open. ProcessTxBlock feeds
+    // IQ when both are set; ReadTxMonitorAudio drains regardless of the request
+    // flag (the ring drains naturally when feed stops).
+    private readonly object _monitorLock = new();
+    private int? _monitorChannelId;
+    private volatile bool _monitorRequested;
+    private RxaMode _monitorMode = RxaMode.USB;
+    private int _monitorFilterLow = 150;
+    private int _monitorFilterHigh = 2850;
+
+    // Tracked engine-side MOX so SetTxMonitorEnabled can decide whether to
+    // flip TXA state independently. SetMox writes this under _txaLock; the
+    // helpers below read it under _txaLock too. Without this the "monitor
+    // on while MOX off" path leaves TXA quiescent (state=0) — fexchange2
+    // returns without filling iout/qout and the monitor RXA hears silence
+    // or stack garbage.
+    private bool _moxOn;
+    // Tracked engine-side TXA state-bit so the helper can flip idempotently
+    // and avoid double-priming. TXA opens at state=0; SetChannelState walks
+    // it through 1 / 0 transitions explicitly.
+    private bool _txaRunning;
+
     public WdspDspEngine(ILogger<WdspDspEngine>? logger = null)
     {
         _log = logger ?? NullLogger<WdspDspEngine>.Instance;
@@ -299,8 +364,13 @@ public sealed class WdspDspEngine : IDspEngine
         if (pixelWidth <= 0) throw new ArgumentOutOfRangeException(nameof(pixelWidth));
         if (sampleRateHz <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRateHz));
 
+        // Skip ids occupied by TXA (which is NOT registered in _channels but
+        // still owns a slot in WDSP's global channel table). Wave 7 — when
+        // the TX monitor opens AFTER TXA, this loop would otherwise hand
+        // back the TXA's id and the two channels would alias inside WDSP,
+        // double-freeing on disconnect.
         int id = 0;
-        while (_channels.ContainsKey(id)) id++;
+        while (_channels.ContainsKey(id) || id == _txaChannelId) id++;
 
         int outSamples = (int)((long)InSize * OutputRate / sampleRateHz);
         int outDoubles = Math.Max(2, outSamples * 2);
@@ -995,6 +1065,23 @@ public sealed class WdspDspEngine : IDspEngine
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
 
+        int txaIdForReturn = OpenTxChannelInternal(outputRateHz);
+
+        // If the operator had already toggled monitor on before TXA opened
+        // (e.g. on a deferred protocol-2 connect path), open the channel now
+        // that the IQ rate is known. EnsureMonitorChannelOpen short-circuits
+        // when the channel is already open or the request flag is clear, so
+        // calling it here is cheap on the common path. Done outside _txaLock
+        // so the monitor lock-acquisition order stays one-way.
+        if (_monitorRequested)
+        {
+            EnsureMonitorChannelOpen();
+        }
+        return txaIdForReturn;
+    }
+
+    private int OpenTxChannelInternal(int outputRateHz)
+    {
         lock (_txaLock)
         {
             if (_txaChannelId is int existing) return existing;
@@ -1281,11 +1368,22 @@ public sealed class WdspDspEngine : IDspEngine
         // outgoing side is damped (dmp=1) before the incoming side comes up
         // clean (dmp=0) — avoids a pop from the demuted side catching an
         // in-flight buffer.
-        int rxaPrior, txaPrior;
+        //
+        // TX-monitor wrinkle: when MOX falls but monitor is on, TXA must
+        // stay running so fexchange2 keeps producing IQ for the monitor
+        // demod path. We re-derive TXA target = (MOX || monitor) so the
+        // monitor path doesn't go silent when the operator releases MOX.
+        int rxaPrior, txaPrior = -1;
+        bool wantTxa = moxOn || _monitorRequested;
         if (moxOn)
         {
+            _moxOn = true;
             rxaPrior = NativeMethods.SetChannelState(rxaId, 0, 1);
-            txaPrior = NativeMethods.SetChannelState(txaId, 1, 0);
+            if (!_txaRunning)
+            {
+                txaPrior = NativeMethods.SetChannelState(txaId, 1, 0);
+                _txaRunning = true;
+            }
             // No priming: Thetis (console.cs:31375) does not prime — bfo=1
             // semantics already make the first fexchange wait for real output.
             // Tell PureSignal calcc that MOX is now true so the LCOLLECT phase
@@ -1295,11 +1393,19 @@ public sealed class WdspDspEngine : IDspEngine
         }
         else
         {
+            _moxOn = false;
             // Drop the PS MOX flag *before* the TXA state-flip so the iqc
             // stage sees "no longer transmitting" while the chain is still
             // alive — same ordering pihpsdr uses (transmitter.c:2422-2444).
             NativeMethods.SetPSMox(txaId, 0);
-            txaPrior = NativeMethods.SetChannelState(txaId, 0, 1);
+            // Only damp TXA if the audition path doesn't need it. When
+            // monitor is on, TXA stays at state=1 so the chain keeps
+            // producing IQ to be demodulated by the monitor RXA channel.
+            if (_txaRunning && !wantTxa)
+            {
+                txaPrior = NativeMethods.SetChannelState(txaId, 0, 1);
+                _txaRunning = false;
+            }
             rxaPrior = NativeMethods.SetChannelState(rxaId, 1, 0);
             // Unkeying: clear the stage-meter snapshot so UI doesn't latch the
             // last-during-TX reading while idle. The next MOX-on will publish
@@ -1426,6 +1532,16 @@ public sealed class WdspDspEngine : IDspEngine
                     _twoToneF1Hz, _twoToneF2Hz, signedF1, signedF2, mapped);
             }
         }
+        // Mirror the mode onto the monitor channel so the audition demodulates
+        // with the same sideband / modulation as the on-air signal.
+        lock (_monitorLock)
+        {
+            _monitorMode = mapped;
+            if (_monitorChannelId is int monId)
+            {
+                SetMode(monId, mode);
+            }
+        }
         _log.LogInformation("wdsp.setTxMode mode={Mode}", mapped);
     }
 
@@ -1437,8 +1553,151 @@ public sealed class WdspDspEngine : IDspEngine
             if (_txaChannelId is not int txa) return;
             NativeMethods.SetTXABandpassFreqs(txa, lowHz, highHz);
         }
+        // Mirror the filter onto the monitor channel so the audition stays at
+        // the same bandwidth as the on-air signal. Stash the values regardless
+        // of whether the monitor channel is open yet — EnsureMonitorChannelOpen
+        // reads them at lazy-open time.
+        lock (_monitorLock)
+        {
+            _monitorFilterLow = lowHz;
+            _monitorFilterHigh = highHz;
+            if (_monitorChannelId is int monId)
+            {
+                SetFilter(monId, lowHz, highHz);
+            }
+        }
         _log.LogInformation("wdsp.setTxFilter low={Low} high={High}", lowHz, highHz);
     }
+
+    /// <summary>Operator-facing TX-monitor toggle. When true, the engine opens
+    /// (or reuses) a private RXA channel and feeds it the post-CFIR/RSMPOUT TX
+    /// IQ produced inside <see cref="ProcessTxBlock"/>; the demodulated mono
+    /// audio is available via <see cref="ReadTxMonitorAudio"/>. The channel is
+    /// only opened once TXA exists; calling this before <see cref="OpenTxChannel"/>
+    /// stores the request and the channel opens on the next OpenTxChannel
+    /// (or the first ProcessTxBlock with a valid TXA, whichever runs first).
+    /// Toggling off keeps the channel allocated but stops feeding it, so the
+    /// next on-toggle is instant.</summary>
+    public void SetTxMonitorEnabled(bool enabled)
+    {
+        if (_disposed != 0) return;
+        _monitorRequested = enabled;
+        if (enabled)
+        {
+            EnsureMonitorChannelOpen();
+        }
+
+        // Flip TXA's run state if the audition path's requirement diverges
+        // from MOX's. Without this the chain stays quiescent (state=0) when
+        // the operator hits monitor with MOX off, fexchange2 returns without
+        // filling iout/qout, and the monitor RXA gets silence (or stack
+        // garbage from the uninitialised IQ buffer). RXA stays put — the
+        // operator still wants to NOT hear the band when monitor is on, but
+        // we don't damp RXA either, since the AudioFrame substitution in
+        // DspPipelineService.Tick handles the "RX muted" UX cleanly.
+        int? txaPrior = null;
+        bool nowRunning;
+        lock (_txaLock)
+        {
+            if (_txaChannelId is int txa && !_moxOn)
+            {
+                bool wantTxa = enabled;  // MOX off; TXA target derived from monitor
+                if (_txaRunning != wantTxa)
+                {
+                    txaPrior = NativeMethods.SetChannelState(txa, wantTxa ? 1 : 0, wantTxa ? 0 : 1);
+                    _txaRunning = wantTxa;
+                }
+            }
+            nowRunning = _txaRunning;
+        }
+        _log.LogInformation(
+            "wdsp.setTxMonitor requested={Enabled} channelId={Id} txaRunning={Running}{Prior}",
+            enabled, _monitorChannelId, nowRunning,
+            txaPrior is int p ? $" (txa prior={p})" : "");
+    }
+
+    /// <summary>Drain demodulated TX-monitor audio into <paramref name="output"/>.
+    /// Returns the number of mono float32 samples written, 0 when monitor is
+    /// off or the channel hasn't been opened yet. Same shape as
+    /// <see cref="ReadAudio"/> but routes to the private monitor channel.</summary>
+    public int ReadTxMonitorAudio(Span<float> output)
+    {
+        if (_disposed != 0) return 0;
+        if (!_monitorRequested) return 0;
+        int? id = _monitorChannelId;
+        if (id is null) return 0;
+        return ReadAudio(id.Value, output);
+    }
+
+    /// <summary>Volatile-read so callers can gate the audio-broadcast path
+    /// without taking _monitorLock. Reflects the operator's request, not
+    /// whether the channel is fully open.</summary>
+    public bool IsTxMonitorOn => _monitorRequested;
+
+    // Open the monitor RXA channel matched to the current TXA output rate. The
+    // channel uses the standard OpenChannel lifecycle (state=0 → configure →
+    // worker → SetChannelState(id,1,0)) so the wdsp-init-gotchas.md ordering
+    // is honoured. Mode + filter are synced from the latched TX values so the
+    // audition starts at the right bandwidth profile from the first sample.
+    //
+    // No-op if the monitor channel is already open. No-op (with a deferred
+    // open) if TXA isn't open yet — first OpenTxChannel will retry.
+    private void EnsureMonitorChannelOpen()
+    {
+        lock (_monitorLock)
+        {
+            if (_monitorChannelId is not null) return;
+            int iqRate;
+            lock (_txaLock)
+            {
+                if (_txaChannelId is null) return;
+                iqRate = _txaOutputRateHz;
+            }
+            // PixelWidth=1024 is plenty for the analyzer that OpenChannel
+            // creates. The analyzer output is never read for the monitor
+            // channel; we keep it allocated so RunWorker's Spectrum0 call
+            // doesn't crash on an unallocated slot. Cost: a few KB of FFT
+            // state per engine — negligible.
+            int id;
+            try
+            {
+                id = OpenChannel(iqRate, pixelWidth: 1024);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "wdsp.openMonitorChannel failed iqRate={Rate}", iqRate);
+                return;
+            }
+            // Sync mode + filter to current TX state. SetMode also clears the
+            // audio ring so the first audition block starts from silence.
+            SetMode(id, MapRxaToRxMode(_txCurrentMode));
+            SetFilter(id, _monitorFilterLow, _monitorFilterHigh);
+            _monitorMode = _txCurrentMode;
+            _monitorChannelId = id;
+            _log.LogInformation(
+                "wdsp.openMonitorChannel id={Id} iqRate={Rate} mode={Mode} filter=[{Lo},{Hi}]",
+                id, iqRate, _txCurrentMode, _monitorFilterLow, _monitorFilterHigh);
+        }
+    }
+
+    // RxaMode → RxMode reverse lookup so the monitor channel can be configured
+    // via the public SetMode API (which takes the contract enum). The forward
+    // mapping lives at MapMode(RxMode); kept inline here since the inverse is
+    // only needed by the monitor seam.
+    private static RxMode MapRxaToRxMode(RxaMode m) => m switch
+    {
+        RxaMode.LSB => RxMode.LSB,
+        RxaMode.USB => RxMode.USB,
+        RxaMode.CWL => RxMode.CWL,
+        RxaMode.CWU => RxMode.CWU,
+        RxaMode.AM => RxMode.AM,
+        RxaMode.FM => RxMode.FM,
+        RxaMode.SAM => RxMode.SAM,
+        RxaMode.DSB => RxMode.DSB,
+        RxaMode.DIGL => RxMode.DIGL,
+        RxaMode.DIGU => RxMode.DIGU,
+        _ => RxMode.USB,
+    };
 
     public void SetTwoTone(bool on, double freq1, double freq2, double mag)
     {
@@ -1569,7 +1828,14 @@ public sealed class WdspDspEngine : IDspEngine
                 _psAmpDelayNs = ampDelayNs;
                 if (id >= 0) _ = NativeMethods.SetPSTXDelay(id, ampDelayNs * 1e-9);
             }
-            if (hwPeak > 0.0 && hwPeak <= 2.0 && hwPeak != _psHwPeak)
+            // mi0bot: PSForm.cs PSpeak_TextChanged calls
+            // puresignal.SetPSHWPeak(_txachannel, _PShwpeak) unconditionally on
+            // every TextChanged, with no equality guard against the prior
+            // value. Mirror that here so the operator can re-push the same
+            // value to clear an info[6]=0x0044 fault state without typing a
+            // different value first. Range check stays (mi0bot stops the
+            // operator at the WinForms NUD min/max).
+            if (hwPeak > 0.0 && hwPeak <= 2.0)
             {
                 _psHwPeak = hwPeak;
                 if (id >= 0) NativeMethods.SetPSHWPeak(id, hwPeak);
@@ -2019,6 +2285,30 @@ public sealed class WdspDspEngine : IDspEngine
             cfg.Enabled, cfg.PostEqEnabled, cfg.PreCompDb, cfg.PrePeqDb);
     }
 
+    // VST plugin-host seam. Both methods short-circuit on the disabled flag
+    // with a single volatile read — no allocation, no copy, no syscall — so
+    // the bypass path adds a virtual call and a boolean check to ProcessTxBlock
+    // / DspPipelineService.Tick. When the chain is enabled and a handler is
+    // installed, dispatch through the delegate (Zeus.Server's PluginHost
+    // wiring lives there). We deliberately do NOT take a dependency on
+    // Zeus.PluginHost here; the host integration sits one layer up so
+    // Zeus.Dsp stays free of IPC / sandboxing concerns.
+    public bool ProcessRxVstChain(Span<float> audio, int frames, int sampleRateHz)
+    {
+        if (!_vstChainEnabled) return false;
+        var handler = _vstChainHandler;
+        if (handler is null) return false;
+        return handler(audio, frames, sampleRateHz);
+    }
+
+    public bool ProcessTxMicVstChain(Span<float> audio, int frames, int sampleRateHz)
+    {
+        if (!_vstChainEnabled) return false;
+        var handler = _vstChainHandler;
+        if (handler is null) return false;
+        return handler(audio, frames, sampleRateHz);
+    }
+
     private DateTime _lastTxMeterLogUtc;
 
     public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved)
@@ -2048,6 +2338,32 @@ public sealed class WdspDspEngine : IDspEngine
         qin.Clear();
         Span<float> iout = stackalloc float[outSize];
         Span<float> qout = stackalloc float[outSize];
+        // stackalloc spans are NOT guaranteed zero-initialised across all
+        // .NET configurations (SkipLocalsInit can elide the zeroing). When
+        // TXA is at state=0, fexchange2 returns without writing iout/qout,
+        // and we'd otherwise propagate stack garbage downstream — both into
+        // the wire IQ ring and (worse) into the TX-monitor RXA channel, where
+        // garbage demodulates as audible noise. Clear them so the no-process
+        // path is deterministic silence.
+        iout.Clear();
+        qout.Clear();
+
+        // VST plugin-host seam — TX side, on the 48 kHz mono mic buffer
+        // BEFORE WDSP's fexchange2 chain. This placement keeps WDSP CFC last
+        // (after the plugin chain) so the operator's preferred final-stage
+        // compressor remains the gain-limiting authority. See
+        // docs/proposals/vst-host-phase2-wire.md "TX seam location".
+        // When the chain is disabled or no handler is installed, the seam
+        // short-circuits on a volatile-bool read and the buffer flows through
+        // bit-identical to the seam-absent code path. When the chain is
+        // enabled, the handler may mutate `iin` in place; downstream
+        // fexchange2 sees the post-plugin audio.
+        if (_vstChainEnabled)
+        {
+            // _txaInputRateHz is always 48 kHz (mic side) for both P1 and P2
+            // profiles; use it explicitly for clarity.
+            ProcessTxMicVstChain(iin, inSize, _txaInputRateHz);
+        }
 
         NativeMethods.fexchange2(txa, ref iin[0], ref qin[0], ref iout[0], ref qout[0], out int err);
         if (err != 0 && ++_txFexchangeErrLogged <= 8)
@@ -2059,6 +2375,25 @@ public sealed class WdspDspEngine : IDspEngine
         {
             iqInterleaved[2 * i] = iout[i];
             iqInterleaved[2 * i + 1] = qout[i];
+        }
+
+        // TX Monitor — feed the post-CFIR / post-RSMPOUT IQ (the wire signal
+        // about to hit the radio) into the private monitor RXA channel so the
+        // operator can hear the actual on-air audio at the TX bandwidth
+        // profile. Volatile-bool short-circuit when monitor is off; matches
+        // the VST seam pattern above. Float→double conversion is required by
+        // the FeedIq contract; stack-allocate to avoid GC pressure on the
+        // mic-ingest hot path. Worst case is P2: outSize=2048 → 2 × 2048 ×
+        // 8 bytes = 32 KiB on the stack, comfortable under the default budget.
+        if (_monitorRequested && _monitorChannelId is int monId)
+        {
+            Span<double> monIqDouble = stackalloc double[2 * outSize];
+            for (int i = 0; i < outSize; i++)
+            {
+                monIqDouble[2 * i] = iout[i];
+                monIqDouble[2 * i + 1] = qout[i];
+            }
+            FeedIq(monId, monIqDouble);
         }
 
         // Feed the TX analyzer with the post-CFIR IQ so TryGetTxDisplayPixels

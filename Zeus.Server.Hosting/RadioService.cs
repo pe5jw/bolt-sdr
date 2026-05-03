@@ -128,6 +128,13 @@ public sealed class RadioService : IDisposable
     public event Action<StateDto>? StateChanged;
     public event Action<IProtocol1Client>? Connected;
     public event Action? Disconnected;
+    // Protocol-2 lifecycle. Parallel to the P1-typed Connected/Disconnected
+    // pair so subscribers (TxMetersService for hi-priority status, future
+    // P2 consumers) can hook a freshly-opened Protocol2Client without
+    // probing DspPipelineService. Issue #174 — needed so the meter service
+    // can wire its OnTelemetry handler to client.TelemetryReceived.
+    public event Action<Zeus.Protocol2.Protocol2Client>? P2Connected;
+    public event Action? P2Disconnected;
     // Fires whenever the effective PA snapshot changes (store edit, VFO band
     // crossing, drive slider). DspPipelineService consumes this to forward the
     // same snapshot into any live Protocol2Client (byte 345 / byte 1401 /
@@ -194,7 +201,7 @@ public sealed class RadioService : IDisposable
             Endpoint: null,
             VfoHz: 14_200_000,
             Mode: RxMode.USB,
-            FilterLowHz: 150,
+            FilterLowHz: 100,
             FilterHighHz: 2850,
             SampleRate: 192_000,
             AgcTopDb: 80.0,
@@ -204,7 +211,7 @@ public sealed class RadioService : IDisposable
             AutoAttEnabled: true,
             AttOffsetDb: 0,
             AdcOverloadWarning: false,
-            // Zeus default filter (150/2850) maps to the seeded USB VAR1 slot.
+            // Zeus default filter (100/2850) maps to the seeded USB VAR1 slot.
             FilterPresetName: "VAR1",
             FilterAdvancedPaneOpen: filterPresetStore?.GetAdvancedPaneOpen() ?? false,
             // PS persisted fields (or DTO defaults when not persisted yet).
@@ -342,11 +349,25 @@ public sealed class RadioService : IDisposable
         {
             await client.ConnectAsync(ipEndpoint, ct).ConfigureAwait(false);
             await client.StartAsync(new StreamConfig(hpsdrRate, _preampOn, _atten), ct).ConfigureAwait(false);
-            client.SetVfoAHz(Snapshot().VfoHz);
+            client.SetVfoAHz(CwOffset.EffectiveLoHz(Snapshot()));
+
+            // Default-on the N2ADR 7-relay filter board for HL2 — mirrors
+            // Thetis's HERCULES preset (setup.cs:14642). Most HL2 deployments
+            // ship with N2ADR; without this the OC pins stay 0 and the LPF
+            // relays never click. Operators on bare HL2 (no filter board) can
+            // override via PA Settings once that knob is exposed.
+            if (client.BoardKind == HpsdrBoardKind.HermesLite2)
+                client.SetHasN2adr(true);
 
             Mutate(s => s with { Status = ConnectionStatus.Connected });
             _log.LogInformation("radio.connected endpoint={Ep} rate={Rate}", ipEndpoint, hpsdrRate);
             Connected?.Invoke(client);
+            // N2ADR 7-relay low-pass filter board is standard equipment on HL2.
+            // Enable it unconditionally on connect so band changes immediately
+            // drive the relay coils. Future work: make this a user toggle IFF a
+            // compelling reason to ship bare HL2 without N2ADR emerges.
+            if (ConnectedBoardKind == HpsdrBoardKind.HermesLite2)
+                client.SetHasN2adr(true);
             // Replay PA settings into the fresh client — drive byte, OC masks,
             // and (for P2 downstream) PA-enable. Without this the client sits
             // at the protocol defaults (drive=0, OC=0) until something else
@@ -394,9 +415,14 @@ public sealed class RadioService : IDisposable
     {
         long clamped = Math.Clamp(hz, 0L, 60_000_000L);
         long previous;
-        lock (_sync) previous = _state.VfoHz;
+        RxMode currentMode;
+        lock (_sync) { previous = _state.VfoHz; currentMode = _state.Mode; }
         Mutate(s => s with { VfoHz = clamped });
-        ActiveClient?.SetVfoAHz(clamped);
+        // CW retunes the LO cw_pitch below/above the dial so the listening
+        // freq lands on the +cw_pitch / -cw_pitch audio passband. In SSB /
+        // AM / FM / DIG modes EffectiveLoHz returns the dial value
+        // unchanged, preserving prior behaviour.
+        ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(currentMode, clamped));
         // Band edge crossed? Per-band PA gain / OC bits may have swapped — push
         // the new snapshot before the next TX frame ships. Cheap when no
         // crossing occurred (same bytes re-pushed).
@@ -418,7 +444,10 @@ public sealed class RadioService : IDisposable
     private FamilyFilter _ssbFilter = new(150, 2850);
     private FamilyFilter _amFilter = new(0, 4000);
     private FamilyFilter _fmFilter = new(0, 5500);
-    private FamilyFilter _cwFilter = new(0, 125);
+    // CW abs values include the cw_pitch offset (Thetis F6 250 Hz preset:
+    // pitch=600, half=125 → 475..725). SignedFilterForMode keeps them as
+    // (+475,+725) for CWU and mirrors to (-725,-475) for CWL.
+    private FamilyFilter _cwFilter = new(475, 725);
 
     // TX-side per-family filter memory. Thetis stores a single TX filter Lo/Hi
     // (setup.cs:5029-5066); pihpsdr uses hardcoded per-mode shapes
@@ -426,16 +455,17 @@ public sealed class RadioService : IDisposable
     // operator's USB TX width survives an AM round-trip, and LSB/USB share
     // absolute values with sign flipped at apply time. Defaults track Thetis
     // stock: SSB 150-2850, AM/DSB 0-4000, FM 0-3000 (Thetis narrowest FM TX
-    // is 3 kHz half-width), CW 0-150 (150 Hz around cw_pitch is plenty).
+    // is 3 kHz half-width), CW 475-725 (250 Hz around cw_pitch=600).
     private FamilyFilter _ssbTxFilter = new(150, 2850);
     private FamilyFilter _amTxFilter = new(0, 4000);
     private FamilyFilter _fmTxFilter = new(0, 3000);
-    private FamilyFilter _cwTxFilter = new(0, 150);
+    private FamilyFilter _cwTxFilter = new(475, 725);
 
     public StateDto SetMode(RxMode mode)
     {
         RxMode departingMode = default;
         string? departingPreset = null;
+        long newVfoHz = 0;
         Mutate(s =>
         {
             departingMode = s.Mode;
@@ -462,9 +492,21 @@ public sealed class RadioService : IDisposable
 
             // 4) Restore the last-known preset name for the incoming mode.
             _lastPresetPerMode.TryGetValue(mode, out var restoredPreset);
+
+            // 5) Thetis-style dial bump on SSB↔CW transitions so the
+            //    effective LO doesn't jump under the operator's feet — the
+            //    dial absorbs the ±cw_pitch step and the radio stays on the
+            //    same physical signal. Within CWU↔CWL the dial stays put
+            //    (Thetis console.cs:34037-34052, 34203-34298 mirrored here).
+            //    Non-CW↔non-CW transitions return 0, so SSB/AM/FM/DIG
+            //    behaviour is unchanged.
+            long bump = CwOffset.DialBumpForModeTransition(s.Mode, mode);
+            newVfoHz = Math.Clamp(s.VfoHz + bump, 0L, 60_000_000L);
+
             return s with
             {
                 Mode = mode,
+                VfoHz = newVfoHz,
                 FilterLowHz = lo, FilterHighHz = hi,
                 TxFilterLowHz = txLo, TxFilterHighHz = txHi,
                 FilterPresetName = restoredPreset,
@@ -475,6 +517,12 @@ public sealed class RadioService : IDisposable
         if (departingPreset != null)
             _filterPresetStore?.UpsertLastSelectedPreset(departingMode, departingPreset);
 
+        // Push the new effective LO. Even with no dial bump, switching
+        // into/out of CW changes EffectiveLoHz by ±cw_pitch and the radio
+        // needs the new tuning before the next IQ block arrives. P2 is
+        // pushed via DspPipelineService.OnRadioStateChanged.
+        ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(mode, newVfoHz));
+
         return Snapshot();
     }
 
@@ -482,14 +530,22 @@ public sealed class RadioService : IDisposable
     {
         if (highHz < lowHz) (lowHz, highHz) = (highHz, lowHz);
         RxMode modeAtSet = RxMode.USB;
+        string? resolvedName = presetName;
         Mutate(s =>
         {
             modeAtSet = s.Mode;
-            if (presetName != null) _lastPresetPerMode[s.Mode] = presetName;
-            return s with { FilterLowHz = lowHz, FilterHighHz = highHz, FilterPresetName = presetName };
+            // Normalize the slot name: if (low,high) exactly matches a non-VAR
+            // preset for this mode, use that slot's name regardless of what the
+            // caller passed. Prevents dual selection where a stored VAR happens
+            // to equal a standard preset width and edges.
+            var match = FilterPresets.DefaultsForMode(s.Mode)
+                .FirstOrDefault(e => !e.IsVar && e.LowHz == lowHz && e.HighHz == highHz);
+            if (match is not null) resolvedName = match.SlotName;
+            if (resolvedName != null) _lastPresetPerMode[s.Mode] = resolvedName;
+            return s with { FilterLowHz = lowHz, FilterHighHz = highHz, FilterPresetName = resolvedName };
         });
-        if (presetName != null)
-            _filterPresetStore?.UpsertLastSelectedPreset(modeAtSet, presetName);
+        if (resolvedName != null)
+            _filterPresetStore?.UpsertLastSelectedPreset(modeAtSet, resolvedName);
         return Snapshot();
     }
 
@@ -600,7 +656,15 @@ public sealed class RadioService : IDisposable
             RxMode.DIGL => (-hiAbs, 0),
             RxMode.AM or RxMode.SAM or RxMode.DSB => (-hiAbs, +hiAbs),
             RxMode.FM => (-hiAbs, +hiAbs),
-            RxMode.CWL or RxMode.CWU => (-hiAbs, +hiAbs),
+            // CW is sideband-keyed: CWU sits in the positive baseband around
+            // +cw_pitch, CWL in the negative around -cw_pitch. WDSP groups
+            // CWU with USB and CWL with LSB inside ApplyBandpassForMode, so
+            // the absolute family-filter values already include the cw_pitch
+            // offset (see FilterPresets.Cwu/Cwl: low/high = ±(pitch ± half)).
+            // A symmetric (-hi,+hi) signing here would collapse the passband
+            // to (hi,hi) after WDSP's abs-and-sort, killing CW audio.
+            RxMode.CWU => (+loAbs, +hiAbs),
+            RxMode.CWL => (-hiAbs, -loAbs),
             _ => (+loAbs, +hiAbs),
         };
     }
@@ -1063,6 +1127,19 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    /// <summary>TX-monitor toggle (audition path). Mutates StateDto so the
+    /// next DspPipelineService.UpdateState tick latches the value into
+    /// engine.SetTxMonitorEnabled. Mirrors PsMonitor's lifecycle — operator
+    /// preference, not persisted across sessions; resets to off on each new
+    /// connect so the radio doesn't come up auditioning unintentionally.</summary>
+    public StateDto SetTxMonitor(TxMonitorSetRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+        _log.LogInformation("setTxMonitor enabled={Enabled}", req.Enabled);
+        Mutate(s => s with { TxMonitorEnabled = req.Enabled });
+        return Snapshot();
+    }
+
     public StateDto SetTwoTone(TwoToneSetRequest req)
     {
         ArgumentNullException.ThrowIfNull(req);
@@ -1128,7 +1205,15 @@ public sealed class RadioService : IDisposable
     public void ApplyPsHwPeakForConnection(bool isProtocol2, HpsdrBoardKind board)
     {
         double peak = ResolvePsHwPeak(isProtocol2, board);
-        Mutate(s => s.PsHwPeak == peak ? s : s with { PsHwPeak = peak });
+        // Snap PsHwPeakDefault to the resolved per-board value alongside
+        // PsHwPeak so the UI can compare them for a "differs from default"
+        // hint. mi0bot ref: PSForm.cs:830 reads HardwareSpecific.PSDefaultPeak
+        // (clsHardwareSpecific.cs:303-328) at the same boundary — radio
+        // change → re-resolve default.
+        Mutate(s =>
+            s.PsHwPeak == peak && s.PsHwPeakDefault == peak
+                ? s
+                : s with { PsHwPeak = peak, PsHwPeakDefault = peak });
         _log.LogInformation(
             "radio.applyPsHwPeak proto={Proto} board={Board} peak={Peak:F4}",
             isProtocol2 ? "P2" : "P1", board, peak);
@@ -1170,7 +1255,12 @@ public sealed class RadioService : IDisposable
     // disconnects. RadioService's _activeClient is P1-only; this is how
     // the shared state (Status, Endpoint, SampleRate) stays coherent for
     // the UI without growing a P2 client slot here.
-    public void MarkProtocol2Connected(string endpoint, int sampleRateHz)
+    //
+    // The optional <paramref name="client"/> wires the freshly-opened
+    // Protocol2Client to subscribers of <see cref="P2Connected"/>; passing
+    // null keeps the signature backward-compatible for tests that don't
+    // need the telemetry surface (issue #174).
+    public void MarkProtocol2Connected(string endpoint, int sampleRateHz, Zeus.Protocol2.Protocol2Client? client = null)
     {
         lock (_sync) _p2Active = true;
         Mutate(s => s with
@@ -1182,6 +1272,9 @@ public sealed class RadioService : IDisposable
         // P2 is alive — PA defaults should reflect G2 / Orion class so the
         // operator sees realistic numbers when they open the PA panel.
         RecomputePaAndPush();
+        // Fire AFTER the state mutation + PA recompute so subscribers see a
+        // fully-coherent RadioService when they read board kind / snapshot.
+        if (client is not null) P2Connected?.Invoke(client);
     }
 
     public void MarkProtocol2Disconnected()
@@ -1192,6 +1285,7 @@ public sealed class RadioService : IDisposable
             Status = ConnectionStatus.Disconnected,
             Endpoint = null,
         });
+        P2Disconnected?.Invoke();
     }
 
     // Resolves the board class for ALL board-specific behavior: PA settings,

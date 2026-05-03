@@ -140,6 +140,11 @@ public class DspPipelineService : BackgroundService
     // reads from the pipeline thread — no compound mutation, just a bool.
     private volatile bool _psMonitorEnabled;
     private long _psMonitorTickCount;
+    // TX Monitor latch (issue #106 follow-up). Same change-detect pattern as
+    // _psMonitorEnabled — UpdateState writes when StateDto.TxMonitorEnabled
+    // flips, and the latch fires engine.SetTxMonitorEnabled exactly once per
+    // edge so we don't spam the engine on every tick with the same value.
+    private bool _appliedTxMonitorEnabled;
     // Set by DisconnectP2Async so the next OnRadioStateChanged after a
     // fresh ConnectP2Async re-pushes every PS field regardless of equality
     // — necessary because the new WdspDspEngine instance starts with field
@@ -255,6 +260,21 @@ public class DspPipelineService : BackgroundService
         get { lock (_engineLock) return _engine; }
     }
 
+    /// <summary>Raised after the engine instance is swapped (Synthetic ↔ WDSP).
+    /// VstHostHostedService subscribes and re-installs its chain handler on
+    /// the new engine. Subscribers receive the new <see cref="IDspEngine"/>
+    /// (never null).</summary>
+    public event Action<IDspEngine>? EngineChanged;
+
+    private void RaiseEngineChanged(IDspEngine engine)
+    {
+        try { EngineChanged?.Invoke(engine); }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "dsp.pipeline EngineChanged subscriber threw");
+        }
+    }
+
     /// <summary>Snapshot of the active Protocol2 client, or null on P1 / no
     /// connection. Exposed for the PS auto-attenuate service which needs to
     /// call <c>SetTxAttenuationDb</c> on the same client this pipeline is
@@ -274,6 +294,7 @@ public class DspPipelineService : BackgroundService
             _sampleRateHz = SyntheticSampleRateHz;
         }
         _log.LogInformation("dsp.pipeline engine=synthetic channel={Id}", channelId);
+        RaiseEngineChanged(engine);
     }
 
     private void OnRadioConnected(IProtocol1Client client)
@@ -301,8 +322,24 @@ public class DspPipelineService : BackgroundService
 
         TeardownEngine(old, oldChannel);
         _log.LogInformation("dsp.pipeline engine=wdsp channel={Id} rate={Rate}", channelId, rate);
+        RaiseEngineChanged(wdsp);
 
         StartIqPump(client);
+        StartPsFeedbackPumpP1(client);
+        // Force the next OnRadioStateChanged to re-push every PS field into
+        // the freshly-opened WdspDspEngine instance — same rationale as the
+        // P2 reconnect path. Without this, a P1 reconnect leaves the engine
+        // sitting at field defaults (hwPeak=0.4072) and calcc never sees
+        // the operator's HL2 0.233 / hardware-correct numbers.
+        _psResyncRequired = true;
+        _appliedTxMonitorEnabled = false;
+        // Apply the per-board PS HW peak default so the engine sees the
+        // right curve scale before the operator arms PS. Mirrors P2's
+        // ApplyPsHwPeakForConnection call. ConnectedBoardKind returns the
+        // currently-active board (HL2, Hermes, ANAN-class…) — the value
+        // is per-board (HL2 → 0.233, others → 0.4072) and only fires a
+        // StateChanged when the value actually changes.
+        _radio.ApplyPsHwPeakForConnection(isProtocol2: false, _radio.ConnectedBoardKind);
     }
 
     private void OnRadioDisconnected()
@@ -326,6 +363,7 @@ public class DspPipelineService : BackgroundService
 
         TeardownEngine(old, oldChannel);
         _log.LogInformation("dsp.pipeline engine=synthetic channel={Id}", channelId);
+        RaiseEngineChanged(synth);
     }
 
     private void OnRadioStateChanged(StateDto s)
@@ -336,7 +374,7 @@ public class DspPipelineService : BackgroundService
         // about tune changes without this forward. Sample rate / mode follow
         // here too when P2-side support is added.
         var p2 = _p2Client;
-        p2?.SetVfoAHz(s.VfoHz);
+        p2?.SetVfoAHz(CwOffset.EffectiveLoHz(s));
 
         IDspEngine? engine;
         int channel;
@@ -460,13 +498,20 @@ public class DspPipelineService : BackgroundService
             //
             // Task.Delay(100).Wait() is acceptable here — OnRadioStateChanged
             // runs on a state-change handler thread, not the request path.
-            // TODO(ps-p1): when P1 PS lands, dispatch to _radio.ActiveClient
-            // here too (the P1 client gains a SetPuresignal(bool) sibling
-            // — see hermes.md item 4b). Today the P1 ActiveClient receives
-            // no PS bit and the frontend gates the PS toggle off on P1.
+            //
+            // P1 sibling (issue #172): the active P1 client gets the same
+            // arm/disarm sequencing — flip the wire bit (which also
+            // bumps NumReceiversMinusOne in the next Config frame so the
+            // gateware switches to the 2-DDC paired layout), wait the
+            // same 100 ms settle window, then arm the engine. On a
+            // non-HL2 P1 board this is harmless: SetPsEnabled stores the
+            // flag locally and the C0=0x14 wire byte is unaffected
+            // (board-gated in WriteAttenuatorPayload).
+            var p1Active = _radio.ActiveClient;
             if (s.PsEnabled)
             {
                 _p2Client?.SetPsFeedbackEnabled(true);
+                p1Active?.SetPsEnabled(true);
                 try { Task.Delay(100).Wait(); } catch { /* ignore */ }
                 engine.SetPsEnabled(true);
             }
@@ -474,6 +519,7 @@ public class DspPipelineService : BackgroundService
             {
                 engine.SetPsEnabled(false);
                 _p2Client?.SetPsFeedbackEnabled(false);
+                p1Active?.SetPsEnabled(false);
                 DrainPsFeedback();
             }
             _appliedPsEnabled = s.PsEnabled;
@@ -528,6 +574,18 @@ public class DspPipelineService : BackgroundService
         {
             _log.LogInformation("psMonitor.latch enabled={Enabled}", s.PsMonitorEnabled);
             _psMonitorEnabled = s.PsMonitorEnabled;
+        }
+
+        // TX Monitor (issue #106 follow-up) — engages the engine's parallel
+        // demod path on the post-CFIR TX IQ. Edge-triggered call to the
+        // engine so a re-tick with the same flag is a no-op. The engine
+        // tolerates being called before TXA is open (lazy-open inside) so
+        // ordering vs SetTxMode/SetTxFilter above doesn't matter.
+        if (_appliedTxMonitorEnabled != s.TxMonitorEnabled)
+        {
+            _log.LogInformation("txMonitor.latch enabled={Enabled}", s.TxMonitorEnabled);
+            engine.SetTxMonitorEnabled(s.TxMonitorEnabled);
+            _appliedTxMonitorEnabled = s.TxMonitorEnabled;
         }
 
         // Resync done — clear the flag so subsequent state changes use
@@ -681,6 +739,41 @@ public class DspPipelineService : BackgroundService
         }, cts.Token);
     }
 
+    /// <summary>
+    /// HL2 / Protocol-1 sibling of <see cref="StartPsFeedbackPumpP2"/>.
+    /// Reads 1024-sample paired blocks emitted by the
+    /// <see cref="IProtocol1Client.PsFeedbackFrames"/> channel and pushes
+    /// them into WDSP's <c>psccF</c> via the engine's
+    /// <c>FeedPsFeedbackBlock</c>. Same lifecycle as the P2 pump:
+    /// started on connect, stopped on disconnect — NOT gated on PsEnabled,
+    /// because the radio sends paired frames whenever the wire bit is
+    /// set and the engine drops blocks internally when SetPsRunCal is 0
+    /// (see lessons_puresignal_convergence_g2_mkii.md). Issue #172.
+    /// </summary>
+    private void StartPsFeedbackPumpP1(IProtocol1Client client)
+    {
+        var cts = new CancellationTokenSource();
+        _psFeedbackPumpCts = cts;
+        _psFeedbackPumpTask = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var frame in client.PsFeedbackFrames.ReadAllAsync(cts.Token).ConfigureAwait(false))
+                {
+                    IDspEngine? engine;
+                    lock (_engineLock) { engine = _engine; }
+                    engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (ChannelClosedException) { }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "dsp.pipeline p1 ps-feedback-pump exited with error");
+            }
+        }, cts.Token);
+    }
+
     private async Task StopPsFeedbackPumpAsync()
     {
         var cts = _psFeedbackPumpCts;
@@ -700,13 +793,23 @@ public class DspPipelineService : BackgroundService
     // Best-effort drain of in-flight paired frames after PS disarm. Called
     // synchronously from OnRadioStateChanged so by the time the next state
     // change tries to re-arm, the channel is empty. The pump task itself is
-    // not stopped — only the buffered backlog is drained.
+    // not stopped — only the buffered backlog is drained. Drains either
+    // active client (P1 or P2 — only one is non-null at a time).
     private void DrainPsFeedback()
     {
-        var client = _p2Client;
-        if (client is null) return;
-        var reader = client.PsFeedbackFrames;
-        while (reader.TryRead(out _)) { }
+        var p2 = _p2Client;
+        if (p2 is not null)
+        {
+            var reader = p2.PsFeedbackFrames;
+            while (reader.TryRead(out _)) { }
+            return;
+        }
+        var p1 = _radio.ActiveClient;
+        if (p1 is not null)
+        {
+            var reader = p1.PsFeedbackFrames;
+            while (reader.TryRead(out _)) { }
+        }
     }
 
     /// <summary>
@@ -786,6 +889,7 @@ public class DspPipelineService : BackgroundService
         }
         TeardownEngine(old, oldChannel);
         _log.LogInformation("dsp.pipeline p2 engine={Engine} rate={Rate}", newEngine.GetType().Name, rateHz);
+        RaiseEngineChanged(newEngine);
 
         _p2Client = client;
         // Sync the change-detect cache with the values we just seeded so the
@@ -820,7 +924,14 @@ public class DspPipelineService : BackgroundService
         // settings back, calcc runs on wrong hw_scale, and PS doesn't
         // converge after a reconnect. See `project_ps_reconnect_state_loss.md`.
         _psResyncRequired = true;
-        _radio.MarkProtocol2Connected(radioEndpoint.ToString(), rateHz);
+        // TX-monitor: same re-push problem as PS — the new engine starts at
+        // monitor=off, so if the operator had it on the latch's change-detect
+        // would skip the push. Reset the latch so the next UpdateState fires.
+        _appliedTxMonitorEnabled = false;
+        // Pass the live client so RadioService can fire P2Connected with a
+        // reference to the freshly-opened Protocol2Client. TxMetersService
+        // subscribes through that event to hook hi-priority status (#174).
+        _radio.MarkProtocol2Connected(radioEndpoint.ToString(), rateHz, client);
         // P2 G2/MkII default HW peak = 0.6121; ANAN-7000/8000 = 0.2899. The
         // RadioService switch covers both so we don't bake a value in here.
         // ConnectedBoardKind returns OrionMkII when _p2Active is true; future
@@ -900,6 +1011,7 @@ public class DspPipelineService : BackgroundService
             _sampleRateHz = SyntheticSampleRateHz;
         }
         TeardownEngine(old, oldChannel);
+        RaiseEngineChanged(synth);
         // Mark PS state for forced re-push on the next ConnectP2Async. The
         // change-detect cache (`_appliedPs*`) is preserved across disconnect
         // — by design, so a reconnect with unchanged operator state doesn't
@@ -910,6 +1022,7 @@ public class DspPipelineService : BackgroundService
         // engine never gets the operator's settings. See
         // `project_ps_reconnect_state_loss.md` for the rack reproduction.
         _psResyncRequired = true;
+        _appliedTxMonitorEnabled = false;
         _radio.MarkProtocol2Disconnected();
         _log.LogInformation("dsp.pipeline p2 disconnected, engine=synthetic");
     }
@@ -1059,26 +1172,76 @@ public class DspPipelineService : BackgroundService
             RxId: 0,
             BodyFlags: flags,
             Width: Width,
-            CenterHz: state.VfoHz,
+            // Panadapter centres on the radio's actual LO, which equals
+            // VfoHz outside CW and VfoHz ∓ cw_pitch in CWU/CWL. The CW filter
+            // (audio passband centred on cw_pitch) then renders on top of
+            // the dial line via PassbandOverlay's `centerHz + filterLow..high`.
+            CenterHz: CwOffset.EffectiveLoHz(state),
             HzPerPixel: hzPerPixel,
             PanDb: panBuf,
             WfDb: wfBuf);
 
         _hub.Broadcast(frame);
 
+        // Audio broadcast — when TX monitor is on, replace RX audio with the
+        // monitor channel's demodulated TX audio so the operator hears the
+        // chain output (post-bandpass / post-CFIR, demodulated back to mono)
+        // instead of band RX. This unifies "monitor while keyed" (Thetis MON
+        // semantics) and "audition without keying" (audio passes through the
+        // chain so VST plugins receive samples and their meters animate). RX
+        // is drained anyway so the WDSP audio ring doesn't back up — we just
+        // don't broadcast it. The VST RX seam still fires on the drained RX
+        // so RX-side plugins keep running even while monitor is on.
+        bool txMonitorOn = engine.IsTxMonitorOn;
         int audioSampleCount = engine.ReadAudio(channel, audioBuf);
         if (audioSampleCount > 0)
         {
-            var audioFrame = new AudioFrame(
-                Seq: ++_audioSeq,
-                TsUnixMs: nowMs,
-                RxId: 0,
-                Channels: 1,
-                SampleRateHz: (uint)AudioOutputRateHz,
-                SampleCount: (ushort)audioSampleCount,
-                Samples: new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
-            _hub.Broadcast(audioFrame);
-            RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
+            // VST plugin host is TX-only by design (operator decision
+            // 2026-04-30). The chain is configured for the TX bandwidth,
+            // tuned for voice processing, and shares one set of plugin
+            // instances with the TX seam — routing RX through it would
+            // (a) apply TX-tuned effects to band audio (sounds wrong),
+            // (b) inherit IIR state from the most recent TX block, and
+            // (c) waste CPU on RX when the operator only wants chain
+            // processing on transmit. The RX-side seam method on
+            // IDspEngine remains in place for any future "RX insert"
+            // feature, but the audio pipeline does not call it.
+
+            if (!txMonitorOn)
+            {
+                var audioFrame = new AudioFrame(
+                    Seq: ++_audioSeq,
+                    TsUnixMs: nowMs,
+                    RxId: 0,
+                    Channels: 1,
+                    SampleRateHz: (uint)AudioOutputRateHz,
+                    SampleCount: (ushort)audioSampleCount,
+                    Samples: new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
+                _hub.Broadcast(audioFrame);
+                RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
+            }
+        }
+        if (txMonitorOn)
+        {
+            // Drain whatever the monitor RXA produced this tick. The buffer
+            // shape matches the RX path (mono float32 @ 48 kHz) so it slots
+            // into the same AudioFrame format with no front-end change. When
+            // the chain is idle (no MOX, no mic) the monitor channel produces
+            // silence, which is the correct behaviour for "audition mode but
+            // operator isn't talking".
+            int monCount = engine.ReadTxMonitorAudio(audioBuf.AsSpan());
+            if (monCount > 0)
+            {
+                var monFrame = new AudioFrame(
+                    Seq: ++_audioSeq,
+                    TsUnixMs: nowMs,
+                    RxId: 0,
+                    Channels: 1,
+                    SampleRateHz: (uint)AudioOutputRateHz,
+                    SampleCount: (ushort)monCount,
+                    Samples: new ReadOnlyMemory<float>(audioBuf, 0, monCount));
+                _hub.Broadcast(monFrame);
+            }
         }
 
         if (++_rxMeterTickMod >= RxMeterTickModulus)

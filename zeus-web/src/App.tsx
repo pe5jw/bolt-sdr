@@ -64,7 +64,6 @@ import { FilterPanel } from './components/filter/FilterPanel';
 import { FilterRibbon, useFilterRibbonOpenSync } from './components/filter/FilterRibbon';
 import { MoxButton } from './components/MoxButton';
 import { PsToggleButton } from './components/PsToggleButton';
-import { TwoToneButton } from './components/TwoToneButton';
 import { Panadapter } from './components/Panadapter';
 import { PaTempChip } from './components/PaTempChip';
 import { PreampButton } from './components/PreampButton';
@@ -78,13 +77,9 @@ import { VfoDisplay } from './components/VfoDisplay';
 import { Waterfall } from './components/Waterfall';
 import { useSwUpdatePrompt } from './pwa/useSwUpdatePrompt';
 import { CONTACTS, bandOf } from './components/design/data';
-import { TuningStepWidget } from './components/TuningStepWidget';
 import { Dockable } from './components/design/Dockable';
-import { CollapsibleBottomSlot } from './components/design/CollapsibleBottomSlot';
-import { useBottomPinStore } from './state/bottom-pin-store';
 import { DspPanel } from './components/DspPanel';
 import { TxFilterPanel } from './components/TxFilterPanel';
-import { LogbookLive } from './components/design/LogbookLive';
 import { QrzCard } from './components/design/QrzCard';
 import { TerminatorLines } from './components/design/TerminatorLines';
 import { bearingDeg, distanceKm } from './components/design/geo';
@@ -95,7 +90,9 @@ import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
 import { useMicUplink } from './audio/use-mic-uplink';
 import { fetchState } from './api/client';
+import { BOARD_LABELS } from './api/radio';
 import { useConnectionStore } from './state/connection-store';
+import { useRadioStore } from './state/radio-store';
 import { useQrzStore } from './state/qrz-store';
 import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
@@ -103,6 +100,7 @@ import { useTxStore } from './state/tx-store';
 import { useLayoutPreferenceStore } from './state/layout-preference-store';
 import { useLayoutStore } from './state/layout-store';
 import { useDisplaySettingsStore } from './state/display-settings-store';
+import { useCapabilitiesStore } from './state/capabilities-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
 import { registerServiceWorker } from './service-worker/registerSW';
@@ -133,6 +131,21 @@ export default function App() {
   const tunOn = useTxStore((s) => s.tunOn);
   const filterRibbonOpen = useConnectionStore((s) => s.filterAdvancedPaneOpen);
   const connected = status === 'Connected';
+  // Brand sub label in the topbar reflects what discovery actually saw on
+  // the wire (selection.connected), not the operator's preferred override —
+  // showing "ANAN G2" when an HL2 is plugged in would just confuse anyone
+  // reading the topbar to confirm what they're talking to. Falls back to
+  // a neutral "NOT CONNECTED" when nothing is on the wire yet.
+  const radioConnected = useRadioStore((s) => s.selection.connected);
+  const radioLoad = useRadioStore((s) => s.load);
+  // Reload on mount AND every time the wire connection flips to Connected.
+  // Clicking Connect on a discovered radio doesn't refresh radio-store on
+  // its own (only the manual-connect path does), so without this the
+  // brand-sub label keeps showing "NOT CONNECTED" until the next page load.
+  useEffect(() => { radioLoad(); }, [radioLoad, connected]);
+  const brandSub = radioConnected !== 'Unknown'
+    ? BOARD_LABELS[radioConnected].toUpperCase()
+    : 'NOT CONNECTED';
 
   useKeyboardShortcuts();
   useMicUplink();
@@ -156,6 +169,14 @@ export default function App() {
     return () => {
       stop();
     };
+  }, []);
+
+  // Fetch host capabilities once on mount. The backend snapshot is built
+  // at startup and doesn't change at runtime, so a single fetch is enough;
+  // failures fall back to "no features available" which hides feature-gated
+  // UI rather than rendering broken controls.
+  useEffect(() => {
+    void useCapabilitiesStore.getState().refresh();
   }, []);
 
   useEffect(() => {
@@ -259,10 +280,6 @@ export default function App() {
   const terminatorActive = panBackground === 'beam-map';
   const imageMode = panBackground === 'image' && !!backgroundImage;
   const bgActive = terminatorActive || imageMode;
-  // Per-slot pin state for the bottom row. Layout (pinned-tier vs
-  // chip-tier vs grid-template-columns) is driven by the JSX below
-  // and the .bottom-tier--* rules in layout.css.
-  const bottomPinned = useBottomPinStore((s) => s.pinned);
   // While 'M' is held and the map is showing, the spectrum canvas stack goes
   // pointer-events:none and the Leaflet map underneath takes drag/zoom input.
   // Click-to-tune is suspended for the duration of the modifier.
@@ -671,7 +688,7 @@ export default function App() {
           </div>
           <div className="brand-text">
             <div className="brand-name mono">OpenHpsdr Zeus</div>
-            <div className="brand-sub label-xs hide-mobile">HERMES LITE 2 · 0.1–54 MHz</div>
+            <div className="brand-sub label-xs hide-mobile">{brandSub}</div>
           </div>
         </div>
 
@@ -1001,80 +1018,27 @@ export default function App() {
             </Dockable>
           </div>
 
-          {/* Tuning Step — taller in classic mode + button row wraps so
-              all step values stay visible without horizontal overflow. */}
-          <div className="side-slot side-slot--tuning-step hide-mobile">
-            <Dockable title="Tuning Step" ledOn>
-              <TuningStepWidget />
+          {/* TX Stage Meters — MIC / ALC / PWR / SWR. Lit red while
+              keyed (MOX or TUN), green when receiving. */}
+          <div className="side-slot side-slot--tx-stage-meters hide-mobile">
+            <Dockable
+              title="TX Stage Meters"
+              ledTx={moxOn || tunOn}
+              ledOn={!(moxOn || tunOn)}
+              actions={<OverdriveIndicator />}
+            >
+              <TxStageMeters />
             </Dockable>
           </div>
 
         </div>
 
-        {/* Bottom row — Logbook + TX Stage Meters on desktop; big PTT on
-            mobile. The row has two tiers:
-              - .bottom-tier--pinned   : pinned panels share the row width
-                (2fr 1fr when both pinned, 1fr when only one is pinned).
-              - .bottom-tier--unpinned : unpinned chips sit below the
-                pinned tier, left-aligned, auto-sized to their label.
-            Both tiers are conditionally rendered, so when both are
-            unpinned only a thin chip strip remains and the panadapter
-            grows into the freed vertical space. */}
+        {/* Bottom row — Logbook + TX Stage Meters were removed from the
+            default classic layout: TX Stage Meters now live in the
+            right-hand side stack as a Dockable, and Logbook can be
+            re-added via "+ Add" when the operator wants it back. The
+            mobile PTT button still occupies this strip on phones. */}
         <div className="bottom-row">
-          {(bottomPinned.logbook || bottomPinned.txmeters) && (
-            <div className={`bottom-tier bottom-tier--pinned hide-mobile ${
-              bottomPinned.logbook && bottomPinned.txmeters ? 'has-both' : 'has-one'
-            }`}>
-              {bottomPinned.logbook && (
-                <div className="bottom-slot">
-                  <CollapsibleBottomSlot
-                    slotId="logbook"
-                    title={logbookTitle}
-                    ledOn
-                    actions={logbookActions}
-                  >
-                    <LogbookLive />
-                  </CollapsibleBottomSlot>
-                </div>
-              )}
-              {bottomPinned.txmeters && (
-                <div className="bottom-slot">
-                  <CollapsibleBottomSlot
-                    slotId="txmeters"
-                    title="TX Stage Meters"
-                    ledOn={moxOn || tunOn}
-                    actions={<OverdriveIndicator />}
-                  >
-                    <TxStageMeters />
-                  </CollapsibleBottomSlot>
-                </div>
-              )}
-            </div>
-          )}
-          {(!bottomPinned.logbook || !bottomPinned.txmeters) && (
-            <div className="bottom-tier bottom-tier--unpinned hide-mobile">
-              {!bottomPinned.logbook && (
-                <CollapsibleBottomSlot
-                  slotId="logbook"
-                  title={logbookTitle}
-                  ledOn
-                  actions={logbookActions}
-                >
-                  <LogbookLive />
-                </CollapsibleBottomSlot>
-              )}
-              {!bottomPinned.txmeters && (
-                <CollapsibleBottomSlot
-                  slotId="txmeters"
-                  title="TX Stage Meters"
-                  ledOn={moxOn || tunOn}
-                  actions={<OverdriveIndicator />}
-                >
-                  <TxStageMeters />
-                </CollapsibleBottomSlot>
-              )}
-            </div>
-          )}
           <div className="bottom-slot show-mobile mobile-ptt-slot">
             <MobilePttButton />
           </div>
@@ -1089,7 +1053,6 @@ export default function App() {
         <MoxButton />
         <TunButton />
         <PsToggleButton />
-        <TwoToneButton />
         <div className="transport-sep" />
         <AudioToggle />
         <MicMeter />

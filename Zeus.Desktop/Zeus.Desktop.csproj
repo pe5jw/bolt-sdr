@@ -14,6 +14,10 @@
     <AssemblyName>Zeus.Desktop</AssemblyName>
     <SpaRoot>$(MSBuildThisFileDirectory)..\zeus-web</SpaRoot>
     <SpaBuildOutput>$(MSBuildThisFileDirectory)..\Zeus.Server.Hosting\wwwroot\index.html</SpaBuildOutput>
+    <!-- Embed zeus.ico into the Windows PE resource table so Explorer, the
+         taskbar, and Inno Setup's UninstallDisplayIcon all pick it up. No-op
+         on macOS / Linux where Mach-O / ELF have no equivalent slot. -->
+    <ApplicationIcon>zeus.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,6 +26,15 @@
 
   <ItemGroup>
     <PackageReference Include="Photino.NET" Version="4.0.16" />
+  </ItemGroup>
+
+  <!-- Ship zeus.png + zeus.ico next to the binary so Photino's SetIconFile
+       can find them at runtime — zeus.png for Linux GTK / macOS dev runs,
+       zeus.ico for Windows. CopyToOutputDirectory keeps `dotnet run` and
+       `dotnet publish` consistent. -->
+  <ItemGroup>
+    <Content Include="zeus.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="zeus.ico" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Same SPA build target as Zeus.Server: zeus-web/dist → Zeus.Server.Hosting/wwwroot.

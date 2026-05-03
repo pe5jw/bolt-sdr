@@ -5,6 +5,7 @@
 // Lifecycle: window-close drives host shutdown, so there's no orphaned
 // backend on the local port.
 
+using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,6 +26,7 @@ using Zeus.Server;
 // no TOCTOU race with a concurrent listener.
 var hostOptions = new ZeusHostOptions
 {
+    HostMode = ZeusHostMode.Desktop,
     HttpPort = 0,
     BindAllInterfaces = false,
     UseHttpsLanCert = false,
@@ -49,11 +51,33 @@ Console.WriteLine($"Zeus.Desktop hosting backend at {startUrl}");
 // SetUseOsDefaultLocation(false)+Center so first launch doesn't drop the
 // window in the corner. Title is the marketing name; we prefix "Openhpsdr"
 // elsewhere in copy but the OS title bar stays short.
+// Photino on macOS sometimes ignores SetSize on first show — Cocoa initialises
+// the NSWindow at a small default and only the *minimum* size is honoured
+// reliably. Pinning SetMinWidth/SetMinHeight at the desired width forces the
+// frame to open wide enough to clear the SPA's mobile breakpoint (900px) and
+// give the panadapter usable headroom.
+const int MinWidth = 1280;
+const int InitialWidth = 1680;
+const int InitialHeight = 1050;
+
+// Photino's window/dock icon is set per-OS. Windows expects .ico (Photino's
+// SetIconFile binds it to the NSWindow / HWND), Linux GTK expects PNG, and
+// macOS draws the dock icon from CFBundleIconFile in Info.plist — so during
+// `dotnet run` on macOS the SetIconFile call is a no-op (the .app bundle
+// generator wires the icns separately). Both files ship next to the binary
+// via the csproj's <Content Include="zeus.png/.ico"> so AppContext.BaseDirectory
+// resolves correctly from `dotnet run` output and from a published bundle.
+var iconFileName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "zeus.ico" : "zeus.png";
+var iconPath = Path.Combine(AppContext.BaseDirectory, iconFileName);
+
 var window = new PhotinoWindow()
     .SetTitle("Zeus")
     .SetUseOsDefaultLocation(false)
-    .SetSize(1400, 900)
+    .SetMinWidth(MinWidth)
+    .SetMinHeight(800)
+    .SetSize(InitialWidth, InitialHeight)
     .Center()
+    .SetIconFile(iconPath)
     .Load(new Uri(startUrl));
 
 // Translate Ctrl-C / SIGTERM into a window close so `dotnet run` (and the
