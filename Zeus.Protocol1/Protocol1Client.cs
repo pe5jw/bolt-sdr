@@ -235,12 +235,34 @@ public sealed class Protocol1Client : IProtocol1Client
         try
         {
             if (!PacketParser.TryParseHl2Ps4DdcPacket(
-                    packet, ddc0, ddc1, ddc2, ddc3, out uint seq, out int samples))
+                    packet, ddc0, ddc1, ddc2, ddc3,
+                    out uint seq, out int samples,
+                    out TelemetryReading telemetry0,
+                    out TelemetryReading telemetry1,
+                    out byte overloadBits))
                 return;
 
             Interlocked.Increment(ref _psPairedPacketCount);
             ObserveSequence(seq);
             Interlocked.Increment(ref _totalFrames);
+
+            // Fan out telemetry + overload exactly like the standard 1-DDC
+            // path (ReceiveLoopAsync). Without this, FWD/REF/PA-temp and
+            // ADC-overload signals freeze for the duration of any PS+TUN
+            // window — operator sees 0.0 W in the meter while the radio is
+            // visibly transmitting.
+            if (telemetry0.C0Address != 0)
+            {
+                try { TelemetryReceived?.Invoke(telemetry0); }
+                catch (Exception ex) { _log.LogWarning(ex, "TelemetryReceived handler threw"); }
+            }
+            if (telemetry1.C0Address != 0)
+            {
+                try { TelemetryReceived?.Invoke(telemetry1); }
+                catch (Exception ex) { _log.LogWarning(ex, "TelemetryReceived handler threw"); }
+            }
+            try { AdcOverloadObserved?.Invoke(AdcOverloadStatus.FromBits(overloadBits)); }
+            catch (Exception ex) { _log.LogWarning(ex, "AdcOverloadObserved handler threw"); }
 
             // DDC0 → IqFrame channel — keeps panadapter / audio alive during PS+TX.
             // Use a fresh rented buffer the channel can own; the ddc0 rental is
