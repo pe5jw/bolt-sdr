@@ -98,6 +98,14 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _psEnabled;
     private int _psPredistortionValue;     // 0..15 (low nibble of C2)
     private int _psPredistortionSubindex;  // 0..255 (whole C1 byte)
+    // HL2 TX-side step attenuator (AD9866 TX PGA) target in dB. Sentinel
+    // int.MinValue = "untouched" so the C4 byte falls through to the
+    // existing RX-side encoding in WriteAttenuatorPayload — first PS arm
+    // is bit-exact identical to today. PsAutoAttenuateService writes here
+    // each time mi0bot's timer2code SetNewValues state would fire ATTOnTX.
+    // mi0bot console.cs:2084 (UI range -28..+31), networkproto1.c:1086-1088
+    // (wire encoding).
+    private int _hl2TxAttnDb = int.MinValue;
     private long _droppedFrames;
     private long _totalFrames;
 
@@ -473,6 +481,15 @@ public sealed class Protocol1Client : IProtocol1Client
         Interlocked.Exchange(ref _psPredistortionSubindex, subindex);
     }
 
+    public void SetHl2TxStepAttenuationDb(int db)
+    {
+        // Range matches mi0bot console.cs:2084 (udTXStepAttData.Minimum=-28,
+        // Maximum=+31). ControlFrame.WriteAttenuatorPayload then maps to the
+        // 6-bit wire byte via (31 - db) | 0x40 per networkproto1.c:1086-1088.
+        int clamped = Math.Clamp(db, -28, 31);
+        Interlocked.Exchange(ref _hl2TxAttnDb, clamped);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -520,7 +537,12 @@ public sealed class Protocol1Client : IProtocol1Client
             PsEnabled: psOn,
             PsPredistortionValue: (byte)Volatile.Read(ref _psPredistortionValue),
             PsPredistortionSubindex: (byte)Volatile.Read(ref _psPredistortionSubindex),
-            NumReceiversMinusOne: numRxMinus1);
+            NumReceiversMinusOne: numRxMinus1,
+            // mi0bot networkproto1.c:1086-1088 — when MOX is on and the
+            // operator/auto-att has set ATTOnTX, swap C4 source from
+            // rx_step_attn to tx_step_attn. Sentinel int.MinValue means
+            // untouched, fall through to the RX-side encoding above.
+            Hl2TxAttnDb: Volatile.Read(ref _hl2TxAttnDb));
     }
 
     private void RxLoop()

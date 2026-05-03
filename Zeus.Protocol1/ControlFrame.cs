@@ -153,7 +153,14 @@ internal static class ControlFrame
         // Number of receivers minus 1, packed into Config C4 [5:3]. Default
         // 0 (single RX); HL2 PS uses 1 (= 2 receivers, paired DDC0/DDC1
         // layout). mi0bot networkproto1.c:973 — `C4 |= (nddc - 1) << 3`.
-        byte NumReceiversMinusOne = 0);
+        byte NumReceiversMinusOne = 0,
+        // HL2 TX-side step attenuator (PGA) target in dB. Operator-tunable
+        // via PsAutoAttenuateService when PS auto-attenuate is on; otherwise
+        // a sentinel value of int.MinValue means "untouched, use the default
+        // RX-side encoding for C4". Range when set: -28..+31 dB
+        // (mi0bot console.cs:2084 udTXStepAttData min=-28; +31 is the AD9866
+        // TX PGA upper). Wire encoding lives in WriteAttenuatorPayload.
+        int Hl2TxAttnDb = int.MinValue);
 
     /// <summary>
     /// Write the 5 C&amp;C bytes for <paramref name="register"/> given the current
@@ -234,6 +241,25 @@ internal static class ControlFrame
         byte c4 = s.Board == HpsdrBoardKind.HermesLite2
             ? (byte)(0x40 | Math.Clamp(60 - db, 0, 60))
             : (byte)(0x20 | (db & 0x1F));
+
+        // HL2 PS auto-attenuate: during MOX with PS enabled, mi0bot
+        // networkproto1.c:1086-1088 swaps the C4 source from rx_step_attn to
+        // tx_step_attn so the AD9866 TX-side PGA presents the operator's
+        // ATTOnTX value (the feedback path PGA register, NOT a separate RX
+        // attenuator). C# UI value (-28..+31 dB) → wire byte (31 - db),
+        // matching mi0bot console.cs:10947-10948
+        // `NetworkIO.SetTxAttenData(31 - _tx_attenuator_data)`. Bit 6 stays
+        // set (0x40, PGA select); the low 6 bits carry the wire byte clamped
+        // to the same 0..60 RX-side range so a stale operator value can't
+        // overflow the field. Sentinel int.MinValue keeps the default RX-
+        // side encoding above untouched — first PS arm matches today's
+        // behaviour exactly.
+        if (s.Board == HpsdrBoardKind.HermesLite2
+            && s.Mox
+            && s.Hl2TxAttnDb != int.MinValue)
+        {
+            c4 = (byte)(Math.Clamp(31 - s.Hl2TxAttnDb, 0, 60) | 0x40);
+        }
 
         c14[0] = 0;   // C1 — reserved on this register
         c14[1] = 0;   // C2

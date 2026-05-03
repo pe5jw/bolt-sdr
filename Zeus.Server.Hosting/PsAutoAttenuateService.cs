@@ -19,6 +19,11 @@
 // (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
 // Both are GPL-2.0-or-later.
 
+using Zeus.Contracts;
+using Zeus.Dsp;
+using Zeus.Protocol1;
+using Zeus.Protocol1.Discovery;
+
 namespace Zeus.Server;
 
 /// <summary>
@@ -38,10 +43,12 @@ namespace Zeus.Server;
 /// seconds without overshooting). After every attenuator change we issue a
 /// SetPSControl(reset=1) so calcc retries with the new feedback level.
 ///
-/// Hard-gated on a P2 connection (TX step attenuator wire support landed in
-/// <see cref="Zeus.Protocol2.Protocol2Client.SetTxAttenuationDb"/>; the P1
-/// path hasn't been wired yet). Idle when PS is off, AutoAttenuate is off, or
-/// the radio isn't keyed — no broadcast, no engine pokes.
+/// Two wire paths are supported. Protocol 2 (G2/Saturn etc.) uses the simple
+/// step-then-reset pattern via <see cref="Zeus.Protocol2.Protocol2Client.SetTxAttenuationDb"/>.
+/// HL2 (Protocol 1) uses the mi0bot timer2code 3-state dance — disable PS at
+/// the engine, write the new ATTOnTX wire byte, then re-enable PS — because
+/// changing C4 (AD9866 TX PGA) mid-fit otherwise wedges calcc into binfo[6]
+/// permanent-fault. mi0bot ref: PSForm.cs:728-815 timer2code.
 /// </summary>
 public sealed class PsAutoAttenuateService : BackgroundService
 {
@@ -59,6 +66,12 @@ public sealed class PsAutoAttenuateService : BackgroundService
     // writes a single byte 0..31 dB per ADC tap).
     private const int TxAttnMinDb = 0;
     private const int TxAttnMaxDb = 31;
+
+    // HL2 TX-side step attenuator range (mi0bot console.cs:2084 udTXStepAttData
+    // Minimum=-28, Maximum=+31). Wider than the bare-HPSDR 0..31 because HL2's
+    // AD9866 TX PGA can reduce PA drive below the nominal 0 dB reference.
+    private const int Hl2TxAttnMinDb = -28;
+    private const int Hl2TxAttnMaxDb = 31;
 
     // Settle time after a step change: give the radio one wire-cycle to pick
     // up the new attenuator, then issue the reset so calcc starts fresh.
@@ -90,6 +103,23 @@ public sealed class PsAutoAttenuateService : BackgroundService
     // failing gate during a 5 s rack key without flooding the log.
     private long _lastGateLogTickMs;
     private const long GateLogIntervalMs = 1000;
+
+    // HL2 P1 path — mi0bot timer2code 3-state dance. mi0bot PSForm.cs:728-815.
+    //   Monitor:          detect new fit + threshold breach → SetPSControl
+    //                     reset=1 (disable PS in WDSP) → SetNewValues
+    //   SetNewValues:     write ATTOnTX wire byte → 100 ms settle →
+    //                     RestoreOperation
+    //   RestoreOperation: SetPSControl(0, save_single, save_auto, 0)
+    //                     (re-enable PS with the operator's prior cal-mode)
+    //                     → Monitor
+    // Cycling at the 10 Hz tick gives ~200 ms between disable and re-enable —
+    // enough for the C4 frame change to land on the radio without leaving
+    // calcc fitting against a moving envelope.
+    private enum Hl2AutoAttState { Monitor, SetNewValues, RestoreOperation }
+    private Hl2AutoAttState _hl2State = Hl2AutoAttState.Monitor;
+    private int _hl2DeltaDb;
+    private bool _hl2SavedAuto;
+    private bool _hl2SavedSingle;
 
     public PsAutoAttenuateService(
         RadioService radio,
@@ -150,24 +180,59 @@ public sealed class PsAutoAttenuateService : BackgroundService
         // fresh arm starts at the radio's untouched 0 dB. The actual radio
         // state may differ if the operator manually changed step-att between
         // sessions; assume the radio holds 0 between arms (matches pihpsdr).
+        // Also reset the HL2 state machine so a fresh arm always starts in
+        // Monitor — if the prior session was disarmed mid-dance, we don't
+        // want to fire RestoreOperation against a stale saved cal-mode.
         if (s.PsEnabled && !_psWasEnabled)
         {
             _currentAttnDb = 0;
             _lastCalibrationAttempts = -1;
+            _hl2State = Hl2AutoAttState.Monitor;
             _log.LogInformation("psAutoAttn.armed reset attn={Db}", _currentAttnDb);
         }
         _psWasEnabled = s.PsEnabled;
 
-        // Idle conditions — no telemetry to act on.
-        if (!s.PsEnabled) { LogGate("skip=PsEnabled-off"); return; }
+        // Hard idle conditions — also force the HL2 state machine back to
+        // Monitor so a mid-dance disarm/unkey doesn't strand PS in the
+        // disabled state when the operator re-keys.
+        if (!s.PsEnabled)
+        {
+            _hl2State = Hl2AutoAttState.Monitor;
+            LogGate("skip=PsEnabled-off");
+            return;
+        }
+        if (!_tx.IsMoxOn && !_tx.IsTwoToneOn)
+        {
+            _hl2State = Hl2AutoAttState.Monitor;
+            LogGate("skip=not-keyed");
+            return;
+        }
+
+        var engine = _pipe.CurrentEngine;
+        if (engine is null)
+        {
+            _hl2State = Hl2AutoAttState.Monitor;
+            LogGate("skip=engine-null");
+            return;
+        }
+
+        // HL2 P1 branch — mi0bot timer2code 3-state dance (PSForm.cs:728-815).
+        // Run before the P2 path because HL2 has its own client + wire
+        // semantics (ATTOnTX writes C4 of register 0x0a during MOX).
+        var p1 = _radio.ActiveClient;
+        if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2 && p1 is not null)
+        {
+            Tick1Hl2(s, engine, p1);
+            return;
+        }
+
+        // P2 branch — original simpler step-then-reset pattern. AutoAttenuate
+        // gate stays here as an early-out because the P2 path has no multi-
+        // tick state to tear down on toggle.
         if (!s.PsAutoAttenuate) { LogGate("skip=AutoAttenuate-off"); return; }
-        if (!_tx.IsMoxOn && !_tx.IsTwoToneOn) { LogGate("skip=not-keyed"); return; }
 
         var p2 = _pipe.CurrentP2Client;
         if (p2 is null) { LogGate("skip=p2-null"); return; }
-
-        var engine = _pipe.CurrentEngine;
-        if (engine is null) { LogGate("skip=engine-null"); return; }
 
         var psm = engine.GetPsStageMeters();
         int feedback = (int)Math.Round(psm.FeedbackLevel);
@@ -220,5 +285,125 @@ public sealed class PsAutoAttenuateService : BackgroundService
         // SetPSControl(reset=1) then re-arm).
         try { Task.Delay(PostStepSettle).Wait(); } catch { /* ignore */ }
         engine.ResetPs();
+    }
+
+    // mi0bot timer2code HL2 path (PSForm.cs:728-815). Three states cycle at
+    // the 10 Hz tick: Monitor → SetNewValues → RestoreOperation → Monitor.
+    // The disable/re-enable bracket around the C4 wire change is what
+    // prevents the calcc binfo[6] wedge that bench-driver hit earlier when
+    // we changed C4 mid-MOX without the dance. Once we're past Monitor we
+    // MUST complete the cycle so PS gets re-enabled — the early gates at
+    // the top of Tick1 honour that by only running while in Monitor.
+    private void Tick1Hl2(StateDto s, IDspEngine engine, IProtocol1Client p1)
+    {
+        switch (_hl2State)
+        {
+            case Hl2AutoAttState.Monitor:
+            {
+                // Operator can disable AutoAttenuate without losing PS — the
+                // gate sits inside Monitor so the state machine never starts
+                // a dance the operator didn't ask for.
+                if (!s.PsAutoAttenuate)
+                {
+                    LogGate("hl2.skip=AutoAttenuate-off");
+                    return;
+                }
+
+                var psm = engine.GetPsStageMeters();
+                int feedback = (int)Math.Round(psm.FeedbackLevel);
+
+                // mi0bot PSForm.cs:1097-1099 CalibrationAttemptsChanged:
+                // gate every step on a freshly-completed calcc fit.
+                if (_lastCalibrationAttempts >= 0
+                    && psm.CalibrationAttempts == _lastCalibrationAttempts)
+                {
+                    LogGate($"hl2.skip=no-new-calc info5={psm.CalibrationAttempts} fb={feedback}");
+                    return;
+                }
+                _lastCalibrationAttempts = psm.CalibrationAttempts;
+
+                // info[4] == 0 → calcc hasn't completed a fit yet.
+                if (feedback <= 0)
+                {
+                    LogGate($"hl2.skip=fb-zero psm.fb={psm.FeedbackLevel:F2}");
+                    return;
+                }
+
+                // mi0bot NeedToRecalibrate_HL2 (PSForm.cs:1109-1112):
+                //   FB > 181  OR  (FB <= 128 AND ATTOnTX > -28)
+                bool tooHot = feedback > FeedbackHighThreshold;
+                bool tooQuiet = feedback <= FeedbackLowThreshold && _currentAttnDb > Hl2TxAttnMinDb;
+                if (!tooHot && !tooQuiet)
+                {
+                    LogGate($"hl2.skip=in-window fb={feedback} attn={_currentAttnDb}");
+                    return;
+                }
+
+                // mi0bot PSForm.cs:745-761 — full ddB step (no ±1 clamp on HL2)
+                // so a single dance can pull a hot envelope back into window
+                // in one cycle. NaN guard + ±100 dB rails per mi0bot.
+                double ddB = 20.0 * Math.Log10(feedback / IdealFeedback);
+                if (double.IsNaN(ddB)) ddB = 10.0;
+                else if (ddB < -100.0) ddB = -10.0;
+                else if (ddB > 100.0) ddB = 10.0;
+                _hl2DeltaDb = (int)Math.Round(ddB, MidpointRounding.AwayFromZero);
+
+                // Save the operator's current cal-mode so RestoreOperation
+                // brings it back exactly. mi0bot uses _save_singlecalON /
+                // _save_autoON, captured at the start of the dance.
+                _hl2SavedAuto = s.PsAuto;
+                _hl2SavedSingle = s.PsSingle;
+
+                // mi0bot PSForm.cs:763 — disable PS BEFORE writing the new
+                // ATTOnTX. Engine.SetPsControl(false, false) maps internally
+                // to NativeMethods.SetPSControl(id, reset=1, mancal=0,
+                // automode=0, turnon=0) — exactly mi0bot's call.
+                engine.SetPsControl(autoCal: false, singleCal: false);
+
+                _log.LogInformation(
+                    "psAutoAttn.hl2.monitor fb={Fb} info5={Cal} ddB={DDb:F1} delta={Delta} attn={Db}",
+                    feedback, psm.CalibrationAttempts, ddB, _hl2DeltaDb, _currentAttnDb);
+                _hl2State = Hl2AutoAttState.SetNewValues;
+                return;
+            }
+
+            case Hl2AutoAttState.SetNewValues:
+            {
+                // mi0bot PSForm.cs:769-788. State advances first so a no-op
+                // delta still reaches RestoreOperation and re-arms PS — same
+                // safety the WinForms version has.
+                _hl2State = Hl2AutoAttState.RestoreOperation;
+                int newAttn = Math.Clamp(
+                    _currentAttnDb + _hl2DeltaDb,
+                    Hl2TxAttnMinDb,
+                    Hl2TxAttnMaxDb);
+                if (newAttn != _currentAttnDb)
+                {
+                    _log.LogInformation(
+                        "psAutoAttn.hl2.setNewValues attn {Old}->{New} dB",
+                        _currentAttnDb, newAttn);
+                    _currentAttnDb = newAttn;
+                    p1.SetHl2TxStepAttenuationDb(newAttn);
+                    // mi0bot PSForm.cs:783 Thread.Sleep(100) — give the
+                    // C4 frame time to land on the wire before the next
+                    // tick re-enables PS in calcc.
+                    try { Task.Delay(PostStepSettle).Wait(); } catch { /* ignore */ }
+                }
+                return;
+            }
+
+            case Hl2AutoAttState.RestoreOperation:
+            {
+                // mi0bot PSForm.cs:790-815 SetPSControl(0, save_single,
+                // save_auto, 0). Engine.SetPsControl translates the saved
+                // (auto, single) pair into the same wire call.
+                engine.SetPsControl(autoCal: _hl2SavedAuto, singleCal: _hl2SavedSingle);
+                _log.LogInformation(
+                    "psAutoAttn.hl2.restoreOperation auto={Auto} single={Single}",
+                    _hl2SavedAuto, _hl2SavedSingle);
+                _hl2State = Hl2AutoAttState.Monitor;
+                return;
+            }
+        }
     }
 }

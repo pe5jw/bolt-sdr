@@ -179,6 +179,18 @@ public interface IProtocol1Client : IDisposable
     void SetPsPredistortion(byte value, byte subindex);
 
     /// <summary>
+    /// HL2 TX-side step attenuator (AD9866 TX PGA) target in dB, range
+    /// -28..+31. Used by <c>PsAutoAttenuateService</c> to bring the PS
+    /// feedback envelope into calcc's [128, 181] convergence window. Out-of-
+    /// range values are clamped to the bounds. Honoured only on HL2 during
+    /// MOX with PS enabled; <see cref="ControlFrame.WriteAttenuatorPayload"/>
+    /// overrides C4 with the mi0bot networkproto1.c:1086-1088 / console.cs:
+    /// 10947-10948 wire encoding (<c>(31 - db) | 0x40</c>). Non-HL2 boards
+    /// store the flag for state-tracking only — the wire stays untouched.
+    /// </summary>
+    void SetHl2TxStepAttenuationDb(int db);
+
+    /// <summary>
     /// 1024-sample paired feedback blocks decoded from the EP6 stream when
     /// PS is armed. TX side comes from the in-flight TX-IQ ring (the
     /// samples we just wrote to the wire); RX side is DDC1, the dedicated
