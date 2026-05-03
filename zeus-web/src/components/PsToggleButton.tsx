@@ -19,7 +19,7 @@
 // (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
 // Both are GPL-2.0-or-later.
 
-import { useCallback } from 'react';
+import { useCallback, useState, type ReactNode } from 'react';
 import { setPs, setPsMonitor } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useRadioStore } from '../state/radio-store';
@@ -29,6 +29,21 @@ import { useTxStore } from '../state/tx-store';
 // Monitor (post-PA loopback display source) is only meaningful where the
 // board has a feedback path, so we don't auto-enable it for these.
 const PS_MONITOR_UNSUPPORTED = new Set(['HermesLite2']);
+
+// Mirrors PsSettingsPanel — keep the indices aligned with the WDSP CalcC
+// state numbering so the hover read-out and the settings panel agree.
+const CAL_STATE_NAMES = [
+  'RESET',
+  'WAIT',
+  'MOXDELAY',
+  'SETUP',
+  'COLLECT',
+  'MOXCHECK',
+  'CALC',
+  'DELAY',
+  'STAYON',
+  'TURNON',
+];
 
 /**
  * PureSignal master arm. Optimistic update with rollback on server refusal —
@@ -45,6 +60,8 @@ export function PsToggleButton() {
   const setPsEnabled = useTxStore((s) => s.setPsEnabled);
   const setPsMonitorLocal = useTxStore((s) => s.setPsMonitorEnabled);
   const connectedBoard = useRadioStore((s) => s.selection.connected);
+
+  const [hover, setHover] = useState(false);
 
   const disabled = !connected;
   const tooltip = psEnabled
@@ -84,15 +101,150 @@ export function PsToggleButton() {
   ]);
 
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={click}
-      className={`btn tx-btn ${psEnabled ? 'tx' : ''}`}
-      title={tooltip}
+    <div
+      style={{ position: 'relative', display: 'inline-flex' }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
     >
-      <span className={`led ${psEnabled ? 'tx' : ''}`} style={{ marginRight: 8 }} />
-      PS
-    </button>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={click}
+        className={`btn tx-btn ${psEnabled ? 'active' : ''}`}
+        title={psEnabled ? undefined : tooltip}
+      >
+        <span className={`led ${psEnabled ? 'on' : ''}`} style={{ marginRight: 8 }} />
+        PS
+      </button>
+      {psEnabled && hover ? <PsHoverReadout /> : null}
+    </div>
+  );
+}
+
+// Hover popover — live PS read-out (Feedback / Cal state / Correction).
+// Only mounted while psEnabled && hovering, so the store subscriptions and
+// peak-decay re-render path stay idle when PS is off.
+function PsHoverReadout() {
+  const psFeedbackLevel = useTxStore((s) => s.psFeedbackLevel);
+  const psCalState = useTxStore((s) => s.psCalState);
+  const psCorrecting = useTxStore((s) => s.psCorrecting);
+  const psCorrectionDb = useTxStore((s) => s.psCorrectionDb);
+
+  const calStateLabel = CAL_STATE_NAMES[psCalState] ?? `state ${psCalState}`;
+  const feedbackPct = Math.max(0, Math.min(1, psFeedbackLevel / 256)) * 100;
+
+  return (
+    <div
+      role="status"
+      aria-label="PureSignal read-out"
+      style={{
+        position: 'absolute',
+        bottom: 'calc(100% + 8px)',
+        left: 0,
+        zIndex: 50,
+        minWidth: 260,
+        padding: '10px 12px 11px',
+        background: 'var(--bg-1)',
+        border: '1px solid var(--panel-border)',
+        borderRadius: 6,
+        boxShadow: '0 8px 22px rgba(0,0,0,0.55)',
+        fontFamily: 'var(--font-mono)',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 9.5,
+          fontWeight: 700,
+          letterSpacing: '0.18em',
+          textTransform: 'uppercase',
+          color: 'var(--fg-3)',
+          marginBottom: 8,
+        }}
+      >
+        Read-out
+      </div>
+      <ReadoutRow label="Feedback">
+        <div
+          style={{
+            position: 'relative',
+            flex: 1,
+            height: 8,
+            background: 'var(--meter-bg)',
+            border: '1px solid var(--panel-border)',
+            borderRadius: 2,
+            overflow: 'hidden',
+            boxShadow: 'inset 0 1px 0 rgba(0,0,0,0.5)',
+          }}
+        >
+          <div
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: `${feedbackPct}%`,
+              background: 'var(--accent)',
+              transition: 'width 80ms linear',
+            }}
+          />
+        </div>
+        <span
+          style={{
+            minWidth: 60,
+            textAlign: 'right',
+            fontSize: 10.5,
+            color: 'var(--fg-1)',
+            letterSpacing: '0.04em',
+          }}
+        >
+          {psFeedbackLevel.toFixed(0)}
+          <span style={{ color: 'var(--fg-3)' }}> / 256</span>
+        </span>
+      </ReadoutRow>
+      <ReadoutRow label="Cal state">
+        <span style={{ fontSize: 11, color: 'var(--fg-1)', letterSpacing: '0.04em' }}>
+          {calStateLabel}
+          {psCorrecting ? (
+            <span style={{ color: 'var(--fg-3)' }}> · correcting</span>
+          ) : null}
+        </span>
+      </ReadoutRow>
+      <ReadoutRow label="Correction">
+        <span style={{ fontSize: 11, color: 'var(--fg-1)', letterSpacing: '0.04em' }}>
+          {psCorrecting ? `${psCorrectionDb.toFixed(1)} dB` : '—'}
+        </span>
+      </ReadoutRow>
+    </div>
+  );
+}
+
+function ReadoutRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        height: 18,
+        marginTop: 5,
+      }}
+    >
+      <span
+        style={{
+          minWidth: 80,
+          fontSize: 9,
+          fontWeight: 600,
+          letterSpacing: '0.18em',
+          textTransform: 'uppercase',
+          color: 'var(--fg-3)',
+        }}
+      >
+        {label}
+      </span>
+      <span style={{ display: 'flex', alignItems: 'center', flex: 1, gap: 8 }}>
+        {children}
+      </span>
+    </div>
   );
 }
