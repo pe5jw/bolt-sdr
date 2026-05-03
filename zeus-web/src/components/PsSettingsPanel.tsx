@@ -28,15 +28,16 @@ import {
   resetPs,
   setTwoTone,
 } from '../api/client';
-import { useConnectionStore } from '../state/connection-store';
 import { useRadioStore } from '../state/radio-store';
 import { useTxStore } from '../state/tx-store';
 
-// HermesLite2 has no PS feedback receiver — the entire PS-Monitor view
-// hinges on a paired DDC0/DDC1 loopback that doesn't exist on HL2. Hide
-// the toggle on HL2 so the operator doesn't get a switch that does
-// nothing. ANAN-class boards (and anything else that shows up here)
-// retain the toggle. See issue #121.
+// HermesLite2 has no internal feedback coupler — the operator-side PS
+// Monitor (post-PA loopback display) and the Internal/External feedback
+// source selector both reduce to a single working choice on HL2:
+// "External coupler". We hide the Internal/External selector on HL2 (the
+// operator can't pick anything else) and the PS-Monitor toggle on HL2
+// (no internal loopback to display). ANAN-class boards (and anything
+// else that shows up here) retain both controls. See issues #121 and #172.
 const HL2_BOARD_ID = 'HermesLite2';
 
 const CAL_STATE_NAMES = [
@@ -60,15 +61,18 @@ const CAL_STATE_NAMES = [
  * amber is reserved for the panadapter trace per CLAUDE.md.
  */
 export function PsSettingsPanel() {
-  const protocol = useConnectionStore((s) => s.connectedProtocol);
-  const p1Disabled = protocol === 'P1';
   // The PS-Monitor source switch only makes sense when there's a real PS
   // feedback receiver. On HL2 we hide the toggle entirely. We key on the
   // CONNECTED board (not preferred) so a user who explicitly selects G2
   // while no radio is attached still sees the control as a preview, but
-  // a live HL2 connection cleanly drops it.
+  // a live HL2 connection cleanly drops it. The Internal-vs-External
+  // feedback source selector remains visible on every board (including
+  // HL2) — even though HL2 currently routes only through the external
+  // coupler path, an operator running HL2 + future amp setup may want
+  // the option exposed.
   const connectedBoard = useRadioStore((s) => s.selection.connected);
   const psMonitorSupported = connectedBoard !== HL2_BOARD_ID;
+  const feedbackSourceSelectorSupported = true;
 
   const psEnabled = useTxStore((s) => s.psEnabled);
   const psMonitorEnabled = useTxStore((s) => s.psMonitorEnabled);
@@ -81,12 +85,19 @@ export function PsSettingsPanel() {
   const psLoopDelaySec = useTxStore((s) => s.psLoopDelaySec);
   const psAmpDelayNs = useTxStore((s) => s.psAmpDelayNs);
   const psHwPeak = useTxStore((s) => s.psHwPeak);
+  const psHwPeakDefault = useTxStore((s) => s.psHwPeakDefault);
   const psIntsSpiPreset = useTxStore((s) => s.psIntsSpiPreset);
   const psFeedbackSourceState = useTxStore((s) => s.psFeedbackSource);
   const psFeedbackLevel = useTxStore((s) => s.psFeedbackLevel);
   const psCalState = useTxStore((s) => s.psCalState);
   const psCorrecting = useTxStore((s) => s.psCorrecting);
   const psCorrectionDb = useTxStore((s) => s.psCorrectionDb);
+  // Observed TX envelope peak — mi0bot PSForm.cs:624 reads
+  // GetPSMaxTX(_txachannel, ptr) every timer tick and shows it in
+  // txtGetPSpeak so the operator can compare against HW peak. Zeus already
+  // pumps this from WdspDspEngine.GetPsStageMeters → PsMetersFrame; we just
+  // render the live value next to the HW-peak input.
+  const psMaxTxEnvelope = useTxStore((s) => s.psMaxTxEnvelope);
   const setPsAuto = useTxStore((s) => s.setPsAuto);
   const setPsSingle = useTxStore((s) => s.setPsSingle);
   const setPsPtol = useTxStore((s) => s.setPsPtol);
@@ -210,22 +221,6 @@ export function PsSettingsPanel() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      {p1Disabled ? (
-        <div
-          style={{
-            padding: 10,
-            border: '1px solid var(--panel-border)',
-            borderRadius: 6,
-            background: 'var(--bg-1)',
-            color: 'var(--fg-2)',
-            fontSize: 11,
-          }}
-        >
-          PureSignal predistortion for Hermes / Protocol 1 is coming in a
-          follow-up. Two-tone test generator below works on both protocols.
-        </div>
-      ) : null}
-
       {/* Calibration */}
       <Section title="Calibration">
         <Row label="Mode">
@@ -235,7 +230,6 @@ export function PsSettingsPanel() {
               name="ps-mode"
               checked={psAuto && !psSingle}
               onChange={() => setMode(true, false)}
-              disabled={p1Disabled}
             />{' '}
             Auto
           </label>
@@ -245,7 +239,6 @@ export function PsSettingsPanel() {
               name="ps-mode"
               checked={psSingle}
               onChange={() => setMode(false, true)}
-              disabled={p1Disabled}
             />{' '}
             Single
           </label>
@@ -254,7 +247,6 @@ export function PsSettingsPanel() {
           <button
             type="button"
             onClick={onReset}
-            disabled={p1Disabled}
             className="btn sm"
           >
             Reset
@@ -269,7 +261,6 @@ export function PsSettingsPanel() {
               setPsAutoAttenuate(v);
               pushAdvanced({ autoAttenuate: v });
             }}
-            disabled={p1Disabled}
           />
         </Row>
       </Section>
@@ -286,7 +277,6 @@ export function PsSettingsPanel() {
               setPsMoxDelaySec(v);
               pushAdvanced({ moxDelaySec: v });
             }}
-            disabled={p1Disabled}
           />
         </Row>
         <Row label="Cal delay (s)">
@@ -299,7 +289,6 @@ export function PsSettingsPanel() {
               setPsLoopDelaySec(v);
               pushAdvanced({ loopDelaySec: v });
             }}
-            disabled={p1Disabled}
           />
         </Row>
         <Row label="Amp delay (ns)">
@@ -312,48 +301,60 @@ export function PsSettingsPanel() {
               setPsAmpDelayNs(v);
               pushAdvanced({ ampDelayNs: v });
             }}
-            disabled={p1Disabled}
           />
         </Row>
       </Section>
 
       {/* Hardware */}
       <Section title="Hardware">
-        <Row label="Feedback source">
-          {/* Two-way selector: Internal coupler (default) or External
-              (Bypass). On G2/MkII this flips ALEX_RX_ANTENNA_BYPASS in
-              alex0 during xmit + PS armed. WDSP cal/iqc are unaffected;
-              the HW-peak slider below stays shared across sources to
-              match pihpsdr/Thetis. Disabled on P1 because P1 PS isn't
-              wired through yet. */}
-          <label
-            style={{ display: 'inline-flex', alignItems: 'center', marginRight: 12 }}
-          >
-            <input
-              type="radio"
-              name="psFeedbackSource"
-              value="internal"
-              checked={psFeedbackSourceState === 'internal'}
-              onChange={() => onFeedbackSourceChange('internal')}
-              disabled={p1Disabled}
-              style={{ marginRight: 4 }}
-            />
-            <span style={{ fontSize: 11, color: 'var(--fg-1)' }}>Internal coupler</span>
-          </label>
-          <label style={{ display: 'inline-flex', alignItems: 'center' }}>
-            <input
-              type="radio"
-              name="psFeedbackSource"
-              value="external"
-              checked={psFeedbackSourceState === 'external'}
-              onChange={() => onFeedbackSourceChange('external')}
-              disabled={p1Disabled}
-              style={{ marginRight: 4 }}
-            />
-            <span style={{ fontSize: 11, color: 'var(--fg-1)' }}>External (Bypass)</span>
-          </label>
-        </Row>
+        {feedbackSourceSelectorSupported ? (
+          <Row label="Feedback source">
+            {/* Two-way selector: Internal coupler (default) or External
+                (Bypass). On G2/MkII this flips ALEX_RX_ANTENNA_BYPASS in
+                alex0 during xmit + PS armed. WDSP cal/iqc are unaffected;
+                the HW-peak slider below stays shared across sources to
+                match pihpsdr/Thetis.
+
+                Hidden on HL2: HL2 has no internal coupler, so the only
+                workable feedback path is external (issue #172). The
+                backend default already routes the wire bit appropriately
+                for HL2 — there's no operator choice to expose. */}
+            <label
+              style={{ display: 'inline-flex', alignItems: 'center', marginRight: 12 }}
+            >
+              <input
+                type="radio"
+                name="psFeedbackSource"
+                value="internal"
+                checked={psFeedbackSourceState === 'internal'}
+                onChange={() => onFeedbackSourceChange('internal')}
+                style={{ marginRight: 4 }}
+              />
+              <span style={{ fontSize: 11, color: 'var(--fg-1)' }}>Internal coupler</span>
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center' }}>
+              <input
+                type="radio"
+                name="psFeedbackSource"
+                value="external"
+                checked={psFeedbackSourceState === 'external'}
+                onChange={() => onFeedbackSourceChange('external')}
+                style={{ marginRight: 4 }}
+              />
+              <span style={{ fontSize: 11, color: 'var(--fg-1)' }}>External (Bypass)</span>
+            </label>
+          </Row>
+        ) : null}
         <Row label="HW peak">
+          {/* mi0bot ref: PSForm.cs PSpeak_TextChanged fires on every text
+              change regardless of whether the value differs from the prior
+              value, so re-typing the same number re-pushes it to WDSP and
+              resets calcc state. React's controlled <input> only fires
+              onChange when the rendered value actually changes, so a stale
+              focus-and-blur with no edit is silently dropped. Mirror the
+              mi0bot semantic by firing setPsAdvanced unconditionally on
+              blur / Enter via onCommit, in addition to the live onChange
+              path used by the other advanced fields. */}
           <NumberInput
             value={psHwPeak}
             min={0.01}
@@ -363,8 +364,61 @@ export function PsSettingsPanel() {
               setPsHwPeak(v);
               pushAdvanced({ hwPeak: v });
             }}
-            disabled={p1Disabled}
+            onCommit={(v) => {
+              setPsHwPeak(v);
+              pushAdvanced({ hwPeak: v });
+            }}
           />
+          {/* mi0bot ref: PSForm.cs:830
+              `pbWarningSetPk.Visible = _PShwpeak != HardwareSpecific.PSDefaultPeak;`
+              + clsHardwareSpecific.cs:303-328 PSDefaultPeak per-board switch.
+              Show a small accent glyph after the input when the operator has
+              dialed PsHwPeak away from the per-board factory default. Title
+              attribute exposes the resolved default for the operator so they
+              know what value would clear the indicator. */}
+          {psHwPeak !== psHwPeakDefault ? (
+            <span
+              aria-label="HW peak differs from per-board default"
+              title={`Differs from default ${psHwPeakDefault.toFixed(4)}`}
+              style={{
+                color: 'var(--accent)',
+                fontSize: 12,
+                fontWeight: 700,
+                marginLeft: 4,
+                userSelect: 'none',
+              }}
+            >
+              *
+            </span>
+          ) : null}
+          {/* mi0bot ref: PSForm.cs:991-994 btnDefaultPeaks_Click →
+              SetDefaultPeaks → psdefpeak (PSForm.cs:371-381) writes
+              HardwareSpecific.PSDefaultPeak (clsHardwareSpecific.cs:303-328)
+              into txtPSpeak. One-click reset to the per-board factory default
+              for operators who've drifted off and want to start over.
+              Disabled when already at the default — no point re-pushing the
+              same value through this button (the field's onCommit covers
+              the deliberate re-push case). */}
+          <button
+            type="button"
+            className="btn sm"
+            disabled={psHwPeak === psHwPeakDefault}
+            title={`Reset HW peak to per-board default ${psHwPeakDefault.toFixed(4)}`}
+            onClick={() => {
+              setPsHwPeak(psHwPeakDefault);
+              pushAdvanced({ hwPeak: psHwPeakDefault });
+            }}
+          >
+            Default
+          </button>
+        </Row>
+        {/* mi0bot ref: PSForm.cs:624 GetPSMaxTX → PSForm.designer.cs
+            txtGetPSpeak readout. Read-only; the operator dials HW peak
+            above to match the observed envelope max during calibration. */}
+        <Row label="Observed peak">
+          <span style={{ fontSize: 11, color: 'var(--fg-1)' }}>
+            {psMaxTxEnvelope.toFixed(4)}
+          </span>
         </Row>
         <Row label="Ints / Spi">
           <select
@@ -374,7 +428,6 @@ export function PsSettingsPanel() {
               setPsIntsSpiPreset(v);
               pushAdvanced({ intsSpiPreset: v });
             }}
-            disabled={p1Disabled}
           >
             <option value="16/256">16 / 256</option>
             <option value="8/512">8 / 512</option>
@@ -390,7 +443,6 @@ export function PsSettingsPanel() {
               setPsPtol(v);
               pushAdvanced({ ptol: v });
             }}
-            disabled={p1Disabled}
           />
         </Row>
       </Section>
@@ -407,7 +459,6 @@ export function PsSettingsPanel() {
               type="checkbox"
               checked={psMonitorEnabled}
               onChange={(e) => onPsMonitorToggle(e.target.checked)}
-              disabled={p1Disabled}
               title="Show post-correction signal in TX panadapter"
             />
             <span style={{ fontSize: 11, color: 'var(--fg-2)', marginLeft: 8 }}>
@@ -542,6 +593,7 @@ function NumberInput({
   max,
   step,
   onChange,
+  onCommit,
   disabled,
 }: {
   value: number;
@@ -549,6 +601,11 @@ function NumberInput({
   max: number;
   step: number;
   onChange: (v: number) => void;
+  // mi0bot ref: PSForm.cs PSpeak_TextChanged — onCommit fires on blur and
+  // Enter unconditionally so re-entering the same value still re-pushes,
+  // mirroring WinForms TextChanged-on-every-keystroke semantics that React's
+  // controlled-input dedup otherwise hides on focus/blur with no edit.
+  onCommit?: (v: number) => void;
   disabled?: boolean;
 }) {
   return (
@@ -562,6 +619,25 @@ function NumberInput({
       onChange={(e) => {
         const v = Number(e.target.value);
         if (Number.isFinite(v)) onChange(v);
+      }}
+      onBlur={(e) => {
+        if (!onCommit) return;
+        const v = Number(e.target.value);
+        if (!Number.isFinite(v)) return;
+        // React-controlled-input cosmetic ("00.18" → "0.18", ".5" → "0.5",
+        // trailing zeros trimmed); mi0bot WinForms NumericUpDown handles via
+        // .Value setter. State is already the parsed number, but a
+        // controlled <input type="number"> does not re-render when the
+        // parsed value matches state, so the raw text sticks until
+        // something else changes — write the canonical form back to the DOM.
+        const normalized = String(v);
+        if (normalized !== e.target.value) e.target.value = normalized;
+        onCommit(v);
+      }}
+      onKeyDown={(e) => {
+        if (!onCommit || e.key !== 'Enter') return;
+        const v = Number((e.target as HTMLInputElement).value);
+        if (Number.isFinite(v)) onCommit(v);
       }}
       style={{
         width: 100,
