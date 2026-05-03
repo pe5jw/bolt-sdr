@@ -121,6 +121,30 @@ public sealed class PsAutoAttenuateService : BackgroundService
     private bool _hl2SavedAuto;
     private bool _hl2SavedSingle;
 
+    // Zeus-specific auto-cal of WDSP hw_peak from observed envelope. Tracks the
+    // last EnvelopeStabilityWindow ticks of GetPSMaxTX; once the max-min spread
+    // is within EnvelopeStabilityRatio we consider the envelope "stable" and
+    // re-target hw_peak to observed * HwPeakSafetyMargin. Hysteresis prevents
+    // continuous re-pushes for sub-5% drift.
+    //
+    // *** DEVIATION FROM mi0bot ***
+    // mi0bot does NOT auto-tune hw_peak — Thetis exposes PSForm.cs txtPSpeak
+    // as an operator-tuned NumericUpDown that defaults to the per-board
+    // PSDefaultPeak (clsHardwareSpecific.cs:303-328) and is otherwise hand-
+    // dialed. We deviate per Brian (EI6LF) "I want it automatic" instruction:
+    // the calcc bin-fill math means hw_peak just below observed_peak / 0.9375
+    // is the sweet spot (all samples bin AND bin 15 fills); 2% safety margin
+    // above observed gives plenty of headroom for envelope jitter without
+    // dropping bin 15.
+    private const int EnvelopeStabilityWindow = 10;        // 1 s at 10 Hz
+    private const double EnvelopeStabilityRatio = 0.05;    // (max-min)/max ≤ 5%
+    private const double HwPeakHysteresisRatio = 0.05;     // re-push when |Δ|/cur > 5%
+    private const double HwPeakSafetyMargin = 1.02;        // 2% above observed
+    private const double EnvelopeMinForAutoCal = 0.01;     // ignore TX-silent ticks
+    private const double HwPeakMin = 0.05;                 // server clamps (0,2]
+    private const double HwPeakMax = 2.0;
+    private readonly Queue<double> _envelopeHistory = new();
+
     public PsAutoAttenuateService(
         RadioService radio,
         TxService tx,
@@ -188,22 +212,26 @@ public sealed class PsAutoAttenuateService : BackgroundService
             _currentAttnDb = 0;
             _lastCalibrationAttempts = -1;
             _hl2State = Hl2AutoAttState.Monitor;
+            _envelopeHistory.Clear();
             _log.LogInformation("psAutoAttn.armed reset attn={Db}", _currentAttnDb);
         }
         _psWasEnabled = s.PsEnabled;
 
         // Hard idle conditions — also force the HL2 state machine back to
         // Monitor so a mid-dance disarm/unkey doesn't strand PS in the
-        // disabled state when the operator re-keys.
+        // disabled state when the operator re-keys. Envelope history clears
+        // too so a fresh TX cycle starts the stability window from zero.
         if (!s.PsEnabled)
         {
             _hl2State = Hl2AutoAttState.Monitor;
+            _envelopeHistory.Clear();
             LogGate("skip=PsEnabled-off");
             return;
         }
         if (!_tx.IsMoxOn && !_tx.IsTwoToneOn)
         {
             _hl2State = Hl2AutoAttState.Monitor;
+            _envelopeHistory.Clear();
             LogGate("skip=not-keyed");
             return;
         }
@@ -212,9 +240,15 @@ public sealed class PsAutoAttenuateService : BackgroundService
         if (engine is null)
         {
             _hl2State = Hl2AutoAttState.Monitor;
+            _envelopeHistory.Clear();
             LogGate("skip=engine-null");
             return;
         }
+
+        // Auto-cal hw_peak from observed envelope. Independent of HL2/P2 path
+        // and runs every keyed tick — same gates as the rest of the loop
+        // (PsEnabled + TX active + engine present, all checked above).
+        TickAutoCalHwPeak(s, engine);
 
         // HL2 P1 branch — mi0bot timer2code 3-state dance (PSForm.cs:728-815).
         // Run before the P2 path because HL2 has its own client + wire
@@ -285,6 +319,57 @@ public sealed class PsAutoAttenuateService : BackgroundService
         // SetPSControl(reset=1) then re-arm).
         try { Task.Delay(PostStepSettle).Wait(); } catch { /* ignore */ }
         engine.ResetPs();
+    }
+
+    // Zeus-specific (DEVIATION FROM mi0bot): silently retarget WDSP hw_peak
+    // to track the observed TX envelope so calcc binning fills bin 15 without
+    // operator intervention. Runs every keyed tick. Gated on a stable observed
+    // envelope across EnvelopeStabilityWindow ticks; hysteresis prevents re-
+    // pushing for sub-5% drift. mi0bot leaves hw_peak as a hand-dialed
+    // operator value (PSForm.cs txtPSpeak); we tune it automatically per
+    // Brian (EI6LF) "I want it automatic" instruction.
+    private void TickAutoCalHwPeak(StateDto s, IDspEngine engine)
+    {
+        var psm = engine.GetPsStageMeters();
+        double observed = psm.MaxTxEnvelope;
+        if (observed < EnvelopeMinForAutoCal)
+        {
+            // TX is silent or below noise floor — drop the window so the
+            // first non-silent samples don't co-mingle with stale silence.
+            _envelopeHistory.Clear();
+            return;
+        }
+
+        _envelopeHistory.Enqueue(observed);
+        while (_envelopeHistory.Count > EnvelopeStabilityWindow)
+        {
+            _envelopeHistory.Dequeue();
+        }
+        if (_envelopeHistory.Count < EnvelopeStabilityWindow) return;
+
+        double max = _envelopeHistory.Max();
+        double min = _envelopeHistory.Min();
+        if (max <= 0.0) return;
+        // (max - min)/max ≤ EnvelopeStabilityRatio → envelope is stable.
+        if ((max - min) / max > EnvelopeStabilityRatio) return;
+
+        // Calcc bin-fill math (DEVIATION FROM mi0bot rationale):
+        //   hw_scale = 1/hw_peak; samples bin when env*hw_scale ≤ 1.0;
+        //   bin 15 covers env*hw_scale ∈ [0.9375, 1.0] → for bin 15 to fill
+        //   we need observed > 0.9375 * hw_peak → hw_peak < observed * 1.067.
+        // Sweet spot 1.02× gives bin-15 fill with 4.5% headroom for jitter.
+        double targetHwPeak = Math.Clamp(max * HwPeakSafetyMargin, HwPeakMin, HwPeakMax);
+        double currentHwPeak = s.PsHwPeak;
+        if (currentHwPeak <= 0.0) currentHwPeak = HwPeakMin;
+        if (Math.Abs(currentHwPeak - targetHwPeak) / currentHwPeak < HwPeakHysteresisRatio)
+        {
+            return;
+        }
+
+        _log.LogInformation(
+            "psAutoAttn.autoCalHwPeak observed={Obs:F4} target={Tgt:F4} (was {Cur:F4})",
+            max, targetHwPeak, currentHwPeak);
+        _radio.SetPsAdvanced(new PsAdvancedSetRequest(HwPeak: targetHwPeak));
     }
 
     // mi0bot timer2code HL2 path (PSForm.cs:728-815). Three states cycle at
