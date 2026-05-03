@@ -130,11 +130,7 @@ public class DspPipelineService : BackgroundService
     private double _appliedPsMoxDelaySec = 0.2;
     private double _appliedPsLoopDelaySec;
     private double _appliedPsAmpDelayNs = 150.0;
-    // No _appliedPsHwPeak cache: mi0bot PSForm.cs PSpeak_TextChanged calls
-    // puresignal.SetPSHWPeak unconditionally on every TextChanged, with no
-    // intermediate "applied" guard. Mirror that here so re-pushing the same
-    // HW peak value clears an info[6]=0x0044 fault inside calcc instead of
-    // being silently swallowed by a value-equality short-circuit.
+    private double _appliedPsHwPeak = 0.4072;
     private string _appliedPsIntsSpiPreset = "16/256";
     private PsFeedbackSource _appliedPsFeedbackSource = PsFeedbackSource.Internal;
     // PS-Monitor toggle (issue #121). Pure source-routing flag — Tick reads
@@ -453,16 +449,11 @@ public class DspPipelineService : BackgroundService
         // instance picks up the canonical state instead of running on its
         // field defaults.
         bool resync = _psResyncRequired;
-        // mi0bot: PSForm.cs PSpeak_TextChanged calls SetPSHWPeak directly on
-        // every TextChanged with no intermediate cache. We mirror that — no
-        // `_appliedPsHwPeak` short-circuit — so an operator re-pushing the
-        // same value (or a state-change push that arrives with the unchanged
-        // hwPeak) still reaches WDSP and can clear an info[6]=0x0044 fault.
-        // Range checks live one layer down in WdspDspEngine.SetPsHwPeak.
-        // Other PS advanced fields (ptol, mox/loop/amp delays, ints/spi)
-        // keep their `_applied*` caches because they don't have the
-        // re-push-to-clear-fault use case.
-        engine.SetPsHwPeak(s.PsHwPeak);
+        if (resync || s.PsHwPeak != _appliedPsHwPeak)
+        {
+            engine.SetPsHwPeak(s.PsHwPeak);
+            _appliedPsHwPeak = s.PsHwPeak;
+        }
         if (resync
             || s.PsPtol != _appliedPsPtol
             || s.PsMoxDelaySec != _appliedPsMoxDelaySec
