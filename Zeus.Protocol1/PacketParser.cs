@@ -371,16 +371,30 @@ internal static class PacketParser
     /// EP6 packet. Each output buffer must have room for at least
     /// <c>2 × <see cref="Hl2Ps4DdcSamplesPerPacket"/></c> doubles
     /// (interleaved I/Q). Returns false on bad framing.
+    ///
+    /// Telemetry (FWD/REF/PA-temp via the C&amp;C echo) and ADC-overload bits
+    /// are emitted on the same <c>usb[3..8]</c> bytes as the standard
+    /// single-DDC layout — only the payload below the 8-byte USB header
+    /// differs between the two parsers. Surfaced here because PS-armed
+    /// TUN windows are routinely held for many seconds during HL2
+    /// calibration; without this extraction the meter pipeline reads zero
+    /// throughout PS+TUN even though the radio is keying.
     /// </summary>
     public static bool TryParseHl2Ps4DdcPacket(
         ReadOnlySpan<byte> packet,
         Span<double> ddc0Out, Span<double> ddc1Out,
         Span<double> ddc2Out, Span<double> ddc3Out,
         out uint sequence,
-        out int complexSamples)
+        out int complexSamples,
+        out TelemetryReading telemetry0,
+        out TelemetryReading telemetry1,
+        out byte adcOverloadBits)
     {
         sequence = 0;
         complexSamples = 0;
+        telemetry0 = default;
+        telemetry1 = default;
+        adcOverloadBits = 0;
 
         if (packet.Length != PacketLength) return false;
         if (packet[0] != MetisMagic0 || packet[1] != MetisMagic1) return false;
@@ -399,6 +413,23 @@ internal static class PacketParser
             int frameStart = MetisHeaderLength + frame * UsbFrameLength;
             ReadOnlySpan<byte> usb = packet.Slice(frameStart, UsbFrameLength);
             if (usb[0] != Sync || usb[1] != Sync || usb[2] != Sync) return false;
+
+            // Same C&C echo extraction as the standard 1-DDC parser
+            // (TryParsePacket, line ~219). usb[3..8] is identical wire
+            // format; only the payload below differs by layout.
+            byte c0 = usb[3];
+            int addr = (c0 >> 3) & 0x1F;
+            if (addr is 1 or 2 or 3)
+            {
+                var reading = new TelemetryReading(
+                    C0Address: c0,
+                    Ain0: BinaryPrimitives.ReadUInt16BigEndian(usb.Slice(4, 2)),
+                    Ain1: BinaryPrimitives.ReadUInt16BigEndian(usb.Slice(6, 2)));
+                if (frame == 0) telemetry0 = reading;
+                else telemetry1 = reading;
+            }
+            adcOverloadBits |= (byte)(usb[4] & 0x01);
+            adcOverloadBits |= (byte)((usb[5] & 0x01) << 1);
 
             ReadOnlySpan<byte> payload = usb[UsbHeaderLength..];
             for (int g = 0; g < Hl2Ps4DdcSamplesPerUsbFrame; g++)
