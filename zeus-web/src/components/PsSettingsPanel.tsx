@@ -91,6 +91,12 @@ export function PsSettingsPanel() {
   const psCalState = useTxStore((s) => s.psCalState);
   const psCorrecting = useTxStore((s) => s.psCorrecting);
   const psCorrectionDb = useTxStore((s) => s.psCorrectionDb);
+  // Observed TX envelope peak — mi0bot PSForm.cs:624 reads
+  // GetPSMaxTX(_txachannel, ptr) every timer tick and shows it in
+  // txtGetPSpeak so the operator can compare against HW peak. Zeus already
+  // pumps this from WdspDspEngine.GetPsStageMeters → PsMetersFrame; we just
+  // render the live value next to the HW-peak input.
+  const psMaxTxEnvelope = useTxStore((s) => s.psMaxTxEnvelope);
   const setPsAuto = useTxStore((s) => s.setPsAuto);
   const setPsSingle = useTxStore((s) => s.setPsSingle);
   const setPsPtol = useTxStore((s) => s.setPsPtol);
@@ -349,6 +355,14 @@ export function PsSettingsPanel() {
               pushAdvanced({ hwPeak: v });
             }}
           />
+        </Row>
+        {/* mi0bot ref: PSForm.cs:624 GetPSMaxTX → PSForm.designer.cs
+            txtGetPSpeak readout. Read-only; the operator dials HW peak
+            above to match the observed envelope max during calibration. */}
+        <Row label="Observed peak">
+          <span style={{ fontSize: 11, color: 'var(--fg-1)' }}>
+            {psMaxTxEnvelope.toFixed(4)}
+          </span>
         </Row>
         <Row label="Ints / Spi">
           <select
