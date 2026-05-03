@@ -345,12 +345,25 @@ export function PsSettingsPanel() {
           </Row>
         ) : null}
         <Row label="HW peak">
+          {/* mi0bot ref: PSForm.cs PSpeak_TextChanged fires on every text
+              change regardless of whether the value differs from the prior
+              value, so re-typing the same number re-pushes it to WDSP and
+              resets calcc state. React's controlled <input> only fires
+              onChange when the rendered value actually changes, so a stale
+              focus-and-blur with no edit is silently dropped. Mirror the
+              mi0bot semantic by firing setPsAdvanced unconditionally on
+              blur / Enter via onCommit, in addition to the live onChange
+              path used by the other advanced fields. */}
           <NumberInput
             value={psHwPeak}
             min={0.01}
             max={2.0}
             step={0.001}
             onChange={(v) => {
+              setPsHwPeak(v);
+              pushAdvanced({ hwPeak: v });
+            }}
+            onCommit={(v) => {
               setPsHwPeak(v);
               pushAdvanced({ hwPeak: v });
             }}
@@ -537,6 +550,7 @@ function NumberInput({
   max,
   step,
   onChange,
+  onCommit,
   disabled,
 }: {
   value: number;
@@ -544,6 +558,11 @@ function NumberInput({
   max: number;
   step: number;
   onChange: (v: number) => void;
+  // mi0bot ref: PSForm.cs PSpeak_TextChanged — onCommit fires on blur and
+  // Enter unconditionally so re-entering the same value still re-pushes,
+  // mirroring WinForms TextChanged-on-every-keystroke semantics that React's
+  // controlled-input dedup otherwise hides on focus/blur with no edit.
+  onCommit?: (v: number) => void;
   disabled?: boolean;
 }) {
   return (
@@ -557,6 +576,25 @@ function NumberInput({
       onChange={(e) => {
         const v = Number(e.target.value);
         if (Number.isFinite(v)) onChange(v);
+      }}
+      onBlur={(e) => {
+        if (!onCommit) return;
+        const v = Number(e.target.value);
+        if (!Number.isFinite(v)) return;
+        // React-controlled-input cosmetic ("00.18" → "0.18", ".5" → "0.5",
+        // trailing zeros trimmed); mi0bot WinForms NumericUpDown handles via
+        // .Value setter. State is already the parsed number, but a
+        // controlled <input type="number"> does not re-render when the
+        // parsed value matches state, so the raw text sticks until
+        // something else changes — write the canonical form back to the DOM.
+        const normalized = String(v);
+        if (normalized !== e.target.value) e.target.value = normalized;
+        onCommit(v);
+      }}
+      onKeyDown={(e) => {
+        if (!onCommit || e.key !== 'Enter') return;
+        const v = Number((e.target as HTMLInputElement).value);
+        if (Number.isFinite(v)) onCommit(v);
       }}
       style={{
         width: 100,
