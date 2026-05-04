@@ -1,10 +1,26 @@
 /* ===========================================================
    Zeus SDR — Layout & component CSS (faithful to reference)
-   =========================================================== */
+   ===========================================================
+
+   App shell grid (issue #241):
+
+       ┌──────┬──────────────────────────────────┐
+       │      │   topbar-slim   (44 px)          │
+       │ left │   alert banner  (auto)           │
+       │ bar  │   workspace     (1fr, scrolls)   │
+       │      │   transport     (44 px)          │
+       │      │   bottom status (32 px)          │
+       └──────┴──────────────────────────────────┘
+
+   The left bar spans the full app height; the rest stack in the right
+   column. Workspace (FlexWorkspace) is the only row that scrolls — bottom
+   status bar stays pinned even when the operator stacks many flex panels.
+*/
 
 .app {
   display: grid;
-  grid-template-rows: 54px 68px auto 1fr 44px;
+  grid-template-columns: 60px 1fr;
+  grid-template-rows: 44px auto 1fr 44px 32px;
   height: 100vh;
   width: 100vw;
   background: var(--bg-0);
@@ -13,7 +29,175 @@
   gap: 6px;
 }
 
-/* ===== Top bar — beveled gradient strip with embedded pills ===== */
+.app > .left-layout-bar { grid-column: 1; grid-row: 1 / -1; }
+.app > .topbar          { grid-column: 2; grid-row: 1; }
+.app > .alert-banner    { grid-column: 2; grid-row: 2; }
+.app > .flex-workspace  { grid-column: 2; grid-row: 3; min-height: 0; overflow: auto; }
+.app > .transport       { grid-column: 2; grid-row: 4; }
+.app > .bottom-status-bar { grid-column: 2; grid-row: 5; }
+
+/* ===== Left layout bar — issue #241 ===== */
+.left-layout-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 4px;
+  background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--r-lg);
+  box-shadow: var(--panel-shadow);
+  min-height: 0;
+}
+.left-layout-bar .lb-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.left-layout-bar .lb-empty {
+  text-align: center;
+  font-size: 16px;
+  color: var(--fg-3);
+  padding: 12px 0;
+}
+.left-layout-bar .lb-item {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+.left-layout-bar .lb-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-1);
+  background: linear-gradient(180deg, var(--btn-top), var(--btn-bot));
+  border: 1px solid var(--btn-edge);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 1px 0 var(--btn-hl);
+  cursor: pointer;
+  text-align: center;
+  min-height: 36px;
+  word-break: break-word;
+  hyphens: auto;
+  transition: background var(--dur-fast), border-color var(--dur-fast),
+    color var(--dur-fast), box-shadow var(--dur-fast);
+}
+.left-layout-bar .lb-tab:hover { filter: brightness(1.12); }
+.left-layout-bar .lb-item.active .lb-tab {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: inset 0 1px 0 var(--btn-hl), 0 0 8px var(--accent-soft);
+}
+.left-layout-bar .lb-tab-name {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  line-clamp: 3;
+  overflow: hidden;
+}
+.left-layout-bar .lb-rename {
+  flex: 1;
+  width: 100%;
+  background: #0a1220;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  color: var(--fg-0);
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  text-transform: uppercase;
+  padding: 6px 4px;
+}
+.left-layout-bar .lb-x {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  background: linear-gradient(180deg, #2e2f33, #1c1d20);
+  border: 1px solid var(--btn-edge);
+  border-radius: 50%;
+  color: var(--fg-2);
+  cursor: pointer;
+  line-height: 1;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+.left-layout-bar .lb-x:hover {
+  color: var(--tx);
+  border-color: var(--tx);
+}
+.left-layout-bar .lb-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.left-layout-bar .lb-action {
+  width: 100%;
+  padding: 6px 0;
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* ===== Bottom status bar — issue #241 ===== */
+.bottom-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--r-lg);
+  box-shadow: var(--panel-shadow);
+  height: 32px;
+  min-height: 0;
+}
+.bottom-status-bar .bsb-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.bottom-status-bar .bsb-brand {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--fg-1);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.bottom-status-bar .bsb-divider {
+  width: 1px;
+  height: 16px;
+  background: rgba(0, 0, 0, 0.4);
+  box-shadow: 1px 0 0 rgba(255, 255, 255, 0.06);
+}
+.bottom-status-bar .bsb-sub {
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+.bottom-status-bar .bsb-spacer { flex: 1; }
+.bottom-status-bar .bsb-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ===== Top bar — slim version (issue #241) =====
+   Beveled gradient strip; only holds the brand mark, the connected-state
+   ConnectPanel (Disconnect button), and the settings ⚙ trigger. */
 .topbar {
   display: flex;
   align-items: center;
@@ -23,7 +207,7 @@
   border: 1px solid var(--panel-edge);
   border-radius: var(--r-lg);
   box-shadow: var(--panel-shadow);
-  height: 54px;
+  height: 44px;
 }
 .brand {
   display: flex;
