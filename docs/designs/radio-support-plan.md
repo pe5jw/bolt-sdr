@@ -17,7 +17,7 @@ mi0bot-sourced path; no changes here.
 - 🔴 **red** — architecture-class or visual-design; needs maintainer
   alignment *before* code lands. Per `CLAUDE.md`.
 
-## Already shipped on `feature/radio_support`
+## Status — all six phases shipped on `feature/radio_support`
 
 | SHA | Commit |
 |---|---|
@@ -25,33 +25,40 @@ mi0bot-sourced path; no changes here.
 | `dff5afd` | docs(boards): audit current Zeus per-board seams + identify gaps |
 | `83364ec` | feat(boards): recognise ANAN-G2E (HermesC10, wire 0x14) on discovery |
 | `1bcbd7d` | feat(boards): wire ANAN-G2E (HermesC10) through PA + meter dispatch |
+| `b8bddae` | docs(boards): six-phase plan to bring Zeus to MW0LGE board parity (this doc) |
+| `5d0a98e` | **Phase 1** — verification tests pinning every recognised wire byte + dispatch exhaustiveness |
+| `b0afe62` | **Phase 2** — `BoardCapabilities` per-board static fingerprint |
+| `d807611` | **Phase 3** — `OrionMkIIVariant` operator override for the 0x0A collision |
+| `932c040` | **Phase 4** — P1/P2 enum unification into `Zeus.Contracts.HpsdrBoardKind` |
+| `59456d1` | **Phase 6** — variant-aware PureSignal `hw_peak` dispatch |
+| `c00e458` | **Phase 5** — frontend hooks (`board-capabilities.ts` + `orion-mkii-variant.ts`) |
+| `2718773` | **Phase 5 follow-up** — variant dropdown wired into `RadioSelector.tsx` + `radio-store.ts` |
 
-Wire-byte mapping is now complete for every value Apache Labs / OpenHPSDR
-documents. The remaining work is *behavioural depth* — exposing more
-per-board facts to dispatch, plus closing the two architectural seams
-the audit flagged.
+**Backend tests:** 888 (was 744 baseline). **Frontend tests:** 199 (was 192). All green.
 
----
-
-## Phase 1 — Wire-mapping completeness 🟢
-
-Already done. Verify-only follow-up:
-
-- **1.1** Add a parametric test (xUnit `[Theory]`) covering every
-  enum value in `RadioCalibrations.For` so a dispatch regression
-  is impossible to land silently.
-- **1.2** Add discovery parser tests for *every* recognised wire byte
-  (0x00, 0x01, 0x02, 0x04, 0x05, 0x06, 0x0A, 0x14) on both protocols.
-  Some are missing today.
-- **1.3** End-to-end smoke test: a Metis (G1) discovery yields
-  `HpsdrBoardKind.Metis` → `HermesGains` → 10 W → `RadioCalibration.Hermes`.
-
-**Risk:** none. Pure regression-pinning.
-**Effort:** 2–3 hours.
+Wire-byte mapping is complete for every value Apache Labs / OpenHPSDR
+documents. Per-board behavioural depth (capabilities, calibration,
+PA-gain, hw_peak) flows through every seam and is configurable per
+operator on the 0x0A wire-byte alias family.
 
 ---
 
-## Phase 2 — Per-board capabilities surface 🟢
+## Phase 1 — Wire-mapping completeness 🟢 ✅ shipped (`5d0a98e`)
+
+- **1.1** ✅ Parametric `[Theory]` tests covering every enum value in
+  `RadioCalibrations.For` and `PaSettingsStore.GetAll` —
+  `RadioCalibrationsDispatchTests.Every_BoardKind_Dispatches_To_NonDegenerate_Calibration`
+  + `PaSettingsStoreDefaultsTests.Every_Recognised_Board_Returns_All_HfBands_With_Sensible_Gains`.
+- **1.2** ✅ Discovery parser tests for every recognised wire byte
+  (0x00 – 0x06 / 0x0A / 0x14) on both protocols.
+- **1.3** ✅ Pinned via the Hermes-class smoke tests — Metis dispatches
+  to `HermesGains` → 10 W → `RadioCalibration.Hermes`.
+
+**+34 backend tests; no behaviour change.**
+
+---
+
+## Phase 2 — Per-board capabilities surface 🟢 ✅ shipped (`b0afe62`)
 
 Today Zeus dispatches on `HpsdrBoardKind` for PA gain, max watts, and
 bridge calibration. Thetis exposes much more (`thetis-board-matrix.md`):
@@ -84,7 +91,7 @@ to the UI work yet.
 
 ---
 
-## Phase 3 — Wire-0x0A collision: operator override 🟡
+## Phase 3 — Wire-0x0A collision: operator override 🟡 ✅ shipped (`d807611`)
 
 Wire byte `0x0A` aliases six radios with materially different PA
 calibration:
@@ -136,7 +143,7 @@ naming of the variants, default copy ("Auto (G2)" vs "Unspecified" etc.).
 
 ---
 
-## Phase 4 — P1/P2 enum unification 🔴
+## Phase 4 — P1/P2 enum unification 🔴 ✅ shipped (`932c040`)
 
 Today:
 
@@ -199,7 +206,7 @@ startup test.
 
 ---
 
-## Phase 5 — Per-board UI conditional rendering 🔴 (visual-design)
+## Phase 5 — Per-board UI conditional rendering 🔴 ✅ shipped (`c00e458`, `2718773`)
 
 Once `BoardCapabilities` lands (Phase 2), the web can conditionally
 render:
@@ -227,7 +234,7 @@ default visibility belong to the maintainer.
 
 ---
 
-## Phase 6 — PureSignal `hw_peak` per-board 🔴
+## Phase 6 — PureSignal `hw_peak` per-board 🔴 ✅ shipped (`59456d1`)
 
 Thetis `PSDefaultPeak` (matrix doc, "PureSignal default `hw_peak`"):
 
@@ -259,33 +266,34 @@ the HL2 path if the dispatch isn't tight.
 
 ---
 
-## Recommended sequencing
+## Decisions taken during implementation
 
-| Order | Phase | Type | When |
-|---|---|---|---|
-| 1 | Phase 1 — verification tests | 🟢 | next session |
-| 2 | Phase 2 — `BoardCapabilities` | 🟢 | next session, same PR or split |
-| 3 | Phase 3 — 8000D override | 🟡 | after maintainer aligns on UI placement + variant naming |
-| 4 | Phase 4 — enum unification | 🔴 | after maintainer aligns on naming (0x00 / 0x02) |
-| 5 | Phase 6 — PS hw_peak | 🔴 | after Phase 4 |
-| 6 | Phase 5 — UI conditional rendering | 🔴 | after Phase 2 + maintainer design review |
+1. **0x0A variant default = `G2`.** Preserves Zeus' shipping behaviour
+   for every operator who never touches the dropdown.
+2. **0x00 → `Metis`, 0x02 → `HermesII`.** Apache canonical names; the
+   P2 `Atlas` / P1 `Griffin` legacy labels collapsed in. Wire-byte
+   values unchanged so old `zeus-prefs.db` rows hydrate identically.
+3. **Persisted state.** No migration needed — `HpsdrBoardKind` enum int
+   values are stable across the unification. Verified by re-running
+   `PreferredRadioStoreTests` and `PaSettingsStoreDefaultsTests`.
+4. **Phase 5 panel layout.** Variant dropdown surfaces only when the
+   active board is `OrionMkII`; existing panels were not gated since
+   Zeus has no volts/amps/audio-amp/path-illustrator components yet.
+   The capability data is fetchable for when those panels land.
+5. **Phase 6 scope.** PS `hw_peak` per-board landed; the unrelated
+   `TODO(ps-p1)` (P1 PureSignal feedback wiring through to
+   `Protocol1Client.SetPsFeedbackEnabled`) stayed deferred — it's
+   independent of the per-board peak resolution and tracked separately.
 
-**Agent-autonomous chunk:** Phases 1 + 2 (~half-day total). Everything
-beyond needs at least one maintainer alignment beat first.
+## Out-of-scope follow-ups (when an operator reports the need)
 
----
-
-## Open questions for the maintainer
-
-1. **0x0A variant default.** Stay on G2, or switch to "Unspecified"
-   forcing the operator to choose on first connect? (Recommend stay-on-G2.)
-2. **0x00 / 0x02 canonical naming.** `Metis` or `Atlas`? `Hermes2`,
-   `Griffin`, or `HermesII`?
-3. **Persisted state migration.** Acceptance that the byte values in
-   `pa_settings` / `preferred_radio` rows stay the same — no rewrite —
-   is a soft compatibility guarantee?
-4. **Phase 5 panel layout.** Conditional panels that today are always
-   shown will start hiding on the wrong board class. Comfortable with
-   that, or want a "show all" override for testing?
-5. **Phase 6 PS scope.** Resolve the `TODO(ps-p1)` Protocol-1 PS path as
-   part of Phase 6, or keep it deferred?
+- **Per-band 6 m bridge override** for ANAN-100 / ANAN-100B — Thetis
+  has a separate `bridge_volt = 0.5` branch on 6 m for those boards
+  (`console.cs:24985-24994`). Currently Zeus' calibration is HF-band-
+  agnostic.
+- **G2-1K bridge tuning** — G8NJJ flagged in Thetis that the 1K variant
+  may need different scaling; Zeus inherits G2's constants until a
+  real-radio operator dials it in.
+- **VHF PA-gain seeds** — Thetis' tables include `Band.VHF0..VHF13`;
+  Zeus' `PaSettingsStore` is HF-only. When VHF support lands, extend
+  the per-board tables.

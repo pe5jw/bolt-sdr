@@ -1,8 +1,24 @@
 # Zeus Per-Board Support Audit
 
-**Audit Date:** 2026-05-04  
-**Auditor:** zeus-auditor  
+**Audit Date:** 2026-05-04
+**Auditor:** zeus-auditor
 **Coverage:** HpsdrBoardKind enums, discovery mappings, drive profiles, PA defaults, calibrations, wire format quirks
+
+> **Status update:** every "Critical Gap" called out below was closed by
+> the six-phase implementation tracked in
+> `docs/designs/radio-support-plan.md`. This document is preserved as the
+> historical snapshot that guided the implementation; live truth is in
+> the plan doc + the source.
+>
+> - **Gap 1** (P1/P2 enum split) — closed by Phase 4 (`932c040`); single
+>   `Zeus.Contracts.HpsdrBoardKind` covers both protocols.
+> - **Gap 2** (0x0A alias collision) — closed by Phase 3 (`d807611`);
+>   operator selects variant via `OrionMkIIVariant` and dispatch routes
+>   to the right calibration / PA-gain bucket.
+> - **Gap 3** ("OrionMkII not in `PaDefaults.TableFor`") — was already
+>   wired before the audit ran (see `PaDefaults.cs:102` at the time);
+>   audit reading was stale.
+> - **Secondary gaps 4–7** — all addressed in the plan's executed phases.
 
 ---
 

@@ -33,11 +33,12 @@ namespace Zeus.Server;
 ///
 /// Constants come from Thetis <c>console.cs:25053-25118</c>
 /// (<c>computeAlexFwdPower</c>). Where Thetis distinguishes flavours that
-/// Zeus' single-byte board id collapses (e.g. ANAN_G2 vs ORIONMKII vs
-/// ANAN-8000D, all id 0x0A), we pick the bucket the test rig uses and
-/// document the caveat. Operators on the alternate hardware will see a
-/// meter offset that needs maintainer review — flagged TODO in the
-/// per-record summaries.
+/// Zeus' single-byte board id collapses (the 0x0A wire-byte family —
+/// ANAN-G2 vs Apache OrionMkII vs ANAN-8000D etc.), the operator selects
+/// the variant via <see cref="OrionMkIIVariant"/> and the dispatch routes
+/// to the right bucket. Default <see cref="OrionMkIIVariant.G2"/> matches
+/// pre-#218 dispatch for every operator who never touches the variant
+/// setting.
 /// </summary>
 internal static class RadioCalibrations
 {
