@@ -65,9 +65,10 @@ The installer packages for Zeus.Server include launcher scripts that:
 - PowerShell browser launcher runs **detached** in background (`start "" /B`)
 
 **Lifecycle Management:**
-- Closing the cmd window → automatically terminates Zeus.Server.exe (Windows job object behavior)
-- Ctrl-C in cmd window → signal propagates to Zeus.Server.exe → graceful shutdown
+- Closing the cmd window → console control event (CTRL_CLOSE_EVENT) is broadcast to every process attached to that console; .NET's host catches it via `Console.CancelKeyPress` and shuts Kestrel down. The OS forces termination ~5s later if the process doesn't exit.
+- Ctrl-C in cmd window → CTRL_C_EVENT, same handler path → graceful shutdown
 - Zeus.Server.Program.cs has signal handlers for `Console.CancelKeyPress` and `SIGTERM`
+- NOTE: this is *not* a Win32 job object — Zeus does not call `CreateJobObject` / `AssignProcessToJobObject`. A force-kill of cmd.exe via Task Manager can therefore orphan Zeus.Server.exe; normal close/Ctrl-C is fine.
 
 **Result:** No orphaned processes — cmd window lifecycle controls Zeus.Server.exe lifecycle.
 
@@ -234,7 +235,7 @@ Before sending signals, we check if the process exists with `kill -0 "$SERVER_PI
 
 ### Windows vs Unix Signal Handling
 
-**Windows:** Ctrl-C and window close are handled by the Windows console subsystem. When the cmd window closes, all child processes in the job object are automatically terminated by the OS.
+**Windows:** Ctrl-C and window close are handled by the Windows console subsystem. Closing the cmd window broadcasts CTRL_CLOSE_EVENT to every process attached to that console; processes get ~5s to exit cleanly before the OS terminates them. This is *not* a Win32 job object — there's no real parent/child kernel relationship, so a force-kill of cmd.exe via Task Manager can orphan Zeus.Server.exe.
 
 **Unix:** Signals are explicit. A parent shell closing doesn't automatically terminate background jobs (`&`). We must explicitly `kill` the subprocess and `wait` for it to reap the zombie process.
 
