@@ -60,11 +60,10 @@
     <Content Include="appsettings.Development.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!-- Shipped band-plan JSON. SDK already includes JSON under the project
-       root by default, so use Update (not Include) to set CopyToOutputDirectory
-       without producing the NETSDK1022 duplicate-content error. -->
+  <!-- Shipped band-plan JSON. Plain Microsoft.NET.Sdk (not Web SDK) doesn't
+       include JSON under project root by default, so use explicit Include. -->
   <ItemGroup>
-    <Content Update="BandPlans\**\*.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="BandPlans\**\*.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- SPA assets are produced by Zeus.Server's BuildSpa target on publish; for
