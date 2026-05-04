@@ -45,17 +45,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
+import { AfGainSlider } from './components/AfGainSlider';
+import { AgcSlider } from './components/AgcSlider';
 import { AlertBanner } from './components/AlertBanner';
+import { AttenuatorSlider } from './components/AttenuatorSlider';
 import { AudioToggle } from './components/AudioToggle';
-import { BottomStatusBar } from './components/BottomStatusBar';
+import { BandFavorites } from './components/toolbar/BandFavorites';
 import { ConnectPanel } from './components/ConnectPanel';
+import { FilterPanel } from './components/filter/FilterPanel';
 import { LeftLayoutBar } from './components/LeftLayoutBar';
 import { MicMeter } from './components/MicMeter';
+import { ModeFavorites } from './components/toolbar/ModeFavorites';
 import { MoxButton } from './components/MoxButton';
+import { PreampButton } from './components/PreampButton';
 import { PsToggleButton } from './components/PsToggleButton';
 import { PaTempChip } from './components/PaTempChip';
+import { QrzStatusPill } from './components/QrzStatusPill';
+import { RotatorStatusPill } from './components/RotatorStatusPill';
 import { SettingsMenu } from './components/SettingsMenu';
+import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
+import { BOARD_LABELS } from './api/radio';
 import { useFilterRibbonOpenSync } from './components/filter/FilterRibbon';
 import { useSwUpdatePrompt } from './pwa/useSwUpdatePrompt';
 import { CONTACTS, bandOf } from './components/design/data';
@@ -99,6 +109,7 @@ export default function App() {
   const preampOn = useConnectionStore((s) => s.preampOn);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
+  const endpoint = useConnectionStore((s) => s.endpoint);
   const connected = status === 'Connected';
   // Brand sub label reflects what discovery actually saw on the wire
   // (selection.connected), not the operator's preferred override — showing
@@ -112,6 +123,9 @@ export default function App() {
   // Clicking Connect on a discovered radio doesn't refresh radio-store on
   // its own (only the manual-connect path does).
   useEffect(() => { radioLoad(); }, [radioLoad, connected]);
+  const brandSub = radioConnected !== 'Unknown'
+    ? BOARD_LABELS[radioConnected]
+    : 'Not Connected';
 
   // Per-radio layouts (issue #241): the layout-store is keyed on the active
   // BoardKind. "default" is the sentinel for "no radio yet" — discovery
@@ -629,12 +643,14 @@ export default function App() {
           layouts for the active radio with switch/add/delete/reset actions. */}
       <LeftLayoutBar />
 
-      {/* Slim top bar — only the brand mark, Connect/Disconnect, and the
-          settings menu trigger live up here now (issue #241). All status
-          chips and per-control strips moved into the FlexWorkspace and the
-          BottomStatusBar. The bar still sits above the disconnected overlay
-          so QRZ sign-in stays usable before a radio is connected. */}
-      <header className="topbar topbar-slim" style={{ position: 'relative', zIndex: 300 }}>
+      {/* Top bar — brand on the left, transport-level inline controls
+          (mode/filter/band/step/front-end/AGC/AF) in the middle, status
+          pills + settings on the right. These controls stay always-visible
+          across default layouts so they're reachable mid-QSO without hunting
+          through the workspace (see feedback memory: top bar keeps inline
+          controls). The bar sits above the disconnected overlay so QRZ
+          sign-in stays usable before a radio is connected. */}
+      <header className="topbar" style={{ position: 'relative', zIndex: 300 }}>
         <div className="brand">
           <div className="brand-mark">
             <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden>
@@ -645,17 +661,44 @@ export default function App() {
           </div>
           <div className="brand-text">
             <div className="brand-name mono">OpenHpsdr Zeus</div>
+            <div className="brand-sub label-xs hide-mobile">{brandSub}</div>
+          </div>
+        </div>
+
+        <span className="topbar-divider hide-mobile" aria-hidden />
+
+        <div className="topbar-controls hide-mobile">
+          <ModeFavorites />
+          <span className="strip-divider" aria-hidden />
+          <FilterPanel />
+          <span className="strip-divider" aria-hidden />
+          <BandFavorites />
+          <span className="strip-divider" aria-hidden />
+          <StepFavorites />
+          <span className="strip-divider" aria-hidden />
+          <div className="ctrl-group" style={{ minWidth: 200 }}>
+            <div className="label-xs ctrl-lbl">FRONT-END</div>
+            <div className="btn-row" style={{ gap: 6, alignItems: 'center' }}>
+              <PreampButton />
+              <AttenuatorSlider />
+            </div>
+          </div>
+          <div className="ctrl-group" style={{ minWidth: 160 }}>
+            <div className="label-xs ctrl-lbl">AGC</div>
+            <AgcSlider />
+          </div>
+          <div className="ctrl-group" style={{ minWidth: 160 }}>
+            <div className="label-xs ctrl-lbl">AF</div>
+            <AfGainSlider />
           </div>
         </div>
 
         <div className="spacer" style={{ flex: 1 }} />
 
-        {/* While disconnected the centre overlay owns the Discover UI; the
-            topbar slot holds only the connected-state Disconnect control.
-            Mounting one ConnectPanel at a time also avoids doubled 10s
-            discovery polls. */}
-        {connected && <ConnectPanel />}
-
+        {/* Settings comes first, then Disconnect. Rotator / QRZ pills and the
+            radio IP moved to the BottomStatusBar — no need to duplicate them
+            up here. While disconnected the centre overlay owns Discover so
+            we mount only one ConnectPanel at a time. */}
         <button
           type="button"
           className="btn"
@@ -664,6 +707,7 @@ export default function App() {
         >
           ⚙
         </button>
+        {connected && <ConnectPanel compact />}
       </header>
 
       <AlertBanner />
@@ -675,9 +719,11 @@ export default function App() {
           inactive layouts not consume DOM resources). */}
       <FlexWorkspace key={activeLayoutId} />
 
-      {/* Transport — MOX/TUN + audio + drive + mic meter + chips. Stays
-          where it is; this isn't one of the "two header info/control bars"
-          the issue retired — it's bottom-pinned TX transport. */}
+      {/* Transport — MOX/TUN + audio + mic + macro buttons on the left,
+          PA/PRE chips, then the per-radio status (radio IP, rotator, QRZ)
+          and "+ Add Panel" trigger on the right. This is the single
+          bottom-pinned bar; the previous separate BottomStatusBar was
+          merged in here so the chrome doesn't duplicate. */}
       <div className="transport">
         <MoxButton />
         <TunButton />
@@ -695,11 +741,21 @@ export default function App() {
           <span className="k">PRE</span>
           <span className="v">{preampOn ? 'ON' : 'OFF'}</span>
         </div>
+        <span className={`chip ${connected ? 'accent' : ''}`}>
+          <span className="k">RADIO</span>
+          <span className="v mono">{connected ? (endpoint ?? '—') : '—'}</span>
+        </span>
+        <RotatorStatusPill />
+        <QrzStatusPill />
+        <button
+          type="button"
+          className="btn sm"
+          onClick={() => useLayoutStore.getState().setAddPanelOpen(true)}
+          title="Add a panel to the active layout"
+        >
+          + Add Panel
+        </button>
       </div>
-
-      {/* Bottom status bar — always-visible per issue #241. Holds radio
-          brand sub-label, link state, RotatorStatusPill, QrzStatusPill. */}
-      <BottomStatusBar />
 
       {disconnectedOverlay}
       <SettingsMenu open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsInitialTab} />

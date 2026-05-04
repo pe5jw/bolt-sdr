@@ -5,22 +5,24 @@
    App shell grid (issue #241):
 
        ┌──────┬──────────────────────────────────┐
-       │      │   topbar-slim   (44 px)          │
-       │ left │   alert banner  (auto)           │
-       │ bar  │   workspace     (1fr, scrolls)   │
-       │      │   transport     (44 px)          │
-       │      │   bottom status (32 px)          │
+       │ left │   topbar        (68 px)          │
+       │ bar  │   alert banner  (auto)           │
+       │      │   workspace     (1fr, scrolls)   │
+       │      │   transport     (44 px, pinned) │
        └──────┴──────────────────────────────────┘
 
    The left bar spans the full app height; the rest stack in the right
-   column. Workspace (FlexWorkspace) is the only row that scrolls — bottom
-   status bar stays pinned even when the operator stacks many flex panels.
+   column. Workspace (FlexWorkspace) is the only row that scrolls — the
+   transport row (TX controls + radio status pills + "+ Add Panel") stays
+   pinned at the bottom. Top bar holds inline transport-level controls
+   (mode/filter/band/step/front-end/AGC/AF) plus brand and the settings
+   + connect/disconnect buttons.
 */
 
 .app {
   display: grid;
   grid-template-columns: 60px 1fr;
-  grid-template-rows: 44px auto 1fr 44px 32px;
+  grid-template-rows: 68px auto 1fr 44px;
   height: 100vh;
   width: 100vw;
   background: var(--bg-0);
@@ -29,12 +31,11 @@
   gap: 6px;
 }
 
-.app > .left-layout-bar { grid-column: 1; grid-row: 1 / -1; }
-.app > .topbar          { grid-column: 2; grid-row: 1; }
-.app > .alert-banner    { grid-column: 2; grid-row: 2; }
-.app > .flex-workspace  { grid-column: 2; grid-row: 3; min-height: 0; overflow: auto; }
-.app > .transport       { grid-column: 2; grid-row: 4; }
-.app > .bottom-status-bar { grid-column: 2; grid-row: 5; }
+.app > .left-layout-bar   { grid-column: 1; grid-row: 1 / -1; }
+.app > .topbar            { grid-column: 2; grid-row: 1; }
+.app > .alert-banner      { grid-column: 2; grid-row: 2; }
+.app > .flex-workspace    { grid-column: 2; grid-row: 3; min-height: 0; overflow: auto; }
+.app > .transport         { grid-column: 2; grid-row: 4; }
 
 /* ===== Left layout bar — issue #241 ===== */
 .left-layout-bar {
@@ -152,52 +153,10 @@
   line-height: 1;
 }
 
-/* ===== Bottom status bar — issue #241 ===== */
-.bottom-status-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 10px;
-  background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
-  border: 1px solid var(--panel-edge);
-  border-radius: var(--r-lg);
-  box-shadow: var(--panel-shadow);
-  height: 32px;
-  min-height: 0;
-}
-.bottom-status-bar .bsb-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.bottom-status-bar .bsb-brand {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--fg-1);
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
-.bottom-status-bar .bsb-divider {
-  width: 1px;
-  height: 16px;
-  background: rgba(0, 0, 0, 0.4);
-  box-shadow: 1px 0 0 rgba(255, 255, 255, 0.06);
-}
-.bottom-status-bar .bsb-sub {
-  color: var(--fg-2);
-  white-space: nowrap;
-}
-.bottom-status-bar .bsb-spacer { flex: 1; }
-.bottom-status-bar .bsb-pills {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* ===== Top bar — slim version (issue #241) =====
-   Beveled gradient strip; only holds the brand mark, the connected-state
-   ConnectPanel (Disconnect button), and the settings ⚙ trigger. */
+/* ===== Top bar — issue #241 =====
+   Beveled gradient strip. Holds brand+radio label, transport-level inline
+   controls (mode/filter/band/step/front-end/AGC/AF), and the right-side
+   status pills + ⚙ settings. */
 .topbar {
   display: flex;
   align-items: center;
@@ -207,7 +166,19 @@
   border: 1px solid var(--panel-edge);
   border-radius: var(--r-lg);
   box-shadow: var(--panel-shadow);
-  height: 44px;
+  height: 68px;
+  overflow: hidden;
+}
+.topbar .topbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  /* Allow the controls block to scroll horizontally instead of bleeding off
+     the bar on narrow desktop windows; the bar's own overflow:hidden keeps
+     it from spilling into the workspace below. */
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .brand {
   display: flex;
