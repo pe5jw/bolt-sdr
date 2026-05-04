@@ -98,4 +98,23 @@ public class RadioCalibrationsDispatchTests
         Assert.True(cal.BridgeVolt > 0);
         Assert.True(cal.RefVoltage > 0);
     }
+
+    [Theory]
+    [MemberData(nameof(EveryBoardKind))]
+    public void Every_BoardKind_Dispatches_To_NonDegenerate_Calibration(HpsdrBoardKind board)
+    {
+        // Exhaustiveness pin: every enum value must dispatch to a bucket
+        // whose constants cannot drive ComputeMeters into Infinity / NaN.
+        // Adding a new HpsdrBoardKind value without extending For() will
+        // fall through to HermesLite2 (sane fallback), so this test
+        // verifies the safety net rather than enforcing per-board correctness
+        // (the named tests above do that).
+        var cal = RadioCalibrations.For(board);
+        Assert.True(cal.BridgeVolt > 0, $"{board} dispatched to a zero-bridge calibration");
+        Assert.True(cal.RefVoltage > 0, $"{board} dispatched to a zero-ref calibration");
+        Assert.True(cal.MaxWatts > 0, $"{board} dispatched to a zero-max-watts calibration");
+    }
+
+    public static IEnumerable<object[]> EveryBoardKind() =>
+        Enum.GetValues<HpsdrBoardKind>().Select(b => new object[] { b });
 }

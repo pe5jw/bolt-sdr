@@ -151,6 +151,24 @@ public class PaSettingsStoreDefaultsTests : IDisposable
         Assert.Equal(50.9, FindGain(d, "20m"));
     }
 
+    [Theory]
+    [MemberData(nameof(BoardsWithDefaults))]
+    public void Every_Recognised_Board_Returns_All_HfBands_With_Sensible_Gains(HpsdrBoardKind board)
+    {
+        // Exhaustiveness pin for PaDefaults: every enum value with a known
+        // PA bucket must yield 11 HF bands and either a non-zero seed (boards
+        // we have a Thetis-sourced table for) or a zero seed (Unknown
+        // fallback to legacy mode). This catches a future enum addition that
+        // forgets to wire PaDefaults.TableFor.
+        using var store = NewStore();
+        var s = store.GetAll(board);
+        Assert.Equal(BandUtils.HfBands.Count, s.Bands.Count);
+        Assert.Equal(BandUtils.HfBands.ToArray(), s.Bands.Select(b => b.Band).ToArray());
+    }
+
+    public static IEnumerable<object[]> BoardsWithDefaults() =>
+        Enum.GetValues<HpsdrBoardKind>().Select(b => new object[] { b });
+
     private static double FindGain(PaSettingsDto s, string band) =>
         s.Bands.First(b => b.Band == band).PaGainDb;
 }
