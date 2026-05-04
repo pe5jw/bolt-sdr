@@ -75,6 +75,40 @@ function OcBitCheckbox({
   );
 }
 
+// Read-only sibling of OcBitCheckbox — renders the firmware auto-mask
+// (N2ADR on HL2) as a row of dimmed chips. Active pins fill, inactive pins
+// outline only. Deliberately uses the neutral palette (not the blue accent
+// reserved for editable controls) so the operator can see at a glance which
+// chips are firmware-driven vs operator-toggled.
+function OcBitIndicator({
+  label,
+  bit,
+  mask,
+}: {
+  label: string;
+  bit: number;
+  mask: number;
+}) {
+  const active = (mask & (1 << (bit - 1))) !== 0;
+  return (
+    <span
+      title={
+        active
+          ? `${label} pin ${bit} — firmware-driven`
+          : `${label} pin ${bit} — not driven`
+      }
+      className={
+        'inline-flex h-4 w-4 select-none items-center justify-center rounded text-[9px] font-mono ' +
+        (active
+          ? 'bg-neutral-600 text-neutral-100'
+          : 'border border-neutral-700 text-neutral-600')
+      }
+    >
+      {bit}
+    </span>
+  );
+}
+
 export function PaSettingsPanel() {
   const settings = usePaStore((s) => s.settings);
   const loaded = usePaStore((s) => s.loaded);
@@ -85,6 +119,12 @@ export function PaSettingsPanel() {
   const setBand = usePaStore((s) => s.setBand);
   const resetToBoardDefaults = usePaStore((s) => s.resetToBoardDefaults);
   const selection = useRadioStore((s) => s.selection);
+
+  // Show the "Auto N2ADR" column only when the board has a non-zero
+  // firmware auto-mask for at least one band — i.e. an HL2. Bare-Hermes
+  // and ANAN/Orion users don't need a column of empty chips, and showing
+  // it on first-boot (Unknown board, autoOcMask=0) would be visual noise.
+  const showAutoCol = settings.bands.some((b) => b.autoOcMask > 0);
 
   // HL2 overloads the "PA Gain" field into an output percentage. Switch
   // label + clamp range + step when the effective board (connected wins
@@ -181,6 +221,20 @@ export function PaSettingsPanel() {
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-widest text-neutral-300">
           Per Band
         </h3>
+        {showAutoCol && (
+          <p className="mb-2 text-[10px] text-neutral-500">
+            <span className="mr-2 inline-flex items-center gap-1">
+              <span className="inline-block h-3 w-3 rounded bg-neutral-600" /> firmware-driven
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="inline-block h-3 w-3 rounded border border-neutral-700" /> not driven
+            </span>
+            <span className="ml-2">
+              {' '}— Auto column shows the N2ADR LPF mask applied automatically on HL2.
+              These pins click on band change even when your OC TX / OC RX rows below are empty.
+            </span>
+          </p>
+        )}
         <div className="overflow-x-auto rounded bg-neutral-800/40">
           <table className="w-full border-collapse text-xs">
             <thead className="text-[10px] uppercase tracking-wider text-neutral-500">
@@ -190,6 +244,14 @@ export function PaSettingsPanel() {
                   {paFieldLabel}
                 </th>
                 <th className="px-2 py-2 text-center">Disable PA</th>
+                {showAutoCol && (
+                  <th
+                    className="px-2 py-2 text-left"
+                    title="Read-only: OC pins the firmware drives automatically per band (N2ADR LPF on HL2). OR'd with your OC TX / OC RX masks before the wire."
+                  >
+                    Auto N2ADR (1..7)
+                  </th>
+                )}
                 <th className="px-2 py-2 text-left">OC TX (1..7)</th>
                 <th className="px-2 py-2 text-left">OC RX (1..7)</th>
               </tr>
@@ -224,6 +286,20 @@ export function PaSettingsPanel() {
                         className="h-3 w-3 accent-[#4a9eff]"
                       />
                     </td>
+                    {showAutoCol && (
+                      <td className="px-2 py-1">
+                        <div className="flex gap-2">
+                          {OC_PINS.map((bit) => (
+                            <OcBitIndicator
+                              key={bit}
+                              label={`${bandName} N2ADR auto`}
+                              bit={bit}
+                              mask={b.autoOcMask}
+                            />
+                          ))}
+                        </div>
+                      </td>
+                    )}
                     <td className="px-2 py-1">
                       <div className="flex gap-2">
                         {OC_PINS.map((bit) => (
