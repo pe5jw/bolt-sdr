@@ -12,8 +12,9 @@
 //
 // Issue #241: visual chrome reuses tokens.css; no new colors are introduced.
 
-import { useState } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { useLayoutStore } from '../state/layout-store';
+import { useDisplaySettingsStore } from '../state/display-settings-store';
 import {
   LayoutSettingsModal,
   type LayoutSettingsValue,
@@ -33,6 +34,31 @@ export function LeftLayoutBar() {
   const updateLayoutMeta = useLayoutStore((s) => s.updateLayoutMeta);
   const resetActiveLayout = useLayoutStore((s) => s.resetActiveLayout);
   const isLoaded = useLayoutStore((s) => s.isLoaded);
+  // The bar's blue gradient + dot wash follows the operator's panadapter
+  // trace colour from the Display tab. CLAUDE.md flags trace amber as
+  // "panadapter-only", but the maintainer explicitly asked for the chrome
+  // to track the trace selection — so the bar tints to whatever hue the
+  // operator chose. Wash uses a 0.25× darkened variant so the original
+  // top-half-fades-out gradient style is preserved at any hue.
+  const rxTraceColor = useDisplaySettingsStore((s) => s.rxTraceColor);
+  const tintStyle = useMemo<CSSProperties | undefined>(() => {
+    const m = /^#([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})$/.exec(rxTraceColor);
+    if (!m || !m[1] || !m[2] || !m[3]) return undefined;
+    const r = parseInt(m[1], 16);
+    const g = parseInt(m[2], 16);
+    const b = parseInt(m[3], 16);
+    const dr = Math.round(r * 0.25);
+    const dg = Math.round(g * 0.25);
+    const db = Math.round(b * 0.25);
+    return {
+      ['--lb-tint-r' as string]: r,
+      ['--lb-tint-g' as string]: g,
+      ['--lb-tint-b' as string]: b,
+      ['--lb-wash-r' as string]: dr,
+      ['--lb-wash-g' as string]: dg,
+      ['--lb-wash-b' as string]: db,
+    };
+  }, [rxTraceColor]);
 
   const [modal, setModal] = useState<ModalState>({ kind: 'closed' });
 
@@ -73,7 +99,7 @@ export function LeftLayoutBar() {
     modal.kind === 'edit' ? layouts.find((l) => l.id === modal.id) : undefined;
 
   return (
-    <aside className="left-layout-bar" aria-label="Layouts">
+    <aside className="left-layout-bar" aria-label="Layouts" style={tintStyle}>
       <div className="lb-list" role="tablist" aria-orientation="vertical">
         {!isLoaded ? (
           <div className="lb-empty" aria-hidden>…</div>

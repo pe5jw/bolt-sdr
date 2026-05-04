@@ -52,14 +52,25 @@
   overflow: hidden;
 }
 
-/* Subtle blue brand accent overlay. Two layers:
-   - ::before is the deep-blue wash (matches the VFO frequency-display blue).
-     Solid 0–50%, fades out across 50–70%, fully transparent below 70%.
+/* Subtle tint overlay. Two layers:
+   - ::before is the top-half wash (matches the VFO frequency-display blue at
+     the default). Solid 0–50%, fades out across 50–70%, fully transparent
+     below 70%.
    - ::after is the diffused dot matrix. Invisible above 50%, fades in across
      50–70%, gone by 70%.
-   Both layers use raw VFO-tab colors (#14243e ≈ rgba(20,36,62,…)) +
-   var(--accent) for the dots; the bar's panel chrome shows through cleanly
-   below 70%. */
+   The hue is sourced from --lb-wash-{r,g,b} (a darkened 0.25× variant of
+   the operator's panadapter trace colour) and --lb-tint-{r,g,b} (the trace
+   colour itself). Defaults preserve the original VFO-blue + accent-blue
+   look when the JS hasn't injected the operator's choice yet. The 70% mark
+   keeps the bar's lower half clean so action buttons stay readable. */
+.left-layout-bar {
+  --lb-wash-r: 20;
+  --lb-wash-g: 36;
+  --lb-wash-b: 62;
+  --lb-tint-r: 74;
+  --lb-tint-g: 158;
+  --lb-tint-b: 255;
+}
 .left-layout-bar::before {
   content: '';
   position: absolute;
@@ -68,10 +79,10 @@
   z-index: 0;
   background: linear-gradient(
     to bottom,
-    rgba(20, 36, 62, 0.55) 0%,
-    rgba(20, 36, 62, 0.55) 50%,
-    rgba(20, 36, 62, 0.00) 70%,
-    rgba(20, 36, 62, 0.00) 100%
+    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.55) 0%,
+    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.55) 50%,
+    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.00) 70%,
+    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.00) 100%
   );
 }
 .left-layout-bar::after {
@@ -81,7 +92,9 @@
   pointer-events: none;
   z-index: 0;
   background:
-    radial-gradient(circle, rgba(74, 158, 255, 0.22) 1px, transparent 1.5px)
+    radial-gradient(circle,
+      rgba(var(--lb-tint-r), var(--lb-tint-g), var(--lb-tint-b), 0.22) 1px,
+      transparent 1.5px)
     0 0 / 8px 8px;
   /* Dots only paint in the 50–70% band: fully transparent above 50%, fade
      in to ~60% peak, fully transparent again by 70% so the bar's bottom
