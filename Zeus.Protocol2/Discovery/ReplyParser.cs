@@ -45,6 +45,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.NetworkInformation;
+using Zeus.Contracts;
 
 namespace Zeus.Protocol2.Discovery;
 
@@ -110,7 +111,7 @@ public static class ReplyParser
 
     private static HpsdrBoardKind MapBoard(byte raw) => raw switch
     {
-        0x00 => HpsdrBoardKind.Atlas,
+        0x00 => HpsdrBoardKind.Metis,
         0x01 => HpsdrBoardKind.Hermes,
         0x02 => HpsdrBoardKind.HermesII,
         0x04 => HpsdrBoardKind.Angelia,

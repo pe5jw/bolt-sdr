@@ -29,7 +29,7 @@ public class BoardCapabilitiesTableTests
         foreach (var board in new[] {
             HpsdrBoardKind.Metis,
             HpsdrBoardKind.Hermes,
-            HpsdrBoardKind.Griffin,
+            HpsdrBoardKind.HermesII,
         })
         {
             var caps = BoardCapabilitiesTable.For(board);

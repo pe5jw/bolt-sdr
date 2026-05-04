@@ -62,7 +62,7 @@ internal static class RadioCalibrations
         HpsdrBoardKind.HermesLite2 => RadioCalibration.HermesLite2,
         HpsdrBoardKind.Hermes      => RadioCalibration.Hermes,
         HpsdrBoardKind.Metis       => RadioCalibration.Hermes,
-        HpsdrBoardKind.Griffin     => RadioCalibration.Hermes,
+        HpsdrBoardKind.HermesII     => RadioCalibration.Hermes,
         HpsdrBoardKind.Angelia     => RadioCalibration.Anan100,
         HpsdrBoardKind.Orion       => RadioCalibration.Anan200,
         // Board id 0x0A aliases six radios. Operator selects the variant

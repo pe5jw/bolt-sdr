@@ -54,7 +54,7 @@ internal static class BoardCapabilitiesTable
         // excludes only the high-power MkII family).
         HpsdrBoardKind.Metis      => HermesClass,
         HpsdrBoardKind.Hermes     => HermesClass,
-        HpsdrBoardKind.Griffin    => HermesClass, // ANAN-10E / 100B firmware
+        HpsdrBoardKind.HermesII    => HermesClass, // ANAN-10E / 100B firmware
         // --- ANAN-100D: dual-ADC Hermes-supply ---
         // clsHardwareSpecific.cs:122-128 — first DDC family entrant.
         HpsdrBoardKind.Angelia    => Angelia,

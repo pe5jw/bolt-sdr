@@ -100,7 +100,7 @@ internal static class PaDefaults
     {
         HpsdrBoardKind.Hermes      => HermesGains,
         HpsdrBoardKind.Metis       => HermesGains,
-        HpsdrBoardKind.Griffin     => HermesGains,
+        HpsdrBoardKind.HermesII     => HermesGains,
         HpsdrBoardKind.Angelia     => Anan100Gains,
         HpsdrBoardKind.Orion       => Anan200Gains,
         // 0x0A wire alias — variant selects the per-board PA bucket:
@@ -166,7 +166,7 @@ internal static class PaDefaults
         HpsdrBoardKind.HermesLite2 => 5,      // HL2: class-A 5 W stock
         HpsdrBoardKind.Hermes      => 10,     // Hermes / ANAN-10 / ANAN-10E: 10 W
         HpsdrBoardKind.Metis       => 10,     // Metis boards paired with 10 W PA
-        HpsdrBoardKind.Griffin     => 10,
+        HpsdrBoardKind.HermesII     => 10,
         HpsdrBoardKind.Angelia     => 100,    // ANAN-100 / ANAN-100B / ANAN-8000D: 100 W
         HpsdrBoardKind.Orion       => 100,    // ANAN-100D / ANAN-200D: 100 W
         HpsdrBoardKind.OrionMkII   => variant switch

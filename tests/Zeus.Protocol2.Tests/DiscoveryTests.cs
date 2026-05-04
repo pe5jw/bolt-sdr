@@ -44,6 +44,7 @@
 
 using System.Net;
 using System.Net.NetworkInformation;
+using Zeus.Contracts;
 using Zeus.Protocol2.Discovery;
 
 namespace Zeus.Protocol2.Tests;
@@ -105,7 +106,7 @@ public class DiscoveryTests
     }
 
     [Theory]
-    [InlineData((byte)0x00, HpsdrBoardKind.Atlas)]
+    [InlineData((byte)0x00, HpsdrBoardKind.Metis)]
     [InlineData((byte)0x01, HpsdrBoardKind.Hermes)]
     [InlineData((byte)0x02, HpsdrBoardKind.HermesII)]
     [InlineData((byte)0x04, HpsdrBoardKind.Angelia)]

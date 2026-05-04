@@ -35,7 +35,7 @@ public class RadioCalibrationsDispatchTests
     {
         Assert.Same(RadioCalibration.Hermes, RadioCalibrations.For(HpsdrBoardKind.Hermes));
         Assert.Same(RadioCalibration.Hermes, RadioCalibrations.For(HpsdrBoardKind.Metis));
-        Assert.Same(RadioCalibration.Hermes, RadioCalibrations.For(HpsdrBoardKind.Griffin));
+        Assert.Same(RadioCalibration.Hermes, RadioCalibrations.For(HpsdrBoardKind.HermesII));
     }
 
     [Fact]

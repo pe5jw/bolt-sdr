@@ -44,6 +44,7 @@
 
 using System.Net;
 using System.Net.NetworkInformation;
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 
 namespace Zeus.Protocol1.Tests;
@@ -96,7 +97,7 @@ public class DiscoveryTests
     [Theory]
     [InlineData((byte)0x00, HpsdrBoardKind.Metis)]      // original HPSDR Mercury+Penelope+Metis
     [InlineData((byte)0x01, HpsdrBoardKind.Hermes)]
-    [InlineData((byte)0x02, HpsdrBoardKind.Griffin)]    // ANAN-10E / 100B / Hermes-II firmware
+    [InlineData((byte)0x02, HpsdrBoardKind.HermesII)]    // ANAN-10E / 100B / Hermes-II firmware
     [InlineData((byte)0x04, HpsdrBoardKind.Angelia)]    // ANAN-100D
     [InlineData((byte)0x05, HpsdrBoardKind.Orion)]      // ANAN-200D
     [InlineData((byte)0x06, HpsdrBoardKind.HermesLite2)]
