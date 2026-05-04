@@ -34,7 +34,18 @@ internal static class BoardCapabilitiesTable
     /// Falls back to <see cref="BoardCapabilities.UnknownDefaults"/> for
     /// any future enum value that hasn't been wired yet.
     /// </summary>
-    public static BoardCapabilities For(HpsdrBoardKind board) => board switch
+    public static BoardCapabilities For(HpsdrBoardKind board) =>
+        For(board, OrionMkIIVariant.G2);
+
+    /// <summary>
+    /// Variant-aware overload — when <paramref name="board"/> is
+    /// <see cref="HpsdrBoardKind.OrionMkII"/>, the variant selects the
+    /// matching capability fingerprint. The Apache OrionMkII original
+    /// (<see cref="OrionMkIIVariant.OrionMkII"/>) lacks volts/amps/audio-amp
+    /// telemetry per <c>clsHardwareSpecific.cs:249-262, 459-468</c>; every
+    /// other 0x0A variant shares the Saturn-class Saturn fingerprint.
+    /// </summary>
+    public static BoardCapabilities For(HpsdrBoardKind board, OrionMkIIVariant variant) => board switch
     {
         // --- Hermes-class single-RX, Alex-class BPF, Hermes-side L/R swap ---
         // Thetis clsHardwareSpecific.cs:87-121 sets RxADC=1, MKIIBPF=0,
@@ -55,11 +66,12 @@ internal static class BoardCapabilitiesTable
         // (docs/lessons/wdsp-init-gotchas.md, hl2-drive-model.md). Single
         // RX, no Alex, no telemetry, no path illustrator.
         HpsdrBoardKind.HermesLite2 => HermesLite2,
-        // --- 0x0A family default: G2-class facts ---
-        // OrionMkII byte collapses 7 boards. Pick the G2 / 7000DLE-class
-        // fingerprint (dual-ADC, MKII BPF, 50 mV, telemetry + audio amp,
-        // no path illustrator). Issue #218 will fan this out per variant.
-        HpsdrBoardKind.OrionMkII  => Saturn,
+        // --- 0x0A family ---
+        // Operator-selected variant (issue #218) routes to the matching
+        // Saturn vs Apache-OrionMkII-original fingerprint.
+        HpsdrBoardKind.OrionMkII  => variant == OrionMkIIVariant.OrionMkII
+            ? OrionMkIIOriginal
+            : Saturn,
         // --- ANAN-G2E (HermesC10, N1GP) ---
         // clsHardwareSpecific.cs:129-135. Hybrid: single RX + 33 mV supply
         // (Hermes-class) BUT MKII BPF on + LR-swap off + telemetry +
@@ -124,6 +136,21 @@ internal static class BoardCapabilitiesTable
         HasAmps: true,
         HasAudioAmplifier: true,
         HasSteppedAttenuationRx2: false, // single-RX: RX2 doesn't exist
+        SupportsPathIllustrator: false);
+
+    // Apache OrionMkII original (Orion-MkII firmware, 100 W) — Saturn-class
+    // hardware fingerprint but without on-board telemetry / audio amp per
+    // clsHardwareSpecific.cs:249-262 (HasVolts/Amps lists exclude
+    // ORIONMKII) and :459-468 (HasAudioAmplifier excludes it too).
+    private static readonly BoardCapabilities OrionMkIIOriginal = new(
+        RxAdcCount: 2,
+        MkiiBpf: true,
+        AdcSupplyMv: 50,
+        LrAudioSwap: false,
+        HasVolts: false,
+        HasAmps: false,
+        HasAudioAmplifier: false,
+        HasSteppedAttenuationRx2: true,
         SupportsPathIllustrator: false);
 
     private static readonly BoardCapabilities HermesLite2 = new(

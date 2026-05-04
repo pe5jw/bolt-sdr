@@ -902,7 +902,7 @@ public sealed class RadioService : IDisposable
         // PA config uses the effective board so the operator can pre-stage
         // PA Settings for a radio not yet connected; once a radio IS on the
         // wire, EffectiveBoardKind == ConnectedBoardKind (discovery wins).
-        var cfg = _paStore.GetAll(EffectiveBoardKind);
+        var cfg = _paStore.GetAll(EffectiveBoardKind, EffectiveOrionMkIIVariant);
         var bandName = BandUtils.FreqToBand(stateSnap.VfoHz);
         var bandCfg = bandName is not null
             ? cfg.Bands.FirstOrDefault(b => b.Band == bandName) ?? new PaBandSettingsDto(bandName)
@@ -1335,6 +1335,14 @@ public sealed class RadioService : IDisposable
             return _preferredRadioStore?.Get() ?? HpsdrBoardKind.Unknown;
         }
     }
+
+    // Variant override for the 0x0A wire-byte alias family (issue #218).
+    // Read by dispatch helpers (RadioCalibrations.For / PaDefaults.* /
+    // BoardCapabilitiesTable.For) when EffectiveBoardKind == OrionMkII;
+    // ignored for every other board. Default OrionMkIIVariant.G2 preserves
+    // Zeus' pre-#218 behaviour for operators who never touch this setting.
+    public OrionMkIIVariant EffectiveOrionMkIIVariant =>
+        _preferredRadioStore?.GetOrionMkIIVariant() ?? OrionMkIIVariant.G2;
 
     // Protocol1 → RadioService bridge. Runs on the RX thread at ~1.2 kHz;
     // hands off to HandleAdcOverload for the logic the tests can drive.
