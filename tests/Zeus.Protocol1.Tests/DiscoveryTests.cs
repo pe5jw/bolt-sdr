@@ -94,6 +94,26 @@ public class DiscoveryTests
     }
 
     [Fact]
+    public void Parses_HermesC10_Reply_AnanG2E()
+    {
+        // Apache Labs ANAN-G2E reports board id 0x14 (Thetis HPSDRHW.HermesC10).
+        // Before this mapping landed, a G2E discovery fell through to
+        // HpsdrBoardKind.Unknown and skipped per-board PA / calibration dispatch.
+        var reply = BuildReply(new ReplyFields(
+            Status: 0x02,
+            Mac: new byte[] { 0x00, 0x55, 0x66, 0x77, 0x88, 0x99 },
+            CodeVersion: 71,
+            BoardId: 0x14,
+            GatewareBuild: 11));
+
+        Assert.True(ReplyParser.TryParse(reply, FromIp, out var radio));
+        Assert.Equal(HpsdrBoardKind.HermesC10, radio.Board);
+        Assert.Equal((byte)0x14, radio.Details.RawBoardId);
+        Assert.Equal("7.1", radio.FirmwareString);
+        Assert.Null(radio.Details.HermesLite2MinorVersion);
+    }
+
+    [Fact]
     public void Parses_Anan10_Or_Orion_Reply()
     {
         var reply = BuildReply(new ReplyFields(

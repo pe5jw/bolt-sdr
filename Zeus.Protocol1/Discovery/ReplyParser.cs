@@ -125,6 +125,7 @@ public static class ReplyParser
         0x05 => HpsdrBoardKind.Orion,
         0x06 => HpsdrBoardKind.HermesLite2,
         0x0A => HpsdrBoardKind.OrionMkII,
+        0x14 => HpsdrBoardKind.HermesC10,
         _ => HpsdrBoardKind.Unknown,
     };
 

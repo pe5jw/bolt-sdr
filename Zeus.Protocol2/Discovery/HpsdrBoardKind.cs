@@ -53,5 +53,8 @@ public enum HpsdrBoardKind : byte
     Orion = 0x05,
     HermesLite2 = 0x06,
     OrionMkII = 0x0A,
+    // Apache Labs ANAN-G2E (N1GP firmware). Thetis HPSDRHW.HermesC10 — see
+    // enums.cs:400 in ramdor/Thetis. Single-RX, MKII-BPF, no LR swap.
+    HermesC10 = 0x14,
     Unknown = 0xFF,
 }

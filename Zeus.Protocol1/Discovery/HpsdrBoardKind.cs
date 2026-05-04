@@ -53,5 +53,11 @@ public enum HpsdrBoardKind : byte
     Orion = 0x05,
     HermesLite2 = 0x06,
     OrionMkII = 0x0A,
+    // Apache Labs ANAN-G2E (N1GP firmware). Thetis HPSDRHW.HermesC10 — see
+    // enums.cs:400 and HardwareSpecific.Model setter at clsHardwareSpecific.cs:129
+    // in ramdor/Thetis. Single-RX, MKII-BPF, 33 mV ADC supply, no LR audio
+    // swap. Shares the OrionMkII / G2 PA forward-power calibration constants
+    // (bridge 0.12 / ref 5.0 / offset 32) per console.cs:25079-25088.
+    HermesC10 = 0x14,
     Unknown = 0xFF,
 }
