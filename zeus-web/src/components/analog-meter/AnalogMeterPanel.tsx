@@ -22,6 +22,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTxStore } from '../../state/tx-store';
 import { AnalogMeterFace } from './AnalogMeterFace';
 import { AnalogMeterConfig } from './AnalogMeterConfig';
+import { AnalogMeterZeusOverlay } from './AnalogMeterZeusOverlay';
 import {
   S_SCALE,
   PO_SCALE,
@@ -343,13 +344,19 @@ export function AnalogMeterPanel({ onClose }: AnalogMeterPanelProps = {}) {
 
       <AnalogMeterConfig open={configOpen} onClose={() => setConfigOpen(false)} />
 
-      <AnalogMeterFace
-        enabledScales={enabled}
-        activeScaleId={activeScaleId}
-        needleN={render.needleN}
-        peakN={cfg.peakHold ? render.peakN : null}
-        scales={scalesForFace}
-      />
+      <div className="am-face-stack">
+        <AnalogMeterFace
+          enabledScales={enabled}
+          activeScaleId={activeScaleId}
+          needleN={render.needleN}
+          peakN={cfg.peakHold ? render.peakN : null}
+          scales={scalesForFace}
+        />
+        <AnalogMeterZeusOverlay
+          sValue={readoutValues.s}
+          active={cfg.zeusMode && enabled.s && activeScaleId === 's'}
+        />
+      </div>
 
       <ReadoutStrip
         enabled={enabled}

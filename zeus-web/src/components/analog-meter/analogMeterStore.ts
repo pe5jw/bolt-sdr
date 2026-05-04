@@ -32,6 +32,10 @@ export interface AnalogMeterConfig {
   /** When true, the panel auto-flips between RX and TX when MOX/TUN engages.
    *  When false, the operator's manual mode-tab choice sticks. */
   followMox: boolean;
+  /** When true, an image of Zeus fades in over the S-meter face as the
+   *  signal approaches S9+20, with a blue flicker glow. Pure visual flair —
+   *  no protocol/DSP impact. Off by default. */
+  zeusMode: boolean;
 }
 
 export interface AnalogMeterState extends AnalogMeterConfig {
@@ -45,6 +49,7 @@ export interface AnalogMeterState extends AnalogMeterConfig {
   setAvg: (n: number) => void;
   setPeakHold: (on: boolean) => void;
   setFollowMox: (on: boolean) => void;
+  setZeusMode: (on: boolean) => void;
   resetBallistics: () => void;
 }
 
@@ -64,6 +69,7 @@ export const ANALOG_METER_DEFAULTS: AnalogMeterConfig = {
   avg: 6,
   peakHold: true,
   followMox: true,
+  zeusMode: false,
 };
 
 export const useAnalogMeterStore = create<AnalogMeterState>()(
@@ -90,6 +96,7 @@ export const useAnalogMeterStore = create<AnalogMeterState>()(
       setAvg: (n) => set({ avg: Math.max(1, Math.min(64, Math.round(n))) }),
       setPeakHold: (on) => set({ peakHold: on }),
       setFollowMox: (on) => set({ followMox: on }),
+      setZeusMode: (on) => set({ zeusMode: on }),
       resetBallistics: () =>
         set({
           attack: ANALOG_METER_DEFAULTS.attack,

@@ -121,6 +121,13 @@ export function AnalogMeterConfig({ open, onClose }: AnalogMeterConfigProps) {
             >
               Show dBm
             </CheckRow>
+            <CheckRow
+              checked={cfg.zeusMode}
+              onChange={cfg.setZeusMode}
+              sub="Image fades in past S9, lightning crackles at S9+20"
+            >
+              Zeus mode
+            </CheckRow>
           </div>
         </section>
 
