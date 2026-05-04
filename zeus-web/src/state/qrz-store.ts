@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -168,4 +175,42 @@ export const useQrzStore = create<QrzStoreState>((set) => ({
 
 // Kick off a status probe at module load so reconnected sessions (backend still has
 // a session key from an earlier page) rehydrate without the user having to log in.
-void useQrzStore.getState().refreshStatus();
+//
+// Retry-on-load: a fresh backend has stored credentials in LiteDB but its
+// silent QRZ XML-API re-login takes ~400-1000 ms (TLS + auth). If the
+// frontend's first probe lands during that window, the response is
+// connected=false even though the operator IS about to be logged in. We
+// retry with backoff while the backend reports `hasStoredCredentials:true`
+// and `connected:false` — that combination is the unambiguous "in flight"
+// signal. Stops as soon as connected flips true, or hasStoredCredentials
+// flips false (operator never set creds, or just logged out elsewhere).
+async function probeStatusWithRetry(): Promise<void> {
+  // Total budget ~6.2 s — well past a typical QRZ silent-login + slack.
+  const backoffMs = [200, 400, 800, 1600, 3200];
+  for (let attempt = 0; ; attempt++) {
+    let status: QrzStatus;
+    try {
+      status = await qrzStatus();
+    } catch {
+      // Transient fetch failure (backend not yet listening on first
+      // attempt is the common case). Sleep and try again — but stop
+      // after the budget, no point hammering.
+      if (attempt >= backoffMs.length) return;
+      await new Promise((r) => setTimeout(r, backoffMs[attempt]));
+      continue;
+    }
+
+    useQrzStore.setState(applyStatus(status));
+
+    // Done — either we got connected, or the backend has nothing pending.
+    if (status.connected) return;
+    if (!status.hasStoredCredentials) return;
+
+    // Out of retries.
+    if (attempt >= backoffMs.length) return;
+
+    await new Promise((r) => setTimeout(r, backoffMs[attempt]));
+  }
+}
+
+void probeStatusWithRetry();

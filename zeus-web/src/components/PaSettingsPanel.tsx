@@ -12,18 +12,35 @@
 //
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 
 import { useEffect } from 'react';
 import { HF_BANDS, usePaStore } from '../state/pa-store';
+import { useRadioStore } from '../state/radio-store';
+import { BOARD_LABELS } from '../api/radio';
 
 const OC_PINS = [1, 2, 3, 4, 5, 6, 7] as const;
 
+// HL2 uses a percentage-based PA model (mi0bot openhpsdr-thetis) — the
+// PaGainDb DTO field is interpreted as output % 0..100 rather than dB
+// forward gain. Backend HermesLite2DriveProfile enforces this; frontend
+// relabels the input and widens the clamp so the operator can actually
+// type 100. See docs/lessons/hl2-drive-model.md.
+const HL2_BOARD_ID = 'HermesLite2';
+
 // Physical sanity bounds — guards against typos like "100" (intended as a
-// percentage) landing in the dB field, which collapses the drive byte to 0.
-const PA_GAIN_MIN_DB = 0;
-const PA_GAIN_MAX_DB = 70;   // G2-class radios top out ~51 dB; 70 leaves headroom
-const PA_MAX_W_MIN   = 0;
-const PA_MAX_W_MAX   = 1500; // Covers Shared Apex / 1 kW + amps
+// percentage) landing in the dB field on non-HL2 radios, which collapses
+// the drive byte to 0.
+const PA_GAIN_MIN_DB  = 0;
+const PA_GAIN_MAX_DB  = 70;    // G2-class radios top out ~51 dB; 70 leaves headroom
+const PA_GAIN_MAX_PCT = 100;   // HL2: value is an output percentage
+const PA_MAX_W_MIN    = 0;
+const PA_MAX_W_MAX    = 1500;  // Covers Shared Apex / 1 kW + amps
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -66,18 +83,63 @@ export function PaSettingsPanel() {
   const load = usePaStore((s) => s.load);
   const setGlobal = usePaStore((s) => s.setGlobal);
   const setBand = usePaStore((s) => s.setBand);
+  const resetToBoardDefaults = usePaStore((s) => s.resetToBoardDefaults);
+  const selection = useRadioStore((s) => s.selection);
+
+  // HL2 overloads the "PA Gain" field into an output percentage. Switch
+  // label + clamp range + step when the effective board (connected wins
+  // when present, else the preferred radio) is HL2. Non-HL2 boards keep
+  // the dB convention (Hermes / ANAN / Orion).
+  const isHl2 = selection.effective === HL2_BOARD_ID;
+  const paFieldLabel = isHl2 ? 'PA Output (%)' : 'PA Gain (dB)';
+  const paFieldMax   = isHl2 ? PA_GAIN_MAX_PCT : PA_GAIN_MAX_DB;
+  const paFieldStep  = isHl2 ? 1 : 0.1;
+  const paFieldTitle = isHl2
+    ? 'HL2 output percentage per band (0..100). HL2 uses a different PA model than other HPSDR radios: 100 = no attenuation (rated power); lower values soft-cap output for weaker bands (6 m stock is ~38.8). NOT decibels.'
+    : 'PA forward gain in dB per band — the amplifier\'s own gain from DUC output to antenna. NOT a trim. Seeded from the board kind (e.g. G2 MkII ≈ 48-51 dB on HF). Used together with Rated PA Output (W) to compute the drive byte: lower gain here → more drive byte → more output at a given slider %.';
 
   useEffect(() => {
     load();
   }, [load]);
 
+  // Reset targets the operator's explicit pick when set, else the effective
+  // board (connected > preferred). Undefined override = server decides.
+  const resetTargetBoard =
+    selection.preferred !== 'Auto' ? selection.preferred : selection.effective;
+  const resetTargetLabel =
+    resetTargetBoard === 'Unknown'
+      ? 'defaults'
+      : `${BOARD_LABELS[resetTargetBoard]} defaults`;
+  const canReset = resetTargetBoard !== 'Unknown' && !inflight;
+
+  const handleResetToDefaults = () => {
+    const override = selection.preferred !== 'Auto' ? selection.preferred : undefined;
+    resetToBoardDefaults(override);
+  };
+
   return (
     <div className="space-y-6">
       <section>
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-widest text-neutral-300">
-          Global
-        </h3>
-        <div className="grid grid-cols-1 gap-4 rounded bg-neutral-800/40 p-3 md:grid-cols-3">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <h3 className="text-xs font-semibold uppercase tracking-widest text-neutral-300">
+            Global
+          </h3>
+          <button
+            type="button"
+            onClick={handleResetToDefaults}
+            disabled={!canReset}
+            title={
+              canReset
+                ? `Replace PA Gain (all bands) and Rated PA Output with ${BOARD_LABELS[resetTargetBoard]}'s factory defaults. Your OC masks and Disable-PA checkboxes are not touched. APPLY to persist.`
+                : 'Select a radio above to reset to its defaults.'
+            }
+            className="btn sm"
+            style={{ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase' }}
+          >
+            Reset to {resetTargetLabel}
+          </button>
+        </div>
+        <div className="grid grid-cols-1 gap-4 rounded bg-neutral-800/40 p-3 md:grid-cols-2">
           <label className="flex items-center gap-2 text-xs text-neutral-300">
             <input
               type="checkbox"
@@ -112,21 +174,6 @@ export function PaSettingsPanel() {
               </span>
             )}
           </label>
-
-          <div className="flex flex-col gap-1 text-xs text-neutral-300">
-            <span>OC bits while Tune</span>
-            <div className="flex gap-2">
-              {OC_PINS.map((bit) => (
-                <OcBitCheckbox
-                  key={bit}
-                  label="OC-Tune"
-                  bit={bit}
-                  mask={settings.global.ocTune}
-                  onToggle={(next) => setGlobal({ ocTune: next })}
-                />
-              ))}
-            </div>
-          </div>
         </div>
       </section>
 
@@ -139,11 +186,8 @@ export function PaSettingsPanel() {
             <thead className="text-[10px] uppercase tracking-wider text-neutral-500">
               <tr>
                 <th className="px-2 py-2 text-left">Band</th>
-                <th
-                  className="px-2 py-2 text-right"
-                  title="PA forward gain in dB per band — the amplifier's own gain from DUC output to antenna. NOT a trim. Seeded from the board kind (e.g. G2 MkII ≈ 48-51 dB on HF). Used together with Rated PA Output (W) to compute the drive byte: lower gain here → more drive byte → more output at a given slider %."
-                >
-                  PA Gain (dB)
+                <th className="px-2 py-2 text-right" title={paFieldTitle}>
+                  {paFieldLabel}
                 </th>
                 <th className="px-2 py-2 text-center">Disable PA</th>
                 <th className="px-2 py-2 text-left">OC TX (1..7)</th>
@@ -160,13 +204,13 @@ export function PaSettingsPanel() {
                     <td className="px-2 py-1 text-right">
                       <input
                         type="number"
-                        step={0.1}
+                        step={paFieldStep}
                         min={PA_GAIN_MIN_DB}
-                        max={PA_GAIN_MAX_DB}
+                        max={paFieldMax}
                         value={b.paGainDb}
                         onChange={(e) =>
                           setBand(b.band, {
-                            paGainDb: clamp(Number(e.target.value) || 0, PA_GAIN_MIN_DB, PA_GAIN_MAX_DB),
+                            paGainDb: clamp(Number(e.target.value) || 0, PA_GAIN_MIN_DB, paFieldMax),
                           })
                         }
                         className="w-20 rounded border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-right text-neutral-100"

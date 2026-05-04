@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -51,9 +58,19 @@ namespace Zeus.Server.Tests;
 /// exercised directly via the internal <c>EvaluateSwrTrip(swr, now)</c>
 /// seam so tests can drive synthetic timestamps without wall-clock delays.
 /// </summary>
-public class TxMetersSwrTripTests
+public class TxMetersSwrTripTests : IDisposable
 {
     private static readonly RadioCalibration Cal = RadioCalibration.HermesLite2;
+
+    // Per-fixture temp DBs — see ZoomValidationTests for the rationale.
+    private readonly string _dbPath =
+        Path.Combine(Path.GetTempPath(), $"zeus-prefs-swrtrip-{Guid.NewGuid():N}.db");
+
+    public void Dispose()
+    {
+        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { }
+        try { if (File.Exists(_dbPath + ".pa")) File.Delete(_dbPath + ".pa"); } catch { }
+    }
 
     // Helper: compute ADC value that yields a specific SWR when FWD = 3 W.
     // SWR = (1 + rho) / (1 - rho) where rho = sqrt(P_ref / P_fwd).
@@ -74,11 +91,11 @@ public class TxMetersSwrTripTests
         return (ushort)Math.Clamp(adc, 0, 4095);
     }
 
-    private static TxMetersService BuildService(out TxService tx, out StreamingHub hub)
+    private TxMetersService BuildService(out TxService tx, out StreamingHub hub)
     {
         var loggerFactory = NullLoggerFactory.Instance;
-        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
-        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance);
+        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath);
+        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath + ".pa");
         var radio = new RadioService(loggerFactory, dspStore, paStore);
         hub = new StreamingHub(new NullLogger<StreamingHub>());
         var pipeline = new DspPipelineService(radio, hub, loggerFactory);

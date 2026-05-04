@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -113,10 +120,11 @@ public sealed class SyntheticDspEngine : IDspEngine
     }
 
     public const int MinZoomLevel = 1;
-    // Cap at 16× — at AnalyzerFftSize=16384 that leaves 1024 bins after the
-    // centre clip, comfortably above typical pan widths. Beyond 16 the bin
-    // count starts crowding the pixel column count.
-    public const int MaxZoomLevel = 16;
+    // Cap at 32× — at AnalyzerFftSize=16384 that leaves 512 bins after the
+    // centre clip, below typical pan pixel widths so the trace softens at
+    // 32× but stays usable for narrow-signal hunting (CW). Bump
+    // AnalyzerFftSize to 32768 if 32× sharpness becomes a problem.
+    public const int MaxZoomLevel = 32;
 
     internal static void ValidateZoomLevel(int level)
     {
@@ -141,6 +149,11 @@ public sealed class SyntheticDspEngine : IDspEngine
     // "below noise floor" on the S-meter.
     public double GetRxaSignalDbm(int channelId) => -140.0;
 
+    // No WDSP RXA chain on synthetic — return the silent record so the
+    // 0x19 broadcast publishes a consistent (sentinel-shaped) frame even
+    // when the real engine isn't loaded.
+    public RxStageMeters GetRxStageMeters(int channelId) => RxStageMeters.Silent;
+
     // Synthetic has no TXA chain. SetTxMode stashes nothing, ProcessTxBlock
     // reports "no IQ produced" so TX-side callers skip ring writes. Block size
     // mirrors WDSP so tests that round-trip through the interface can assume
@@ -154,6 +167,55 @@ public sealed class SyntheticDspEngine : IDspEngine
     public void SetTxLevelerMaxGain(double maxGainDb) { }
     public void SetTxTune(bool on) { }
     public TxStageMeters GetTxStageMeters() => TxStageMeters.Silent;
+
+    // TwoTone — no PostGen, so no-op on synthetic.
+    public void SetTwoTone(bool on, double freq1, double freq2, double mag) { }
+
+    // PureSignal — synthetic has no TXA / calcc / iqc. All setters and the
+    // feedback pump are no-ops; GetPsStageMeters returns the silent record.
+    public void SetPsEnabled(bool enabled) { }
+    public void SetPsControl(bool autoCal, bool singleCal) { }
+    public void SetPsAdvanced(bool ptol, double moxDelaySec, double loopDelaySec,
+                              double ampDelayNs, double hwPeak, int ints, int spi) { }
+    public void SetPsHwPeak(double hwPeak) { }
+    public void FeedPsFeedbackBlock(ReadOnlySpan<float> txI, ReadOnlySpan<float> txQ,
+                                    ReadOnlySpan<float> rxI, ReadOnlySpan<float> rxQ) { }
+    public PsStageMeters GetPsStageMeters() => PsStageMeters.Silent;
+    public void ResetPs() { }
+    public void SavePsCorrection(string path) { }
+    public void RestorePsCorrection(string path) { }
+
+    // CFC — synthetic has no TXA so SetCfcConfig only validates the payload
+    // shape so bad client requests fail fast in dev/CI without touching audio.
+    public void SetCfcConfig(CfcConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (cfg.Bands is null) throw new ArgumentException("Bands must not be null", nameof(cfg));
+        if (cfg.Bands.Length != 10)
+            throw new ArgumentException($"Bands must have exactly 10 entries; got {cfg.Bands.Length}", nameof(cfg));
+    }
+
+    // VST plugin-host seam — synthetic engine has no plugin chain wired and
+    // never will. Both methods return false unconditionally so callers take
+    // the bypass path and use the original buffer with zero overhead.
+    public bool ProcessRxVstChain(Span<float> audio, int frames, int sampleRateHz) => false;
+    public bool ProcessTxMicVstChain(Span<float> audio, int frames, int sampleRateHz) => false;
+
+    // TX Monitor — synthetic has no TXA / RXA, no IQ to demodulate. Toggle is
+    // a no-op; ReadTxMonitorAudio always returns 0 so the audio-broadcast
+    // path falls through to the regular RX AudioFrame.
+    public void SetTxMonitorEnabled(bool enabled) { }
+    public int ReadTxMonitorAudio(Span<float> output) => 0;
+    public bool IsTxMonitorOn => false;
+
+    // Synthetic has no TX analyzer; the TX panadapter stays on the RX trace.
+    // Returning false tells DspPipelineService.Tick to leave the display alone
+    // while MOX is on, matching the existing "no new data" semantics.
+    public bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
+
+    // Synthetic has no PS feedback path either — the PS-Monitor toggle is a
+    // no-op here, same shape as TryGetTxDisplayPixels.
+    public bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
 
     private const float NoiseFloorDb = -90f;
     private const float SweepPeakDb = -25f;

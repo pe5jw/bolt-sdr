@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -46,6 +53,18 @@ public enum DisplayPixout : byte
 }
 
 public readonly record struct IqFrame(ReadOnlyMemory<double> InterleavedIq, int SampleRateHz);
+
+/// <summary>Delegate invoked by the engine on the RX or TX-mic seam to pump
+/// an audio block through the optional VST plugin chain. Implementations
+/// route to <c>Zeus.PluginHost.PluginHostManager.TryProcess</c>; returning
+/// false means "bypass — caller uses the original buffer". Wire-up lives
+/// one layer up (Zeus.Server) so Zeus.Dsp stays free of any IPC dependency.
+/// </summary>
+/// <param name="audio">Mono float32 samples — modified in place when the
+/// handler returns true.</param>
+/// <param name="frames">Sample count (length of <paramref name="audio"/>).</param>
+/// <param name="sampleRateHz">48 kHz for both seams in current profiles.</param>
+public delegate bool VstChainHandler(Span<float> audio, int frames, int sampleRateHz);
 
 public interface IDspEngine : IDisposable
 {
@@ -69,6 +88,24 @@ public interface IDspEngine : IDisposable
 
     bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut);
 
+    /// <summary>TX panadapter / waterfall pixels in dBm, sourced from a
+    /// dedicated WDSP analyzer fed with the post-CFIR TX IQ. Returns false
+    /// when TXA is not open or no fresh FFT is ready. The TX analyzer is
+    /// configured to display the same frequency span as the RXA analyzer
+    /// (via bin clipping) so the panadapter axis does not move on MOX —
+    /// see issue #81. No-op on Synthetic.</summary>
+    bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut);
+
+    /// <summary>PureSignal-feedback panadapter / waterfall pixels in dBm,
+    /// sourced from a separate WDSP analyzer fed with the post-PA loopback
+    /// IQ pumped through <see cref="FeedPsFeedbackBlock"/>. Returns false
+    /// when PS isn't armed (analyzer slot closed), TXA isn't open, or no
+    /// fresh FFT is ready. Caller is expected to also check that PS has
+    /// converged (info[14]==1) before showing this trace — pre-correction
+    /// the loopback shows the real PA splatter. See issue #121.
+    /// No-op on Synthetic.</summary>
+    bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut);
+
     /// <summary>Open the TXA channel. Idempotent — calling twice returns the existing id.
     /// Must be called after at least one OpenChannel(RXA). For Synthetic, returns -1 and is a no-op.
     /// <paramref name="outputRateHz"/> picks the TXA profile: 48000 for P1 (48k in/out, CFIR off),
@@ -85,6 +122,15 @@ public interface IDspEngine : IDisposable
     /// Returns a frozen −140 dBm from the synthetic engine. Safe to call from the
     /// pipeline tick; WDSP's meter struct is lock-guarded internally.</summary>
     double GetRxaSignalDbm(int channelId);
+
+    /// <summary>RXA per-stage readings (signal peak/avg, ADC peak/avg, AGC
+    /// gain, AGC envelope peak/avg) sampled from the WDSP metering ring in a
+    /// single pass. Returns <see cref="RxStageMeters.Silent"/> on the
+    /// synthetic engine or when the channel is closed. Cal offset is NOT
+    /// applied here — caller (DspPipelineService) decides whether to add the
+    /// per-board offset before broadcasting, so unit tests can assert raw
+    /// WDSP output. Safe to call from the pipeline tick.</summary>
+    RxStageMeters GetRxStageMeters(int channelId);
 
     /// <summary>Set TXA modulator mode (USB/LSB/FM/AM/...). Calls
     /// SetTXAMode internally on WdspDspEngine; no-op for Synthetic and when no
@@ -141,4 +187,151 @@ public interface IDspEngine : IDisposable
     /// concurrently with ProcessTxBlock — the engine publishes via an
     /// atomic snapshot so the reader sees a consistent set.</summary>
     TxStageMeters GetTxStageMeters();
+
+    /// <summary>Two-tone test generator. Replaces mic input with summed tones
+    /// at <paramref name="freq1"/>/<paramref name="freq2"/> while armed.
+    /// Standard PureSignal calibration excitation but useful standalone.
+    /// Mutually exclusive with TUN (both share the WDSP PostGen stage).
+    /// Protocol-agnostic. No-op on Synthetic.</summary>
+    void SetTwoTone(bool on, double freq1, double freq2, double mag);
+
+    // ----------------- PureSignal predistortion (TXA-side) -----------------
+    // PS lives inside the TXA channel (txa[ch].calcc.p, txa[ch].iqc.p0/p1
+    // allocated by create_txa). The setters here drive the WDSP state
+    // machine; FeedPsFeedbackBlock pumps paired TX-modulator + RX-coupler
+    // IQ into pscc. Synthetic implements all of these as no-ops; meters
+    // return PsStageMeters.Silent.
+
+    /// <summary>Master arm. true → SetPSRunCal(1) and SetPSControl mode-on
+    /// (auto vs single is set via <see cref="SetPsControl"/>). false →
+    /// pihpsdr's "7× zero-pscc → SetPSRunCal(0) → SetPSControl reset"
+    /// shutdown sequence so the iqc stage doesn't latch a stale curve.
+    /// </summary>
+    void SetPsEnabled(bool enabled);
+
+    /// <summary>Cal-mode select. <paramref name="autoCal"/> = continuous
+    /// adaptation; <paramref name="singleCal"/> = one-shot collect-then-stay.
+    /// At most one of the two should be true; if both, single takes
+    /// precedence (one-shot then auto). Calls <c>SetPSControl</c> directly.
+    /// </summary>
+    void SetPsControl(bool autoCal, bool singleCal);
+
+    /// <summary>Apply timing + hardware-peak + ints/spi settings as a batch
+    /// (each call internally guards against the heavy
+    /// <c>SetPSIntsAndSpi</c> path firing when the values haven't changed).
+    /// </summary>
+    void SetPsAdvanced(bool ptol, double moxDelaySec, double loopDelaySec,
+                      double ampDelayNs, double hwPeak, int ints, int spi);
+
+    /// <summary>Set just the hardware-peak. Called from RadioService at
+    /// connect time once the protocol/board is known so the right value
+    /// (P1=0.4072, P2 G2=0.6121, P2 ANAN-7000=0.2899) lands before the
+    /// operator arms PS.</summary>
+    void SetPsHwPeak(double hwPeak);
+
+    /// <summary>Push one paired TX-mod-IQ + RX-feedback-IQ block into the
+    /// WDSP <c>psccF</c> entry. Block size must match the value pihpsdr
+    /// uses (1024 complex samples at 192 kHz). Caller owns the buffers; the
+    /// engine copies internally before handing to the native side.</summary>
+    void FeedPsFeedbackBlock(ReadOnlySpan<float> txI, ReadOnlySpan<float> txQ,
+                             ReadOnlySpan<float> rxI, ReadOnlySpan<float> rxQ);
+
+    /// <summary>Latest PureSignal stage readings (GetPSInfo + GetPSMaxTX).
+    /// Returns <see cref="PsStageMeters.Silent"/> when PS isn't armed or
+    /// the engine has no TXA. Safe to poll concurrently.</summary>
+    PsStageMeters GetPsStageMeters();
+
+    /// <summary>Reset PS state — calls <c>SetPSControl(1,0,0,0)</c>. Useful
+    /// after an aborted calibration or when changing radios.</summary>
+    void ResetPs();
+
+    /// <summary>Save the current PS correction curve to disk (ints/spi must
+    /// be 16/256 — WDSP refuses other shapes per Thetis PSForm.cs:865).
+    /// </summary>
+    void SavePsCorrection(string path);
+
+    /// <summary>Restore a previously-saved correction curve. Equivalent to
+    /// PSForm's "Restore-and-go" with <c>SetPSControl(0,0,0,1)</c>.</summary>
+    void RestorePsCorrection(string path);
+
+    // ----------------- CFC (Continuous Frequency Compressor) ---------------
+    // Multi-band frequency-domain compressor (xcfcomp) — issue #123. The
+    // stage already lives in xtxa between xeqp and xbandpass; this seam just
+    // pushes parameters and toggles run flags. Synthetic engine validates
+    // and no-ops; the WDSP engine pushes the profile arrays + scalar
+    // parameters under the TXA lock and flips Run last so a partial config
+    // never lands in the live audio path.
+
+    /// <summary>Apply a CFC profile: per-band frequencies/compression/post-gains
+    /// plus scalar pre-comp/pre-EQ/post-EQ-run/master-run toggles. The
+    /// <c>cfg.Bands</c> array must have exactly 10 entries (matches pihpsdr
+    /// classic-mode shape; the panel layout depends on it). No-op when no TXA
+    /// is open or on Synthetic.</summary>
+    void SetCfcConfig(CfcConfig cfg);
+
+    // ----------------- VST plugin-host seam (Phase 1 — no chain wired) -----
+    // Hooks the optional out-of-process VST plugin chain into the RX and TX
+    // signal paths. Phase 1 ships the seam only: the chain is null/disabled,
+    // every call returns false immediately and the caller proceeds with the
+    // original buffer. Phase 2 will route audio to the Zeus.PluginHost
+    // sidecar; the wiring lives in Zeus.Server, not here. Keeping the engines
+    // free of any PluginHost dependency makes the seam safe to land before
+    // the host project builds.
+
+    /// <summary>Process an RX audio block through the optional plugin chain.
+    /// Phase 1: chain is null or bypassed; this returns immediately and the
+    /// caller proceeds with <paramref name="audio"/> unchanged. Future phases
+    /// route through the out-of-process VST sidecar.
+    ///
+    /// Returns <c>true</c> if the block was processed (caller should treat
+    /// <paramref name="audio"/> as the new buffer); <c>false</c> if bypassed
+    /// (caller can use the original buffer with zero overhead).
+    ///
+    /// <paramref name="frames"/> is the sample count (mono);
+    /// <paramref name="audio"/>.Length must equal <paramref name="frames"/>.
+    /// </summary>
+    bool ProcessRxVstChain(Span<float> audio, int frames, int sampleRateHz);
+
+    // ----------------- TX Monitor (audition path, issue #106 follow-up) ----
+    // Lets the operator hear the post-bandpass / post-CFIR TX audio on a local
+    // audio sink — with or without keying — so they can dial in the VST chain,
+    // EQ, leveler, and bandwidth profile pre-RF. Implemented in the WDSP
+    // engine as a private RXA channel that demodulates the on-air IQ back to
+    // 48 kHz mono audio. Synthetic no-ops; ReadTxMonitorAudio returns 0.
+
+    /// <summary>Operator toggle for the TX-monitor audition path. When true,
+    /// the engine starts demodulating the post-CFIR TX IQ and exposes the
+    /// resulting mono audio via <see cref="ReadTxMonitorAudio"/>. When false,
+    /// stops feeding the monitor channel; subsequent ReadTxMonitorAudio calls
+    /// return 0 once the ring drains. Idempotent and cheap to call repeatedly.
+    /// No-op on Synthetic.</summary>
+    void SetTxMonitorEnabled(bool enabled);
+
+    /// <summary>Drain demodulated TX-monitor audio. Same shape as
+    /// <see cref="ReadAudio"/> — returns the number of mono float32 samples
+    /// written into <paramref name="output"/>. Returns 0 when monitor is off,
+    /// when the channel hasn't been opened yet, or when no samples are queued.
+    /// Synthetic returns 0 unconditionally.</summary>
+    int ReadTxMonitorAudio(Span<float> output);
+
+    /// <summary>Volatile read of the operator's monitor request flag. Used by
+    /// the audio-broadcast pipeline to decide whether to substitute monitor
+    /// audio for the RX AudioFrame. Reflects the toggle, not whether the
+    /// monitor channel is fully spun up. Synthetic returns false.</summary>
+    bool IsTxMonitorOn { get; }
+
+    /// <summary>Process a TX mono mic block BEFORE the WDSP TXA chain.
+    /// Operates on the 48 kHz mono mic buffer (same audio the operator
+    /// just spoke into) before fexchange2 modulates / filters / compresses.
+    /// This placement keeps WDSP's CFC last (after the plugin chain) so
+    /// the operator's preferred final-stage compressor remains the gain-
+    /// limiting authority — see <c>docs/proposals/vst-host-phase2-wire.md</c>
+    /// "TX seam location" decision.
+    ///
+    /// Same contract as <see cref="ProcessRxVstChain"/>: returns true if the
+    /// chain mutated <paramref name="audio"/> in place; false if bypassed
+    /// (caller proceeds with original buffer). <paramref name="sampleRateHz"/>
+    /// is always 48000 here — both P1 and P2 profiles feed mic at 48 kHz; the
+    /// 192 kHz IQ output is downstream of fexchange2.</summary>
+    bool ProcessTxMicVstChain(Span<float> audio, int frames, int sampleRateHz);
 }

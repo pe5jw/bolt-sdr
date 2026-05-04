@@ -4,64 +4,64 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 //
-// Filter visualization PRD §3.1 Phase 1 — compact filter panel.
-// Renders a width readout and a chip row (F1..F10 + VAR1/VAR2) for the
-// current mode. Clicking a chip calls POST /api/filter with the slot's
-// Lo/Hi and preset name. Phase 1: no drag handles, no Lo/Hi nudge
-// controls, no advanced toggle button, no out-of-band colouring.
+// Unified filter control-strip widget. Three favorite filter-preset buttons
+// + a "⋯" toggle that opens the FilterRibbon (mini-pan + presets + custom).
+// Operators drag any preset chip out of the ribbon onto one of the three
+// buttons here to pin it — same UX as the Mode/Band/Step toolbar groups.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionStore } from '../../state/connection-store';
-import { setFilter, getFilterPresets, setFilterAdvancedPaneOpen, type FilterPresetDto } from '../../api/client';
-import { getPresetsForMode, formatFilterWidth, type FilterPresetSlot } from './filterPresets';
+import {
+  setFilter,
+  setFilterAdvancedPaneOpen,
+  getFilterPresets,
+  type FilterPresetDto,
+} from '../../api/client';
+import { useFilterFavoritesStore, useFavoritesForMode } from '../../state/filter-favorites-store';
+import { FILTER_DRAG_MIME } from './FilterRibbon';
+import { getPresetsForMode } from './filterPresets';
 
-const LOCAL_STORAGE_KEY = 'zeus.filter.advancedPaneOpen';
+const RIBBON_OPEN_KEY = 'zeus.filter.advancedPaneOpen';
 
 export function FilterPanel() {
   const mode = useConnectionStore((s) => s.mode);
-  const filterLow = useConnectionStore((s) => s.filterLowHz);
-  const filterHigh = useConnectionStore((s) => s.filterHighHz);
   const filterPresetName = useConnectionStore((s) => s.filterPresetName);
-  const advancedOpen = useConnectionStore((s) => s.filterAdvancedPaneOpen);
+  const ribbonOpen = useConnectionStore((s) => s.filterAdvancedPaneOpen);
   const applyState = useConnectionStore((s) => s.applyState);
+  const loadFavorites = useFilterFavoritesStore((s) => s.load);
+  const updateFavorites = useFilterFavoritesStore((s) => s.update);
+  const favoriteSlotNames = useFavoritesForMode(mode);
 
-  const toggleAdvanced = useCallback(() => {
-    const next = !advancedOpen;
-    useConnectionStore.setState({ filterAdvancedPaneOpen: next });
-    try { window.localStorage.setItem(LOCAL_STORAGE_KEY, next ? '1' : '0'); } catch { /* ok */ }
-    setFilterAdvancedPaneOpen(next).catch(() => {});
-  }, [advancedOpen]);
+  // Seed from the local Thetis preset table so labels render correctly on
+  // first paint. Without this, the buttons collapse to raw slot names
+  // ("F4", "F5", "F6") for the time it takes /api/filter/presets to resolve,
+  // because the lookup `presets.find(...)` returns undefined against an
+  // empty array. Server VAR overrides land here too once the fetch completes.
+  const localPresets = useMemo<FilterPresetDto[]>(
+    () => getPresetsForMode(mode).map((p) => ({ ...p })),
+    [mode],
+  );
+  const [presets, setPresets] = useState<FilterPresetDto[]>(localPresets);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
 
-  // Per-mode VAR1/VAR2 overrides fetched from the server. Seeded on mount
-  // and after any VAR* write. Falls back to the local Thetis-default table
-  // while the fetch is in flight or when the server is unreachable.
-  const [serverPresets, setServerPresets] = useState<FilterPresetDto[] | null>(null);
+  useEffect(() => { void loadFavorites(mode); }, [mode, loadFavorites]);
+
+  // Reseed `presets` to the new mode's local table whenever the mode flips,
+  // so labels never reflect the old mode while the server fetch is in flight.
+  useEffect(() => { setPresets(localPresets); }, [localPresets]);
 
   useEffect(() => {
     let cancelled = false;
     getFilterPresets(mode)
-      .then((presets) => { if (!cancelled) setServerPresets(presets); })
-      .catch(() => { /* server presets unavailable; fall back to local defaults */ });
+      .then((list) => { if (!cancelled && list.length > 0) setPresets(list); })
+      .catch(() => { /* keep local fallback */ });
     return () => { cancelled = true; };
   }, [mode]);
 
-  // Merge server overrides for VAR slots into the local preset table. Server
-  // VAR* overrides take precedence; fixed slots are always from the local table.
-  const presets: readonly FilterPresetSlot[] = (() => {
-    const local = getPresetsForMode(mode);
-    if (!serverPresets) return local;
-    return local.map((slot) => {
-      if (!slot.isVar) return slot;
-      const srv = serverPresets.find((s) => s.slotName === slot.slotName);
-      return srv ? { ...slot, lowHz: srv.lowHz, highHz: srv.highHz } : slot;
-    });
-  })();
-
   const activeSlot = filterPresetName ?? null;
-  const widthLabel = formatFilterWidth(filterLow, filterHigh);
 
   const selectPreset = useCallback(
-    (slot: FilterPresetSlot) => {
+    (slot: FilterPresetDto) => {
       useConnectionStore.setState({
         filterLowHz: slot.lowHz,
         filterHighHz: slot.highHz,
@@ -74,46 +74,83 @@ export function FilterPanel() {
     [applyState],
   );
 
-  // FM has no presets — hide chip row.
-  if (presets.length === 0) return null;
+  const toggleRibbon = useCallback(() => {
+    const next = !ribbonOpen;
+    useConnectionStore.setState({ filterAdvancedPaneOpen: next });
+    try { window.localStorage.setItem(RIBBON_OPEN_KEY, next ? '1' : '0'); } catch { /* ok */ }
+    setFilterAdvancedPaneOpen(next).catch(() => { /* next state poll reconciles */ });
+  }, [ribbonOpen]);
+
+  // Drop a preset chip from the ribbon onto favorite-index `idx`. Swaps if
+  // the dropped slot is already a favorite; otherwise displaces idx.
+  const onDrop = useCallback(
+    (idx: number, slotName: string) => {
+      const next = [...favoriteSlotNames];
+      const existing = next.indexOf(slotName);
+      if (existing === idx) return;
+      const displaced = next[idx];
+      if (existing >= 0 && displaced !== undefined) {
+        next[existing] = displaced;
+      }
+      next[idx] = slotName;
+      void updateFavorites(mode, next);
+    },
+    [favoriteSlotNames, mode, updateFavorites],
+  );
+
+  const onDragOver = (idx: number) => (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes(FILTER_DRAG_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverIdx !== idx) setDragOverIdx(idx);
+  };
+  const onDragLeave = () => setDragOverIdx(null);
+  const onDropEvt = (idx: number) => (e: React.DragEvent) => {
+    const slotName = e.dataTransfer.getData(FILTER_DRAG_MIME);
+    if (!slotName) return;
+    e.preventDefault();
+    onDrop(idx, slotName);
+    setDragOverIdx(null);
+  };
+
+  if (mode === 'FM') return null;
 
   return (
-    <div className="ctrl-group" style={{ minWidth: 320 }}>
-      <div
-        className="label-xs ctrl-lbl"
-        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-      >
-        <span>FILTER</span>
-        <span
-          className="mono"
-          style={{ color: 'var(--accent)', fontWeight: 600, fontSize: 11, letterSpacing: 0.5 }}
-        >
-          {widthLabel}
-        </span>
-      </div>
-      <div className="btn-row wrap" style={{ gap: 3 }}>
-        {presets.map((slot) => (
-          <button
-            key={slot.slotName}
-            type="button"
-            onClick={() => selectPreset(slot)}
-            className={`btn sm ${activeSlot === slot.slotName ? 'active' : ''}`}
-            title={`${slot.slotName}: ${slot.lowHz >= 0 ? '+' : ''}${slot.lowHz} / +${slot.highHz} Hz`}
-          >
-            {slot.slotName === 'VAR1' || slot.slotName === 'VAR2'
-              ? slot.slotName
-              : slot.label}
-          </button>
-        ))}
+    <div className="ctrl-group filter-bar" style={{ minWidth: 220 }}>
+      <div className="label-xs ctrl-lbl">FILTER</div>
+      <div className="btn-row" style={{ gap: 3 }}>
+        {favoriteSlotNames.map((slotName, idx) => {
+          const slot = presets.find((p) => p.slotName === slotName);
+          const isActive = !!slot && activeSlot === slot.slotName;
+          return (
+            <button
+              key={`fav-${idx}`}
+              type="button"
+              onClick={() => slot && selectPreset(slot)}
+              onDragOver={onDragOver(idx)}
+              onDragLeave={onDragLeave}
+              onDrop={onDropEvt(idx)}
+              className={`btn sm ${isActive ? 'active' : ''} ${dragOverIdx === idx ? 'is-drop-target' : ''}`}
+              title={
+                slot
+                  ? `${slot.slotName}: ${slot.lowHz >= 0 ? '+' : ''}${slot.lowHz} / ${slot.highHz >= 0 ? '+' : ''}${slot.highHz} Hz — drag a preset here to replace`
+                  : `Empty slot — drop a preset here`
+              }
+              aria-label={`Filter favorite ${idx + 1}: ${slot ? slot.label : slotName}`}
+            >
+              {slot ? slot.label : slotName}
+            </button>
+          );
+        })}
         <button
           type="button"
-          onClick={toggleAdvanced}
-          className={`btn sm hide-mobile ${advancedOpen ? 'active' : ''}`}
-          title={advancedOpen ? 'Close advanced filter ribbon' : 'Open advanced filter ribbon'}
-          aria-pressed={advancedOpen}
+          onClick={toggleRibbon}
+          className={`btn sm ${ribbonOpen ? 'active' : ''}`}
+          title="Open filter panel"
+          aria-expanded={ribbonOpen}
           style={{ marginLeft: 4 }}
         >
-          {advancedOpen ? '≡ ×' : '≡'}
+          ⋯
         </button>
       </div>
     </div>

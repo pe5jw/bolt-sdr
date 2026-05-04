@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -41,7 +48,7 @@ import { createWfRenderer } from '../gl/waterfall';
 import { useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
-import { ContrastSlider } from './ContrastSlider';
+import { WfDbScale } from './WfDbScale';
 
 // Throttle row uploads so the waterfall scrolls at ~(server tick / N).
 // With a 30 Hz server tick N=2 gives ~15 Hz, which is a comfortable scroll
@@ -80,13 +87,11 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     // Seed with the current store value so the palette survives remount
     // (e.g. after a resize that cycles the canvas).
     renderer.setColormap(useDisplaySettingsStore.getState().colormap);
-    renderer.setContrast(useDisplaySettingsStore.getState().contrast);
     renderer.setTransparent(transparent);
     let rafHandle = 0;
     let lastSeqDrawn = -1;
     let tickCounter = 0;
     let lastColormap: ColormapId = useDisplaySettingsStore.getState().colormap;
-    let lastContrast = useDisplaySettingsStore.getState().contrast;
 
     const redraw = () => {
       rafHandle = 0;
@@ -121,26 +126,19 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
         renderer.pushFrame(state.wfDb, state.centerHz, state.hzPerPixel, {
           skipRowUpload,
         });
-        // Panadapter still tracks dbMin/dbMax via AUTO toggle (existing
-        // behaviour). Waterfall keeps its own static wfDbMin/wfDbMax so the
-        // mapping doesn't pulse — the γ slider is the operator's only knob.
+        // Feed the auto-range tracker — it's a no-op when AUTO is off.
         useDisplaySettingsStore.getState().updateAutoRange(state.wfDb);
       }
       requestRedraw();
     });
 
-    // Auto-range changes the dbMin/dbMax uniforms without new frames — repaint
-    // when the settings store updates so the toggle feels immediate. Same
-    // subscription also catches colormap swaps; re-upload the LUT only when
-    // the id actually changed to avoid a texImage2D per auto-range tick.
+    // Repaint on dB-range or colormap changes so the WfDbScale drag and the
+    // colormap swap land without waiting for the next server frame. Re-upload
+    // the LUT only when the id actually changed to avoid a texImage2D per tick.
     const unsubSettings = useDisplaySettingsStore.subscribe((state) => {
       if (state.colormap !== lastColormap) {
         lastColormap = state.colormap;
         renderer.setColormap(state.colormap);
-      }
-      if (state.contrast !== lastContrast) {
-        lastContrast = state.contrast;
-        renderer.setContrast(state.contrast);
       }
       requestRedraw();
     });
@@ -177,7 +175,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       }}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
-      <ContrastSlider />
+      <WfDbScale />
       <div
         className="tuning-cursor"
         style={{ left: '50%', pointerEvents: 'none' }}

@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -49,8 +56,14 @@ import {
   setMicGain,
   type RadioInfoDto,
 } from '../api/client';
+import {
+  BOARD_LABELS,
+  updateRadioSelection,
+  type BoardKind,
+} from '../api/radio';
 import { getAudioClient } from '../audio/audio-client';
 import { useConnectionStore } from '../state/connection-store';
+import { useRadioStore } from '../state/radio-store';
 import { useTxStore } from '../state/tx-store';
 import {
   useConnectStore,
@@ -65,6 +78,19 @@ const DEFAULT_SAMPLE_RATE = 192_000;
 const RETRY_THRESHOLD = 2;
 const IPV4_RE = /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)$/;
 const SAMPLE_RATES: SampleRate[] = [48_000, 96_000, 192_000, 384_000];
+
+// Same set as the Settings RadioSelector, in the same order. Auto first so
+// the default Manual-mode connect behaviour is "let discovery decide".
+const MANUAL_BOARD_OPTIONS: ReadonlyArray<BoardKind> = [
+  'Auto',
+  'HermesLite2',
+  'OrionMkII',
+  'Orion',
+  'Angelia',
+  'Hermes',
+  'Metis',
+  'Griffin',
+];
 
 function endpointFor(r: RadioInfoDto): string {
   if (!r.ipAddress) return '';
@@ -94,9 +120,14 @@ export function ConnectPanel() {
   const status = useConnectionStore((s) => s.status);
   const endpoint = useConnectionStore((s) => s.endpoint);
   const applyState = useConnectionStore((s) => s.applyState);
+  // tx-store hydration runs alongside applyState on every fresh
+  // RadioStateDto so PS / TwoTone tunings persisted server-side reach the
+  // UI even when localStorage is empty (cleared cache, new browser, etc.).
+  const hydrateTxFromState = useTxStore((s) => s.hydrateFromState);
   const inflight = useConnectionStore((s) => s.inflight);
   const setInflight = useConnectionStore((s) => s.setInflight);
   const setBoardId = useConnectionStore((s) => s.setBoardId);
+  const setConnectedProtocol = useConnectionStore((s) => s.setConnectedProtocol);
   const lastConnectedEndpoint = useConnectionStore(
     (s) => s.lastConnectedEndpoint,
   );
@@ -104,6 +135,7 @@ export function ConnectPanel() {
     (s) => s.setLastConnectedEndpoint,
   );
   const wisdomPhase = useConnectionStore((s) => s.wisdomPhase);
+  const wisdomStatus = useConnectionStore((s) => s.wisdomStatus);
   const dspPreparing = wisdomPhase === 'building';
 
   const mode = useConnectStore((s) => s.mode);
@@ -127,6 +159,8 @@ export function ConnectPanel() {
   const [manualPort, setManualPort] = useState(manualFormDefaults.port);
   const [manualProtocol, setManualProtocol] = useState<ProtocolChoice>(manualFormDefaults.protocol);
   const [manualSampleRate, setManualSampleRate] = useState<SampleRate>(manualFormDefaults.sampleRate);
+  // Older persisted ManualFormDefaults predate the board field — coalesce to Auto.
+  const [manualBoard, setManualBoard] = useState<BoardKind>(manualFormDefaults.board ?? 'Auto');
   const [manualSave, setManualSave] = useState(true);
   const [manualError, setManualError] = useState<string | null>(null);
 
@@ -137,14 +171,17 @@ export function ConnectPanel() {
   useEffect(() => {
     const ctrl = new AbortController();
     fetchState(ctrl.signal)
-      .then(applyState)
+      .then((s) => {
+        applyState(s);
+        hydrateTxFromState(s);
+      })
       .catch((err) => {
         if (ctrl.signal.aborted) return;
         setError(errorMessage(err));
         setFailureCount((n) => n + 1);
       });
     return () => ctrl.abort();
-  }, [applyState]);
+  }, [applyState, hydrateTxFromState]);
 
   // Discovery polling keeps running while Manual mode is active (PRD §6.2
   // proposal): toggling back to Discover shows fresh results immediately.
@@ -191,17 +228,20 @@ export function ConnectPanel() {
       setError(null);
       try {
         if (isP2) {
-          await apiConnectP2({ endpoint: ep, sampleRate: 48_000 });
+          await apiConnectP2({ endpoint: ep, sampleRate: DEFAULT_SAMPLE_RATE });
           const fresh = await fetchState();
           applyState(fresh);
+          hydrateTxFromState(fresh);
         } else {
           const next = await apiConnect({
             endpoint: ep,
             sampleRate: DEFAULT_SAMPLE_RATE,
           });
           applyState(next);
+          hydrateTxFromState(next);
         }
         setBoardId(r.boardId || null);
+        setConnectedProtocol(isP2 ? 'P2' : 'P1');
         setLastConnectedEndpoint(ep || null);
         applyPostConnectEffects();
       } catch (err) {
@@ -210,7 +250,7 @@ export function ConnectPanel() {
         setInflight(false);
       }
     },
-    [applyState, setBoardId, setInflight, setLastConnectedEndpoint],
+    [applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setInflight, setLastConnectedEndpoint],
   );
 
   const handleManualConnect = useCallback(
@@ -220,7 +260,8 @@ export function ConnectPanel() {
       const port = override?.port ?? manualPort;
       const protocol: ProtocolChoice = override?.protocol ?? manualProtocol;
       const sampleRate: SampleRate = (override?.sampleRate as SampleRate | undefined)
-        ?? (protocol === 'P2' ? 48_000 : manualSampleRate);
+        ?? manualSampleRate;
+      const board: BoardKind = override?.board ?? manualBoard;
       const label = override?.label;
 
       if (!IPV4_RE.test(ip)) {
@@ -236,21 +277,39 @@ export function ConnectPanel() {
       setInflight(true);
       setManualError(null);
       try {
+        // Apply the operator's board choice BEFORE opening the socket so
+        // RadioService.ConnectedBoardKind resolves correctly on the very
+        // first packet — otherwise PA defaults / drive-byte / ATT would
+        // briefly use the auto-detected board until Settings was used to
+        // flip the override. 'Auto' clears any prior override.
+        const overrideOn = board !== 'Auto';
+        try {
+          await updateRadioSelection(board, overrideOn);
+          await useRadioStore.getState().load();
+        } catch (selErr) {
+          // Don't block the connect on selection-PUT failure; surface it
+          // alongside any subsequent connect error.
+          setManualError(`Board override: ${errorMessage(selErr)}`);
+        }
+
         if (protocol === 'P2') {
-          await apiConnectP2({ endpoint: ep, sampleRate: 48_000 });
+          await apiConnectP2({ endpoint: ep, sampleRate });
           const fresh = await fetchState();
           applyState(fresh);
+          hydrateTxFromState(fresh);
         } else {
           const next = await apiConnect({ endpoint: ep, sampleRate });
           applyState(next);
+          hydrateTxFromState(next);
         }
         setBoardId(null);
+        setConnectedProtocol(protocol);
         setLastConnectedEndpoint(ep);
         applyPostConnectEffects();
         if (manualSave || override) {
-          saveEndpoint({ label, ip, port, protocol, sampleRate });
+          saveEndpoint({ label, ip, port, protocol, sampleRate, board });
         }
-        setManualFormDefaults({ ip, port, protocol, sampleRate, label: '' });
+        setManualFormDefaults({ ip, port, protocol, sampleRate, board, label: '' });
       } catch (err) {
         setManualError(errorMessage(err));
       } finally {
@@ -258,9 +317,9 @@ export function ConnectPanel() {
       }
     },
     [
-      manualIp, manualPort, manualProtocol, manualSampleRate,
-      manualSave, applyState, setBoardId, setInflight, setLastConnectedEndpoint,
-      saveEndpoint, setManualFormDefaults,
+      manualIp, manualPort, manualProtocol, manualSampleRate, manualBoard,
+      manualSave, applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setInflight,
+      setLastConnectedEndpoint, saveEndpoint, setManualFormDefaults,
     ],
   );
 
@@ -273,14 +332,16 @@ export function ConnectPanel() {
       try { await apiDisconnectP2(); } catch { /* may have been P1 */ }
       const fresh = await fetchState();
       applyState(fresh);
+      hydrateTxFromState(fresh);
       setBoardId(null);
+      setConnectedProtocol(null);
       setRadios(null);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
       setInflight(false);
     }
-  }, [applyState, setBoardId, setInflight]);
+  }, [applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setInflight]);
 
   const handleRetry = useCallback(() => {
     setError(null);
@@ -327,7 +388,7 @@ export function ConnectPanel() {
   }
 
   const statusRight = dspPreparing
-    ? 'Preparing DSP…'
+    ? 'Building…'
     : status === 'Connecting'
       ? 'Connecting…'
       : inflight
@@ -427,7 +488,7 @@ export function ConnectPanel() {
         }}
       >
         <span className="label-xs" style={{ fontSize: 11, letterSpacing: '0.14em' }}>
-          Discover Radio
+          {dspPreparing ? 'First-run setup' : 'Discover Radio'}
         </span>
         <span className="label-xs" style={{ color: 'var(--fg-3)' }}>
           {scanning && <span aria-hidden>· </span>}
@@ -436,6 +497,10 @@ export function ConnectPanel() {
       </div>
 
       <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12, background: 'var(--bg-1)' }}>
+        {dspPreparing ? (
+          <WisdomBuildingBody status={wisdomStatus} />
+        ) : (
+          <>
         <div
           role="tablist"
           aria-label="Connect mode"
@@ -547,25 +612,21 @@ export function ConnectPanel() {
                       <button
                         type="button"
                         onClick={() => handleConnect(r)}
-                        disabled={r.busy || inflight || (dspPreparing && !isP2)}
+                        disabled={r.busy || inflight}
                         title={
                           r.busy
                             ? 'Radio is busy (in use by another client)'
-                            : dspPreparing && !isP2
-                              ? 'DSP is preparing FFTW plans (first-run only, up to ~2 min)'
-                              : isP2
-                                ? 'Protocol 2 path — experimental, RX only'
-                                : undefined
+                            : isP2
+                              ? 'Protocol 2 path — experimental, RX only'
+                              : undefined
                         }
-                        className={`btn sm ${r.busy ? '' : 'active'} ${dspPreparing && !isP2 ? 'pulsing' : ''}`}
+                        className={`btn sm ${r.busy ? '' : 'active'}`}
                       >
                         {r.busy
                           ? 'Busy'
-                          : dspPreparing && !isP2
-                            ? 'Preparing DSP…'
-                            : inflight
-                              ? 'Connecting…'
-                              : 'Connect'}
+                          : inflight
+                            ? 'Connecting…'
+                            : 'Connect'}
                       </button>
                     </li>
                   );
@@ -583,12 +644,13 @@ export function ConnectPanel() {
             setProtocol={setManualProtocol}
             sampleRate={manualSampleRate}
             setSampleRate={setManualSampleRate}
+            board={manualBoard}
+            setBoard={setManualBoard}
             save={manualSave}
             setSave={setManualSave}
             error={manualError}
             onConnect={() => handleManualConnect()}
             inflight={inflight}
-            dspPreparing={dspPreparing}
             savedEndpoints={sortedSaved}
             lastConnectedId={lastConnectedId}
             onReconnect={(e) => {
@@ -596,14 +658,100 @@ export function ConnectPanel() {
               setManualPort(e.port);
               setManualProtocol(e.protocol);
               setManualSampleRate(e.sampleRate);
+              setManualBoard(e.board ?? 'Auto');
               touchEndpoint(e.id);
               void handleManualConnect(e);
             }}
             onRemove={removeEndpoint}
           />
         )}
+          </>
+        )}
       </div>
       </div>
+    </div>
+  );
+}
+
+function WisdomBuildingBody({ status }: { status: string }) {
+  const trimmed = status.trim();
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-label="First-run DSP setup in progress"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'stretch',
+        gap: 12,
+        padding: '6px 2px 4px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span
+          className="mono"
+          style={{
+            color: 'var(--fg-0)',
+            fontSize: 16,
+            fontWeight: 700,
+            letterSpacing: '0.02em',
+            flex: 1,
+          }}
+        >
+          Preparing wisdom file…
+        </span>
+        <span
+          aria-label="Why is this happening?"
+          title="Wisdom precalculates FFTW transforms (forward and inverse, across every FFT size WDSP uses) so noise reduction, filters, and the panadapter respond instantly once you connect. Runs once per machine; subsequent startups skip this step."
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 18,
+            height: 18,
+            borderRadius: '50%',
+            border: '1px solid var(--panel-border)',
+            background: 'var(--bg-0)',
+            color: 'var(--fg-2)',
+            fontSize: 11,
+            fontWeight: 700,
+            cursor: 'help',
+            flexShrink: 0,
+          }}
+        >
+          i
+        </span>
+      </div>
+      <div
+        className="mono"
+        style={{
+          minHeight: 18,
+          padding: '8px 10px',
+          background: 'var(--bg-0)',
+          border: '1px solid var(--panel-border)',
+          borderRadius: 'var(--r-sm)',
+          color: 'var(--accent)',
+          fontSize: 11,
+          letterSpacing: '0.02em',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {trimmed || 'Starting FFTW planner…'}
+      </div>
+      <span
+        style={{
+          color: 'var(--fg-1)',
+          fontSize: 11,
+          lineHeight: 1.5,
+        }}
+      >
+        Helps noise reduction and filters respond faster by precalculating
+        DSP transforms. One-time, first-run only — please leave the app open
+        and wait. Connect will become available automatically.
+      </span>
     </div>
   );
 }
@@ -613,11 +761,11 @@ interface ManualModeProps {
   port: number; setPort: (v: number) => void;
   protocol: ProtocolChoice; setProtocol: (v: ProtocolChoice) => void;
   sampleRate: SampleRate; setSampleRate: (v: SampleRate) => void;
+  board: BoardKind; setBoard: (v: BoardKind) => void;
   save: boolean; setSave: (v: boolean) => void;
   error: string | null;
   onConnect: () => void;
   inflight: boolean;
-  dspPreparing: boolean;
   savedEndpoints: SavedEndpoint[];
   lastConnectedId: string | undefined;
   onReconnect: (e: SavedEndpoint) => void;
@@ -643,8 +791,7 @@ const fieldLabelStyle: React.CSSProperties = {
 };
 
 function ManualMode(p: ManualModeProps) {
-  const p2Disabled = p.protocol === 'P2';
-  const canConnect = !p.inflight && !(p.dspPreparing && p.protocol === 'P1');
+  const canConnect = !p.inflight;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div
@@ -710,13 +857,12 @@ function ManualMode(p: ManualModeProps) {
         </div>
         <label style={fieldLabelStyle}>
           <span className="label-xs" style={{ color: 'var(--fg-2)' }}>
-            Sample rate {p2Disabled && <span style={{ color: 'var(--fg-3)' }}>· forced 48k on P2</span>}
+            Sample rate
           </span>
           <select
-            value={p2Disabled ? 48_000 : p.sampleRate}
-            disabled={p2Disabled}
+            value={p.sampleRate}
             onChange={(e) => p.setSampleRate(Number(e.target.value) as SampleRate)}
-            style={{ ...inputStyle, opacity: p2Disabled ? 0.5 : 1, cursor: p2Disabled ? 'not-allowed' : 'pointer' }}
+            style={inputStyle}
           >
             {SAMPLE_RATES.map((r) => (
               <option key={r} value={r}>{r / 1000} kHz</option>
@@ -724,6 +870,42 @@ function ManualMode(p: ManualModeProps) {
           </select>
         </label>
       </div>
+
+      <label style={fieldLabelStyle}>
+        <span className="label-xs" style={{ color: 'var(--fg-2)' }}>
+          Radio type
+        </span>
+        <select
+          value={p.board}
+          onChange={(e) => p.setBoard(e.target.value as BoardKind)}
+          style={inputStyle}
+          title={
+            p.board === 'Auto'
+              ? 'Auto-detect: discovery picks the board.'
+              : 'Override active: Zeus will treat this radio as the selected board, ignoring auto-detection. Wrong choice can produce wrong drive levels — use only if you know your hardware combination is misreported (e.g. Anvelina + ANAN 200D PA).'
+          }
+        >
+          {MANUAL_BOARD_OPTIONS.map((b) => (
+            <option key={b} value={b}>
+              {BOARD_LABELS[b]}
+            </option>
+          ))}
+        </select>
+        {p.board !== 'Auto' && (
+          <span
+            className="label-xs"
+            style={{
+              color: 'var(--tx)',
+              fontSize: 10,
+              letterSpacing: 0,
+              textTransform: 'none',
+              marginTop: 2,
+            }}
+          >
+            Override active — discovery result will be ignored.
+          </span>
+        )}
+      </label>
 
       <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--fg-2)' }}>
         <input
@@ -754,14 +936,10 @@ function ManualMode(p: ManualModeProps) {
         type="button"
         onClick={p.onConnect}
         disabled={!canConnect}
-        className={`btn lg ${canConnect ? 'active' : ''} ${p.dspPreparing && p.protocol === 'P1' ? 'pulsing' : ''}`}
+        className={`btn lg ${canConnect ? 'active' : ''}`}
         style={{ alignSelf: 'stretch' }}
       >
-        {p.inflight
-          ? 'Connecting…'
-          : p.dspPreparing && p.protocol === 'P1'
-            ? 'Preparing DSP…'
-            : 'Connect'}
+        {p.inflight ? 'Connecting…' : 'Connect'}
       </button>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
@@ -810,6 +988,19 @@ function ManualMode(p: ManualModeProps) {
                       {isLast && (
                         <span className="chip accent" style={{ marginLeft: 6 }}>
                           <span className="v">LAST</span>
+                        </span>
+                      )}
+                      {e.board && e.board !== 'Auto' && (
+                        <span
+                          className="chip"
+                          style={{
+                            marginLeft: 6,
+                            background: 'var(--tx-soft)',
+                            borderColor: 'var(--tx)',
+                          }}
+                          title={`Board override: ${BOARD_LABELS[e.board]}`}
+                        >
+                          <span className="v">{BOARD_LABELS[e.board]}</span>
                         </span>
                       )}
                     </span>

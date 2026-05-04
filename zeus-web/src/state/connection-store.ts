@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -65,6 +72,8 @@ export type ConnectionState = {
   txFilterHighHz: number;
   sampleRate: number;
   agcTopDb: number;
+  autoAgcEnabled: boolean;
+  agcOffsetDb: number;
   rxAfGainDb: number;
   attenDb: number;
   autoAttEnabled: boolean;
@@ -75,6 +84,13 @@ export type ConnectionState = {
   // preamp guard treats null as "show", which is the safe default (an HL2
   // preamp toggle does nothing harmful, just nothing useful).
   boardId: string | null;
+  // Connected protocol — 'P1' or 'P2', or null when disconnected. Set by
+  // ConnectPanel on a successful /api/connect or /api/connect/p2 call so
+  // protocol-gated features (e.g. PureSignal v1 — P2 only) can disable
+  // their controls cleanly without round-tripping the discovery list.
+  // TODO(ps-p1): once Protocol1 PureSignal lands, this gate can drop the
+  // PS-toggle disabled branch.
+  connectedProtocol: 'P1' | 'P2' | null;
   preampOn: boolean;
   nr: NrConfigDto;
   zoomLevel: ZoomLevel;
@@ -84,14 +100,19 @@ export type ConnectionState = {
   // Intentionally in-memory only — no localStorage yet.
   lastConnectedEndpoint: string | null;
   wisdomPhase: WisdomPhase;
+  // Live WDSP wisdom_get_status() text streamed by the server while
+  // wisdomPhase === 'building'. Empty otherwise.
+  wisdomStatus: string;
   applyState: (s: RadioStateDto) => void;
   setInflight: (v: boolean) => void;
   setBoardId: (id: string | null) => void;
+  setConnectedProtocol: (p: 'P1' | 'P2' | null) => void;
   setPreampOn: (on: boolean) => void;
   setNr: (nr: NrConfigDto) => void;
   setZoomLevel: (level: ZoomLevel) => void;
   setLastConnectedEndpoint: (ep: string | null) => void;
   setWisdomPhase: (phase: WisdomPhase) => void;
+  setWisdomStatus: (status: string) => void;
 };
 
 export const useConnectionStore = create<ConnectionState>((set) => ({
@@ -107,12 +128,15 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   txFilterHighHz: 2850,
   sampleRate: 192_000,
   agcTopDb: 80,
+  autoAgcEnabled: false,
+  agcOffsetDb: 0,
   rxAfGainDb: 0,
   attenDb: 0,
   autoAttEnabled: true,
   attOffsetDb: 0,
   adcOverloadWarning: false,
   boardId: null,
+  connectedProtocol: null,
   preampOn: false,
   nr: { ...NR_CONFIG_DEFAULT },
   zoomLevel: 1,
@@ -121,6 +145,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   // Default to 'ready' so a page-load before the WS attach doesn't show the
   // pulse spuriously. The server overrides on attach with the real phase.
   wisdomPhase: 'ready',
+  wisdomStatus: '',
   applyState: (s) =>
     set({
       status: s.status,
@@ -135,6 +160,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       txFilterHighHz: s.txFilterHighHz,
       sampleRate: s.sampleRate,
       agcTopDb: s.agcTopDb,
+      autoAgcEnabled: s.autoAgcEnabled,
+      agcOffsetDb: s.agcOffsetDb,
       rxAfGainDb: s.rxAfGainDb,
       attenDb: s.attenDb,
       autoAttEnabled: s.autoAttEnabled,
@@ -145,10 +172,12 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
     }),
   setInflight: (inflight) => set({ inflight }),
   setBoardId: (boardId) => set({ boardId }),
+  setConnectedProtocol: (connectedProtocol) => set({ connectedProtocol }),
   setPreampOn: (preampOn) => set({ preampOn }),
   setNr: (nr) => set({ nr }),
   setZoomLevel: (zoomLevel) => set({ zoomLevel }),
   setLastConnectedEndpoint: (lastConnectedEndpoint) =>
     set({ lastConnectedEndpoint }),
   setWisdomPhase: (wisdomPhase) => set({ wisdomPhase }),
+  setWisdomStatus: (wisdomStatus) => set({ wisdomStatus }),
 }));

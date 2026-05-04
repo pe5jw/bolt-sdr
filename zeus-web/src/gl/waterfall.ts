@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -80,9 +87,6 @@ export type WfRenderer = {
   /** 1.0 = opaque (default). 0.0 = noise floor fades to transparent so a
    *  background layer (e.g. the QRZ-mode Leaflet map) shows through. */
   setTransparent: (transparent: boolean) => void;
-  /** Gamma applied to the normalised dB value before LUT lookup. 1.0 =
-   *  linear (default). >1 suppresses the noise floor; <1 lifts weak signal. */
-  setContrast: (gamma: number) => void;
   dispose: () => void;
 };
 
@@ -103,9 +107,7 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   const uWriteRow = gl.getUniformLocation(drawProg, 'uWriteRow');
   const uH = gl.getUniformLocation(drawProg, 'uH');
   const uBgAlpha = gl.getUniformLocation(drawProg, 'uBgAlpha');
-  const uContrast = gl.getUniformLocation(drawProg, 'uContrast');
   let bgAlpha = 1;
-  let contrast = 1;
 
   const shiftProg = buildProgram(gl, WF_VS, WF_SHIFT_FS);
   const uShiftSrc = gl.getUniformLocation(shiftProg, 'uSrc');
@@ -281,9 +283,6 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
     setTransparent(transparent) {
       bgAlpha = transparent ? 0 : 1;
     },
-    setContrast(gamma) {
-      contrast = Math.max(0.1, gamma);
-    },
     draw(dbMin, dbMax) {
       gl.viewport(0, 0, canvasW, canvasH);
       gl.clearColor(0, 0, 0, 0);
@@ -305,7 +304,6 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
       gl.uniform1f(uWriteRow, writeRow);
       gl.uniform1f(uH, HISTORY_ROWS);
       gl.uniform1f(uBgAlpha, bgAlpha);
-      gl.uniform1f(uContrast, contrast);
       gl.bindVertexArray(vao);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.bindVertexArray(null);

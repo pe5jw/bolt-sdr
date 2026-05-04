@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -117,7 +124,12 @@ export function AttenuatorSlider() {
         }
         className={`btn sm ${autoEnabled ? 'active' : ''} ${overload ? 'overload' : ''}`}
       >
-        {autoEnabled ? 'A-ATT' : 'S-ATT'}
+        {/* Issue #126 — Dfinitski / HPSDR convention: this control is the
+            Step Attenuator (S-ATT). The button toggles the auto-att overlay
+            on top of it; "active" CSS class conveys that auto state without
+            renaming the control itself. Previously read "A-ATT" while auto
+            was on, which was non-standard nomenclature. */}
+        S-ATT
       </button>
       <input
         type="range"
@@ -125,7 +137,7 @@ export function AttenuatorSlider() {
         max={MAX}
         step={1}
         value={sliderValue}
-        disabled={!connected}
+        disabled={!connected || autoEnabled}
         onChange={(e) => setDragValue(Number(e.currentTarget.value))}
         onMouseUp={() => {
           if (dragValue !== null) sendValue(dragValue);

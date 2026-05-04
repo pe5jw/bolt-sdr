@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -36,7 +43,7 @@
 // License for details.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { setAgcTop } from '../api/client';
+import { setAgcTop, setAutoAgc } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 
 // AGC top (max gain) in dB. 80 is the Thetis AGC_MEDIUM default; the WDSP
@@ -46,17 +53,23 @@ const MIN = 0;
 const MAX = 120;
 
 export function AgcSlider() {
-  const serverAgc = useConnectionStore((s) => s.agcTopDb);
+  const userAgc = useConnectionStore((s) => s.agcTopDb);
+  const offsetDb = useConnectionStore((s) => s.agcOffsetDb);
+  const autoEnabled = useConnectionStore((s) => s.autoAgcEnabled);
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const applyState = useConnectionStore((s) => s.applyState);
 
   // Local drag state overrides the store while the user is actively moving
   // the slider so echoed state updates don't yank the thumb back.
   const [dragValue, setDragValue] = useState<number | null>(null);
-  const value = dragValue ?? serverAgc;
+  // Slider thumb edits the user baseline (agcTopDb); the displayed number shows
+  // the effective AGC on the DSP so the user can watch the auto ramp.
+  const sliderValue = dragValue ?? userAgc;
+  const effective = Math.round(Math.max(MIN, Math.min(MAX, sliderValue + offsetDb)));
 
   const inflightAbort = useRef<AbortController | null>(null);
-  const latestSent = useRef<number>(serverAgc);
+  const latestSent = useRef<number>(userAgc);
+  const autoAbort = useRef<AbortController | null>(null);
 
   const sendValue = useCallback(
     (v: number) => {
@@ -76,18 +89,53 @@ export function AgcSlider() {
     [applyState],
   );
 
-  useEffect(() => () => inflightAbort.current?.abort(), []);
+  const toggleAuto = useCallback(() => {
+    if (!connected) return;
+    autoAbort.current?.abort();
+    const ac = new AbortController();
+    autoAbort.current = ac;
+    setAutoAgc(!autoEnabled, ac.signal)
+      .then((next) => {
+        if (!ac.signal.aborted) applyState(next);
+      })
+      .catch(() => {
+        /* state subscription will reconcile on next broadcast */
+      });
+  }, [autoEnabled, connected, applyState]);
+
+  useEffect(
+    () => () => {
+      inflightAbort.current?.abort();
+      autoAbort.current?.abort();
+    },
+    [],
+  );
 
   return (
     <label className="knob-group" style={{ minWidth: 170 }}>
-      <span className="label-xs" style={{ whiteSpace: 'nowrap' }}>AGC-T</span>
+      <button
+        type="button"
+        onClick={toggleAuto}
+        disabled={!connected}
+        aria-pressed={autoEnabled}
+        aria-label={autoEnabled ? 'Auto AGC on' : 'Auto AGC off'}
+        title={
+          autoEnabled
+            ? 'Auto-AGC ON (click to disable)'
+            : 'Auto-AGC OFF (click to enable)'
+        }
+        className={`btn sm ${autoEnabled ? 'active' : ''}`}
+        style={{ whiteSpace: 'nowrap' }}
+      >
+        AGC-T
+      </button>
       <input
         type="range"
         min={MIN}
         max={MAX}
         step={1}
-        value={value}
-        disabled={!connected}
+        value={sliderValue}
+        disabled={!connected || autoEnabled}
         onChange={(e) => setDragValue(Number(e.currentTarget.value))}
         onMouseUp={() => {
           if (dragValue !== null) sendValue(dragValue);
@@ -104,7 +152,7 @@ export function AgcSlider() {
         style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}
       />
       <span className="mono" style={{ width: 48, textAlign: 'right', color: 'var(--fg-1)', fontSize: 11 }}>
-        {value} dB
+        {effective} dB
       </span>
     </label>
   );

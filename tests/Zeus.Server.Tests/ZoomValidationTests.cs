@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -47,12 +54,26 @@ namespace Zeus.Server.Tests;
 /// bouncing against the next state-poll. Service must accept the full
 /// DSP-engine range (1..16) and reject anything outside it.
 /// </summary>
-public class ZoomValidationTests
+public class ZoomValidationTests : IDisposable
 {
-    private static RadioService BuildRadio()
+    // Per-fixture temp DBs so xUnit class-level parallelism can't collide on
+    // the shared zeus-prefs.db (Linux: ~/.local/share/Zeus/zeus-prefs.db).
+    // Without this, parallel construction of LiteDB instances against the
+    // same file races the BsonMapper and intermittently fails LINQ
+    // expression compilation with "Member X not found on BsonMapper".
+    private readonly string _dbPath =
+        Path.Combine(Path.GetTempPath(), $"zeus-prefs-zoom-{Guid.NewGuid():N}.db");
+
+    public void Dispose()
     {
-        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
-        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance);
+        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { }
+        try { if (File.Exists(_dbPath + ".pa")) File.Delete(_dbPath + ".pa"); } catch { }
+    }
+
+    private RadioService BuildRadio()
+    {
+        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath);
+        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath + ".pa");
         return new RadioService(NullLoggerFactory.Instance, dspStore, paStore);
     }
 
@@ -66,6 +87,8 @@ public class ZoomValidationTests
     [InlineData(7)]
     [InlineData(8)]
     [InlineData(16)]
+    [InlineData(24)]
+    [InlineData(32)]
     public void SetZoom_AcceptsInRangeLevels(int level)
     {
         using var radio = BuildRadio();
@@ -76,7 +99,7 @@ public class ZoomValidationTests
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    [InlineData(17)]
+    [InlineData(33)]
     [InlineData(100)]
     public void SetZoom_RejectsOutOfRangeLevels(int level)
     {

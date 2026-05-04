@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -79,34 +86,49 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
     }
 
     [Fact]
-    public async Task Post20db_SetsLinearGainOf10()
+    public async Task PostPlus10db_SetsLinearGainOfRoughly3point16()
     {
         _factory.TestEngine.GainCalls.Clear();
         using var client = _factory.CreateClient();
 
-        var resp = await client.PostAsJsonAsync("/api/mic-gain", new { db = 20 });
+        var resp = await client.PostAsJsonAsync("/api/mic-gain", new { db = 10 });
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
 
         var call = Assert.Single(_factory.TestEngine.GainCalls);
-        Assert.Equal(10.0, call, precision: 6);
+        Assert.Equal(Math.Pow(10.0, 0.5), call, precision: 6);
     }
 
     [Fact]
-    public async Task PostOutOfRange_ClampsTo0And20()
+    public async Task PostMinus20db_AttenuatesByLinearGainOfRoughly0point1()
     {
         _factory.TestEngine.GainCalls.Clear();
         using var client = _factory.CreateClient();
 
-        // db=-5 clamps to 0 → gain 1.0
+        // -20 dB → linear gain 0.1 — verifies the negative half of the range
+        // actually attenuates, not just clamps to 0 / unity.
+        var resp = await client.PostAsJsonAsync("/api/mic-gain", new { db = -20 });
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+
+        var call = Assert.Single(_factory.TestEngine.GainCalls);
+        Assert.Equal(0.1, call, precision: 6);
+    }
+
+    [Fact]
+    public async Task PostOutOfRange_ClampsToMinus40AndPlus10()
+    {
+        _factory.TestEngine.GainCalls.Clear();
+        using var client = _factory.CreateClient();
+
+        // db=-100 clamps to -40 → gain 10^(-2) = 0.01
         Assert.Equal(HttpStatusCode.OK,
-            (await client.PostAsJsonAsync("/api/mic-gain", new { db = -5 })).StatusCode);
-        // db=50 clamps to 20 → gain 10.0
+            (await client.PostAsJsonAsync("/api/mic-gain", new { db = -100 })).StatusCode);
+        // db=50 clamps to +10 → gain 10^(0.5) ≈ 3.1623
         Assert.Equal(HttpStatusCode.OK,
             (await client.PostAsJsonAsync("/api/mic-gain", new { db = 50 })).StatusCode);
 
         Assert.Collection(_factory.TestEngine.GainCalls,
-            v => Assert.Equal(1.0, v, precision: 6),
-            v => Assert.Equal(10.0, v, precision: 6));
+            v => Assert.Equal(0.01, v, precision: 6),
+            v => Assert.Equal(Math.Pow(10.0, 0.5), v, precision: 6));
     }
 
     public sealed class Factory : WebApplicationFactory<Program>
@@ -162,14 +184,35 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         public void SetZoom(int channelId, int level) { }
         public int ReadAudio(int channelId, Span<float> output) => 0;
         public bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut) => false;
+        public bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
+        public bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
         public int OpenTxChannel(int outputRateHz = 48_000) => 0;
         public void SetMox(bool moxOn) { }
         public double GetRxaSignalDbm(int channelId) => -140.0;
+        public RxStageMeters GetRxStageMeters(int channelId) => RxStageMeters.Silent;
         public void SetTxMode(RxMode mode) { }
         public void SetTxFilter(int lowHz, int highHz) { }
         public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved) => 0;
         public void SetTxTune(bool on) { }
         public TxStageMeters GetTxStageMeters() => TxStageMeters.Silent;
+        public void SetTwoTone(bool on, double freq1, double freq2, double mag) { }
+        public void SetPsEnabled(bool enabled) { }
+        public void SetPsControl(bool autoCal, bool singleCal) { }
+        public void SetPsAdvanced(bool ptol, double moxDelaySec, double loopDelaySec,
+                                  double ampDelayNs, double hwPeak, int ints, int spi) { }
+        public void SetPsHwPeak(double hwPeak) { }
+        public void FeedPsFeedbackBlock(ReadOnlySpan<float> txI, ReadOnlySpan<float> txQ,
+                                        ReadOnlySpan<float> rxI, ReadOnlySpan<float> rxQ) { }
+        public PsStageMeters GetPsStageMeters() => PsStageMeters.Silent;
+        public void ResetPs() { }
+        public void SavePsCorrection(string path) { }
+        public void RestorePsCorrection(string path) { }
+        public void SetCfcConfig(CfcConfig cfg) { }
+        public bool ProcessRxVstChain(Span<float> audio, int frames, int sampleRateHz) => false;
+        public bool ProcessTxMicVstChain(Span<float> audio, int frames, int sampleRateHz) => false;
+        public void SetTxMonitorEnabled(bool enabled) { }
+        public int ReadTxMonitorAudio(Span<float> output) => 0;
+        public bool IsTxMonitorOn => false;
         public void Dispose() { }
     }
 

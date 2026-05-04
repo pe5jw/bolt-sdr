@@ -12,33 +12,89 @@
 //
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { PaSettingsPanel } from './PaSettingsPanel';
 import { BandPlanEditor } from './bandplan/BandPlanEditor';
+import { AboutPanel } from './AboutPanel';
+import { DisplayPanel } from './DisplayPanel';
+import { QrzSettingsPanel } from './QrzSettingsPanel';
+import { RotatorSettingsPanel } from './RotatorSettingsPanel';
+import { ServerUrlPanel } from './ServerUrlPanel';
+import { TciSettingsPanel } from './TciSettingsPanel';
+import { RadioSelector } from './RadioSelector';
 import { usePaStore } from '../state/pa-store';
+import { useCapabilitiesStore } from '../state/capabilities-store';
+import { PsSettingsPanel } from './PsSettingsPanel';
+import { TxAudioToolsPanel } from './TxAudioToolsPanel';
 
-type TabId = 'pa' | 'bandplan';
+type TabId =
+  | 'pa'
+  | 'ps'
+  | 'tx-audio'
+  | 'bandplan'
+  | 'qrz'
+  | 'rotator'
+  | 'tci'
+  | 'display'
+  | 'server'
+  | 'about';
 
-const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
+const ALL_TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'pa', label: 'PA SETTINGS' },
+  { id: 'ps', label: 'PURESIGNAL' },
+  { id: 'tx-audio', label: 'TX AUDIO TOOLS' },
   { id: 'bandplan', label: 'BAND PLAN' },
+  { id: 'qrz', label: 'QRZ' },
+  { id: 'rotator', label: 'ROTATOR' },
+  { id: 'tci', label: 'TCI' },
+  { id: 'display', label: 'DISPLAY' },
+  { id: 'server', label: 'SERVER' },
+  { id: 'about', label: 'ABOUT' },
 ];
 
 type Props = {
   open: boolean;
   onClose: () => void;
+  initialTab?: TabId;
 };
 
 // Floating, draggable settings panel. Deliberately has NO backdrop: the operator
 // must be able to MOX / TUN / tune the radio while the panel is open. The only
 // event-capture surface is the panel rectangle itself; everything outside
 // (panadapter, top-bar buttons) stays clickable.
-export function SettingsMenu({ open, onClose }: Props) {
-  const [active, setActive] = useState<TabId>('pa');
+export function SettingsMenu({ open, onClose, initialTab }: Props) {
+  const [active, setActive] = useState<TabId>(initialTab ?? 'pa');
   const savePa = usePaStore((s) => s.save);
   const loadPa = usePaStore((s) => s.load);
   const paInflight = usePaStore((s) => s.inflight);
+  // Feature gates. The TX Audio Tools tab is hidden when the VST host is
+  // not available — today that means non-Linux builds and Linux builds
+  // missing the zeus-plughost sidecar binary. Hiding (rather than
+  // disabling) is deliberate: the operator can't act on a disabled tab
+  // until the platform ships its own sidecar.
+  const vstHostAvailable = useCapabilitiesStore(
+    (s) => s.capabilities?.features.vstHost.available ?? false,
+  );
+  const TABS = useMemo(
+    () => ALL_TABS.filter((t) => t.id !== 'tx-audio' || vstHostAvailable),
+    [vstHostAvailable],
+  );
+
+  // If the active tab gets filtered out (e.g. the operator was on
+  // tx-audio when the capabilities response came back saying it's
+  // unavailable), fall back to the first tab.
+  useEffect(() => {
+    if (!TABS.some((t) => t.id === active)) {
+      setActive(TABS[0]?.id ?? 'pa');
+    }
+  }, [TABS, active]);
 
   const handleApply = async () => {
     await savePa();
@@ -56,6 +112,11 @@ export function SettingsMenu({ open, onClose }: Props) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
+
+  // Set the active tab when initialTab prop changes
+  useEffect(() => {
+    if (initialTab) setActive(initialTab);
+  }, [initialTab]);
 
   useEffect(() => {
     if (!open) return;
@@ -201,6 +262,8 @@ export function SettingsMenu({ open, onClose }: Props) {
         </button>
       </div>
 
+      <RadioSelector />
+
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <nav
           role="tablist"
@@ -276,34 +339,42 @@ export function SettingsMenu({ open, onClose }: Props) {
           }}
         >
           {active === 'pa' && <PaSettingsPanel />}
+          {active === 'ps' && <PsSettingsPanel />}
+          {active === 'tx-audio' && <TxAudioToolsPanel />}
           {active === 'bandplan' && <BandPlanEditor />}
+          {active === 'qrz' && <QrzSettingsPanel />}
+          {active === 'rotator' && <RotatorSettingsPanel />}
+          {active === 'tci' && <TciSettingsPanel />}
+          {active === 'display' && <DisplayPanel />}
+          {active === 'server' && <ServerUrlPanel />}
+          {active === 'about' && <AboutPanel />}
         </div>
       </div>
 
       {active === 'pa' && (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'flex-end',
-          gap: 6,
-          padding: '10px 14px',
-          background: 'var(--bg-0)',
-          borderTop: '1px solid var(--panel-border)',
-        }}
-      >
-        <button type="button" className="btn sm" onClick={handleCancel} disabled={paInflight}>
-          CANCEL
-        </button>
-        <button
-          type="button"
-          className="btn sm active"
-          onClick={handleApply}
-          disabled={paInflight}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            gap: 6,
+            padding: '10px 14px',
+            background: 'var(--bg-0)',
+            borderTop: '1px solid var(--panel-border)',
+          }}
         >
-          {paInflight ? 'SAVING…' : 'APPLY'}
-        </button>
-      </div>
+          <button type="button" className="btn sm" onClick={handleCancel} disabled={paInflight}>
+            CANCEL
+          </button>
+          <button
+            type="button"
+            className="btn sm active"
+            onClick={handleApply}
+            disabled={paInflight}
+          >
+            {paInflight ? 'SAVING…' : 'APPLY'}
+          </button>
+        </div>
       )}
     </div>
   );

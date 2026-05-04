@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -80,8 +87,40 @@ public enum MsgType : byte
     // would be overkill. Broadcast at 2 Hz always.
     PaTemp = 0x17,
 
+    // PureSignal stage telemetry. Broadcast at 10 Hz only while PsEnabled is
+    // armed — keeps the wire quiet during normal operation. Carries WDSP
+    // GetPSInfo readouts (info[4] = feedback level, info[14] = correcting
+    // bit, info[15] = cal-state enum) plus a derived correction-depth dB
+    // and the GetPSMaxTX envelope peak. Bare-payload like TxMetersV2 (no
+    // 16-byte header) — same 10 Hz rate logic.
+    PsMeters = 0x18,
+
+    // Server → client (RX telemetry v2). Compatible additive extension of
+    // RxMeter (0x14): carries the full set of RXA stage meters — signal
+    // peak/avg (calibrated dBm), ADC peak/avg (dBFS), AGC gain (signed dB,
+    // positive = boosting), and AGC envelope peak/avg (calibrated dBm).
+    // Bare-payload like TxMetersV2 (no 16-byte header), broadcast at the
+    // same 5 Hz cadence as RxMeter. The legacy 5-byte 0x14 frame stays in
+    // flight for older clients (e.g. SMeterLive) — 0x19 is purely additive.
+    RxMetersV2 = 0x19,
+
+    // VST plugin-host event. UTF-8 text payload carrying a small notification
+    // tag that the browser maps to a /api/plughost/state re-fetch (e.g.
+    // "snapshot", "slotEditorClosed:0", "slotStateChanged:2",
+    // "chainEnabledChanged:1", "parameterChanged:0:42:0.500000",
+    // "sidecarExited:1"). Plain string keeps the format flexible while
+    // Wave 6b figures out exactly what the UI wants to consume; the browser
+    // can split on ':' to extract slot index / value. Sent from
+    // VstHostHostedService via StreamingHub.BroadcastVstHostEvent.
+    // Originally assigned 0x19 on the VST-Experimental branch; renumbered to
+    // 0x1A on merge to release/0.6.0-alpha to resolve the collision with
+    // RxMetersV2 above.
+    VstHostEvent = 0x1A,
+
     // Server → client (band plan changed). Broadcast when the active region
     // changes or the operator edits the plan. Payload: [type:1][regionIdUtf8…].
     // Frontend refetches GET /api/bands/current on receipt.
-    BandPlanChanged = 0x18,
+    // Originally 0x18 on the issue-65 branch; renumbered to 0x1B on merge
+    // with develop to resolve the collision with PsMeters above.
+    BandPlanChanged = 0x1B,
 }

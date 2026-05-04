@@ -14,10 +14,10 @@ AI agents opening PRs against this repo may autonomously fix:
 - **Bugs with a clear root cause** — null refs, missing guards, off-by-one, persistence/wiring bugs where the fix is obvious from the symptom
 - **Build / CI fixes** — missing NuGet refs, csproj typos, dotnet version bumps, workflow YAML breakage, Vite / npm config fixes
 - **Protocol / WDSP compliance fixes** — where the Zeus behavior diverges from Thetis and Thetis source confirms Zeus is wrong. *Exception:* if the fix changes a default that an operator will feel (TX power cap, filter bandwidth, AGC curve, meter scaling), that is red-light — see below.
-- **Docs and lessons updates** — additions to `docs/lessons/`, `docs/rca/`, `README.md`. Renames and restructuring are red-light.
+- **Docs and lessons updates** — additions to `docs/lessons/`, `docs/rca/`, `README.md`. Renames and restructuring are red-light. **README scope:** `README.md` stays tight — one-line radio status per board and a high-level feature list only. Extensive feature write-ups, per-panel guides, and step-by-step how-tos belong in the [GitHub wiki](https://github.com/brianbruff/openhpsdr-zeus/wiki), not the README.
 
 **Red-light (flag for maintainer review, do NOT merge without approval):**
-- **Visual design** — colors, fonts, layout, spacing, typography. Zeus has a single-hue amber convention (`#FFA028` with varying alpha, no rainbow gradients). Do not propose palette changes.
+- **Visual design** — colors, fonts, layout, spacing, typography. The Zeus aesthetic is faithful to the **Hermes Lite 2 hardware front panel**: near-black beveled panel chrome (`--panel-top`/`--panel-bot` gradient) on a blue-gray workspace (`--bg-app` `#657486`), Archivo Narrow type, and a restrained accent system — `--accent` blue `#4a9eff` for focus/state, `--tx` red `#e63a2b` for TX/gain-reduction, `--power` yellow `#ffc93a` for output power, `--orange` `#f28524` reserved for the QRZ button. The single-hue amber `#FFA028` is the **panadapter WebGL trace + meter peak-tick** color (signal-strength visualization, varying alpha — see `gl/panadapter.ts` and `docs/lessons/dev-conventions.md`); it is not a global UI accent and must not be applied to chrome, buttons, or controls. **Source of truth for the global palette is `zeus-web/src/styles/tokens.css`.** Use the existing token variables, never raw hex. Do not propose palette changes.
 - **UX behavior** — what a click/drag/scroll does, keyboard shortcuts, panadapter/waterfall axis direction, VFO tuning feel. "Wrong scroll direction" reports are almost always a missed waterfall horizontal-shift, not an axis bug — see `docs/lessons/`.
 - **Architecture** — new threads, new dependencies, new NuGet/npm packages, changes to the Zeus.Contracts wire format, signal-routing restructures.
 - **Default values** — anything an operator will notice on first connect: TX power, filter widths, AGC, meter calibration, default band/mode, color palette. One bug report is not evidence that the default is wrong for everyone.
@@ -30,8 +30,8 @@ When uncertain, implement the minimal fix and note in the PR description that de
 Before touching DSP, protocol, or layout code, skim these — they have bitten us before:
 
 - **`docs/lessons/wdsp-init-gotchas.md`** — WDSP RXA channels MUST open at `state=0` and flip via `SetChannelState(id, 1, 0)` *after* the worker is live. A `-400` meter reading means the xmeter thread didn't run. This ordering is load-bearing; do not reorder init without reading the lesson.
-- **`docs/lessons/dev-conventions.md`** — port allocation (backend **6060**, Vite dev **5173**), panadapter amber (`#FFA028`), getUserMedia on LAN IP quirks.
-- **`docs/lessons/hl2-drive-byte-quantization.md`** — HL2 honours only the top 4 bits of the TX drive byte. Touching `RadioService.RecomputePaAndPush`, `ControlFrame.WriteUsbFrame`, or any PA-calibration code without reading this will produce a radio that silently makes 20% of rated power.
+- **`docs/lessons/dev-conventions.md`** — port allocation (backend **6060**, Vite dev **5173**), panadapter trace amber (`#FFA028`, signal-strength visualization only — global palette lives in `zeus-web/src/styles/tokens.css`), getUserMedia on LAN IP quirks.
+- **`docs/lessons/hl2-drive-model.md`** — HL2 does NOT use the piHPSDR / Thetis dB drive model. It uses a percentage-based model from the mi0bot openhpsdr-thetis fork. `PaGainDb` on HL2 is a per-band output % (0..100), not decibels. Touching `HermesLite2DriveProfile`, `RadioService.RecomputePaAndPush`, `PaDefaults.GetPaGainDb`, or the PA Settings panel without reading this will produce a radio that silently makes 20% of rated power. The older `hl2-drive-byte-quantization.md` is now a redirect stub — the "calibrate to 26 dB" workaround it documented is obsolete.
 - **`docs/references/`** — vendor protocol PDFs + per-radio capability matrix. **If a board-specific doc exists (e.g. `docs/references/protocol-1/hermes-lite2-protocol.md`), read it before inferring behaviour from Thetis or piHPSDR.** The HL2 drive-byte quantisation bug cost two days because this folder wasn't consulted.
 - **`docs/rca/`** — per-incident post-mortems. Read the relevant one before "fixing" a symptom that matches.
 
@@ -63,7 +63,7 @@ Backend + frontend run independently during dev:
 dotnet run --project Zeus.Server
 
 # frontend (Vite dev server on :5173, proxies /api and /hub to :6060)
-npm --prefix Zeus.Web run dev
+npm --prefix zeus-web run dev
 ```
 
 Full details, dependency list, and native WDSP build in `README.md` and `native/`. Do not duplicate them here.
@@ -79,8 +79,9 @@ Full details, dependency list, and native WDSP build in `README.md` and `native/
 
 - **`Zeus.Contracts`** — wire format shared between server and web (frames, DTOs, enums). Changes here are red-light.
 - **`Zeus.Protocol1`** — HPSDR original-protocol UDP client, discovery, packet parsing, TX IQ ring.
+- **`Zeus.Protocol2`** — HPSDR Protocol 2 (ANAN-class / Orion) UDP client: discovery, DDC RX streaming, TX IQ/mic path.
 - **`Zeus.Dsp`** — DSP engine abstraction (`IDspEngine`), synthetic and WDSP implementations, TX-stage meters.
 - **`Zeus.Server`** — ASP.NET host, SignalR `StreamingHub`, radio / DSP / TX pipeline services, discovery.
-- **`Zeus.Web`** (frontend) — Vite + React, connects to the hub, renders panadapter/waterfall/VFO/meters.
+- **`zeus-web`** (frontend) — Vite + React, connects to the hub, renders panadapter/waterfall/VFO/meters.
 
 When in doubt about where code belongs, match the existing project's single responsibility rather than introducing a new one.

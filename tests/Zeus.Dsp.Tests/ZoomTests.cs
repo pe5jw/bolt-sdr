@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -56,7 +63,7 @@ public class ZoomTests
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    [InlineData(17)]
+    [InlineData(33)]
     [InlineData(100)]
     public void Synthetic_SetZoom_RejectsOutOfRange(int level)
     {
@@ -75,6 +82,8 @@ public class ZoomTests
     [InlineData(8)]
     [InlineData(11)]
     [InlineData(16)]
+    [InlineData(24)]
+    [InlineData(32)]
     public void Synthetic_SetZoom_AcceptsAllowedLevels(int level)
     {
         using var eng = new SyntheticDspEngine();
@@ -102,6 +111,7 @@ public class ZoomTests
             engine.SetZoom(channel, 7);
             engine.SetZoom(channel, 8);
             engine.SetZoom(channel, 16);
+            engine.SetZoom(channel, 32);
             engine.SetZoom(channel, 1);
 
             // Pixel drain should still succeed after the walk — proves the
@@ -141,7 +151,7 @@ public class ZoomTests
         {
             Assert.Throws<ArgumentException>(() => engine.SetZoom(channel, 0));
             Assert.Throws<ArgumentException>(() => engine.SetZoom(channel, -1));
-            Assert.Throws<ArgumentException>(() => engine.SetZoom(channel, 17));
+            Assert.Throws<ArgumentException>(() => engine.SetZoom(channel, 33));
         }
         finally
         {

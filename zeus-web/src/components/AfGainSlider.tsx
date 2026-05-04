@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -77,7 +84,28 @@ export function AfGainSlider() {
     [applyState],
   );
 
-  useEffect(() => () => inflightAbort.current?.abort(), []);
+  // Debounced send while dragging — 100ms is fast enough to feel immediate
+  // but prevents excessive API calls during a quick slider sweep.
+  const debounceTimer = useRef<number | null>(null);
+  const sendDebounced = useCallback(
+    (v: number) => {
+      if (debounceTimer.current !== null) {
+        clearTimeout(debounceTimer.current);
+      }
+      debounceTimer.current = window.setTimeout(() => {
+        sendValue(v);
+        debounceTimer.current = null;
+      }, 100);
+    },
+    [sendValue],
+  );
+
+  useEffect(() => () => {
+    inflightAbort.current?.abort();
+    if (debounceTimer.current !== null) {
+      clearTimeout(debounceTimer.current);
+    }
+  }, []);
 
   return (
     <label className="knob-group" style={{ minWidth: 170 }}>
@@ -89,17 +117,39 @@ export function AfGainSlider() {
         step={1}
         value={value}
         disabled={!connected}
-        onChange={(e) => setDragValue(Number(e.currentTarget.value))}
+        onChange={(e) => {
+          const newValue = Number(e.currentTarget.value);
+          setDragValue(newValue);
+          sendDebounced(newValue);
+        }}
         onMouseUp={() => {
-          if (dragValue !== null) sendValue(dragValue);
+          if (dragValue !== null) {
+            if (debounceTimer.current !== null) {
+              clearTimeout(debounceTimer.current);
+              debounceTimer.current = null;
+            }
+            sendValue(dragValue);
+          }
           setDragValue(null);
         }}
         onTouchEnd={() => {
-          if (dragValue !== null) sendValue(dragValue);
+          if (dragValue !== null) {
+            if (debounceTimer.current !== null) {
+              clearTimeout(debounceTimer.current);
+              debounceTimer.current = null;
+            }
+            sendValue(dragValue);
+          }
           setDragValue(null);
         }}
         onKeyUp={() => {
-          if (dragValue !== null) sendValue(dragValue);
+          if (dragValue !== null) {
+            if (debounceTimer.current !== null) {
+              clearTimeout(debounceTimer.current);
+              debounceTimer.current = null;
+            }
+            sendValue(dragValue);
+          }
           setDragValue(null);
         }}
         style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}

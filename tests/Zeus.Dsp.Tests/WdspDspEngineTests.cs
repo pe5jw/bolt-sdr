@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -35,7 +42,6 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-using System.Runtime.InteropServices;
 using Zeus.Contracts;
 using Zeus.Dsp;
 using Zeus.Dsp.Wdsp;
@@ -462,12 +468,6 @@ public class WdspDspEngineTests
         }
     }
 
-    private static class DebugNative
-    {
-        [DllImport("libwdsp", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern double GetRXAMeter(int channel, int mt);
-    }
-
     [SkippableFact]
     public void GetRXAMeter_SAv_EscapesSentinel_AfterIqFlows_WithTxChannelAndProductionState()
     {
@@ -517,10 +517,29 @@ public class WdspDspEngineTests
                 if (totalDrained >= 1024) break;
             }
 
-            double sAv = DebugNative.GetRXAMeter(channel, 1);
-            double adcAv = DebugNative.GetRXAMeter(channel, 3);
+            double sAv = NativeMethods.GetRXAMeter(channel, 1);
+            double adcAv = NativeMethods.GetRXAMeter(channel, 3);
             Assert.True(totalDrained > 0, $"expected audio to drain; S_AV={sAv:F1} ADC_AV={adcAv:F1}");
             Assert.True(sAv > -399.0, $"RXA_S_AV still at -400 sentinel; ADC_AV={adcAv:F1}");
+
+            // Meters Panel PR 1: assert that the full RxStageMeters snapshot
+            // also escapes the −400 sentinel once IQ has flowed. Each of the
+            // 7 indices comes from a different point in the WDSP RXA chain
+            // (smeter / adcmeter / wcpAGC), so a sentinel on any one of them
+            // would mean that stage hasn't ticked. AgcGain is signed and can
+            // legitimately read 0 when AGC is disengaged, so we use a wider
+            // bound for it (anything above −300 means it ticked).
+            var rx = engine.GetRxStageMeters(channel);
+            Assert.True(rx.SignalPk > -399.0, $"RxStageMeters.SignalPk at sentinel ({rx.SignalPk:F1})");
+            Assert.True(rx.SignalAv > -399.0, $"RxStageMeters.SignalAv at sentinel ({rx.SignalAv:F1})");
+            Assert.True(rx.AdcPk > -399.0, $"RxStageMeters.AdcPk at sentinel ({rx.AdcPk:F1})");
+            Assert.True(rx.AdcAv > -399.0, $"RxStageMeters.AdcAv at sentinel ({rx.AdcAv:F1})");
+            // AgcGain is signed dB (can be 0 when AGC is off, +30 boosting,
+            // −12 cutting). Sentinel for this index would be ~ −400 like the
+            // others; assert it's above −300 to stay conservative.
+            Assert.True(rx.AgcGain > -300.0, $"RxStageMeters.AgcGain at sentinel ({rx.AgcGain:F1})");
+            Assert.True(rx.AgcEnvPk > -399.0, $"RxStageMeters.AgcEnvPk at sentinel ({rx.AgcEnvPk:F1})");
+            Assert.True(rx.AgcEnvAv > -399.0, $"RxStageMeters.AgcEnvAv at sentinel ({rx.AgcEnvAv:F1})");
         }
         finally
         {

@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -57,6 +64,10 @@ function useDisplayHzPerPixel(): string {
 export function HeroPanel() {
   const {
     terminatorActive,
+    imageMode,
+    bgActive,
+    backgroundImage,
+    backgroundImageFit,
     moxOn,
     tunOn,
     contact,
@@ -89,7 +100,7 @@ export function HeroPanel() {
 
   return (
     <div
-      className={`panel hero ${terminatorActive ? 'qrz-mode' : ''} ${mapInteractive ? 'map-mode' : ''}`}
+      className={`panel hero ${bgActive ? 'bg-active' : ''} ${mapInteractive ? 'map-mode' : ''}`}
       style={{ display: 'flex', flexDirection: 'column', height: '100%' }}
     >
       <div className="panel-head">
@@ -101,7 +112,8 @@ export function HeroPanel() {
             <button
               type="button"
               className="chip mono"
-              onClick={() => setBeamInputStr((((sp % 360) + 360) % 360).toFixed(0))}
+              onClick={() => handleRotateToBearing(sp)}
+              title="Short path — click to rotate"
             >
               <span className="k">SP</span>
               <span className="v">{sp.toFixed(0)}°</span>
@@ -109,7 +121,8 @@ export function HeroPanel() {
             <button
               type="button"
               className="chip mono"
-              onClick={() => setBeamInputStr((((lp % 360) + 360) % 360).toFixed(0))}
+              onClick={() => handleRotateToBearing(lp)}
+              title="Long path — click to rotate"
             >
               <span className="k">LP</span>
               <span className="v">{lp.toFixed(0)}°</span>
@@ -141,10 +154,10 @@ export function HeroPanel() {
         {terminatorActive && mapAvailable && (
           <span
             className={`chip mono ${mapInteractive ? 'accent' : ''}`}
-            title="Hold M to pan/zoom the map (click-to-tune paused)"
+            title="Hold ⌥ (Alt) to zoom and pan the map (click-to-tune paused)"
           >
-            <span className="k">M</span>
-            <span className="v">{mapInteractive ? 'MAP' : 'hold'}</span>
+            <span className="k">⌥</span>
+            <span className="v">+ −</span>
           </span>
         )}
         <span className="chip mono">
@@ -153,6 +166,12 @@ export function HeroPanel() {
         </span>
       </div>
       <div className="panel-body hero-body" style={{ flex: 1, position: 'relative' }}>
+        {imageMode && (
+          <div
+            className={`image-layer ${backgroundImageFit}`}
+            style={{ backgroundImage: `url(${backgroundImage})` }}
+          />
+        )}
         <div className={`map-layer ${terminatorActive ? 'visible' : ''}`}>
           <LeafletMapErrorBoundary
             onError={(error) => {
@@ -200,7 +219,7 @@ export function HeroPanel() {
           }}
         >
           {connected && <Panadapter />}
-          {connected && <Waterfall transparent={terminatorActive} />}
+          {connected && <Waterfall transparent={bgActive} />}
         </div>
       </div>
     </div>

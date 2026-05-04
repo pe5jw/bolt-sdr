@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -37,6 +44,9 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+
+import type { CfcConfigDto, RadioStateDto } from '../api/client';
+import { CFC_CONFIG_DEFAULT } from '../api/client';
 
 // TX-side state. Intentionally separate from connection-store so the TX panel
 // can mount/unmount cleanly and so TX-specific fields (drivePercent, micGainDb,
@@ -73,11 +83,21 @@ export enum AlertKind {
   SwrTrip = 0,
   TxTimeout = 1,
   OutOfBand = 2,
+  // Frontend-only sentinel for service-worker update prompts. Shares the
+  // numeric value with TxTimeout, but the wire never sends this — it's
+  // raised locally by useSwUpdatePrompt and consumed by AlertBanner.
+  FrontendUpdate = 1,
 }
+
+export type AlertAction = {
+  label: string;
+  onClick: () => void;
+};
 
 export type Alert = {
   kind: AlertKind;
   message: string;
+  action?: AlertAction;
 };
 
 export type TxState = {
@@ -158,6 +178,98 @@ export type TxState = {
   // haven't connected). Transient per-session — not persisted.
   paTempC: number | null;
   setPaTempC: (c: number) => void;
+
+  // ---- PureSignal (predistortion) — MsgType 0x18 at 10 Hz when armed.
+  // psEnabled is the master arm; not persisted (parity with MOX).
+  // psAuto / psSingle are the cal-mode select. The advanced fields are
+  // persisted because they're per-rack tuning the operator dials in once
+  // and rarely revisits.
+  psEnabled: boolean;
+  setPsEnabled: (on: boolean) => void;
+  psAuto: boolean;
+  setPsAuto: (on: boolean) => void;
+  psSingle: boolean;
+  setPsSingle: (on: boolean) => void;
+  psPtol: boolean;
+  setPsPtol: (on: boolean) => void;
+  psAutoAttenuate: boolean;
+  setPsAutoAttenuate: (on: boolean) => void;
+  psMoxDelaySec: number;
+  setPsMoxDelaySec: (s: number) => void;
+  psLoopDelaySec: number;
+  setPsLoopDelaySec: (s: number) => void;
+  psAmpDelayNs: number;
+  setPsAmpDelayNs: (ns: number) => void;
+  psHwPeak: number;
+  setPsHwPeak: (p: number) => void;
+  // Per-board factory default resolved by the server at connect time. UI
+  // compares psHwPeak against this to show a "differs from default" hint.
+  // mi0bot ref: PSForm.cs:830 pbWarningSetPk.Visible = _PShwpeak !=
+  // HardwareSpecific.PSDefaultPeak.
+  psHwPeakDefault: number;
+  psIntsSpiPreset: string;
+  setPsIntsSpiPreset: (p: string) => void;
+  // Feedback antenna source — Internal coupler (default) or External
+  // (Bypass). On G2/MkII this flips one ALEX bit; WDSP cal/iqc are
+  // unaffected. The HW-Peak slider stays shared across sources to match
+  // pihpsdr/Thetis behaviour.
+  psFeedbackSource: 'internal' | 'external';
+  setPsFeedbackSource: (s: 'internal' | 'external') => void;
+  // PS-Monitor (issue #121) — operator-facing "Monitor PA output" toggle.
+  // When on AND PS armed AND PS converged, the TX panadapter source flips
+  // from the predistorted TX-IQ analyzer to the PS-feedback analyzer
+  // (post-PA loopback). Default off; not persisted (parity with psEnabled
+  // — viewing preference, resets each session). Hidden / disabled in the
+  // UI on boards with no PS feedback path (e.g. HermesLite2).
+  psMonitorEnabled: boolean;
+  setPsMonitorEnabled: (on: boolean) => void;
+  // TX Monitor (issue #106 follow-up) — audition toggle that engages a
+  // parallel demod of the post-CFIR TX IQ. Substitutes for RX audio in the
+  // AudioFrame stream while on. Operator preference, default off, not
+  // persisted across sessions. UI lives in the VST Host submenu, not the
+  // main GUI (per maintainer rule).
+  txMonitorEnabled: boolean;
+  setTxMonitorEnabled: (on: boolean) => void;
+  // Live readout pushed via MsgType.PsMeters (0x18) at 10 Hz when armed.
+  psFeedbackLevel: number;
+  psCorrectionDb: number;
+  psCalState: number;
+  psCorrecting: boolean;
+  psMaxTxEnvelope: number;
+  setPsMeters: (m: {
+    feedbackLevel: number;
+    correctionDb: number;
+    calState: number;
+    correcting: boolean;
+    maxTxEnvelope: number;
+  }) => void;
+
+  // ---- Two-tone test generator (TXA PostGen mode=1; protocol-agnostic).
+  twoToneOn: boolean;
+  setTwoToneOn: (on: boolean) => void;
+  twoToneFreq1: number;
+  setTwoToneFreq1: (hz: number) => void;
+  twoToneFreq2: number;
+  setTwoToneFreq2: (hz: number) => void;
+  twoToneMag: number;
+  setTwoToneMag: (m: number) => void;
+
+  // ---- CFC (Continuous Frequency Compressor) — issue #123. Whole config
+  // travels as one object so the panel's per-band edits + master toggles
+  // round-trip atomically. Persisted via partialize so a reload reads the
+  // same UI state without waiting for the server hydrate. Hydrated from
+  // the server's StateDto.cfc on connect — the server is the source of
+  // truth (LiteDB-backed) so a fresh browser sees the operator's last
+  // dial-in.
+  cfcConfig: CfcConfigDto;
+  setCfcConfig: (cfg: CfcConfigDto) => void;
+
+  // Hydrate the persistable PS / TwoTone fields from the server's StateDto.
+  // Called from ConnectPanel and App.tsx alongside connection-store.applyState
+  // so a fresh browser (no localStorage) sees the operator's last persisted
+  // dial-in instead of the hard-coded defaults. Master-arm fields are
+  // intentionally NOT hydrated — the operator must re-arm each session.
+  hydrateFromState: (s: RadioStateDto) => void;
 };
 
 export const useTxStore = create<TxState>()(
@@ -228,16 +340,115 @@ export const useTxStore = create<TxState>()(
       setAlert: (a) => set({ alert: a }),
       paTempC: null,
       setPaTempC: (c) => set({ paTempC: c }),
+
+      // PureSignal — psEnabled / psSingle / live read-out are NOT persisted;
+      // operator must re-arm each session.
+      psEnabled: false,
+      setPsEnabled: (on) => set({ psEnabled: on }),
+      psAuto: true,
+      setPsAuto: (on) => set({ psAuto: on }),
+      psSingle: false,
+      setPsSingle: (on) => set({ psSingle: on }),
+      psPtol: false,
+      setPsPtol: (on) => set({ psPtol: on }),
+      psAutoAttenuate: true,
+      setPsAutoAttenuate: (on) => set({ psAutoAttenuate: on }),
+      psMoxDelaySec: 0.2,
+      setPsMoxDelaySec: (s) => set({ psMoxDelaySec: s }),
+      psLoopDelaySec: 0,
+      setPsLoopDelaySec: (s) => set({ psLoopDelaySec: s }),
+      psAmpDelayNs: 150,
+      setPsAmpDelayNs: (ns) => set({ psAmpDelayNs: ns }),
+      psHwPeak: 0.4072,
+      setPsHwPeak: (p) => set({ psHwPeak: p }),
+      // Pre-connect default mirrors PsHwPeak; ApplyPsHwPeakForConnection on
+      // the server will push the per-board value into the StateDto, and
+      // hydrateFromState below picks it up. mi0bot PSForm.cs:830 ref.
+      psHwPeakDefault: 0.4072,
+      psIntsSpiPreset: '16/256',
+      setPsIntsSpiPreset: (p) => set({ psIntsSpiPreset: p }),
+      psFeedbackSource: 'internal',
+      setPsFeedbackSource: (s) => set({ psFeedbackSource: s }),
+      psMonitorEnabled: false,
+      setPsMonitorEnabled: (on) => set({ psMonitorEnabled: on }),
+      txMonitorEnabled: false,
+      setTxMonitorEnabled: (on) => set({ txMonitorEnabled: on }),
+      psFeedbackLevel: 0,
+      psCorrectionDb: 0,
+      psCalState: 0,
+      psCorrecting: false,
+      psMaxTxEnvelope: 0,
+      setPsMeters: (m) => set({
+        psFeedbackLevel: m.feedbackLevel,
+        psCorrectionDb: m.correctionDb,
+        psCalState: m.calState,
+        psCorrecting: m.correcting,
+        psMaxTxEnvelope: m.maxTxEnvelope,
+      }),
+
+      // Two-tone — defaults match pihpsdr.
+      twoToneOn: false,
+      setTwoToneOn: (on) => set({ twoToneOn: on }),
+      twoToneFreq1: 700,
+      setTwoToneFreq1: (hz) => set({ twoToneFreq1: hz }),
+      twoToneFreq2: 1900,
+      setTwoToneFreq2: (hz) => set({ twoToneFreq2: hz }),
+      twoToneMag: 0.49,
+      setTwoToneMag: (m) => set({ twoToneMag: m }),
+
+      // CFC — defaults mirror CfcConfig.Default on the server (master OFF,
+      // pihpsdr-classic 10-band split). The server is authoritative and
+      // hydrates over this on connect.
+      cfcConfig: CFC_CONFIG_DEFAULT,
+      setCfcConfig: (cfg) => set({ cfcConfig: cfg }),
+
+      hydrateFromState: (s) =>
+        set({
+          psAuto: s.psAuto,
+          psPtol: s.psPtol,
+          psAutoAttenuate: s.psAutoAttenuate,
+          psMoxDelaySec: s.psMoxDelaySec,
+          psLoopDelaySec: s.psLoopDelaySec,
+          psAmpDelayNs: s.psAmpDelayNs,
+          psIntsSpiPreset: s.psIntsSpiPreset,
+          psFeedbackSource: s.psFeedbackSource,
+          // mi0bot ref: PSForm.cs:830 — per-board factory default frozen by
+          // the server in ApplyPsHwPeakForConnection. Hydrated alongside the
+          // operator-tuned psHwPeak so the UI sees a coherent pair.
+          psHwPeak: s.psHwPeak,
+          psHwPeakDefault: s.psHwPeakDefault,
+          twoToneFreq1: s.twoToneFreq1,
+          twoToneFreq2: s.twoToneFreq2,
+          twoToneMag: s.twoToneMag,
+          cfcConfig: s.cfc,
+        }),
     }),
     {
       name: 'zeus-tx',
-      // Only persist the two fields the operator repeatedly sets. Everything
-      // else (mox/tun/meters/alert) is transient per-session.
+      // Persist only operator-tuning fields. Master arm bits (psEnabled,
+      // twoToneOn, mox/tun) are transient per-session.
       partialize: (s) => ({
         drivePercent: s.drivePercent,
         tunePercent: s.tunePercent,
         micGainDb: s.micGainDb,
         levelerMaxGainDb: s.levelerMaxGainDb,
+        // PS tuning is persisted server-side too, but we mirror it here so
+        // the slider seeks don't flicker on first paint after a reload.
+        psAuto: s.psAuto,
+        psPtol: s.psPtol,
+        psAutoAttenuate: s.psAutoAttenuate,
+        psMoxDelaySec: s.psMoxDelaySec,
+        psLoopDelaySec: s.psLoopDelaySec,
+        psAmpDelayNs: s.psAmpDelayNs,
+        psHwPeak: s.psHwPeak,
+        psIntsSpiPreset: s.psIntsSpiPreset,
+        psFeedbackSource: s.psFeedbackSource,
+        twoToneFreq1: s.twoToneFreq1,
+        twoToneFreq2: s.twoToneFreq2,
+        twoToneMag: s.twoToneMag,
+        // CFC tuning — persisted client-side too so the panel paints with
+        // the operator's last config before the server hydrate lands.
+        cfcConfig: s.cfcConfig,
       }),
     },
   ),

@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -199,6 +206,17 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void Spectrum0(int run, int disp, int ss, int LO, ref double pbuff);
 
+    // Pull complex IQ samples from TXA's siphon ring. The siphon sits at
+    // xsiphon's position in xtxa, which is BEFORE iqc (PureSignal correction)
+    // and BEFORE cfir/rsmpout. Default run=1, mode=0, sipsize=16384 (set
+    // inside libwdsp's create_txa). Output buffer is 2*size floats interleaved
+    // I,Q,I,Q. This lets the panadapter render the operator's pre-distortion
+    // voice spectrum so the trace looks "clean" while PS is converging — the
+    // same approach Thetis uses (cmaster.cs:544-545 + siphon.c:268).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void TXAGetaSipF1(int channel, ref float pout, int size);
+
     // Averaging trio. Mode 3 = log-recursive (EMA in dB space) — the Thetis
     // default. Backmult is the per-frame retention factor (0 = no smoothing,
     // 1 = frozen). NumAverage matters for modes 2/4; we're on mode 3 so it
@@ -308,6 +326,57 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXAEMNRpost2Rate(int channel, double tc);
+
+    // EMNR Trained gain-method tuning. emnr.c:1429,1436. T1 is the dB threshold
+    // against the trained zetaHat lookup table; T2 is a secondary suppression
+    // threshold. Only consulted by WDSP when SetRXAEMNRgainMethod=3 (Trained),
+    // but writing them is harmless either way.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRtrainZetaThresh(int channel, double thresh);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRtrainT2(int channel, double t2);
+
+    // SBNR (NR4) — libspecbleach spectral-bleaching NR. Symbols defined in
+    // native/wdsp/sbnr.c with the float / int signatures shown here.
+    // IMPORTANT: requires libwdsp rebuild — Phase 1 of issue #79; the
+    // bundled binaries shipped today do NOT export these symbols, so any
+    // call here will fail with EntryPointNotFoundException at runtime.
+    // The engine guards SBNR-on against the missing library; tests that
+    // try to actually flip Sbnr Run=1 are [Skip]'d until Phase 1 lands.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRPosition(int channel, int position);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRreductionAmount(int channel, float amount);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRsmoothingFactor(int channel, float factor);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRwhiteningFactor(int channel, float factor);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRnoiseRescale(int channel, float factor);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRpostFilterThreshold(int channel, float threshold);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRnoiseScalingType(int channel, int noise_scaling_type);
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -550,6 +619,53 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXACFCOMPRun(int channel, int run);
 
+    // CFC (Continuous Frequency Compressor — multi-band frequency-domain
+    // compressor sitting in xtxa between xeqp and xbandpass). Issue #123.
+    // Entry points are case-sensitive — note `prof_i_le` is lowercase per
+    // cfcomp.c. Verified via `nm -D libwdsp.so | grep -i CFC`.
+    //
+    // SetTXACFCOMPprofile takes parallel arrays F[], G[], E[] (frequency Hz,
+    // compression dB, post-EQ gain dB) plus optional Q-derivative arrays for
+    // the *parametric* mode. Pass IntPtr.Zero for Qg/Qe to select the classic
+    // (pihpsdr / PowerSDR) non-parametric mode — cfcomp.c:122-123 falls back
+    // to linear interpolation when the Q pointers are NULL. The caller pins
+    // F/G/E with `fixed` blocks and passes them via `ref *pF`.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACFCOMPprofile(
+        int channel,
+        int nfreqs,
+        ref double F,
+        ref double G,
+        ref double E,
+        IntPtr Qg,
+        IntPtr Qe);
+
+    // Frequency-independent pre-compressor gain (dB).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACFCOMPPrecomp(int channel, double precomp);
+
+    // Frequency-independent pre-EQ gain (dB).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACFCOMPPrePeq(int channel, double prepeq);
+
+    // Post-comp EQ branch enable (separate toggle from the master CFCOMPRun).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACFCOMPPeqRun(int channel, int run);
+
+    // Per-bin compression-meter readback. `comp_values` must be a pinned
+    // double[] sized to the FFT bins; `ready` is set to 1 when a fresh frame
+    // is available. Read-only diagnostic — not on the hot path.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void GetTXACFCOMPDisplayCompression(
+        int channel,
+        ref double comp_values,
+        out int ready);
+
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXAPHROTRun(int channel, int run);
@@ -581,6 +697,17 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXAPostGenToneFreq(int channel, double freq);
+
+    // Two-tone test generator (wdsp.h:590-591). PostGen mode=1 sums two
+    // tones at the modulator input. Standard PS calibration excitation —
+    // see Thetis PSForm.cs:935-940. Independent of TUN (mode=0).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPostGenTTMag(int channel, double mag1, double mag2);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPostGenTTFreq(int channel, double freq1, double freq2);
 
     // Pre-DSP generator (injected before the TX chain). pihpsdr transmitter.c
     // :1293-1296 explicitly disables PreGen on TXA open — WDSP's create_channel
@@ -638,4 +765,91 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial IntPtr wisdom_get_status();
+
+    // -- PureSignal (predistortion). Lives inside the TXA channel via
+    //    create_calcc / create_iqc (TXA.c:405,424). Symbol set verified
+    //    against native/wdsp/wdsp.h. The mox/solidmox args to psccF are
+    //    documented as ignored — drive MOX state through SetPSMox instead
+    //    (calcc.c:846).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSControl(int channel, int reset, int mancal, int automode, int turnon);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSRunCal(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSMox(int channel, int mox);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSFeedbackRate(int channel, int rate);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSHWPeak(int channel, double peak);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSPtol(int channel, double ptol);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSPinMode(int channel, int pin);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSMapMode(int channel, int map);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSStabilize(int channel, int stbl);
+
+    // SetPSIntsAndSpi is a heavy restart, not a setter (calcc.c:1132-1151).
+    // Only safe to call when not actively calibrating.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSIntsAndSpi(int channel, int ints, int spi);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSMoxDelay(int channel, double delay);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSLoopDelay(int channel, double delay);
+
+    // Returns the actual delay applied (clamped). pihpsdr stores the return.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial double SetPSTXDelay(int channel, double delay);
+
+    // info[16]: state-machine snapshot. Caller passes a pinned int[16].
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void GetPSInfo(int channel, IntPtr info);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void GetPSMaxTX(int channel, out double maxtx);
+
+    // pscc float variant (calcc.c:840). Feed paired TX-modulator IQ + RX
+    // feedback IQ. Block size is 1024 complex samples per pihpsdr's
+    // receiver.c:636. mox/solidmox are dead args — pass 0/0.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void psccF(int channel, int size,
+                                       float[] Itxbuff, float[] Qtxbuff,
+                                       float[] Irxbuff, float[] Qrxbuff,
+                                       int mox, int solidmox);
+
+    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void PSSaveCorr(int channel, string filename);
+
+    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void PSRestoreCorr(int channel, string filename);
 }

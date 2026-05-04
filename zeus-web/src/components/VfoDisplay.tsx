@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -102,6 +109,7 @@ export function VfoDisplay() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const digitsContainerRef = useRef<HTMLButtonElement | null>(null);
 
   const wheelTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wheelPending = useRef<number | null>(null);
@@ -180,9 +188,25 @@ export function VfoDisplay() {
   // digit's decade. Wheel up = freq up. Updates local store immediately so
   // the display tracks the wheel, POSTs the final resting value after the
   // user stops scrolling.
-  const onDigitWheel = useCallback(
-    (e: React.WheelEvent<HTMLSpanElement>) => {
-      const decadeAttr = e.currentTarget.dataset.decade;
+  //
+  // Attached as a NATIVE listener via addEventListener with { passive: false }
+  // rather than a React `onWheel` JSX prop. React 17+ delegates wheel events
+  // through a root-level passive listener, which means `e.preventDefault()`
+  // inside a synthetic onWheel handler is silently ignored — letting the
+  // ancestor `.freq-panel` (overflow:auto, see layout/panels/VfoPanel.tsx) and
+  // any other scrollable parent perform their default scroll. Compare the
+  // canonical pattern at `util/use-pan-tune-gesture.ts:307` (panadapter zoom).
+  // Event-delegated on the digits container: wheel over a `[data-decade]`
+  // span is consumed; wheel over a separator or padding is left alone so the
+  // outer page can still scroll naturally.
+  useEffect(() => {
+    const el = digitsContainerRef.current;
+    if (!el || editing) return;
+    const handler = (e: WheelEvent) => {
+      const target = e.target as Element | null;
+      const digit = target?.closest<HTMLElement>('[data-decade]');
+      if (!digit || !el.contains(digit)) return;
+      const decadeAttr = digit.dataset.decade;
       if (!decadeAttr) return;
       const decade = Number.parseInt(decadeAttr, 10);
       if (!Number.isFinite(decade) || decade <= 0) return;
@@ -198,13 +222,13 @@ export function VfoDisplay() {
       if (wheelTimer.current != null) clearTimeout(wheelTimer.current);
       wheelTimer.current = setTimeout(() => {
         wheelTimer.current = null;
-        const target = wheelPending.current;
+        const pending = wheelPending.current;
         wheelPending.current = null;
-        if (target == null) return;
+        if (pending == null) return;
         wheelInflight.current?.abort();
         const ac = new AbortController();
         wheelInflight.current = ac;
-        setVfo(target, ac.signal)
+        setVfo(pending, ac.signal)
           .then((reply) => {
             if (ac.signal.aborted) return;
             applyState(reply);
@@ -215,9 +239,11 @@ export function VfoDisplay() {
             /* next state poll will reconcile */
           });
       }, WHEEL_DEBOUNCE_MS);
-    },
-    [applyState],
-  );
+    };
+    // passive:false so preventDefault() actually stops the ancestor scroll.
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
+  }, [applyState, editing]);
 
   const digits = useMemo(() => DIGIT_PLACES, []);
 
@@ -253,6 +279,7 @@ export function VfoDisplay() {
         </div>
       ) : (
         <button
+          ref={digitsContainerRef}
           type="button"
           onClick={beginEdit}
           aria-label="Edit frequency"
@@ -268,7 +295,6 @@ export function VfoDisplay() {
                 <span
                   className={`digit ${isLeading ? 'leading' : ''}`}
                   data-decade={place.decade}
-                  onWheel={onDigitWheel}
                   style={{ cursor: 'ns-resize' }}
                 >
                   {d}

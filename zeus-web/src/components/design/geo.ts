@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -148,4 +155,47 @@ export function greatCircleSegments(
     prev = p;
   }
   return segments.filter((s) => s.length > 1);
+}
+
+/**
+ * Continuous great-circle path a→b as a single [lat, lon] list — longitudes
+ * are unwrapped (may exceed ±180°) so consecutive points stay within 180° of
+ * each other. Use for closed polygon fills where `greatCircleSegments`' split
+ * would break the ring; Leaflet handles unwrapped longitudes when rendering.
+ */
+export function greatCirclePath(
+  a: { lat: number; lon: number },
+  b: { lat: number; lon: number },
+  steps = 64,
+): [number, number][] {
+  const φ1 = toRad(a.lat);
+  const λ1 = toRad(a.lon);
+  const φ2 = toRad(b.lat);
+  const λ2 = toRad(b.lon);
+  const Δφ = φ2 - φ1;
+  const Δλ = λ2 - λ1;
+  const aa =
+    Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  const d = 2 * Math.atan2(Math.sqrt(aa), Math.sqrt(1 - aa));
+  if (d === 0) return [[a.lat, a.lon]];
+
+  const pts: [number, number][] = [];
+  let prevLon: number | null = null;
+  for (let i = 0; i <= steps; i++) {
+    const f = i / steps;
+    const A = Math.sin((1 - f) * d) / Math.sin(d);
+    const B = Math.sin(f * d) / Math.sin(d);
+    const x = A * Math.cos(φ1) * Math.cos(λ1) + B * Math.cos(φ2) * Math.cos(λ2);
+    const y = A * Math.cos(φ1) * Math.sin(λ1) + B * Math.cos(φ2) * Math.sin(λ2);
+    const z = A * Math.sin(φ1) + B * Math.sin(φ2);
+    const φ = Math.atan2(z, Math.sqrt(x * x + y * y));
+    let lon = toDeg(Math.atan2(y, x));
+    if (prevLon != null) {
+      while (lon - prevLon > 180) lon -= 360;
+      while (lon - prevLon < -180) lon += 360;
+    }
+    pts.push([toDeg(φ), lon]);
+    prevLon = lon;
+  }
+  return pts;
 }

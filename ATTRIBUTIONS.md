@@ -16,11 +16,13 @@ text is in [`LICENSE`](LICENSE). Every first-party source file in this
 repository carries the `SPDX-License-Identifier: GPL-2.0-or-later` tag
 plus a short-form copyright and attribution block.
 
-This licence was chosen deliberately to align Zeus with its two direct
-upstreams:
+This licence was chosen deliberately to align Zeus with its primary
+upstreams and reference projects:
 
 - **Thetis** — GPL v2 or later
 - **WDSP** — GPL v2 or later
+- **pihpsdr** — GPL v2 or later
+- **DeskHPSDR** — GPL v2 or later
 
 Zeus's "or later" clause preserves forward-compatibility with downstream
 GPL v3 works.
@@ -97,6 +99,7 @@ forward through the lineage above — made this project possible:
 | Joe Torrey | WD5Y |
 | Andrew Mansfield | M0YGG |
 | Reid Campbell | MI0BOT |
+| Sigi Jetzlsperger | DH1KLM |
 | **FlexRadio Systems** | *(corporate)* |
 
 Some Thetis contributions carry dual-licensing statements in addition
@@ -123,10 +126,84 @@ Five small shim / glue files under `native/wdsp/` and
 GPL-2.0-or-later under the Zeus copyright:
 
 - `native/wdsp/wdsp_export.h`
-- `native/wdsp/stubs/rnnoise.h`
-- `native/wdsp/stubs/rnnr_stub.c`
-- `native/wdsp/stubs/sbnr_stub.c`
-- `native/wdsp/stubs/specbleach_adenoiser.h`
+- `native/wdsp/stubs/nr3/rnnoise.h`
+- `native/wdsp/stubs/nr3/rnnr_stub.c`
+- `native/wdsp/stubs/nr4/sbnr_stub.c`
+- `native/wdsp/stubs/nr4/specbleach_adenoiser.h`
+
+## libspecbleach
+
+Zeus's NR4 (SBNR — Spectral Bleaching Noise Reduction) signal path links
+against **libspecbleach** (Luciano Dato), vendored in-tree under
+[`native/libspecbleach/`](native/libspecbleach/). The library is built as
+a static sub-target of `libwdsp` with hidden symbol visibility, so the
+SBNR exports surface from `libwdsp.{so,dll,dylib}` directly and end-users
+do not see a separate runtime dependency.
+
+libspecbleach is **Copyright (C) 2022 Luciano Dato
+&lt;lucianodato@gmail.com&gt;** and is distributed under the **GNU Lesser
+General Public License, version 2.1 or (at your option) any later
+version** (LGPL-2.1-or-later). The full licence text is preserved
+verbatim at
+[`native/libspecbleach/LICENSE`](native/libspecbleach/LICENSE);
+provenance and a re-vendor recipe are in
+[`native/libspecbleach/VENDORING.md`](native/libspecbleach/VENDORING.md).
+
+The vendored copy is the **MW0LGE-modified snapshot that ships with
+Thetis**, sourced from
+`Thetis/Project Files/lib/NR_Algorithms_x64/src/libspecbleach/`. This was
+chosen over upstream `lucianodato/libspecbleach` so that Zeus's
+`specbleach_adaptive_*` calls in `native/wdsp/sbnr.c` match Thetis's NR4
+reference behaviour bit-for-bit. The MW0LGE modifications are
+concentrated in `CMakeLists.txt` (FFTW3f path discovery for the Windows
+build, marked `# MW0LGE (c) 2025`); the algorithmic source under `src/`
+matches upstream as of the Thetis snapshot.
+
+Upstream:
+- Original library — <https://github.com/lucianodato/libspecbleach>
+- Thetis-modified snapshot — <https://github.com/ramdor/Thetis>
+
+LGPL-2.1-or-later → GPL-2.0-or-later is one-way licence-compatible, so
+linking libspecbleach into Zeus's GPL-2-or-later distribution is
+consistent with both the LGPL's permissive linking clause and Zeus's own
+licence terms. Zeus does not modify the vendored libspecbleach source;
+per-file headers in `native/libspecbleach/` are preserved as received
+from upstream and must remain so on re-vendor.
+
+libspecbleach also introduces a build-time dependency on **FFTW3f** (the
+single-precision build of FFTW3) on every host that rebuilds the native
+library. FFTW3f is a separately-distributed library and is not vendored
+into Zeus; see `native/README.md` for the per-platform install hint.
+
+## Relationship to pihpsdr
+
+Zeus is independent of pihpsdr but **routinely consulted pihpsdr source as
+the authoritative reference for Saturn-class (ANAN G2, G2 MkII, Saturn /
+Saturn-XDMA) Protocol-2 behaviour**, particularly for:
+
+- Hardware-peak values per board class (`transmitter.c`)
+- Wire-format byte semantics on `CmdHighPriority` and `CmdTx` (`new_protocol.c`)
+- PureSignal arm sequence and `tx_ps_reset` / `tx_ps_resume` patterns
+- ALEX antenna routing for the PS feedback DDC pair
+- DDC0 / DDC1 sample-pair convention into `pscc()`
+
+pihpsdr is maintained by **Christoph Wüllen, DL1YCF** at
+[github.com/dl1ycf/pihpsdr](https://github.com/dl1ycf/pihpsdr) and is
+licensed GPL-2.0-or-later, compatible with Zeus.
+
+Zeus acknowledges the following pihpsdr contributors whose work informed
+Zeus's Protocol-2 / PureSignal implementation:
+
+| Callsign |
+| --- |
+| DL1YCF (Christoph Wüllen) |
+
+## Relationship to DeskHPSDR
+
+Zeus is independent of DeskHPSDR but consulted DeskHPSDR as a
+cross-reference for HPSDR client behaviour. DeskHPSDR is maintained by
+**Heiko, DL1BZ** at [github.com/dl1bz/deskhpsdr](https://github.com/dl1bz/deskhpsdr)
+and is licensed GPL-2.0-or-later, compatible with Zeus.
 
 ## Third-party assets and imagery
 
@@ -138,10 +215,10 @@ imagery is reproduced in this repository.
 ## Per-file header format
 
 Every first-party Zeus source file begins with an SPDX identifier,
-the Zeus copyright line, the short GPL notice, and a Thetis /
-WDSP acknowledgement block that names all twelve Thetis
-contributors and points back at this file. See any source file
-for the canonical form.
+the Zeus copyright line, the short GPL notice, and an acknowledgement
+block that names all thirteen Thetis contributors, references pihpsdr
+(DL1YCF) and DeskHPSDR (DL1BZ), and points back at this file.
+See any source file for the canonical form.
 
 ## Reporting attribution concerns
 

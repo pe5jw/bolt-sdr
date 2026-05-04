@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -36,6 +43,7 @@
 // License for details.
 
 import { useDisplayStore } from '../state/display-store';
+import { useConnectionStore } from '../state/connection-store';
 
 function pickStrideHz(spanHz: number, targetTicks: number): number {
   if (spanHz <= 0) return 1;
@@ -61,11 +69,15 @@ function formatMHz(hz: number, strideHz: number): string {
 
 // Overlay rendered inside Panadapter's container. Positions ticks by
 // percentage of the total span so it stays aligned without measuring DOM
-// width: spanHz = panDb.length * hzPerPixel; centerHz lands at 50%.
+// width: spanHz = panDb.length * hzPerPixel; centerHz is the radio's
+// physical LO and lands at 50%. The amber dial-marker line tracks
+// VfoHz, which equals centerHz outside CW and sits ±cw_pitch from
+// centre in CWU/CWL — in non-CW the marker stays at 50% (zero offset).
 export function FreqAxis() {
   const centerHz = useDisplayStore((s) => s.centerHz);
   const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
   const width = useDisplayStore((s) => s.panDb?.length ?? 0);
+  const vfoHz = useConnectionStore((s) => s.vfoHz);
 
   if (!width || hzPerPixel <= 0) return null;
 
@@ -74,6 +86,7 @@ export function FreqAxis() {
   const center = Number(centerHz);
   const startHz = center - spanHz / 2;
   const endHz = center + spanHz / 2;
+  const dialPct = ((vfoHz - startHz) / spanHz) * 100;
 
   const firstIdx = Math.ceil(startHz / stride);
   const lastIdx = Math.floor(endHz / stride);
@@ -99,9 +112,15 @@ export function FreqAxis() {
           </div>
         ))}
       </div>
+      {/*
+        Dial-position marker — sits at VfoHz, which equals centerHz outside
+        CW and is offset by ±cw_pitch from centre in CWU/CWL. In CW the
+        marker lives inside the (amber) passband overlay, so it uses the
+        accent blue + a 2px width to read clearly against the amber fill.
+       */}
       <div
-        className="pointer-events-none absolute inset-y-0 z-10 w-px bg-amber-400/60"
-        style={{ left: '50%' }}
+        className="pointer-events-none absolute inset-y-0 z-[15] -translate-x-1/2"
+        style={{ left: `${dialPct}%`, width: 2, background: 'var(--accent)' }}
       />
     </>
   );

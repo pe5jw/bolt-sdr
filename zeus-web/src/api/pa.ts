@@ -12,6 +12,12 @@
 //
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 
 export type PaBandSettings = {
   band: string;
@@ -24,7 +30,6 @@ export type PaBandSettings = {
 export type PaGlobalSettings = {
   paEnabled: boolean;
   paMaxPowerWatts: number;
-  ocTune: number;
 };
 
 export type PaSettings = {
@@ -43,7 +48,6 @@ type PaBandDtoRaw = {
 type PaGlobalDtoRaw = {
   paEnabled?: unknown;
   paMaxPowerWatts?: unknown;
-  ocTune?: unknown;
 };
 
 type PaSettingsDtoRaw = {
@@ -63,7 +67,6 @@ function normalizeGlobal(raw: PaGlobalDtoRaw | undefined): PaGlobalSettings {
   return {
     paEnabled: toBool(raw?.paEnabled, true),
     paMaxPowerWatts: Math.max(0, Math.round(toNumber(raw?.paMaxPowerWatts, 0))),
-    ocTune: Math.max(0, Math.min(0x7f, Math.round(toNumber(raw?.ocTune, 0)))),
   };
 }
 
@@ -85,9 +88,36 @@ function normalize(raw: PaSettingsDtoRaw): PaSettings {
   };
 }
 
-export async function fetchPaSettings(signal?: AbortSignal): Promise<PaSettings> {
-  const res = await fetch('/api/pa-settings', { signal });
-  if (!res.ok) throw new Error(`GET /api/pa-settings → ${res.status}`);
+// boardOverride=undefined → use the effective board (connected > preferred).
+// Passing a board name lets the radio-selector preview another board's
+// defaults for empty rows without mutating the stored preference. Existing
+// saved per-band calibration is unaffected either way.
+export async function fetchPaSettings(
+  signal?: AbortSignal,
+  boardOverride?: string,
+): Promise<PaSettings> {
+  const url = boardOverride
+    ? `/api/pa-settings?board=${encodeURIComponent(boardOverride)}`
+    : '/api/pa-settings';
+  const res = await fetch(url, { signal });
+  if (!res.ok) throw new Error(`GET ${url} → ${res.status}`);
+  const raw = (await res.json()) as PaSettingsDtoRaw;
+  return normalize(raw);
+}
+
+// Pure board defaults — hits /api/pa-settings/defaults which skips the
+// LiteDB pa_bands collection entirely and returns the piHPSDR/Thetis seed
+// values for the requested board. Used by the "Reset to defaults" button
+// to stomp prior calibration.
+export async function fetchPaDefaults(
+  boardOverride?: string,
+  signal?: AbortSignal,
+): Promise<PaSettings> {
+  const url = boardOverride
+    ? `/api/pa-settings/defaults?board=${encodeURIComponent(boardOverride)}`
+    : '/api/pa-settings/defaults';
+  const res = await fetch(url, { signal });
+  if (!res.ok) throw new Error(`GET ${url} → ${res.status}`);
   const raw = (await res.json()) as PaSettingsDtoRaw;
   return normalize(raw);
 }
