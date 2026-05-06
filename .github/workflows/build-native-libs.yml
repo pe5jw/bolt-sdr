@@ -27,15 +27,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install FFTW via vcpkg (static-md triplet, dynamic CRT)
+      - name: Install FFTW via vcpkg
         run: |
-          # static-md = FFTW linked statically into wdsp.dll, but using the
-          # default dynamic CRT (/MD) so no CRT mismatch with CMake defaults.
-          # Result: a single self-contained wdsp.dll, no fftw3.dll needed.
-          # vcpkg's fftw3 port builds all three precisions (fftw3, fftw3f,
-          # fftw3l) by default, so libspecbleach (NR4) gets fftw3f from the
-          # same install.
-          vcpkg install fftw3:${{ matrix.arch }}-windows-static-md
+          # CRT linkage is per-arch:
+          #
+          # x64 uses the static-md triplet — FFTW is linked statically into
+          # wdsp.dll, but the resulting DLL still imports the dynamic CRT
+          # (vcruntime140.dll, ucrtbase.dll). On x64 boxes vcruntime140.dll
+          # is effectively ubiquitous (Office, Steam, .NET SDK, the bulk of
+          # Windows installer programs all ship the VC++ Redistributable),
+          # so this is fine and matches the choice that has been working
+          # for x64 for the entire Zeus 0.x line.
+          #
+          # arm64 uses the static triplet — FFTW *and* the CRT are linked
+          # into wdsp.dll (matched on the CMake side by
+          # CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded). Win-ARM does NOT
+          # ship the ARM64 VC++ Redistributable by default and a fresh
+          # Surface Pro X / Snapdragon X Elite system has no other
+          # ARM64 native software to drag it in. With the static-md
+          # triplet the resulting wdsp.dll loads VCRUNTIME140.dll at
+          # runtime and we ship to a "module could not be found" error
+          # the first time anything in WdspNativeLoader tries to open a
+          # channel. The static-CRT build has zero non-Windows-shipped
+          # imports — verified locally with llvm-objdump.
+          $triplet = if ("${{ matrix.arch }}" -eq "arm64") {
+            "arm64-windows-static"
+          } else {
+            "x64-windows-static-md"
+          }
+          vcpkg install fftw3:$triplet
+          # Persist for the Configure CMake step so we don't re-derive.
+          echo "VCPKG_TRIPLET=$triplet" >> $env:GITHUB_ENV
           echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
 
       - name: Configure CMake
@@ -55,14 +77,28 @@ jobs:
           # WDSP_WITH_NR4=ON pulls in native/libspecbleach/ as a STATIC sub-
           # target embedded into wdsp.dll. NR3 stays OFF (librnnoise not
           # vendored). Both flags are explicit for build-log clarity.
+          #
+          # arm64 also passes CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded so
+          # WDSP itself is built with /MT, matching the static-CRT FFTW
+          # produced by the arm64-windows-static vcpkg triplet. Without
+          # this match the link step trips LNK2038 ("mismatch detected
+          # for 'RuntimeLibrary'") because vcpkg's libfftw3-3.lib expects
+          # /MT and CMake's MSVC default is /MD. See the FFTW step above
+          # for why arm64 needs static CRT in the first place.
+          $extraArgs = if ("${{ matrix.arch }}" -eq "arm64") {
+            @("-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded")
+          } else {
+            @()
+          }
           cmake -S native/wdsp -B native/build `
             -G "Visual Studio 17 2022" `
             -A $archFlag `
             -T ClangCL `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=${{ matrix.arch }}-windows-static-md `
+            -DVCPKG_TARGET_TRIPLET=$env:VCPKG_TRIPLET `
             -DWDSP_WITH_NR3=OFF `
-            -DWDSP_WITH_NR4=ON
+            -DWDSP_WITH_NR4=ON `
+            @extraArgs
 
       - name: Build
         run: |
