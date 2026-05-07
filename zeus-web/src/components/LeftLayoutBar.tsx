@@ -6,9 +6,21 @@
 // LeftLayoutBar — vertical bar listing the current radio's named layouts.
 // Each item shows a large emoji icon with a small label beneath. Clicking
 // switches to that layout; the gear opens LayoutSettingsModal to edit the
-// label, icon, and tooltip description. The "+" button opens the same modal
-// in create mode; "✕" deletes the active layout; "⟳" resets it to the
-// default tile arrangement.
+// label, icon, and tooltip description.
+//
+// Layout-list anatomy (top → bottom):
+//   • One tab per saved NamedLayout (icon + label, optional gear/✕).
+//   • A trailing dashed "+" placeholder tab — always present — that opens
+//     LayoutSettingsModal in create mode. The "+" is a slot, not a button:
+//     adding a layout slides it down so the next "+" sits below the new
+//     layout. This replaces the earlier separate "+" / "⟳" actions row.
+//   • A horizontal divider, then the bottom-pinned Settings slot. Clicking
+//     it flips layout-store.settingsViewOpen so App swaps the workspace
+//     for SettingsView. Picking any layout tab clears that flag.
+//
+// The "Reset to default" affordance lives on the bottom transport bar
+// alongside "+ Add Panel" — both act on the active layout's tile
+// arrangement, so they read naturally as a pair there.
 //
 // Issue #241: visual chrome reuses tokens.css; no new colors are introduced.
 
@@ -32,8 +44,9 @@ export function LeftLayoutBar() {
   const addLayout = useLayoutStore((s) => s.addLayout);
   const removeLayout = useLayoutStore((s) => s.removeLayout);
   const updateLayoutMeta = useLayoutStore((s) => s.updateLayoutMeta);
-  const resetActiveLayout = useLayoutStore((s) => s.resetActiveLayout);
   const isLoaded = useLayoutStore((s) => s.isLoaded);
+  const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
+  const setSettingsView = useLayoutStore((s) => s.setSettingsView);
   // The bar's blue gradient + dot wash follows the operator's panadapter
   // trace colour from the Display tab. CLAUDE.md flags trace amber as
   // "panadapter-only", but the maintainer explicitly asked for the chrome
@@ -70,13 +83,6 @@ export function LeftLayoutBar() {
     removeLayout(id);
   };
 
-  const handleReset = () => {
-    const active = layouts.find((l) => l.id === activeLayoutId);
-    if (!active) return;
-    if (!window.confirm(`Reset “${active.name}” to the default panel arrangement?`)) return;
-    resetActiveLayout();
-  };
-
   const openEdit = (id: string) => setModal({ kind: 'edit', id });
 
   const handleModalSave = (value: LayoutSettingsValue) => {
@@ -104,74 +110,89 @@ export function LeftLayoutBar() {
         {!isLoaded ? (
           <div className="lb-empty" aria-hidden>…</div>
         ) : (
-          layouts.map((l) => {
-            const active = l.id === activeLayoutId;
-            const tooltip = l.description?.trim()
-              ? `${l.name} — ${l.description}`
-              : `${l.name} (gear to edit)`;
-            return (
-              <div key={l.id} className={`lb-item ${active ? 'active' : ''}`}>
-                <button
-                  type="button"
-                  className="lb-tab"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => setActiveLayout(l.id)}
-                  title={tooltip}
-                >
-                  <span
-                    className={`lb-tab-icon ${l.icon ? '' : 'lb-tab-icon-fallback'}`}
-                    aria-hidden
-                  >
-                    {l.icon || initialLetter(l.name)}
-                  </span>
-                  <span className="lb-tab-name">{l.name}</span>
-                </button>
-                <button
-                  type="button"
-                  className="lb-gear"
-                  onClick={() => openEdit(l.id)}
-                  title={`Edit ${l.name}`}
-                  aria-label={`Edit ${l.name}`}
-                >
-                  ⚙
-                </button>
-                {active && layouts.length > 1 && (
+          <>
+            {layouts.map((l) => {
+              // While the Settings view is showing no layout tab is active —
+              // it's a sibling view, not a layout. The flag is cleared the
+              // moment the operator clicks any layout tab (setActiveLayout).
+              const active = !settingsViewOpen && l.id === activeLayoutId;
+              const tooltip = l.description?.trim()
+                ? `${l.name} — ${l.description}`
+                : `${l.name} (gear to edit)`;
+              return (
+                <div key={l.id} className={`lb-item ${active ? 'active' : ''}`}>
                   <button
                     type="button"
-                    className="lb-x"
-                    onClick={() => handleDelete(l.id, l.name)}
-                    title={`Delete ${l.name}`}
-                    aria-label={`Delete ${l.name}`}
+                    className="lb-tab"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setActiveLayout(l.id)}
+                    title={tooltip}
                   >
-                    ✕
+                    <span
+                      className={`lb-tab-icon ${l.icon ? '' : 'lb-tab-icon-fallback'}`}
+                      aria-hidden
+                    >
+                      {l.icon || initialLetter(l.name)}
+                    </span>
+                    <span className="lb-tab-name">{l.name}</span>
                   </button>
-                )}
-              </div>
-            );
-          })
+                  <button
+                    type="button"
+                    className="lb-gear"
+                    onClick={() => openEdit(l.id)}
+                    title={`Edit ${l.name}`}
+                    aria-label={`Edit ${l.name}`}
+                  >
+                    ⚙
+                  </button>
+                  {active && layouts.length > 1 && (
+                    <button
+                      type="button"
+                      className="lb-x"
+                      onClick={() => handleDelete(l.id, l.name)}
+                      title={`Delete ${l.name}`}
+                      aria-label={`Delete ${l.name}`}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+            {/* Trailing placeholder slot — always at the end of the list.
+                Adding a layout pushes this slot down one row, so the "+"
+                stays the bottom-most tab. */}
+            <div className="lb-item lb-item-add">
+              <button
+                type="button"
+                className="lb-tab lb-tab-add"
+                onClick={handleAdd}
+                title="Add a new layout"
+                aria-label="Add a new layout"
+              >
+                <span className="lb-tab-icon lb-tab-icon-fallback" aria-hidden>
+                  +
+                </span>
+                <span className="lb-tab-name">Add</span>
+              </button>
+            </div>
+          </>
         )}
       </div>
 
-      <div className="lb-actions">
+      <div className="lb-divider" aria-hidden />
+
+      <div className="lb-settings-slot">
         <button
           type="button"
-          className="btn sm lb-action"
-          onClick={handleAdd}
-          title="Add a new layout"
-          aria-label="Add a new layout"
+          className={`lb-tab lb-tab-settings ${settingsViewOpen ? 'active' : ''}`}
+          onClick={() => setSettingsView(!settingsViewOpen)}
+          title="Open settings"
+          aria-pressed={settingsViewOpen}
         >
-          +
-        </button>
-        <button
-          type="button"
-          className="btn ghost sm lb-action"
-          onClick={handleReset}
-          title="Reset active layout to default"
-          aria-label="Reset active layout to default"
-          disabled={!isLoaded || layouts.length === 0}
-        >
-          ⟳
+          <span className="lb-tab-icon" aria-hidden>⚙</span>
+          <span className="lb-tab-name">Settings</span>
         </button>
       </div>
 
