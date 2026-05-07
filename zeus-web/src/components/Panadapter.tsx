@@ -198,16 +198,33 @@ export function Panadapter() {
       requestRedraw();
     });
 
-    // Repaint on auto-range updates so palette changes apply without waiting
-    // for the next server frame.
-    const unsubSettings = useDisplaySettingsStore.subscribe(() => {
-      requestRedraw();
+    // Repaint on dB-range / trace-color updates so auto-range and the Display
+    // settings panel apply without waiting for the next server frame. The
+    // prev-state diff is the load-bearing part: a no-selector subscribe used
+    // to fire on every store mutation, which during ordinary RX traffic
+    // pulled the panadapter rAF floor above the spectrum-tick rate.
+    const unsubSettings = useDisplaySettingsStore.subscribe((state, prev) => {
+      if (
+        state.dbMin !== prev.dbMin ||
+        state.dbMax !== prev.dbMax ||
+        state.txDbMin !== prev.txDbMin ||
+        state.txDbMax !== prev.txDbMax ||
+        state.rxTraceColor !== prev.rxTraceColor
+      ) {
+        requestRedraw();
+      }
     });
 
     // Repaint when MOX / TUN flips so the RX-vs-TX dB range swap is
     // reflected immediately, even if no fresh pan frame arrived yet.
-    const unsubTx = useTxStore.subscribe(() => {
-      requestRedraw();
+    // App.tsx:211 uses the same prev-state diff pattern — without it the
+    // unconditional subscriber fires on every tx-store update (mic dBFS at
+    // 50 Hz from the worklet, RxDbm at 5 Hz, PaTempC at 2 Hz, etc.), which
+    // raises the floor on the redraw rate above the spectrum-tick rate.
+    const unsubTx = useTxStore.subscribe((state, prev) => {
+      if (state.moxOn !== prev.moxOn || state.tunOn !== prev.tunOn) {
+        requestRedraw();
+      }
     });
 
     return () => {

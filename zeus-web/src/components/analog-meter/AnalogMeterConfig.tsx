@@ -88,9 +88,20 @@ interface AnalogMeterConfigProps {
 
 export function AnalogMeterConfig({ open, onClose }: AnalogMeterConfigProps) {
   const cfg = useAnalogMeterStore();
+  // The flyout is the dominant idle CPU cost on this panel — its 30+ form
+  // controls (sliders, checkboxes, tick buttons) were reconciled on every
+  // parent render even when the gear was closed, because the previous form
+  // returned the full tree and only toggled a CSS class. With
+  // AnalogMeterPanel's ballistic rAF loop driving renders at near-frame-rate,
+  // each invisible commit was re-applying ~580 input attributes per second
+  // observed via MutationObserver. Returning null when closed eliminates the
+  // entire reconcile + DOM-commit cost; the trade-off is that the slide-down
+  // animation is now a mount/unmount, which is fine for a settings flyout
+  // that opens infrequently.
+  if (!open) return null;
 
   return (
-    <div className={`am-config ${open ? 'open' : ''}`} aria-hidden={!open}>
+    <div className="am-config open">
       <div className="am-cf-grid">
         <section className="am-cf-sect">
           <header>
