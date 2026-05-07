@@ -157,11 +157,13 @@ export const useRotatorStore = create<RotatorStoreState>((set) => ({
 }));
 
 // Kick off an initial status probe at module load, then poll at 1 s while the
-// page is alive. When rotctld is enabled and connected, this keeps the pill's
-// current-az readout in sync without the UI having to subscribe to a WS stream.
+// page is alive AND rotctld is enabled. When disabled there's nothing to
+// reconcile — skip the fetch to avoid an idle-RX HTTP wakeup the user can't
+// see anyway.
 if (typeof window !== 'undefined') {
   void useRotatorStore.getState().refreshStatus();
   window.setInterval(() => {
+    if (!useRotatorStore.getState().config.enabled) return;
     void useRotatorStore.getState().refreshStatus();
   }, 1000);
 
