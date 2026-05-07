@@ -62,7 +62,7 @@ import { PsToggleButton } from './components/PsToggleButton';
 import { PaTempChip } from './components/PaTempChip';
 import { QrzStatusPill } from './components/QrzStatusPill';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
-import { SettingsMenu } from './components/SettingsMenu';
+import { SettingsView, type SettingsTabId } from './components/SettingsMenu';
 import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
 import { BOARD_LABELS } from './api/radio';
@@ -100,8 +100,9 @@ const STATE_POLL_MS = 333;
 
 export default function App() {
   useSwUpdatePrompt();
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'pa' | 'qrz' | 'rotator' | 'server' | 'about' | undefined>();
+  const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
+  const settingsInitialTab = useLayoutStore((s) => s.settingsInitialTab);
+  const setSettingsView = useLayoutStore((s) => s.setSettingsView);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [installUpdate, setInstallUpdate] = useState<(() => Promise<void>) | null>(null);
   const status = useConnectionStore((s) => s.status);
@@ -223,7 +224,7 @@ export default function App() {
   }, []);
 
   // Handle deeplink via URL hash (#qrz, #rotator, #pa, #server, #about).
-  // Opens settings menu and navigates to the specified tab.
+  // Opens the settings view and navigates to the specified tab.
   useEffect(() => {
     const handleHash = () => {
       const hash = window.location.hash.slice(1); // Remove '#'
@@ -234,8 +235,7 @@ export default function App() {
         hash === 'server' ||
         hash === 'about'
       ) {
-        setSettingsInitialTab(hash);
-        setSettingsOpen(true);
+        setSettingsView(true, hash as SettingsTabId);
         // Clear the hash after handling it
         window.history.replaceState(null, '', window.location.pathname + window.location.search);
       }
@@ -247,7 +247,7 @@ export default function App() {
     // Listen for hash changes
     window.addEventListener('hashchange', handleHash);
     return () => window.removeEventListener('hashchange', handleHash);
-  }, []);
+  }, [setSettingsView]);
 
   // First-run UX for native shells (Capacitor): if there is no server URL
   // configured, the app would spin trying to reach the WebView's own host.
@@ -256,9 +256,8 @@ export default function App() {
   useEffect(() => {
     if (!isCapacitorRuntime()) return;
     if (getServerBaseUrl()) return;
-    setSettingsInitialTab('server');
-    setSettingsOpen(true);
-  }, []);
+    setSettingsView(true, 'server');
+  }, [setSettingsView]);
 
   // --- Design-mock state (QRZ, DSP grid toggles, CW WPM, memories) ---
   const [callsign, setCallsign] = useState('');
@@ -697,29 +696,29 @@ export default function App() {
 
         <div className="spacer" style={{ flex: 1 }} />
 
-        {/* Settings comes first, then Disconnect. Rotator / QRZ pills and the
-            radio IP moved to the BottomStatusBar — no need to duplicate them
-            up here. While disconnected the centre overlay owns Discover so
-            we mount only one ConnectPanel at a time. */}
-        <button
-          type="button"
-          className="btn"
-          onClick={() => setSettingsOpen(true)}
-          title="Open settings menu"
-        >
-          ⚙
-        </button>
+        {/* Settings is reached from the LeftLayoutBar (bottom slot). The
+            top bar is now reserved for Disconnect when connected; while
+            disconnected the centre overlay owns Discover so we mount only
+            one ConnectPanel at a time. */}
         {connected && <ConnectPanel compact />}
       </header>
 
       <AlertBanner />
 
-      {/* Active layout's workspace. Keying on activeLayoutId forces a full
-          unmount + remount when the operator switches layouts so WebGL
-          canvases / RAF loops / hub subscriptions in the prior layout
-          release rather than lingering hidden (issue #241 requires that
-          inactive layouts not consume DOM resources). */}
-      <FlexWorkspace key={activeLayoutId} />
+      {/* Active layout's workspace, or the inline Settings view if the
+          operator picked the Settings slot in the LeftLayoutBar. Keying on
+          activeLayoutId forces a full unmount + remount when the operator
+          switches layouts so WebGL canvases / RAF loops / hub subscriptions
+          in the prior layout release rather than lingering hidden (issue
+          #241 requires that inactive layouts not consume DOM resources). */}
+      {settingsViewOpen ? (
+        <SettingsView
+          initialTab={settingsInitialTab as SettingsTabId | undefined}
+          onClose={() => setSettingsView(false)}
+        />
+      ) : (
+        <FlexWorkspace key={activeLayoutId} />
+      )}
 
       {/* Transport — MOX/TUN + audio + mic + macro buttons on the left,
           PA/PRE chips, then the per-radio status (radio IP, rotator, QRZ)
@@ -749,18 +748,38 @@ export default function App() {
         </span>
         <RotatorStatusPill />
         <QrzStatusPill />
+        {/* Add Panel + Reset live together at the bottom-right: both act on
+            the active layout's tile arrangement, so keeping them adjacent
+            makes the relationship obvious. Disabled while the Settings
+            view is showing (no active workspace to mutate). */}
         <button
           type="button"
-          className="btn sm"
+          className="btn"
           onClick={() => useLayoutStore.getState().setAddPanelOpen(true)}
+          disabled={settingsViewOpen}
           title="Add a panel to the active layout"
         >
           + Add Panel
         </button>
+        <button
+          type="button"
+          className="btn ghost"
+          onClick={() => {
+            const s = useLayoutStore.getState();
+            const active = s.layouts.find((l) => l.id === s.activeLayoutId);
+            if (!active) return;
+            if (!window.confirm(`Reset “${active.name}” to the default panel arrangement?`)) return;
+            s.resetActiveLayout();
+          }}
+          disabled={settingsViewOpen}
+          title="Reset active layout to default"
+          aria-label="Reset active layout to default"
+        >
+          ⟳ Default
+        </button>
       </div>
 
       {disconnectedOverlay}
-      <SettingsMenu open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsInitialTab} />
       <UpdatePrompt show={updateAvailable} onUpdate={installUpdate} />
     </div>
     </SpectrumWheelActionsContext.Provider>
