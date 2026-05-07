@@ -43,7 +43,7 @@
 // License for details.
 
 import { useEffect, useRef } from 'react';
-import { COLORMAPS, type ColormapId } from '../gl/colormap';
+import { COLORMAPS } from '../gl/colormap';
 import { createWfRenderer } from '../gl/waterfall';
 import { useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
@@ -92,7 +92,13 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     let rafHandle = 0;
     let lastSeqDrawn = -1;
     let tickCounter = 0;
-    let lastColormap: ColormapId = useDisplaySettingsStore.getState().colormap;
+    // Visibility gating: skip the rAF redraw when the waterfall tile is
+    // scrolled offscreen or the tab is hidden. We still push frames into
+    // the history texture so when visibility resumes the operator sees a
+    // continuous timeline; we just don't paint to the visible surface.
+    let inViewport = true;
+    let pageVisible = !document.hidden;
+    const isActive = () => inViewport && pageVisible;
 
     const redraw = () => {
       rafHandle = 0;
@@ -106,12 +112,18 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       renderer.draw(dbMin, dbMax);
     };
     const requestRedraw = () => {
+      if (!isActive()) return;
       if (rafHandle === 0) rafHandle = requestAnimationFrame(redraw);
     };
 
     const resize = () => {
       const { width, height } = container.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
+      // Clamp the WebGL backing store at DPR=1. Waterfall is typically the
+      // largest GPU surface in the workspace; running it at native Retina
+      // DPR pushes 4× pixel data through every composite for no visible
+      // gain (the colormap is a smooth gradient and the per-row history
+      // shift is integer-pixel). Same rationale as Panadapter.
+      const dpr = Math.min(1, window.devicePixelRatio || 1);
       const w = Math.max(1, Math.round(width * dpr));
       const h = Math.max(1, Math.round(height * dpr));
       canvas.width = w;
@@ -123,6 +135,22 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     const ro = new ResizeObserver(resize);
     ro.observe(container);
     resize();
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          inViewport = e.isIntersecting;
+        }
+        if (isActive()) requestRedraw();
+      },
+      { threshold: 0 },
+    );
+    io.observe(container);
+    const onVisibilityChange = () => {
+      pageVisible = !document.hidden;
+      if (isActive()) requestRedraw();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     const unsub = useDisplayStore.subscribe((state) => {
       if (state.lastSeq === lastSeqDrawn) return;
@@ -141,19 +169,37 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
 
     // Repaint on dB-range or colormap changes so the WfDbScale drag and the
     // colormap swap land without waiting for the next server frame. Re-upload
-    // the LUT only when the id actually changed to avoid a texImage2D per tick.
-    const unsubSettings = useDisplaySettingsStore.subscribe((state) => {
-      if (state.colormap !== lastColormap) {
-        lastColormap = state.colormap;
+    // the LUT only when the id actually changed to avoid a texImage2D per
+    // tick. The prev-state diff is load-bearing: a no-selector subscribe
+    // used to fire (and redraw) on every store mutation, which during
+    // ordinary RX traffic pulled the waterfall rAF floor above the
+    // spectrum-tick rate.
+    const unsubSettings = useDisplaySettingsStore.subscribe((state, prev) => {
+      if (state.colormap !== prev.colormap) {
         renderer.setColormap(state.colormap);
+        requestRedraw();
+        return;
       }
-      requestRedraw();
+      if (
+        state.wfDbMin !== prev.wfDbMin ||
+        state.wfDbMax !== prev.wfDbMax ||
+        state.wfTxDbMin !== prev.wfTxDbMin ||
+        state.wfTxDbMax !== prev.wfTxDbMax
+      ) {
+        requestRedraw();
+      }
     });
 
     // Repaint when MOX/TUN flips so the RX↔TX waterfall window swap lands
     // immediately instead of waiting for the next server frame or scale drag.
-    const unsubTx = useTxStore.subscribe(() => {
-      requestRedraw();
+    // App.tsx:211 uses the same prev-state diff pattern — without it the
+    // unconditional subscriber fires on every tx-store update (mic dBFS at
+    // 50 Hz from the worklet) and raises the floor on redraw rate above the
+    // spectrum-tick rate.
+    const unsubTx = useTxStore.subscribe((state, prev) => {
+      if (state.moxOn !== prev.moxOn || state.tunOn !== prev.tunOn) {
+        requestRedraw();
+      }
     });
 
     return () => {
@@ -161,6 +207,8 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       unsubSettings();
       unsubTx();
       ro.disconnect();
+      io.disconnect();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       if (rafHandle !== 0) cancelAnimationFrame(rafHandle);
       renderer.dispose();
       rendererRef.current = null;
