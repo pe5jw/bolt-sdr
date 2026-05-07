@@ -52,6 +52,14 @@ import { warnOnce } from '../util/logger';
 // render -∞ and so the bar snaps to fully-empty on a quiet mic.
 const MIC_DBFS_FLOOR = -100;
 
+// Visual update cadence for MicMeter. The mic worklet emits a peak per
+// 20 ms block (50 Hz); driving Zustand at that rate triggers ~50 React
+// reconciliations a second of the bottom-bar meter, which is invisible to
+// the operator but a real CPU drain. We bucket the worklet's per-block
+// peaks across a ~50 ms window (20 Hz visual rate, smoother than TV) and
+// emit the *maximum* of each window so clip indication stays accurate.
+const MIC_VISUAL_INTERVAL_MS = 50;
+
 /**
  * Opens the mic AudioWorklet on mount and keeps it running while the app
  * is live. Peak dBFS of every 20 ms block is pushed to tx-store so the
@@ -68,13 +76,23 @@ export function useMicUplink(): void {
   useEffect(() => {
     let handle: MicUplinkHandle | null = null;
     let disposed = false;
+    let windowPeak = 0;
+    let lastEmit = 0;
 
     startMicUplink((samples, peak) => {
-      // Level: always pushed so MicMeter animates on RX.
-      const dbfs = peak > 0
-        ? Math.max(MIC_DBFS_FLOOR, 20 * Math.log10(peak))
-        : MIC_DBFS_FLOOR;
-      useTxStore.getState().setMicDbfs(dbfs);
+      // Level: always pushed so MicMeter animates on RX. Bucket the
+      // per-block peaks across MIC_VISUAL_INTERVAL_MS and emit the max so
+      // a transient clip is never lost between visual ticks.
+      if (peak > windowPeak) windowPeak = peak;
+      const now = performance.now();
+      if (now - lastEmit >= MIC_VISUAL_INTERVAL_MS) {
+        const dbfs = windowPeak > 0
+          ? Math.max(MIC_DBFS_FLOOR, 20 * Math.log10(windowPeak))
+          : MIC_DBFS_FLOOR;
+        useTxStore.getState().setMicDbfs(dbfs);
+        lastEmit = now;
+        windowPeak = 0;
+      }
 
       // Samples: only forwarded to the server while keyed. Capturing always +
       // gating here avoids a ~300 ms getUserMedia cold-start on every MOX.

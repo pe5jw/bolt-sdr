@@ -95,8 +95,10 @@ import type { QrzStation } from './api/qrz';
 import type { Contact } from './components/design/data';
 
 // See ../state/connection-store.ts — StateDto is REST-poll only; WS is binary
-// frames. 333 ms poll keeps slow state (atten offset, adc overload) fresh.
-const STATE_POLL_MS = 333;
+// frames. 1 s poll keeps slow state (atten offset, adc overload) fresh — the
+// previous 333 ms cadence accounted for ~3 of the ~5 idle-RX fetches/sec and
+// drove repeated applyState/hydrateFromState fan-out into the React tree.
+const STATE_POLL_MS = 1000;
 
 export default function App() {
   useSwUpdatePrompt();
