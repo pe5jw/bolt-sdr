@@ -352,7 +352,7 @@
 }
 .ps-peak .ps-meter {
   height: 6px;
-  border-radius: 3px;
+  border-radius: 0;
   background: var(--meter-bg);
   overflow: hidden;
   border: 1px solid var(--panel-border);
@@ -944,7 +944,7 @@
 .ps-popover-meter {
   position: relative;
   height: 5px;
-  border-radius: 3px;
+  border-radius: 0;
   background: var(--meter-bg);
   border: 1px solid var(--panel-border);
   overflow: hidden;

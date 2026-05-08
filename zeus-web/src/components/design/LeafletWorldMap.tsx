@@ -170,7 +170,7 @@ function callsignAvatarIcon(station: MapStation, tone: 'home' | 'target'): L.Div
         left: 50%;
         transform: translateX(-50%);
         padding: 1px 6px;
-        border-radius: 3px;
+        border-radius: 0;
         background: ${chipBg};
         border: 1px solid ${chipBorder};
         color: ${chipText};
@@ -217,7 +217,7 @@ function buildTargetPopup(
         ${hasRotator
           ? `<button type="button" data-lf-action="rotate" data-lf-bearing="${bearing.toFixed(1)}"
               style="
-                padding: 3px 8px; font-size: 11px; border-radius: 3px;
+                padding: 3px 8px; font-size: 11px; border-radius: 0;
                 border: 1px solid ${COLOR_CYAN}; background: rgba(0,221,255,0.15);
                 color: ${COLOR_CYAN}; cursor: pointer; font-family: inherit;
               ">Rotate ${brg}</button>`

@@ -73,10 +73,11 @@
   --font-display: 'Archivo Narrow', sans-serif;
 
   /* ----- Spacing / radius ----- */
-  --r-xs: 2px;
-  --r-sm: 3px;
-  --r-md: 4px;
-  --r-lg: 6px;
+  /* Square-edge experiment: all corner radii flattened. */
+  --r-xs: 0;
+  --r-sm: 0;
+  --r-md: 0;
+  --r-lg: 0;
 
   /* ----- Easing ----- */
   --ease-out: cubic-bezier(.22,.61,.36,1);

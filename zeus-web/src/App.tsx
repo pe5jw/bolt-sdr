@@ -705,22 +705,22 @@ export default function App() {
         {connected && <ConnectPanel compact />}
       </header>
 
-      <AlertBanner />
-
-      {/* Active layout's workspace, or the inline Settings view if the
-          operator picked the Settings slot in the LeftLayoutBar. Keying on
-          activeLayoutId forces a full unmount + remount when the operator
-          switches layouts so WebGL canvases / RAF loops / hub subscriptions
-          in the prior layout release rather than lingering hidden (issue
-          #241 requires that inactive layouts not consume DOM resources). */}
-      {settingsViewOpen ? (
-        <SettingsView
-          initialTab={settingsInitialTab as SettingsTabId | undefined}
-          onClose={() => setSettingsView(false)}
-        />
-      ) : (
-        <FlexWorkspace key={activeLayoutId} />
-      )}
+      {/* Workspace area — alert banner + active layout (or settings view).
+          Wrapped together so the grid only needs one row for both, which
+          keeps the gap between the topbar and the first panel a single
+          6px unit instead of stacking two grid gaps around an empty
+          alert row. */}
+      <div className="workspace-area">
+        <AlertBanner />
+        {settingsViewOpen ? (
+          <SettingsView
+            initialTab={settingsInitialTab as SettingsTabId | undefined}
+            onClose={() => setSettingsView(false)}
+          />
+        ) : (
+          <FlexWorkspace key={activeLayoutId} />
+        )}
+      </div>
 
       {/* Transport — MOX/TUN + audio + mic + macro buttons on the left,
           PA/PRE chips, then the per-radio status (radio IP, rotator, QRZ)

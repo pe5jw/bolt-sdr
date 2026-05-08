@@ -153,26 +153,26 @@ export function BandPlanEditor() {
             </span>
           </label>
           {store.txGuardIgnore && (
-            <span style={{ fontSize: 10, color: 'rgba(255,80,80,0.8)', background: 'rgba(255,0,0,0.08)', padding: '2px 6px', borderRadius: 4, border: '1px solid rgba(255,80,80,0.3)' }}>
+            <span style={{ fontSize: 10, color: 'rgba(255,80,80,0.8)', background: 'rgba(255,0,0,0.08)', padding: '2px 6px', borderRadius: 0, border: '1px solid rgba(255,80,80,0.3)' }}>
               ⚠ MOX will fire regardless of band legality
             </span>
           )}
         </div>
       </div>
 
-      <div style={{ fontSize: 10, color: 'var(--fg-3)', background: 'rgba(255,160,40,0.06)', border: '1px solid rgba(255,160,40,0.15)', borderRadius: 4, padding: '6px 10px' }}>
+      <div style={{ fontSize: 10, color: 'var(--fg-3)', background: 'rgba(255,160,40,0.06)', border: '1px solid rgba(255,160,40,0.15)', borderRadius: 0, padding: '6px 10px' }}>
         Defaults are best-effort. You are responsible for operating within your licence.
         Source files under Zeus.Server/BandPlans/ — corrections welcome as PRs.
       </div>
 
       {error && (
-        <div style={{ fontSize: 11, color: '#ff5555', background: 'rgba(255,0,0,0.08)', border: '1px solid rgba(255,80,80,0.3)', borderRadius: 4, padding: '6px 10px' }}>
+        <div style={{ fontSize: 11, color: '#ff5555', background: 'rgba(255,0,0,0.08)', border: '1px solid rgba(255,80,80,0.3)', borderRadius: 0, padding: '6px 10px' }}>
           {error}
         </div>
       )}
 
       {/* Segment table */}
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', border: '1px solid var(--panel-border)', borderRadius: 4 }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', border: '1px solid var(--panel-border)', borderRadius: 0 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ background: 'var(--bg-0)', position: 'sticky', top: 0, zIndex: 1 }}>

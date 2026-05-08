@@ -37,7 +37,7 @@
   font-weight: 600;
   padding: 3px 7px;
   border: 1px solid color-mix(in oklab, var(--accent) 50%, var(--panel-border));
-  border-radius: 3px;
+  border-radius: 0;
   background: color-mix(in oklab, var(--accent) 8%, transparent);
   white-space: nowrap;
 }
@@ -80,7 +80,7 @@
   background: var(--bg-0);
   border: 1px solid var(--panel-border);
   color: var(--fg-1);
-  border-radius: 3px;
+  border-radius: 0;
   padding: 3px 6px;
   font-family: var(--font-mono);
   font-size: 11px;
@@ -107,7 +107,7 @@
 .cfc-power .sw {
   width: 42px;
   height: 22px;
-  border-radius: 11px;
+  border-radius: 0;
   background: var(--bg-3);
   border: 1px solid var(--panel-border);
   position: relative;
@@ -163,7 +163,7 @@
 .cfc-check .box {
   width: 14px;
   height: 14px;
-  border-radius: 3px;
+  border-radius: 0;
   background: var(--bg-0);
   border: 1px solid var(--panel-border);
   display: inline-block;
@@ -203,7 +203,7 @@
   color: var(--fg-2);
   background: var(--bg-0);
   border: 1px solid var(--panel-border);
-  border-radius: 3px;
+  border-radius: 0;
   padding: 4px 10px;
   cursor: pointer;
 }

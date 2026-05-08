@@ -112,7 +112,7 @@ export function VstHostSearchPaths() {
             background: 'var(--bg-0)',
             color: 'var(--fg-1)',
             border: '1px solid var(--panel-border)',
-            borderRadius: 3,
+            borderRadius: 0,
             fontSize: 12,
           }}
         />
