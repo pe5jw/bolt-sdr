@@ -46,7 +46,7 @@ import { useEffect, useRef } from 'react';
 import { COLORMAPS } from '../gl/colormap';
 import { createWfRenderer } from '../gl/waterfall';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
-import { useDisplayStore } from '../state/display-store';
+import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
@@ -83,6 +83,11 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       console.error('WebGL2 not available');
       return;
     }
+
+    // Tell the realtime client that decoded spectrum frames are needed —
+    // ws-client.ts skips decodeDisplayFrame entirely when no consumer is
+    // registered (all spectrum surfaces closed).
+    const releaseFrameConsumer = registerFrameConsumer();
 
     const renderer = createWfRenderer(gl);
     rendererRef.current = renderer;
@@ -214,6 +219,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       cancelDrawBusFrame(redraw);
       renderer.dispose();
       rendererRef.current = null;
+      releaseFrameConsumer();
     };
   }, []);
 

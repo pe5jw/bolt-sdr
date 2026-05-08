@@ -46,7 +46,7 @@ import { useEffect, useRef } from 'react';
 import { createPanRenderer, hexToRgbFloats } from '../gl/panadapter';
 import { planWaterfallUpdate } from '../gl/wf-shift';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
-import { useDisplayStore } from '../state/display-store';
+import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
@@ -68,6 +68,11 @@ export function Panadapter() {
       console.error('WebGL2 not available');
       return;
     }
+
+    // Tell the realtime client that decoded spectrum frames are needed —
+    // ws-client.ts skips decodeDisplayFrame entirely when no consumer is
+    // registered (all spectrum surfaces closed).
+    const releaseFrameConsumer = registerFrameConsumer();
 
     const renderer = createPanRenderer(gl);
     // Mirror the waterfall's shift state so pan and wf agree on what a VFO
@@ -238,6 +243,7 @@ export function Panadapter() {
       document.removeEventListener('visibilitychange', onVisibilityChange);
       cancelDrawBusFrame(redraw);
       renderer.dispose();
+      releaseFrameConsumer();
     };
   }, []);
 
