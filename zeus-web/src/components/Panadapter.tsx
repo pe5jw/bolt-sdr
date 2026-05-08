@@ -45,6 +45,7 @@
 import { useEffect, useRef } from 'react';
 import { createPanRenderer, hexToRgbFloats } from '../gl/panadapter';
 import { planWaterfallUpdate } from '../gl/wf-shift';
+import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useTxStore } from '../state/tx-store';
@@ -80,7 +81,6 @@ export function Panadapter() {
     let lastWidth = 0;
     let drawPan: Float32Array | null = null;
     let drawOffsetPx = 0;
-    let rafHandle = 0;
     // Visibility gating: don't burn rAF cycles when the tile is scrolled
     // off-screen, the tab is hidden, or the operator switched to a layout
     // where the panadapter isn't mounted-but-visible. Both signals are
@@ -90,7 +90,6 @@ export function Panadapter() {
     const isActive = () => inViewport && pageVisible;
 
     const redraw = () => {
-      rafHandle = 0;
       if (!drawPan) return;
       const s = useDisplaySettingsStore.getState();
       // While keyed (MOX or TUN — server already feeds TX pixels via
@@ -107,7 +106,10 @@ export function Panadapter() {
     };
     const requestRedraw = () => {
       if (!isActive()) return;
-      if (rafHandle === 0) rafHandle = requestAnimationFrame(redraw);
+      // Shared draw bus: panadapter + waterfall coalesce onto a single rAF
+      // per frame. The bus dedupes repeated requests for the same callback,
+      // matching the prior `if (rafHandle === 0)` gate.
+      requestDrawBusFrame(redraw);
     };
 
     const resize = () => {
@@ -234,7 +236,7 @@ export function Panadapter() {
       ro.disconnect();
       io.disconnect();
       document.removeEventListener('visibilitychange', onVisibilityChange);
-      if (rafHandle !== 0) cancelAnimationFrame(rafHandle);
+      cancelDrawBusFrame(redraw);
       renderer.dispose();
     };
   }, []);
