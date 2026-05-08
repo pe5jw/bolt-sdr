@@ -45,7 +45,8 @@
 import { useEffect, useRef } from 'react';
 import { COLORMAPS } from '../gl/colormap';
 import { createWfRenderer } from '../gl/waterfall';
-import { useDisplayStore } from '../state/display-store';
+import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
+import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
@@ -83,13 +84,17 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       return;
     }
 
+    // Tell the realtime client that decoded spectrum frames are needed —
+    // ws-client.ts skips decodeDisplayFrame entirely when no consumer is
+    // registered (all spectrum surfaces closed).
+    const releaseFrameConsumer = registerFrameConsumer();
+
     const renderer = createWfRenderer(gl);
     rendererRef.current = renderer;
     // Seed with the current store value so the palette survives remount
     // (e.g. after a resize that cycles the canvas).
     renderer.setColormap(useDisplaySettingsStore.getState().colormap);
     renderer.setTransparent(transparent);
-    let rafHandle = 0;
     let lastSeqDrawn = -1;
     let tickCounter = 0;
     // Visibility gating: skip the rAF redraw when the waterfall tile is
@@ -101,7 +106,6 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     const isActive = () => inViewport && pageVisible;
 
     const redraw = () => {
-      rafHandle = 0;
       const { wfDbMin, wfDbMax, wfTxDbMin, wfTxDbMax } = useDisplaySettingsStore.getState();
       const { moxOn, tunOn } = useTxStore.getState();
       const keyed = moxOn || tunOn;
@@ -113,7 +117,10 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     };
     const requestRedraw = () => {
       if (!isActive()) return;
-      if (rafHandle === 0) rafHandle = requestAnimationFrame(redraw);
+      // Shared draw bus: panadapter + waterfall coalesce onto a single rAF
+      // per frame. The bus dedupes repeated requests for the same callback,
+      // matching the prior `if (rafHandle === 0)` gate.
+      requestDrawBusFrame(redraw);
     };
 
     const resize = () => {
@@ -209,9 +216,10 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       ro.disconnect();
       io.disconnect();
       document.removeEventListener('visibilitychange', onVisibilityChange);
-      if (rafHandle !== 0) cancelAnimationFrame(rafHandle);
+      cancelDrawBusFrame(redraw);
       renderer.dispose();
       rendererRef.current = null;
+      releaseFrameConsumer();
     };
   }, []);
 

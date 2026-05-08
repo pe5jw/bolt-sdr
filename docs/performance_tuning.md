@@ -158,3 +158,172 @@ during a session.
   (`MoxTick = 100 ms`, `IdleTick = 500 ms`).
 - Canvas DPR clamp + visibility gate (prior work): `9a36afe`,
   `1c5859a`.
+
+---
+
+# perf3 — backend allocations + frontend coalesce
+
+This is the next pass on `fix/performance3`. Same Mac mini / Chrome via
+Playwright / HL2 idle 20 m USB methodology as perf2. Four investigations
+in parallel: rAF coalesce, persistent-subscriber audit, pushFrame gate,
+and a fresh Zeus.Server profile (the missing piece — perf2 only looked
+at frontend).
+
+## Headline
+
+The frontend candidates from perf2's "what's left" list landed but their
+predicted wins (~1–2 pp each) sit below the **per-31-sample noise floor
+(±2-3 pp)** on this hardware. The honest read is "no measurable
+regression, code is structurally cleaner."
+
+The actionable win was **on the backend**:
+
+| Process | perf3 baseline | after perf3 fixes | Δ |
+|---|---|---|---|
+| Renderer | 19.9 % | 24.8 % | +4.9 (within noise + audio-mute confound, see below) |
+| GPU helper | 7.9 % | 9.2 % | +1.3 (noise) |
+| **Zeus.Server** | **32.7 %** | **25.7 %** | **−7.0 pp** |
+
+Zeus.Server allocation rate dropped roughly **36 %** (per `dotnet-trace`
+gc-verbose) — that's the load-bearing change. The CPU drop is the
+visible consequence.
+
+## What we changed
+
+### `9e3a4d4` `perf(draw-bus)` — frontend candidate #1
+
+`zeus-web/src/realtime/draw-bus.ts` (new). `Panadapter.tsx` and
+`Waterfall.tsx` now register their `redraw` callback on a shared bus
+instead of each calling their own `requestAnimationFrame`. One rAF per
+frame dispatches all registered callbacks. Visibility gating (`isActive`)
+still lives per-component, before the bus call.
+
+### `2c78c30` `perf(pushframe)` — frontend candidate #3
+
+Module-level consumer registry in `zeus-web/src/state/display-store.ts`:
+`registerFrameConsumer()` / `hasActiveFrameConsumers()`. `Panadapter`,
+`Waterfall`, and `FilterMiniPan` register on mount. `ws-client.ts` skips
+`decodeDisplayFrame` + `pushFrame` when the count is zero. Five new
+vitest cases cover the registry (idempotent release, never-negative,
+multi-consumer ref-counting). **Zero CPU impact when any spectrum panel
+is open** — the win is for the all-panels-closed case.
+
+### `0e57230` `perf(server,hub)` — backend, biggest win
+
+`StreamingHub.Broadcast(...)` had nine identical implementations that
+rented a `byte[]` from `ArrayPool`, serialised in, and then
+`new ReadOnlyMemory<byte>(rented, 0, total).ToArray()`-ed into a fresh
+heap-allocated `byte[]`. The pool ceremony saved nothing — the `ToArray`
+copy was the same size as the rent. Now: `new byte[total]` once,
+serialise in, broadcast. Wire format byte-identical (verified). Drops
+the **#1 allocator (36.24 %)** outright; eliminates ~480 KB/s of
+memcpy at 30 Hz spectrum push.
+
+### `3287724` `perf(server,iq-pump)` — backend, second win
+
+`Protocol1Client.RxLoop` rents ~2 KB of `double[]` per IQ packet from
+`ArrayPool<double>`. The server-side pump in `DspPipelineService.StartIqPump`
+consumed each frame but never returned the buffer — pool re-allocated
+on every Rent. At HL2's 381 packets/s that's ~750 KB/s of pure gen0
+garbage. Fix uses `MemoryMarshal.TryGetArray` to extract the underlying
+array and `Return()` it after `FeedIq`. P2 deliberately skipped (its
+`Protocol2Client` allocates with `new`, not pool — returning would
+contaminate the pool's bucket).
+
+## Sub-audit: candidate #2 is exhausted
+
+The sub-audit teammate confirmed that the `MicMeter` throttle in
+`7bb3808` was the **only** always-mounted high-rate React subscriber.
+Every other candidate from the perf2 doc was either already low-rate
+(PA TEMP at 2 Hz from server, conn-store fields at 1 Hz post-`56dac59`)
+or guarded by panel-mount / `IntersectionObserver`.
+
+Mapping kept here for future passes so this ground isn't re-walked:
+
+- All `useRxMetersStore` subscribers (`SMeterLive`, `AnalogMeterPanel`,
+  `MeterWidget`) are inside closeable panels.
+- All TX-meter / RX-meter / PS-meter WS frames (`0x14`, `0x16`, `0x18`,
+  `0x19`) target panel-gated subscribers only.
+- `useTxStore.micDbfs` is the *one* high-rate path that reaches an
+  always-mounted `MicMeter` chip; already throttled at the worklet seam
+  via `use-mic-uplink.ts` (window-max 50 ms / 20 Hz).
+
+## Items flagged for maintainer review (NOT implemented)
+
+The server-profile teammate found three more backend allocation hot paths
+but all touch threading or the UDP read path — bench-test required
+before merge.
+
+1. **`BoundedChannelReader<IqFrame>.WaitToReadAsync` (~13.5 % allocs).**
+   `DspPipelineService.StartIqPump` does `await foreach` over the IQ
+   channel — each iteration allocates an async-state-machine box.
+   Clean fix: dedicated thread + sync `TryRead` + `ManualResetEventSlim`.
+   Touches engine-swap lock ordering on connect/disconnect; reversible
+   but wants a careful read.
+2. **`Protocol1Client.TxLoopAsync` `SemaphoreSlim` waiter churn (~5.3 %).**
+   Same shape as above. Same flag — TX-rate timing is dB-of-power
+   sensitive (see the `PeriodicTimer fell to whatever the OS rounded the
+   period to` comment in `Protocol1Client.cs:62-70`).
+3. **`Socket.ReceiveFrom` per-packet allocation (~16 %).** .NET 7+ ships
+   an overload taking a caller-owned `SocketAddress` that avoids the
+   per-call `EndPoint.Serialize()` + `IPEndPoint` reconstruction. The
+   current code doesn't validate the source, so the new overload is
+   functionally equivalent — but touching the receive socket can subtly
+   affect macOS scheduling. Wants a HL2 bench-test for packet-loss /
+   TX-rate after the swap.
+
+Combined potential: another ~35 % allocation reduction on top of the
+36 % already taken — but each needs an HL2 bench window.
+
+## Frontend candidate #4 is still red-light
+
+Per-frame GPU upload work (`texSubImage2D` / `bufferSubData`) on the
+waterfall and panadapter trace remains the biggest single chunk of
+renderer cost. Per `CLAUDE.md` this is **red-light** — touching it can
+shift waterfall scroll feel / panadapter trace responsiveness, both of
+which are operator-perceptible. Deferred until a maintainer-led
+session.
+
+## Methodology note: audio-mute confound
+
+The first perf3 sample after merging the backend fixes showed renderer
++5 pp, which initially looked like a regression. It turned out the audio
+output had been left **un**muted between samples — the always-mounted
+`MicMeter` was actively re-rendering at 20 Hz instead of being idle. After
+re-muting (matching the perf2 baseline conditions), renderer dropped
+35.7 → 33.9 % (1.8 pp) — accounting for some of the gap, but not all.
+
+Lesson: **fix the audio-mute state in the methodology**. Before any sample
+the bottom-bar audio button must read "▶ Unmute" (i.e. audio is muted,
+worklet idle). The 50 → 20 Hz throttle in `7bb3808` only mitigates the
+unmuted case; an idle-RX baseline must hold the worklet truly idle.
+
+## What we know and what's still uncertain
+
+**Solid**:
+- Backend allocation rate down ~36 % at idle. CPU drop ~7 pp reproducible
+  across multiple samples after a server restart with the new build.
+- The frontend code changes are structurally sound, build clean, all
+  vitest cases pass (209 + 5 new = 214 total in the affected files).
+- `pushFrame` decode is correctly gated when no spectrum panel is mounted
+  (registry unit tests assert this).
+
+**Uncertain**:
+- Per-31-sample variance is wide enough (±2-3 pp on renderer, ±5-7 pp on
+  backend across runs) that we can't confidently *attribute* the
+  individual frontend deltas. The combined doesn't-regress picture is
+  the strongest claim we can defend.
+- `/api/state` reads at ~1.49 Hz when averaged over a 45 s window
+  including page load. Steady state is ~1.0 Hz (the `App.tsx:185` poller
+  alone) — the extra rate is mount-time fetches from `ConnectPanel:182`
+  and `VfoDisplay:129`. Not a bug; flag for the methodology.
+
+## References
+
+- Commits: `9e3a4d4`, `2c78c30`, `0e57230`, `3287724` on
+  `fix/performance3`.
+- Server profile artefacts: `/tmp/zeus-perf3/server-profile.md` (full
+  writeup, top-N tables) and `/tmp/zeus-perf3/server-fresh.nettrace`
+  (raw `dotnet-trace` capture).
+- Per-merge sample tables: `/tmp/zeus-perf3/baseline.md`,
+  `after_raf.md`, `after_raf_pushframe.md`, `after_all_muted.top.txt`.
