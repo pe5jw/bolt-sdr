@@ -86,3 +86,40 @@ export const useDisplayStore = create<DisplayState>((set) => ({
 export function subscribeFrames(cb: (s: DisplayState) => void): () => void {
   return useDisplayStore.subscribe(cb);
 }
+
+// Active-consumer registry. The realtime client (ws-client.ts) consults this
+// before invoking decodeDisplayFrame + pushFrame on every spectrum tick. When
+// every spectrum surface (panadapter, waterfall, filter mini-pan) is closed,
+// decoding still happens for a store with no subscribers; the per-frame cost
+// is small but it scales with backend tick rate (~25 Hz) and allocates two
+// Float32Arrays per call. Components register on mount and unregister on
+// unmount; whilever count > 0 we keep decoding, otherwise we short-circuit.
+//
+// Deliberately a module-level counter (not in the store) so toggling consumer
+// presence doesn't itself fan out as a store update through React.
+let frameConsumerCount = 0;
+
+/**
+ * Mark this caller as a live consumer of decoded display frames. Returns a
+ * single-shot unregister function — call it on cleanup. Idempotent if the
+ * returned function is invoked more than once.
+ */
+export function registerFrameConsumer(): () => void {
+  frameConsumerCount++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    frameConsumerCount = Math.max(0, frameConsumerCount - 1);
+  };
+}
+
+/** True when at least one consumer is mounted and needs decoded frames. */
+export function hasActiveFrameConsumers(): boolean {
+  return frameConsumerCount > 0;
+}
+
+/** Test-only escape hatch; not part of the public API. */
+export function _resetFrameConsumerCount(): void {
+  frameConsumerCount = 0;
+}
