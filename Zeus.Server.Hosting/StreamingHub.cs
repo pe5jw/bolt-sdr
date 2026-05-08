@@ -145,23 +145,26 @@ public sealed class StreamingHub
         }
     }
 
+    // Each Broadcast(...) below allocates the wire payload directly into a
+    // fresh `byte[total]` and serialises into it via FixedBufferWriter. The
+    // earlier shape rented from ArrayPool, serialised into the rented span,
+    // then called `new ReadOnlyMemory<byte>(rented, 0, total).ToArray()` to
+    // produce the broadcast payload — that .ToArray() was the #1 server-side
+    // allocator under idle RX (36% of bytes allocated), and the rent/return
+    // pair didn't save anything because the ToArray copy is the same size as
+    // the rented buffer. Since each client gets the identical payload (queue
+    // shares the byte[]), one `new byte[total]` per broadcast is both cheaper
+    // and simpler. perf(server) follow-up to docs/performance_tuning.md.
+
     public void Broadcast(in DisplayFrame frame)
     {
         if (_clients.IsEmpty) return;
 
         int total = frame.TotalByteLength;
-        var rented = ArrayPool<byte>.Shared.Rent(total);
-        try
-        {
-            var writer = new FixedBufferWriter(rented, total);
-            frame.Serialize(writer);
-            var payload = new ReadOnlyMemory<byte>(rented, 0, total).ToArray();
-            foreach (var client in _clients.Values) client.TryEnqueue(payload);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
+        var payload = new byte[total];
+        var writer = new FixedBufferWriter(payload, total);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values) client.TryEnqueue(payload);
     }
 
     public void Broadcast(in AudioFrame frame)
@@ -169,18 +172,10 @@ public sealed class StreamingHub
         if (_clients.IsEmpty) return;
 
         int total = frame.TotalByteLength;
-        var rented = ArrayPool<byte>.Shared.Rent(total);
-        try
-        {
-            var writer = new FixedBufferWriter(rented, total);
-            frame.Serialize(writer);
-            var payload = new ReadOnlyMemory<byte>(rented, 0, total).ToArray();
-            foreach (var client in _clients.Values) client.TryEnqueue(payload);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
+        var payload = new byte[total];
+        var writer = new FixedBufferWriter(payload, total);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values) client.TryEnqueue(payload);
     }
 
     public void Broadcast(in TxMetersFrame frame)
@@ -188,18 +183,10 @@ public sealed class StreamingHub
         if (_clients.IsEmpty) return;
 
         int total = TxMetersFrame.ByteLength;
-        var rented = ArrayPool<byte>.Shared.Rent(total);
-        try
-        {
-            var writer = new FixedBufferWriter(rented, total);
-            frame.Serialize(writer);
-            var payload = new ReadOnlyMemory<byte>(rented, 0, total).ToArray();
-            foreach (var client in _clients.Values) client.TryEnqueue(payload);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
+        var payload = new byte[total];
+        var writer = new FixedBufferWriter(payload, total);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values) client.TryEnqueue(payload);
     }
 
     public void Broadcast(in TxMetersV2Frame frame)
@@ -207,18 +194,10 @@ public sealed class StreamingHub
         if (_clients.IsEmpty) return;
 
         int total = TxMetersV2Frame.ByteLength;
-        var rented = ArrayPool<byte>.Shared.Rent(total);
-        try
-        {
-            var writer = new FixedBufferWriter(rented, total);
-            frame.Serialize(writer);
-            var payload = new ReadOnlyMemory<byte>(rented, 0, total).ToArray();
-            foreach (var client in _clients.Values) client.TryEnqueue(payload);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
+        var payload = new byte[total];
+        var writer = new FixedBufferWriter(payload, total);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values) client.TryEnqueue(payload);
     }
 
     public void Broadcast(in PsMetersFrame frame)
@@ -226,18 +205,10 @@ public sealed class StreamingHub
         if (_clients.IsEmpty) return;
 
         int total = PsMetersFrame.ByteLength;
-        var rented = ArrayPool<byte>.Shared.Rent(total);
-        try
-        {
-            var writer = new FixedBufferWriter(rented, total);
-            frame.Serialize(writer);
-            var payload = new ReadOnlyMemory<byte>(rented, 0, total).ToArray();
-            foreach (var client in _clients.Values) client.TryEnqueue(payload);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
+        var payload = new byte[total];
+        var writer = new FixedBufferWriter(payload, total);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values) client.TryEnqueue(payload);
     }
 
     public void Broadcast(in RxMeterFrame frame)
@@ -245,18 +216,10 @@ public sealed class StreamingHub
         if (_clients.IsEmpty) return;
 
         int total = RxMeterFrame.ByteLength;
-        var rented = ArrayPool<byte>.Shared.Rent(total);
-        try
-        {
-            var writer = new FixedBufferWriter(rented, total);
-            frame.Serialize(writer);
-            var payload = new ReadOnlyMemory<byte>(rented, 0, total).ToArray();
-            foreach (var client in _clients.Values) client.TryEnqueue(payload);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
+        var payload = new byte[total];
+        var writer = new FixedBufferWriter(payload, total);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values) client.TryEnqueue(payload);
     }
 
     public void Broadcast(in RxMetersV2Frame frame)
@@ -264,18 +227,10 @@ public sealed class StreamingHub
         if (_clients.IsEmpty) return;
 
         int total = RxMetersV2Frame.ByteLength;
-        var rented = ArrayPool<byte>.Shared.Rent(total);
-        try
-        {
-            var writer = new FixedBufferWriter(rented, total);
-            frame.Serialize(writer);
-            var payload = new ReadOnlyMemory<byte>(rented, 0, total).ToArray();
-            foreach (var client in _clients.Values) client.TryEnqueue(payload);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
+        var payload = new byte[total];
+        var writer = new FixedBufferWriter(payload, total);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values) client.TryEnqueue(payload);
     }
 
     public void Broadcast(in PaTempFrame frame)
@@ -283,18 +238,10 @@ public sealed class StreamingHub
         if (_clients.IsEmpty) return;
 
         int total = PaTempFrame.ByteLength;
-        var rented = ArrayPool<byte>.Shared.Rent(total);
-        try
-        {
-            var writer = new FixedBufferWriter(rented, total);
-            frame.Serialize(writer);
-            var payload = new ReadOnlyMemory<byte>(rented, 0, total).ToArray();
-            foreach (var client in _clients.Values) client.TryEnqueue(payload);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
+        var payload = new byte[total];
+        var writer = new FixedBufferWriter(payload, total);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values) client.TryEnqueue(payload);
     }
 
     public void Broadcast(in WisdomStatusFrame frame)
@@ -320,20 +267,16 @@ public sealed class StreamingHub
     {
         if (_clients.IsEmpty) return;
 
-        int total = AlertFrame.MaxByteLength;
-        var rented = ArrayPool<byte>.Shared.Rent(total);
-        try
-        {
-            var writer = new FixedBufferWriter(rented, total);
-            frame.Serialize(writer);
-            // AlertFrame has variable length; need to compute actual size
-            var payload = new ReadOnlyMemory<byte>(rented, 0, 2 + System.Text.Encoding.UTF8.GetByteCount(frame.Message)).ToArray();
-            foreach (var client in _clients.Values) client.TryEnqueue(payload);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
+        // AlertFrame is variable-length: 2-byte header + UTF-8 message bytes.
+        // Compute the exact size up front so we can allocate the broadcast
+        // payload directly (no rent/copy/return). Same shape as the other
+        // Broadcast(...) overloads above.
+        int total = 2 + System.Text.Encoding.UTF8.GetByteCount(frame.Message);
+        if (total > AlertFrame.MaxByteLength) total = AlertFrame.MaxByteLength;
+        var payload = new byte[total];
+        var writer = new FixedBufferWriter(payload, total);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values) client.TryEnqueue(payload);
     }
 
     /// Broadcast a small VST plugin-host event tag (utf-8 text). Used by
