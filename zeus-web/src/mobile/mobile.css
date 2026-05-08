@@ -24,7 +24,7 @@
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  background: linear-gradient(180deg, var(--panel-head-top) 0%, var(--panel-head-bot) 100%);
+  background: linear-gradient(90deg, var(--panel-head-top) 0%, var(--panel-head-bot) 100%);
   border-bottom: 1px solid var(--panel-border);
   position: sticky;
   top: 0;
@@ -114,7 +114,7 @@
   display: flex;
   align-items: center;
   padding: 10px 12px;
-  background: linear-gradient(180deg, var(--panel-head-top) 0%, var(--panel-head-bot) 100%);
+  background: linear-gradient(90deg, var(--panel-head-top) 0%, var(--panel-head-bot) 100%);
   border-bottom: 1px solid var(--panel-border);
 }
 .m-selector-title {
@@ -164,7 +164,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  background: linear-gradient(180deg, var(--panel-head-top) 0%, var(--panel-head-bot) 100%);
+  background: linear-gradient(90deg, var(--panel-head-top) 0%, var(--panel-head-bot) 100%);
   border-bottom: 1px solid var(--panel-border);
   font-family: var(--font-sans);
   font-size: 10px;

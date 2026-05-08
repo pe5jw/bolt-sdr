@@ -95,7 +95,7 @@ export function OverdriveIndicator() {
         alignItems: 'center',
         gap: 4,
         padding: '2px 6px',
-        borderRadius: 3,
+        borderRadius: 0,
         fontSize: 9,
         fontWeight: 700,
         letterSpacing: '0.08em',
@@ -312,7 +312,7 @@ function MeterRow({
             height: 14,
             background: 'var(--meter-bg)',
             border: '1px solid var(--panel-border)',
-            borderRadius: 2,
+            borderRadius: 0,
             boxShadow:
               'inset 0 1px 0 rgba(0,0,0,0.5), inset 0 0 0 0.5px rgba(255,255,255,0.02)',
             overflow: 'hidden',
