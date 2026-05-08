@@ -14,7 +14,7 @@
 // of scissor-clipping or sharing the main panadapter's GL context.
 
 import { useEffect, useRef } from 'react';
-import { useDisplayStore } from '../../state/display-store';
+import { registerFrameConsumer, useDisplayStore } from '../../state/display-store';
 import { useConnectionStore } from '../../state/connection-store';
 import { setFilter } from '../../api/client';
 import { formatCutOffset } from './filterPresets';
@@ -72,6 +72,11 @@ export function FilterMiniPan() {
     if (!canvas) return;
     const ctx = canvas.getContext('2d', { alpha: true });
     if (!ctx) return;
+
+    // Tell the realtime client that decoded spectrum frames are needed —
+    // ws-client.ts skips decodeDisplayFrame entirely when no consumer is
+    // registered (all spectrum surfaces closed).
+    const releaseFrameConsumer = registerFrameConsumer();
 
     let rafHandle = 0;
     let lastSeq = -1;
@@ -301,6 +306,7 @@ export function FilterMiniPan() {
       unsubDisplay();
       unsubConn();
       ro.disconnect();
+      releaseFrameConsumer();
     };
   }, []);
 

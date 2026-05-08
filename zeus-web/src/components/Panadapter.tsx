@@ -45,7 +45,8 @@
 import { useEffect, useRef } from 'react';
 import { createPanRenderer, hexToRgbFloats } from '../gl/panadapter';
 import { planWaterfallUpdate } from '../gl/wf-shift';
-import { useDisplayStore } from '../state/display-store';
+import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
+import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
@@ -68,6 +69,11 @@ export function Panadapter() {
       return;
     }
 
+    // Tell the realtime client that decoded spectrum frames are needed —
+    // ws-client.ts skips decodeDisplayFrame entirely when no consumer is
+    // registered (all spectrum surfaces closed).
+    const releaseFrameConsumer = registerFrameConsumer();
+
     const renderer = createPanRenderer(gl);
     // Mirror the waterfall's shift state so pan and wf agree on what a VFO
     // retune does to the spectrum. On a 'shift' tick the waterfall suppresses
@@ -80,10 +86,15 @@ export function Panadapter() {
     let lastWidth = 0;
     let drawPan: Float32Array | null = null;
     let drawOffsetPx = 0;
-    let rafHandle = 0;
+    // Visibility gating: don't burn rAF cycles when the tile is scrolled
+    // off-screen, the tab is hidden, or the operator switched to a layout
+    // where the panadapter isn't mounted-but-visible. Both signals are
+    // ORed into a single `isActive` flag the requestRedraw guard checks.
+    let inViewport = true;
+    let pageVisible = !document.hidden;
+    const isActive = () => inViewport && pageVisible;
 
     const redraw = () => {
-      rafHandle = 0;
       if (!drawPan) return;
       const s = useDisplaySettingsStore.getState();
       // While keyed (MOX or TUN — server already feeds TX pixels via
@@ -99,12 +110,22 @@ export function Panadapter() {
       renderer.draw(drawPan, dbMin, dbMax, drawOffsetPx);
     };
     const requestRedraw = () => {
-      if (rafHandle === 0) rafHandle = requestAnimationFrame(redraw);
+      if (!isActive()) return;
+      // Shared draw bus: panadapter + waterfall coalesce onto a single rAF
+      // per frame. The bus dedupes repeated requests for the same callback,
+      // matching the prior `if (rafHandle === 0)` gate.
+      requestDrawBusFrame(redraw);
     };
 
     const resize = () => {
       const { width, height } = container.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
+      // Clamp the WebGL backing store at DPR=1. On a Retina display the
+      // native devicePixelRatio is 2 (or higher on 5K), which means the
+      // panadapter would render at 4× the pixels and feed 4× the texture
+      // data through every composite. The trace is a single-pixel-wide line
+      // over a smooth dB gradient — sub-pixel antialiasing is not visible
+      // and not worth the GPU cost. Browser CSS scaling fills the difference.
+      const dpr = Math.min(1, window.devicePixelRatio || 1);
       const w = Math.max(1, Math.round(width * dpr));
       const h = Math.max(1, Math.round(height * dpr));
       canvas.width = w;
@@ -116,6 +137,28 @@ export function Panadapter() {
     const ro = new ResizeObserver(resize);
     ro.observe(container);
     resize();
+
+    // Pause WebGL when the panadapter is not actually visible. Two signals:
+    // IntersectionObserver covers "tile scrolled out of view / display:none
+    // ancestor", and document.visibilitychange covers "tab in background".
+    // When we transition back to active, kick a redraw so the operator
+    // sees the latest pushed frame immediately rather than waiting for the
+    // next store update.
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          inViewport = e.isIntersecting;
+        }
+        if (isActive()) requestRedraw();
+      },
+      { threshold: 0 },
+    );
+    io.observe(container);
+    const onVisibilityChange = () => {
+      pageVisible = !document.hidden;
+      if (isActive()) requestRedraw();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     let lastSeqDrawn = -1;
     const unsub = useDisplayStore.subscribe((state) => {
@@ -162,16 +205,33 @@ export function Panadapter() {
       requestRedraw();
     });
 
-    // Repaint on auto-range updates so palette changes apply without waiting
-    // for the next server frame.
-    const unsubSettings = useDisplaySettingsStore.subscribe(() => {
-      requestRedraw();
+    // Repaint on dB-range / trace-color updates so auto-range and the Display
+    // settings panel apply without waiting for the next server frame. The
+    // prev-state diff is the load-bearing part: a no-selector subscribe used
+    // to fire on every store mutation, which during ordinary RX traffic
+    // pulled the panadapter rAF floor above the spectrum-tick rate.
+    const unsubSettings = useDisplaySettingsStore.subscribe((state, prev) => {
+      if (
+        state.dbMin !== prev.dbMin ||
+        state.dbMax !== prev.dbMax ||
+        state.txDbMin !== prev.txDbMin ||
+        state.txDbMax !== prev.txDbMax ||
+        state.rxTraceColor !== prev.rxTraceColor
+      ) {
+        requestRedraw();
+      }
     });
 
     // Repaint when MOX / TUN flips so the RX-vs-TX dB range swap is
     // reflected immediately, even if no fresh pan frame arrived yet.
-    const unsubTx = useTxStore.subscribe(() => {
-      requestRedraw();
+    // App.tsx:211 uses the same prev-state diff pattern — without it the
+    // unconditional subscriber fires on every tx-store update (mic dBFS at
+    // 50 Hz from the worklet, RxDbm at 5 Hz, PaTempC at 2 Hz, etc.), which
+    // raises the floor on the redraw rate above the spectrum-tick rate.
+    const unsubTx = useTxStore.subscribe((state, prev) => {
+      if (state.moxOn !== prev.moxOn || state.tunOn !== prev.tunOn) {
+        requestRedraw();
+      }
     });
 
     return () => {
@@ -179,8 +239,11 @@ export function Panadapter() {
       unsubSettings();
       unsubTx();
       ro.disconnect();
-      if (rafHandle !== 0) cancelAnimationFrame(rafHandle);
+      io.disconnect();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      cancelDrawBusFrame(redraw);
       renderer.dispose();
+      releaseFrameConsumer();
     };
   }, []);
 

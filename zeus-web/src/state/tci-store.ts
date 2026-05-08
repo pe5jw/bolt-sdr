@@ -92,11 +92,14 @@ export const useTciStore = create<TciStoreState>((set, get) => ({
   },
 }));
 
-// Initial status probe at module load + 2 s polling while the page is alive.
-// Status changes drive the panel's RequiresRestart flag and client count.
+// Initial status probe at module load + 2 s polling while the page is alive
+// AND TCI is enabled. Status changes drive the panel's RequiresRestart flag
+// and client count — neither matters when the listener isn't running, so skip
+// the fetch in the disabled-default case.
 if (typeof window !== 'undefined') {
   void useTciStore.getState().refreshStatus();
   window.setInterval(() => {
+    if (!useTciStore.getState().config.enabled) return;
     void useTciStore.getState().refreshStatus();
   }, 2000);
 }

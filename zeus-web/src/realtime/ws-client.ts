@@ -46,7 +46,7 @@ import { decodeDisplayFrame, FrameDecodeError, MSG_TYPE_DISPLAY_FRAME } from './
 import { AudioFrameDecodeError, MSG_TYPE_AUDIO_PCM, decodeAudioFrame } from '../audio/frame';
 import { getAudioClient } from '../audio/audio-client';
 import { useConnectionStore, type WisdomPhase } from '../state/connection-store';
-import { useDisplayStore } from '../state/display-store';
+import { hasActiveFrameConsumers, useDisplayStore } from '../state/display-store';
 import { useTxStore } from '../state/tx-store';
 import { useBandPlanStore } from '../state/bandPlan';
 import { useRxMetersStore } from '../state/rx-meters-store';
@@ -215,6 +215,14 @@ export function startRealtime(path = '/ws'): () => void {
       try {
         const peekType = new DataView(ev.data).getUint8(0);
         if (peekType === MSG_TYPE_DISPLAY_FRAME) {
+          // Skip the decode + push when no spectrum surface is mounted.
+          // decodeDisplayFrame allocates two Float32Arrays per tick and
+          // pushFrame fans the new state through every store subscriber —
+          // both are wasted when the panadapter, waterfall, and filter
+          // mini-pan are all closed. Consumers register via
+          // registerFrameConsumer() in display-store.ts; the moment any of
+          // them mounts we resume decoding on the next tick.
+          if (!hasActiveFrameConsumers()) return;
           const frame = decodeDisplayFrame(ev.data);
           pushFrame(frame);
           return;

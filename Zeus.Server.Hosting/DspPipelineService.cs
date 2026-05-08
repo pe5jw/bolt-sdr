@@ -674,6 +674,20 @@ public class DspPipelineService : BackgroundService
                     lock (_engineLock) { engine = _engine; channel = _channelId; }
                     engine?.FeedIq(channel, frame.InterleavedSamples.Span);
                     RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
+                    // Return the underlying double[] to ArrayPool now that the
+                    // frame has been consumed. Protocol1Client.RxLoop rents
+                    // ~2 KB per packet from ArrayPool<double>.Shared and the
+                    // contract on RxIqAvailable says the memory is only valid
+                    // for the duration of the synchronous handler — so once
+                    // FeedIq + the event have returned, the buffer is dead.
+                    // Without this return the rented arrays drop straight to
+                    // GC at ~381/s on HL2 (≈750 KB/s of gen0 garbage),
+                    // forcing the pool to allocate fresh on the next Rent.
+                    if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(
+                            frame.InterleavedSamples, out var seg) && seg.Array is { } arr)
+                    {
+                        System.Buffers.ArrayPool<double>.Shared.Return(arr);
+                    }
                 }
             }
             catch (OperationCanceledException) { }

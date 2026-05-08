@@ -80,6 +80,16 @@ interface LayoutState {
   addPanelOpen: boolean;
   setAddPanelOpen: (open: boolean) => void;
 
+  // Settings is rendered as a workspace-replacing view (not a popover).
+  // While settingsViewOpen is true the App renders <SettingsView /> in
+  // place of <FlexWorkspace />. settingsInitialTab seeds the active tab
+  // when the view opens (used by hash deeplinks like #qrz, #server).
+  // setActiveLayout(...) clears this so picking a layout returns to the
+  // workspace.
+  settingsViewOpen: boolean;
+  settingsInitialTab?: string;
+  setSettingsView: (open: boolean, tab?: string) => void;
+
   /** Switch the radio key and reload the layouts list from the server.
    *  No-op when the key already matches and isLoaded is true. */
   loadForRadio: (radioKey: string) => Promise<void>;
@@ -163,6 +173,13 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   isLoaded: false,
   addPanelOpen: false,
   setAddPanelOpen: (open) => set({ addPanelOpen: open }),
+
+  settingsViewOpen: false,
+  setSettingsView: (open, tab) =>
+    set({
+      settingsViewOpen: open,
+      settingsInitialTab: open ? tab : undefined,
+    }),
 
   loadForRadio: async (radioKey) => {
     const safeKey = radioKey || 'default';
@@ -314,6 +331,11 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     set({
       activeLayoutId: id,
       workspace: parseLayoutOrDefault(target.layoutJson),
+      // Picking a layout always returns to the workspace view — clearing
+      // any active settings overlay keeps the operator's mental model
+      // consistent.
+      settingsViewOpen: false,
+      settingsInitialTab: undefined,
     });
     void postActiveLayout(radioKey, id);
   },

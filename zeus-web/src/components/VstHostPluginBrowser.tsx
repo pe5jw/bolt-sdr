@@ -72,7 +72,7 @@ export function VstHostPluginBrowser({ open, targetSlot, onClose }: Props) {
         flexDirection: 'column',
         zIndex: 5,
         border: '1px solid var(--panel-border)',
-        borderRadius: 4,
+        borderRadius: 0,
       }}
     >
       <header
@@ -82,7 +82,7 @@ export function VstHostPluginBrowser({ open, targetSlot, onClose }: Props) {
           gap: 10,
           padding: '8px 12px',
           background:
-            'linear-gradient(180deg, var(--panel-head-top), var(--panel-head-bot))',
+            'linear-gradient(90deg, var(--panel-head-top), var(--panel-head-bot))',
           borderBottom: '1px solid var(--panel-border)',
           color: 'var(--fg-0)',
         }}
@@ -129,7 +129,7 @@ export function VstHostPluginBrowser({ open, targetSlot, onClose }: Props) {
             background: 'var(--bg-0)',
             color: 'var(--fg-1)',
             border: '1px solid var(--panel-border)',
-            borderRadius: 3,
+            borderRadius: 0,
             fontSize: 12,
           }}
         />

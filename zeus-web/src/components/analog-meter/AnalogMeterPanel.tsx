@@ -21,6 +21,7 @@
 // flat without making the animation chunky.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { GripVertical, Settings, X } from 'lucide-react';
 import { usePaStore } from '../../state/pa-store';
 import { useTxStore } from '../../state/tx-store';
@@ -160,6 +161,7 @@ export interface AnalogMeterPanelProps {
 }
 
 export function AnalogMeterPanel({ onClose }: AnalogMeterPanelProps = {}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const cfg = useAnalogMeterStore();
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
@@ -246,8 +248,24 @@ export function AnalogMeterPanel({ onClose }: AnalogMeterPanelProps = {}) {
   const lastPublishedRef = useRef({ needleN: -1, peakN: -1 });
 
   useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
     let raf = 0;
+    // Visibility gate: stop the rAF loop when the tile is scrolled offscreen
+    // or the tab is hidden. Same pattern Panadapter / Waterfall use.
+    let inViewport = true;
+    let pageVisible = !document.hidden;
+    const isActive = () => inViewport && pageVisible;
+    // Throttle React publishes to ~30 Hz max even on high-refresh displays
+    // (macOS ProMotion runs rAF at 120 Hz). The needle face is the only
+    // consumer of `render`; 30 Hz gives a smooth analog feel and stops the
+    // panel reconcile from being driven off the system frame rate, which
+    // used to drag the always-mounted child subtree along with it.
+    const PUBLISH_INTERVAL_MS = 33;
+    let lastPublishMs = 0;
+
     const loop = (now: number) => {
+      raf = 0;
       const s = stateRef.current;
       const dt = Math.min(0.1, (now - s.last) / 1000);
       s.last = now;
@@ -279,15 +297,49 @@ export function AnalogMeterPanel({ onClose }: AnalogMeterPanelProps = {}) {
       }
 
       const last = lastPublishedRef.current;
-      if (Math.abs(s.needleN - last.needleN) > 0.001 || Math.abs(s.peakN - last.peakN) > 0.001) {
+      if (
+        now - lastPublishMs >= PUBLISH_INTERVAL_MS &&
+        (Math.abs(s.needleN - last.needleN) > 0.001 ||
+          Math.abs(s.peakN - last.peakN) > 0.001)
+      ) {
+        lastPublishMs = now;
         lastPublishedRef.current = { needleN: s.needleN, peakN: s.peakN };
         setRender({ needleN: s.needleN, peakN: s.peakN });
       }
 
-      raf = requestAnimationFrame(loop);
+      if (isActive()) raf = requestAnimationFrame(loop);
     };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
+
+    const start = () => {
+      if (raf === 0 && isActive()) {
+        // Reset the dt anchor so the first tick after a wake doesn't account
+        // for the gap as elapsed time and yank the ballistic.
+        stateRef.current.last = performance.now();
+        raf = requestAnimationFrame(loop);
+      }
+    };
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) inViewport = e.isIntersecting;
+        if (isActive()) start();
+      },
+      { threshold: 0 },
+    );
+    io.observe(container);
+    const onVisibilityChange = () => {
+      pageVisible = !document.hidden;
+      if (isActive()) start();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    start();
+
+    return () => {
+      if (raf !== 0) cancelAnimationFrame(raf);
+      io.disconnect();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, [activeScaleId, activeScale, cfg.attack, cfg.decay, cfg.peakHold]);
 
   // The face needs the operator-filtered S-arc; we override SCALES.s for the
@@ -306,9 +358,12 @@ export function AnalogMeterPanel({ onClose }: AnalogMeterPanelProps = {}) {
 
   // Readout values: active scale shows the ballistic-filtered needle reading,
   // others show the raw live values so the footer mirrors the radio's state.
-  const rawRxDbm = useTxStore((s) => s.rxDbm);
-  const rawFwdW = useTxStore((s) => s.fwdWatts);
-  const rawSwr = useTxStore((s) => s.swr);
+  // Single subscription with a shallow comparator keeps this to one re-render
+  // per data tick instead of three (the prior pattern fired three separate
+  // subscribers per store update).
+  const { rxDbm: rawRxDbm, fwdWatts: rawFwdW, swr: rawSwr } = useTxStore(
+    useShallow((s) => ({ rxDbm: s.rxDbm, fwdWatts: s.fwdWatts, swr: s.swr })),
+  );
   const readoutValues = {
     s: activeScaleId === 's' ? needleVal : dbmToS(rawRxDbm),
     po: activeScaleId === 'po' ? needleVal : rawFwdW,
@@ -317,7 +372,7 @@ export function AnalogMeterPanel({ onClose }: AnalogMeterPanelProps = {}) {
   const dbm = sToDbm(readoutValues.s);
 
   return (
-    <div className="am-tile" data-mode={mode}>
+    <div ref={containerRef} className="am-tile" data-mode={mode}>
       <TileHeader
         configOpen={configOpen}
         onGearClick={() => setConfigOpen((o) => !o)}

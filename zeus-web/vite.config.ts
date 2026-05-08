@@ -48,6 +48,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 const backendPort = process.env.BACKEND_PORT || '6060';
+const backendHost = process.env.BACKEND_HOST || 'localhost';
 
 export default defineConfig({
   plugins: [
@@ -100,8 +101,8 @@ export default defineConfig({
     port: 5173,
     allowedHosts: ['.ngrok-free.app', '.ngrok-free.dev', '.ngrok.app', '.ngrok.dev', '.ngrok.io'],
     proxy: {
-      '/api': `http://localhost:${backendPort}`,
-      '/ws': { target: `ws://localhost:${backendPort}`, ws: true },
+      '/api': `http://${backendHost}:${backendPort}`,
+      '/ws': { target: `ws://${backendHost}:${backendPort}`, ws: true },
     },
   },
   build: {

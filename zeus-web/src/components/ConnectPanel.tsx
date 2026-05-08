@@ -557,7 +557,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                   padding: '6px 10px',
                   background: 'rgba(230,58,43,0.12)',
                   border: '1px solid rgba(230,58,43,0.35)',
-                  borderRadius: 4,
+                  borderRadius: 0,
                   color: 'var(--tx)',
                   fontSize: 11,
                 }}
@@ -594,7 +594,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                         padding: '6px 10px',
                         background: 'var(--bg-2)',
                         border: '1px solid var(--panel-border)',
-                        borderRadius: 4,
+                        borderRadius: 0,
                       }}
                     >
                       <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
@@ -934,7 +934,7 @@ function ManualMode(p: ManualModeProps) {
             padding: '6px 10px',
             background: 'rgba(230,58,43,0.12)',
             border: '1px solid rgba(230,58,43,0.35)',
-            borderRadius: 4,
+            borderRadius: 0,
             color: 'var(--tx)',
             fontSize: 11,
           }}
@@ -966,7 +966,7 @@ function ManualMode(p: ManualModeProps) {
               padding: '10px 12px',
               background: 'var(--bg-2)',
               border: '1px dashed var(--panel-border)',
-              borderRadius: 4,
+              borderRadius: 0,
               textAlign: 'center',
             }}
           >
@@ -987,7 +987,7 @@ function ManualMode(p: ManualModeProps) {
                     padding: '6px 10px',
                     background: 'var(--bg-2)',
                     border: '1px solid var(--panel-border)',
-                    borderRadius: 4,
+                    borderRadius: 0,
                   }}
                 >
                   <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>

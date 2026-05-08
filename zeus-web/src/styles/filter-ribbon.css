@@ -25,7 +25,7 @@
   color: #edeef1;
   font-family: inherit;
   min-height: 0;
-  border-radius: 10px;
+  border-radius: 0;
   padding: 10px 12px 8px 12px;
   border: 1px solid rgba(255, 255, 255, 0.05);
   background: linear-gradient(180deg, #26292f 0%, #1e2025 100%);
@@ -50,7 +50,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 3px;
+  border-radius: 0;
 }
 .filter-ribbon__close:hover { color: #edeef1; background: rgba(255, 255, 255, 0.04); }
 
@@ -139,7 +139,7 @@
   flex: 1 1 auto;
   min-height: 102px;
   height: 122px;
-  border-radius: 4px;
+  border-radius: 0;
   overflow: hidden;
 }
 
@@ -157,7 +157,7 @@
 .filter-ribbon__presets {
   background: #2a2d33;
   border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
+  border-radius: 0;
   padding: 8px 8px 7px;
   display: flex;
   flex-direction: column;
@@ -202,7 +202,7 @@
   background: linear-gradient(180deg, #1f2126 0%, #1a1c20 100%);
   color: #edeef1;
   border: 1px solid #3a3e45;
-  border-radius: 3px;
+  border-radius: 0;
   font-variant-numeric: tabular-nums;
   outline: none;
 }
@@ -241,7 +241,7 @@
   border: 1px solid #4a4e55;
   border-top-color: #585c63;
   border-bottom-color: #32353b;
-  border-radius: 4px;
+  border-radius: 0;
   cursor: pointer;
   font-variant-numeric: tabular-nums;
   transition: border-color 120ms ease, filter 120ms ease, color 120ms ease;
@@ -300,7 +300,7 @@
   font-size: clamp(10px, 0.1vw + 9.5px, 12px);
   font-weight: 600;
   letter-spacing: 0.18em;
-  border-radius: 4px;
+  border-radius: 0;
   color: #e0e2e6;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0) 45%, rgba(0, 0, 0, 0.12) 100%),

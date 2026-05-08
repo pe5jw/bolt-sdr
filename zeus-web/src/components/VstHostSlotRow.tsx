@@ -69,7 +69,7 @@ export function VstHostSlotRow({ index, disabled, remote = false, onRequestLoad 
     gap: 6,
     padding: '8px 10px',
     border: '1px solid var(--panel-border)',
-    borderRadius: 4,
+    borderRadius: 0,
     background: 'var(--bg-1)',
     opacity: disabled ? 0.55 : 1,
   };

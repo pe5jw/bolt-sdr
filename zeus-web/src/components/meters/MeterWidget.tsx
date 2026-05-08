@@ -98,7 +98,7 @@ export function MeterWidget({
     alignItems: 'center',
     gap: 6,
     padding: '3px 6px',
-    background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
+    background: 'linear-gradient(90deg, var(--panel-top), var(--panel-bot))',
     borderBottom: '1px solid var(--panel-border)',
     flexShrink: 0,
   };

@@ -86,7 +86,7 @@ export function VstHostSubmenu() {
       style={{
         position: 'relative',
         border: '1px solid var(--panel-border)',
-        borderRadius: 6,
+        borderRadius: 0,
         padding: '10px 12px',
         background: 'var(--bg-1)',
         display: 'flex',
@@ -172,7 +172,7 @@ export function VstHostSubmenu() {
             color: 'var(--fg-2)',
             background: 'var(--bg-2)',
             border: '1px solid var(--panel-border)',
-            borderRadius: 4,
+            borderRadius: 0,
             padding: '6px 8px',
           }}
         >

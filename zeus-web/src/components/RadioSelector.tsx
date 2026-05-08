@@ -162,7 +162,7 @@ export function RadioSelector() {
             color: 'var(--tx)',
             background: 'var(--tx-soft)',
             padding: '2px 6px',
-            borderRadius: 2,
+            borderRadius: 0,
           }}
           title="Discovery disagrees with your selection. Discovery always wins for drive-byte math and PA defaults while connected — flip Override Detection on if you really want the selected board to win."
         >
@@ -258,7 +258,7 @@ export function RadioSelector() {
             color: 'var(--tx)',
             background: 'var(--tx-soft)',
             padding: '2px 6px',
-            borderRadius: 2,
+            borderRadius: 0,
           }}
           title="Override is active. Zeus uses the selected board for drive-byte math, ATT, filters, and PA defaults — discovery is ignored."
         >

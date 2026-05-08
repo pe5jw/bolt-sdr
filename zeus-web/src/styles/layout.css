@@ -22,7 +22,7 @@
 .app {
   display: grid;
   grid-template-columns: 60px 1fr;
-  grid-template-rows: 68px auto 1fr 44px;
+  grid-template-rows: 56px 1fr 44px;
   height: 100vh;
   width: 100vw;
   background: var(--bg-0);
@@ -33,9 +33,21 @@
 
 .app > .left-layout-bar   { grid-column: 1; grid-row: 1 / -1; }
 .app > .topbar            { grid-column: 2; grid-row: 1; }
-.app > .alert-banner      { grid-column: 2; grid-row: 2; }
-.app > .flex-workspace    { grid-column: 2; grid-row: 3; min-height: 0; overflow: auto; }
-.app > .transport         { grid-column: 2; grid-row: 4; }
+.app > .workspace-area    { grid-column: 2; grid-row: 2; min-height: 0; }
+.app > .transport         { grid-column: 2; grid-row: 3; }
+
+/* Workspace area — flex column owning the alert banner + the active
+   layout (or settings view). The empty alert banner returns a 0-height
+   placeholder, so with no flex gap the topbar→first-panel distance is
+   exactly the .app grid gap (6px), matching the inter-panel gap. */
+.workspace-area {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.workspace-area > .alert-banner { flex: 0 0 auto; }
+.workspace-area > .flex-workspace,
+.workspace-area > .settings-view { flex: 1; min-height: 0; }
 
 /* ===== Left layout bar — issue #241 ===== */
 .left-layout-bar {
@@ -259,17 +271,176 @@
   color: var(--tx);
   border-color: var(--tx);
 }
-.left-layout-bar .lb-actions {
+/* Placeholder add-layout slot — sits at the end of the layout list and
+   uses the same .lb-tab footprint so it reads as the next layout-to-be
+   rather than a separate "action" button. Dashed border + reduced
+   opacity tell the eye it's a slot, not a real layout. */
+.left-layout-bar .lb-item-add { opacity: 0.85; }
+.left-layout-bar .lb-tab-add {
+  background: transparent;
+  border: 1px dashed var(--btn-edge);
+  color: var(--fg-2);
+  box-shadow: none;
+}
+.left-layout-bar .lb-tab-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(255, 255, 255, 0.02);
+  filter: none;
+}
+.left-layout-bar .lb-tab-add .lb-tab-icon-fallback {
+  border-color: currentColor;
+  font-weight: 700;
+  opacity: 1;
+}
+
+/* Horizontal spacer between the layout list and the bottom Settings slot.
+   Reuses the bar's existing tinted shadow vocabulary so it doesn't read as
+   foreign chrome. */
+.left-layout-bar .lb-divider {
+  flex: 0 0 auto;
+  height: 1px;
+  margin: 6px 2px 4px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    rgba(255, 255, 255, 0.18),
+    transparent
+  );
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.55);
+}
+
+/* Bottom-pinned settings slot. Uses the same .lb-tab visual vocabulary so
+   the gear reads as a sibling of the layout tabs, not an outside action.
+   .active fires while the SettingsView is showing (settingsViewOpen). */
+.left-layout-bar .lb-settings-slot {
+  flex: 0 0 auto;
+  display: flex;
+}
+.left-layout-bar .lb-tab-settings {
+  flex: 1;
+}
+.left-layout-bar .lb-tab-settings.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: inset 0 1px 0 var(--btn-hl), 0 0 8px var(--accent-soft);
+}
+
+/* ===== Settings view — workspace-replacing pane =====
+   Renders in the same grid cell as .flex-workspace when
+   layout-store.settingsViewOpen is true. Uses the same panel chrome as
+   the rest of the app (panel-top/bot gradient, panel-edge border) so it
+   reads as part of the workspace, not a foreign overlay. */
+.settings-view {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  background: var(--bg-1);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--r-lg);
+  box-shadow: var(--panel-shadow);
+  color: var(--fg-1);
+  overflow: hidden;
+  min-height: 0;
+}
+.settings-view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 44px;
+  padding: 0 14px;
+  background: linear-gradient(
+    90deg,
+    var(--panel-head-top),
+    var(--panel-head-bot)
+  );
+  border-bottom: 1px solid var(--panel-border);
+  box-shadow: inset 0 1px 0 var(--panel-hl-top);
   flex: 0 0 auto;
 }
-.left-layout-bar .lb-action {
-  width: 100%;
-  padding: 6px 0;
-  font-size: 14px;
+.settings-view-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--fg-0);
+  text-transform: uppercase;
+}
+.settings-view-close {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  color: var(--fg-2);
+  font-size: 18px;
   line-height: 1;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.settings-view-close:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fg-0);
+}
+.settings-view-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.settings-view-tabs {
+  width: 200px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  background: var(--bg-0);
+  border-right: 1px solid var(--panel-border);
+  overflow-y: auto;
+}
+.settings-view-tab {
+  text-align: left;
+  padding: 10px 14px;
+  border-radius: var(--r-sm);
+  border: none;
+  border-left: 2px solid transparent;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.settings-view-tab:hover {
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--fg-1);
+}
+.settings-view-tab.active {
+  color: var(--fg-0);
+  background: var(--bg-2);
+  border-left-color: var(--accent);
+}
+.settings-view-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: auto;
+  padding: 18px 22px;
+  background: var(--bg-1);
+  color: var(--fg-1);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+}
+.settings-view-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 10px 14px;
+  background: var(--bg-0);
+  border-top: 1px solid var(--panel-border);
+  flex: 0 0 auto;
 }
 
 /* ===== Top bar — issue #241 =====
@@ -281,11 +452,11 @@
   align-items: center;
   gap: 10px;
   padding: 0 10px;
-  background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+  background: linear-gradient(90deg, var(--panel-top), var(--panel-bot));
   border: 1px solid var(--panel-edge);
   border-radius: var(--r-lg);
   box-shadow: var(--panel-shadow);
-  height: 68px;
+  height: 56px;
   overflow: hidden;
 }
 .topbar .topbar-controls {
@@ -298,6 +469,44 @@
      it from spilling into the workspace below. */
   overflow-x: auto;
   scrollbar-width: thin;
+}
+/* Topbar buttons read as flat regions of the bar, not raised chiclets.
+   The .ctrl-lbl above each .btn-row remains the visual anchor for the
+   group, so we lean on the label + .strip-divider for grouping rather
+   than per-button bevels. */
+.topbar .btn {
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+  text-shadow: none;
+  color: var(--fg-1);
+}
+.topbar .btn:hover {
+  background: rgba(255,255,255,0.06);
+  filter: none;
+}
+.topbar .btn:active,
+.topbar .btn.pressed {
+  background: rgba(0,0,0,0.28);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.4);
+  transform: none;
+}
+.topbar .btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(74,158,255,0.35);
+  text-shadow: none;
+}
+.topbar .btn.ghost { background: transparent; }
+.topbar .btn.ghost:hover { background: rgba(255,255,255,0.06); }
+/* Lift the group label slightly so it carries the grouping role that
+   button bevels used to. */
+.topbar .ctrl-group { gap: 2px; }
+.topbar .ctrl-lbl {
+  color: var(--fg-1);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  opacity: 0.75;
 }
 .brand {
   display: flex;
@@ -388,7 +597,7 @@
   display: flex;
   gap: 12px;
   padding: 4px 10px;
-  background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+  background: linear-gradient(90deg, var(--panel-top), var(--panel-bot));
   border: 1px solid var(--panel-edge);
   border-radius: var(--r-lg);
   box-shadow: var(--panel-shadow);
@@ -597,7 +806,7 @@
   align-items: center;
   gap: 6px;
   padding: 5px 10px;
-  background: linear-gradient(180deg, var(--panel-head-top), var(--panel-head-bot));
+  background: linear-gradient(90deg, var(--panel-head-top), var(--panel-head-bot));
   border-bottom: 1px solid var(--panel-border);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
   min-height: 28px;
@@ -936,7 +1145,7 @@
   color: #e0e8f5;
   padding: 2px 8px;
   background: rgba(0,0,0,0.55);
-  border-radius: 2px;
+  border-radius: 0;
   text-shadow: 0 1px 0 #000;
 }
 .spec-label.center { color: var(--tx); background: rgba(0,0,0,0.75); font-weight: 700; }
@@ -1018,7 +1227,7 @@
   height: 10px;
   background: #000;
   border: 1px solid rgba(0,0,0,0.8);
-  border-radius: 2px;
+  border-radius: 0;
   box-shadow: inset 0 1px 2px rgba(0,0,0,0.8);
   overflow: hidden;
 }
@@ -1044,7 +1253,7 @@
   padding: 6px;
   background: #000;
   border: 1px solid rgba(0,0,0,0.8);
-  border-radius: 3px;
+  border-radius: 0;
   box-shadow: inset 0 1px 3px rgba(0,0,0,0.8);
 }
 .smeter-s {
@@ -1059,7 +1268,7 @@
   width: 100%;
   height: 24%;
   background: #1a3050;
-  border-radius: 1px;
+  border-radius: 0;
   transition: background var(--dur-fast), box-shadow var(--dur-fast);
 }
 .smeter-s:nth-child(2) .smeter-bar { height: 34%; }
@@ -1178,7 +1387,7 @@
   width: 90px;
   background: #0a1220;
   border: 1px solid #000;
-  border-radius: 3px;
+  border-radius: 0;
   padding: 3px 8px;
   font-size: 12px;
   font-weight: 700;
@@ -1201,7 +1410,7 @@
   color: var(--fg-2);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  background: linear-gradient(180deg, var(--panel-top), color-mix(in srgb, var(--panel-top) 60%, var(--panel-bot)));
+  background: linear-gradient(90deg, var(--panel-top), color-mix(in srgb, var(--panel-top) 60%, var(--panel-bot)));
   border-bottom: 1px solid rgba(0,0,0,0.4);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
 }
@@ -1232,7 +1441,7 @@
   align-items: center;
   gap: 8px;
   border-top: 1px solid rgba(0,0,0,0.4);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-top) 60%, var(--panel-bot)), var(--panel-bot));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--panel-top) 60%, var(--panel-bot)), var(--panel-bot));
 }
 
 /* ===== Memory ===== */
@@ -1275,14 +1484,14 @@
   height: 8px;
   background: #000;
   border: 1px solid rgba(0,0,0,0.6);
-  border-radius: 4px;
+  border-radius: 0;
   cursor: pointer;
   box-shadow: inset 0 1px 2px rgba(0,0,0,0.7);
 }
 .slider-fill {
   position: absolute; inset: 0 auto 0 0;
   background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 70%, white));
-  border-radius: 4px 0 0 4px;
+  border-radius: 0;
 }
 .slider-thumb {
   position: absolute;
@@ -1291,7 +1500,7 @@
   width: 14px; height: 16px;
   background: linear-gradient(180deg, #c0cbd9, #7a8698);
   border: 1px solid #000;
-  border-radius: 2px;
+  border-radius: 0;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.6), 0 1px 2px rgba(0,0,0,0.6);
 }
 
@@ -1302,7 +1511,7 @@
   padding: 8px 10px;
   background: #000;
   border: 1px solid rgba(0,0,0,0.8);
-  border-radius: 3px;
+  border-radius: 0;
   font-size: 14px;
   color: var(--accent);
   letter-spacing: 0.2em;
@@ -1322,11 +1531,47 @@
   align-items: center;
   gap: 6px;
   padding: 0 10px;
-  background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+  background: linear-gradient(90deg, var(--panel-top), var(--panel-bot));
   border: 1px solid var(--panel-edge);
   border-radius: var(--r-lg);
   box-shadow: var(--panel-shadow);
   height: 44px;
+}
+/* Transport buttons read as flat clickable regions of the toolbar, not raised
+   chiclets. TX (MOX-on) is excluded — it keeps its red bevel/pulse for safety. */
+.transport .btn {
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+  text-shadow: none;
+  color: var(--fg-1);
+}
+.transport .btn:hover {
+  background: rgba(255,255,255,0.06);
+  filter: none;
+}
+.transport .btn:active,
+.transport .btn.pressed {
+  background: rgba(0,0,0,0.28);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.4);
+  transform: none;
+}
+.transport .btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(74,158,255,0.35);
+  text-shadow: none;
+}
+.transport .btn.ghost {
+  background: transparent;
+}
+.transport .btn.ghost:hover { background: rgba(255,255,255,0.06); }
+/* Restore TX styling for MOX-on state — must remain visually loud. */
+.transport .btn.tx {
+  background: linear-gradient(180deg, var(--btn-top-c), var(--btn-bot-c));
+  border: 1px solid var(--btn-edge);
+  color: #ffd4d0;
+  text-shadow: 0 0 6px rgba(230,58,43,0.8);
 }
 .tx-btn { font-size: 14px; font-weight: 700; letter-spacing: 0.12em; min-width: 80px; }
 .tx-btn.tx {
@@ -1405,7 +1650,7 @@
 }
 .variant-card:hover { filter: brightness(1.1); }
 .variant-card.active { border-color: var(--accent); box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 0 8px var(--accent-soft); }
-.variant-swatch { display: flex; height: 20px; border-radius: 2px; overflow: hidden; border: 1px solid #000; }
+.variant-swatch { display: flex; height: 20px; border-radius: 0; overflow: hidden; border: 1px solid #000; }
 .variant-swatch .sw { flex: 1; }
 .variant-card[data-variant="console"] .sw.bg0 { background: #0f1a2e; }
 .variant-card[data-variant="console"] .sw.bg1 { background: #2d3e5a; }
@@ -1460,7 +1705,7 @@
   padding: 1px 6px;
   background: linear-gradient(180deg, var(--btn-top), var(--btn-bot));
   border: 1px solid #000;
-  border-radius: 2px;
+  border-radius: 0;
   font-size: 10px;
   font-weight: 700;
   margin-right: 6px;

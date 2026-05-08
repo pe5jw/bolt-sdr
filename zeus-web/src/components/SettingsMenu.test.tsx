@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// SettingsMenu — verify the TX Audio Tools tab is always present and that
+// SettingsView — verify the TX Audio Tools tab is always present and that
 // the VST host submenu inside it is gated by /api/capabilities. CFC is
 // WDSP-driven and must remain visible regardless of the sidecar.
 
@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
-import { SettingsMenu } from './SettingsMenu';
+import { SettingsView } from './SettingsMenu';
 import { useCapabilitiesStore } from '../state/capabilities-store';
 
 function seed(vstAvailable: boolean) {
@@ -33,7 +33,7 @@ function seed(vstAvailable: boolean) {
   });
 }
 
-describe('SettingsMenu — TX Audio Tools', () => {
+describe('SettingsView — TX Audio Tools', () => {
   let container: HTMLDivElement;
   let root: Root;
 
@@ -54,7 +54,7 @@ describe('SettingsMenu — TX Audio Tools', () => {
   it('always renders the TX AUDIO TOOLS tab', () => {
     seed(false);
     act(() => {
-      root.render(<SettingsMenu open={true} onClose={() => {}} />);
+      root.render(<SettingsView onClose={() => {}} />);
     });
     const tabs = Array.from(
       container.querySelectorAll('[role="tablist"] button'),
@@ -65,9 +65,7 @@ describe('SettingsMenu — TX Audio Tools', () => {
   it('shows CFC and the VST host submenu when vstHost.available is true', () => {
     seed(true);
     act(() => {
-      root.render(
-        <SettingsMenu open={true} onClose={() => {}} initialTab="tx-audio" />,
-      );
+      root.render(<SettingsView onClose={() => {}} initialTab="tx-audio" />);
     });
     expect(container.textContent).toContain('Continuous Frequency Compressor');
     expect(container.textContent).toContain('VST Host');
@@ -76,9 +74,7 @@ describe('SettingsMenu — TX Audio Tools', () => {
   it('shows CFC but hides the VST host submenu when vstHost.available is false', () => {
     seed(false);
     act(() => {
-      root.render(
-        <SettingsMenu open={true} onClose={() => {}} initialTab="tx-audio" />,
-      );
+      root.render(<SettingsView onClose={() => {}} initialTab="tx-audio" />);
     });
     expect(container.textContent).toContain('Continuous Frequency Compressor');
     expect(container.textContent).not.toContain('VST Host');
