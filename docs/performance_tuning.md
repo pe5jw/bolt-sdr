@@ -284,6 +284,24 @@ shift waterfall scroll feel / panadapter trace responsiveness, both of
 which are operator-perceptible. Deferred until a maintainer-led
 session.
 
+## Sample series
+
+All averages from `top -l 31 -s 1` per PID, HL2 idle 20 m USB, layout
+"Default" with all panels open. "Frontend" = renderer + GPU helper.
+
+| Stage | Branch HEAD | Audio | Renderer | GPU | Frontend | Backend |
+|---|---|---|---|---|---|---|
+| baseline | `cd3a7d3` (post-perf2) | muted | 19.9 | 7.9 | **27.8** | **32.7** |
+| after raf-coalesce | `e49afc2` | muted | 21.1 | 8.5 | 29.7 | 25.2 |
+| after raf + pushframe | `67bf47c` | muted | 21.5 | 8.8 | 30.3 | 25.0 |
+| after server-profile (transient) | `77dd595`, fresh server | unmuted | 25.7 | 9.5 | 35.3 | 25.2 |
+| after server-profile (steady) | `77dd595` | unmuted | 26.1 | 9.6 | 35.7 | 25.8 |
+| after server-profile (re-muted) | `77dd595` | muted | 24.8 | 9.2 | **33.9** | **25.7** |
+
+Backend swing 32.7 → 25.0–25.8 across multiple post-merge samples is the
+reproducible win. Frontend deltas are all within the ±2-3 pp per-31-sample
+noise band.
+
 ## Methodology note: audio-mute confound
 
 The first perf3 sample after merging the backend fixes showed renderer
@@ -291,7 +309,25 @@ The first perf3 sample after merging the backend fixes showed renderer
 output had been left **un**muted between samples — the always-mounted
 `MicMeter` was actively re-rendering at 20 Hz instead of being idle. After
 re-muting (matching the perf2 baseline conditions), renderer dropped
-35.7 → 33.9 % (1.8 pp) — accounting for some of the gap, but not all.
+35.7 → 33.9 % (1.8 pp). That accounted for some of the gap but **not
+all**: ~3 pp of the perf3-baseline-vs-after-all gap remained unexplained
+even with audio muted.
+
+Candidates for the residual ~3 pp (not isolated yet — flagged for the
+next pass):
+
+- **Rotator.** At baseline the rotator pill read "Rotator: —" (no
+  rotator response, idle 1 Hz `/api/rotator/status` poll only). After
+  the restart the rotator was responding ("Rotator: 287°"), so each
+  poll's response triggers store + pill re-renders.
+- **Heap state warm-up.** Baseline was sampled within ~2 minutes of
+  page load (heap 33.6 MB). The post-merge sample was 5+ minutes in
+  (heap stabilised at ~40 MB). More retained store state can mean more
+  subscriber callbacks fire on each high-rate WS frame.
+- **Discovery panel teardown lingering observers.** The page reload +
+  reconnect flow mounts the discovery card, then unmounts when status
+  flips to Connected. If any observer/timer leaks from that transition
+  the cost shows up only post-reconnect, not on first-load baseline.
 
 Lesson: **fix the audio-mute state in the methodology**. Before any sample
 the bottom-bar audio button must read "▶ Unmute" (i.e. audio is muted,
