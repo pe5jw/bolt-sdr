@@ -158,7 +158,7 @@ function WorkspaceCanvas({
   const rowHeight = useMemo(() => {
     if (containerHeight <= 0) return WORKSPACE_ROW_HEIGHT_PX;
     const margin = 6;
-    const containerPadding = 6;
+    const containerPadding = 0;
     const inner =
       containerHeight - 2 * containerPadding - margin * (WORKSPACE_TARGET_ROWS - 1);
     const computed = Math.floor(inner / WORKSPACE_TARGET_ROWS);
@@ -203,7 +203,7 @@ function WorkspaceCanvas({
           cols={{ lg: WORKSPACE_GRID_COLS }}
           rowHeight={rowHeight}
           margin={[6, 6]}
-          containerPadding={[6, 6]}
+          containerPadding={[0, 0]}
           // Position tiles via top/left rather than transform: translate3d.
           // RGL's default `transformStrategy` uses CSS transforms, which
           // (combined with the upstream stylesheet's `will-change: transform`)
