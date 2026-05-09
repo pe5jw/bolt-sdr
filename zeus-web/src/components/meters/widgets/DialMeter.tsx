@@ -11,6 +11,7 @@
 
 import type { CSSProperties } from 'react';
 import type { MeterReadingDef } from '../meterCatalog';
+import { resolveZones, zoneColorTokens } from '../meterCatalog';
 import type { WidgetSettings } from '../metersConfig';
 import { _isSilent, _fillColorForValue } from './HBarMeter';
 
@@ -63,15 +64,24 @@ export function DialMeter({ value, def, settings, size = 96 }: DialMeterProps) {
   const arcBgPath = describeArc(cx, cy, rOuter, SWEEP_START_DEG, SWEEP_END_DEG);
   const arcFillPath = describeArc(cx, cy, rOuter, SWEEP_START_DEG, angle);
 
-  const dangerArcPath =
-    def.dangerAt !== undefined
-      ? (() => {
-          const dangerStart =
-            SWEEP_START_DEG +
-            fractionOf(min, max, def.dangerAt) * SWEEP_RANGE_DEG;
-          return describeArc(cx, cy, rOuter, dangerStart, SWEEP_END_DEG);
-        })()
-      : null;
+  // Zone arcs — same data model as HBar/VBar bands, projected onto the
+  // 270° sweep. Drawn under the live arc so the operator sees where
+  // healthy/borderline/unexpected ranges are even at idle.
+  const zones = resolveZones(def, min, max);
+  const zoneArcs = zones
+    .map((z, i) => {
+      const lo = Math.max(min, Math.min(z.from, z.to));
+      const hi = Math.min(max, Math.max(z.from, z.to));
+      if (hi <= lo) return null;
+      const startDeg = SWEEP_START_DEG + fractionOf(min, max, lo) * SWEEP_RANGE_DEG;
+      const endDeg = SWEEP_START_DEG + fractionOf(min, max, hi) * SWEEP_RANGE_DEG;
+      return {
+        i,
+        path: describeArc(cx, cy, rOuter, startDeg, endDeg),
+        color: zoneColorTokens(z.level).soft,
+      };
+    })
+    .filter((x): x is { i: number; path: string; color: string } => x !== null);
 
   const labelStyle: CSSProperties = {
     position: 'absolute',
@@ -124,16 +134,18 @@ export function DialMeter({ value, def, settings, size = 96 }: DialMeterProps) {
           strokeWidth={5}
           strokeLinecap="round"
         />
-        {/* Danger zone overlay (translucent --tx) */}
-        {dangerArcPath && (
+        {/* Zone arcs — green/amber/red bands at low alpha, sharp ends so
+            adjacent bands abut without rounded gaps */}
+        {zoneArcs.map((z) => (
           <path
-            d={dangerArcPath}
+            key={z.i}
+            d={z.path}
             fill="none"
-            stroke="var(--tx-soft)"
+            stroke={z.color}
             strokeWidth={5}
-            strokeLinecap="round"
+            strokeLinecap="butt"
           />
-        )}
+        ))}
         {/* Filled arc */}
         {!silent && f > 0 && (
           <path

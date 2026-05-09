@@ -22,6 +22,7 @@
 
 import type { CSSProperties } from 'react';
 import type { MeterReadingDef } from '../meterCatalog';
+import { resolveZones, zoneColorTokens } from '../meterCatalog';
 import type { WidgetSettings } from '../metersConfig';
 
 export const PEAK_HOLD_FILL = 'rgba(255, 160, 40, 0.4)';
@@ -42,6 +43,20 @@ function isSilent(v: number): boolean {
 
 function fillColorForValue(def: MeterReadingDef, value: number): string {
   if (def.colorToken === 'amber-signal') return '#FFA028';
+  // Explicit zones win — colour the live fill to match the band the value
+  // is currently sitting in, so fill + background never disagree on
+  // healthy/borderline/unexpected. Only meters with multi-band zones (mic,
+  // output, gain reductions) define these; everything else falls through
+  // to the warnAt/dangerAt / colorToken logic below.
+  if (def.zones && def.zones.length > 0 && isFinite(value)) {
+    for (const z of def.zones) {
+      const lo = Math.min(z.from, z.to);
+      const hi = Math.max(z.from, z.to);
+      if (value >= lo && value <= hi) {
+        return zoneColorTokens(z.level).hard;
+      }
+    }
+  }
   if (def.dangerAt !== undefined && value >= def.dangerAt) return 'var(--tx)';
   if (def.warnAt !== undefined && value >= def.warnAt) return 'var(--power)';
   switch (def.colorToken) {
@@ -83,6 +98,13 @@ export function HBarMeter({
   // alpha rising with strength.
   const isSignalGradient = def.colorToken === 'amber-signal';
 
+  // Zone bands paint behind the live fill so the operator always sees where
+  // healthy / borderline / unexpected ranges are, even when the bar is empty.
+  // Skip on signal-strength bars — their amber gradient already conveys the
+  // "stronger is up the scale" idea and adding green/red bands would just
+  // muddy the SMeter aesthetic.
+  const zones = isSignalGradient ? [] : resolveZones(def, min, max);
+
   const containerStyle: CSSProperties = {
     position: 'relative',
     height,
@@ -104,6 +126,27 @@ export function HBarMeter({
 
   return (
     <div style={containerStyle} aria-hidden="true">
+      {zones.map((z, i) => {
+        const lo = (Math.max(min, Math.min(z.from, z.to)) - min) / Math.max(1e-6, max - min);
+        const hi = (Math.min(max, Math.max(z.from, z.to)) - min) / Math.max(1e-6, max - min);
+        if (hi <= lo) return null;
+        const tokens = zoneColorTokens(z.level);
+        return (
+          <div
+            key={i}
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left: `${lo * 100}%`,
+              width: `${(hi - lo) * 100}%`,
+              background: tokens.soft,
+              pointerEvents: 'none',
+            }}
+          />
+        );
+      })}
       <div style={fillStyle} />
       {showPeak && (
         <div

@@ -9,6 +9,7 @@
 
 import type { CSSProperties } from 'react';
 import type { MeterReadingDef } from '../meterCatalog';
+import { zoneColorTokens } from '../meterCatalog';
 import type { WidgetSettings } from '../metersConfig';
 import { _isSilent } from './HBarMeter';
 
@@ -20,6 +21,17 @@ interface DigitalMeterProps {
 
 function colorForValue(def: MeterReadingDef, value: number): string {
   if (!isFinite(value)) return 'var(--fg-2)';
+  // Mirror HBarMeter — explicit zones win so the digit colour matches the
+  // bar widgets next to it.
+  if (def.zones && def.zones.length > 0) {
+    for (const z of def.zones) {
+      const lo = Math.min(z.from, z.to);
+      const hi = Math.max(z.from, z.to);
+      if (value >= lo && value <= hi) {
+        return zoneColorTokens(z.level).hard;
+      }
+    }
+  }
   if (def.dangerAt !== undefined && value >= def.dangerAt) return 'var(--tx)';
   if (def.warnAt !== undefined && value >= def.warnAt) return 'var(--power)';
   return 'var(--fg-0)';

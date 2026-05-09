@@ -34,6 +34,9 @@
   --tx:          #e63a2b;   /* TX red (like "TX: OFF" red) */
   --tx-soft:     rgba(230,58,43,0.18);
   --power:       #ffc93a;   /* yellow digits like "20W" */
+  --power-soft:  rgba(255,201,58,0.16);
+  --ok:          #2e7a2e;   /* healthy / normal-range green for meter zones */
+  --ok-soft:     rgba(46,122,46,0.18);
   --orange:      #f28524;   /* Lookup button top */
   --orange-dk:   #6b1100;   /* Lookup button shadow edge */
 

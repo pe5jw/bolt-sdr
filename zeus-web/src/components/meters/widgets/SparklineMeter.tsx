@@ -13,6 +13,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { MeterReadingDef } from '../meterCatalog';
+import { resolveZones, zoneColorTokens } from '../meterCatalog';
 import type { WidgetSettings } from '../metersConfig';
 import { _isSilent, _fillColorForValue } from './HBarMeter';
 
@@ -50,6 +51,7 @@ export function SparklineMeter({
   const span = Math.max(1e-6, max - min);
   const isSignalGradient = def.colorToken === 'amber-signal';
   const stroke = isSignalGradient ? '#FFA028' : _fillColorForValue(def, value);
+  const zones = isSignalGradient ? [] : resolveZones(def, min, max);
 
   const buf = bufRef.current;
   const points: string[] = [];
@@ -73,6 +75,25 @@ export function SparklineMeter({
       }}
       aria-hidden="true"
     >
+      {/* Zone bands by Y-axis value — green/amber/red horizontal stripes
+          behind the sample line so a glance shows where the signal has been
+          relative to healthy/borderline/unexpected ranges. */}
+      {zones.map((z, i) => {
+        const lo = (Math.max(min, Math.min(z.from, z.to)) - min) / span;
+        const hi = (Math.min(max, Math.max(z.from, z.to)) - min) / span;
+        if (hi <= lo) return null;
+        const tokens = zoneColorTokens(z.level);
+        return (
+          <rect
+            key={i}
+            x={0}
+            y={height - hi * height}
+            width={width}
+            height={(hi - lo) * height}
+            fill={tokens.soft}
+          />
+        );
+      })}
       {/* faint mid-line at the axis midpoint */}
       <line
         x1={0}

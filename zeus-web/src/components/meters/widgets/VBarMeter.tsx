@@ -9,6 +9,7 @@
 
 import type { CSSProperties } from 'react';
 import type { MeterReadingDef } from '../meterCatalog';
+import { resolveZones, zoneColorTokens } from '../meterCatalog';
 import type { WidgetSettings } from '../metersConfig';
 import { PEAK_HOLD_FILL, _isSilent, _fillColorForValue } from './HBarMeter';
 
@@ -45,6 +46,8 @@ export function VBarMeter({
     settings.peakHold !== false && peakF !== null && peakF > f && !silent;
   const color = _fillColorForValue(def, value);
   const isSignalGradient = def.colorToken === 'amber-signal';
+  // Zone bands behind the live fill — see HBarMeter for rationale.
+  const zones = isSignalGradient ? [] : resolveZones(def, min, max);
 
   const containerStyle: CSSProperties = {
     position: 'relative',
@@ -70,6 +73,27 @@ export function VBarMeter({
 
   return (
     <div style={containerStyle} aria-hidden="true">
+      {zones.map((z, i) => {
+        const lo = (Math.max(min, Math.min(z.from, z.to)) - min) / Math.max(1e-6, max - min);
+        const hi = (Math.min(max, Math.max(z.from, z.to)) - min) / Math.max(1e-6, max - min);
+        if (hi <= lo) return null;
+        const tokens = zoneColorTokens(z.level);
+        return (
+          <div
+            key={i}
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: `${lo * 100}%`,
+              height: `${(hi - lo) * 100}%`,
+              background: tokens.soft,
+              pointerEvents: 'none',
+            }}
+          />
+        );
+      })}
       <div style={fillStyle} />
       {showPeak && (
         <div
