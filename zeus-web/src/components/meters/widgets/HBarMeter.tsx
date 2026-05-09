@@ -3,22 +3,18 @@
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
 //
-// Horizontal bar widget. Pure presentation — `value` is always a finite
-// number (em-dash handling is the caller's responsibility) or NaN/sentinel
-// which the widget renders as an empty bar.
+// Horizontal bar primitive — the immersive horizontal counterpart of
+// VuColumn (LED segments, bloom layer, signal-gradient fill, peak-hold
+// tick, dim zone bands). Pure presentation; the wrapper `MeterWidget`
+// supplies label / readout / tile chrome.
 //
 // Color rules (CLAUDE.md, plan §4.6):
-//   - rx-signal       → amber #FFA028 (the only allowed raw hex; signal-
-//                       strength fills + peak-hold ticks only)
-//   - tx-power        → var(--power) baseline; var(--tx) past dangerAt
-//   - tx-stage levels → var(--accent); var(--power) past warnAt;
-//                       var(--tx) past dangerAt
-//   - tx-protection   → var(--accent) baseline; var(--power) past warnAt;
-//                       var(--tx) past dangerAt
-//   - rx-adc / rx-agc → var(--accent)
+//   - rx-signal       → amber #FFA028 (single-hue gradient, alpha rises
+//                       with strength) — the only allowed raw hex
+//   - everything else → good → warn → tx signal-status gradient
 //
 // Peak-hold tick is amber #FFA028 @ 0.4 alpha — same recipe as the
-// existing TxStageMeters LevelRow and the SMeter (project-wide convention).
+// SMeter and the original TxStageMeters PEP tick.
 
 import type { CSSProperties } from 'react';
 import type { MeterReadingDef } from '../meterCatalog';
@@ -43,11 +39,6 @@ function isSilent(v: number): boolean {
 
 function fillColorForValue(def: MeterReadingDef, value: number): string {
   if (def.colorToken === 'amber-signal') return '#FFA028';
-  // Explicit zones win — colour the live fill to match the band the value
-  // is currently sitting in, so fill + background never disagree on
-  // healthy/borderline/unexpected. Only meters with multi-band zones (mic,
-  // output, gain reductions) define these; everything else falls through
-  // to the warnAt/dangerAt / colorToken logic below.
   if (def.zones && def.zones.length > 0 && isFinite(value)) {
     for (const z of def.zones) {
       const lo = Math.min(z.from, z.to);
@@ -76,93 +67,165 @@ function fractionOf(min: number, max: number, value: number): number {
   return Math.max(0, Math.min(1, (value - min) / (max - min)));
 }
 
+const VB_W = 200;
+const VB_H = 24;
+const SEG_COUNT = 19; // vertical separators dividing the bar into 20 LED cells
+
 export function HBarMeter({
   value,
   peak,
   def,
   settings,
-  height = 12,
+  height = 24,
 }: HBarMeterProps) {
   const min = settings.min ?? def.defaultMin;
   const max = settings.max ?? def.defaultMax;
   const silent = isSilent(value);
-  const f = silent ? 0 : fractionOf(min, max, value);
-  const peakF =
+  const liveFrac = silent ? 0 : fractionOf(min, max, value);
+  const peakFrac =
     peak !== undefined && !isSilent(peak) ? fractionOf(min, max, peak) : null;
   const showPeak =
-    settings.peakHold !== false && peakF !== null && peakF > f && !silent;
-  const color = fillColorForValue(def, value);
+    settings.peakHold !== false && peakFrac !== null && peakFrac > liveFrac && !silent;
 
-  // Special-case: rx-signal. Use the amber gradient that matches the
-  // existing SMeter recipe (lines 184–196 of SMeter.tsx) — single-hue amber,
-  // alpha rising with strength.
   const isSignalGradient = def.colorToken === 'amber-signal';
-
-  // Zone bands paint behind the live fill so the operator always sees where
-  // healthy / borderline / unexpected ranges are, even when the bar is empty.
-  // Skip on signal-strength bars — their amber gradient already conveys the
-  // "stronger is up the scale" idea and adding green/red bands would just
-  // muddy the SMeter aesthetic.
   const zones = isSignalGradient ? [] : resolveZones(def, min, max);
 
+  const fillId = `hb-${def.id.replace(/\W/g, '_')}-fill`;
+  const bloomId = `hb-${def.id.replace(/\W/g, '_')}-bloom`;
+  const blurId = `hb-${def.id.replace(/\W/g, '_')}-blur`;
+  const maskId = `hb-${def.id.replace(/\W/g, '_')}-mask`;
+
   const containerStyle: CSSProperties = {
-    position: 'relative',
+    width: '100%',
     height,
-    background: 'var(--meter-bg)',
-    border: '1px solid var(--panel-border)',
+    display: 'block',
+    background: 'var(--immersive-well-2)',
+    border: '1px solid var(--immersive-line)',
     borderRadius: 'var(--r-xs)',
-    overflow: 'hidden',
-  };
-  const fillStyle: CSSProperties = {
-    position: 'absolute',
-    inset: 0,
-    width: `${f * 100}%`,
-    background: isSignalGradient
-      ? 'linear-gradient(90deg, rgba(255,160,40,0.18) 0%, rgba(255,160,40,0.55) 50%, rgba(255,160,40,1) 100%)'
-      : color,
-    transition: 'width 80ms linear',
-    pointerEvents: 'none',
   };
 
+  const fillW = VB_W * liveFrac;
+  const peakX = peakFrac !== null ? VB_W * peakFrac : 0;
+
   return (
-    <div style={containerStyle} aria-hidden="true">
+    <svg
+      viewBox={`0 0 ${VB_W} ${VB_H}`}
+      preserveAspectRatio="none"
+      style={containerStyle}
+      aria-hidden="true"
+    >
+      <defs>
+        <linearGradient id={fillId} x1="0" y1="0" x2={VB_W} y2="0" gradientUnits="userSpaceOnUse">
+          {isSignalGradient ? (
+            <>
+              <stop offset="0" stopColor="#FFA028" stopOpacity="0.18" />
+              <stop offset="0.5" stopColor="#FFA028" stopOpacity="0.55" />
+              <stop offset="1" stopColor="#FFA028" stopOpacity="1" />
+            </>
+          ) : (
+            <>
+              <stop offset="0" stopColor="var(--immersive-good)" />
+              <stop offset="0.55" stopColor="var(--immersive-good)" />
+              <stop offset="0.7" stopColor="#7cd1a8" />
+              <stop offset="0.78" stopColor="var(--immersive-warn)" />
+              <stop offset="0.92" stopColor="var(--immersive-tx)" />
+              <stop offset="1" stopColor="var(--immersive-tx)" />
+            </>
+          )}
+        </linearGradient>
+        <linearGradient id={bloomId} x1="0" y1="0" x2={VB_W} y2="0" gradientUnits="userSpaceOnUse">
+          {isSignalGradient ? (
+            <stop offset="0" stopColor="#FFA028" stopOpacity="0.4" />
+          ) : (
+            <>
+              <stop offset="0" stopColor="var(--immersive-good)" stopOpacity="0.5" />
+              <stop offset="0.78" stopColor="var(--immersive-warn)" stopOpacity="0.5" />
+              <stop offset="1" stopColor="var(--immersive-tx)" stopOpacity="0.5" />
+            </>
+          )}
+          {isSignalGradient && <stop offset="1" stopColor="#FFA028" stopOpacity="0.6" />}
+        </linearGradient>
+        <filter id={blurId} x="-10%" y="-100%" width="120%" height="300%">
+          <feGaussianBlur stdDeviation="3" />
+        </filter>
+        <mask id={maskId}>
+          <rect x={0} y={0} width={VB_W} height={VB_H} fill="white" />
+        </mask>
+      </defs>
+
+      {/* zone bands behind everything */}
       {zones.map((z, i) => {
-        const lo = (Math.max(min, Math.min(z.from, z.to)) - min) / Math.max(1e-6, max - min);
-        const hi = (Math.min(max, Math.max(z.from, z.to)) - min) / Math.max(1e-6, max - min);
+        const lo = fractionOf(min, max, z.from);
+        const hi = fractionOf(min, max, z.to);
         if (hi <= lo) return null;
-        const tokens = zoneColorTokens(z.level);
         return (
-          <div
-            key={i}
-            aria-hidden="true"
-            style={{
-              position: 'absolute',
-              top: 0,
-              bottom: 0,
-              left: `${lo * 100}%`,
-              width: `${(hi - lo) * 100}%`,
-              background: tokens.soft,
-              pointerEvents: 'none',
-            }}
+          <rect
+            key={`hbz-${i}`}
+            x={lo * VB_W}
+            y={0}
+            width={(hi - lo) * VB_W}
+            height={VB_H}
+            fill={zoneColorTokens(z.level).soft}
           />
         );
       })}
-      <div style={fillStyle} />
-      {showPeak && (
-        <div
-          aria-hidden="true"
-          style={{
-            position: 'absolute',
-            top: 0,
-            bottom: 0,
-            left: `calc(${(peakF ?? 0) * 100}% - 1px)`,
-            width: 2,
-            background: PEAK_HOLD_FILL,
-            pointerEvents: 'none',
-          }}
+
+      {/* inset top shadow */}
+      <rect x={0} y={0} width={VB_W} height={2} fill="rgba(0,0,0,0.5)" />
+
+      {/* bloom (blurred) layer behind crisp fill */}
+      {!silent && fillW > 0 && (
+        <rect
+          x={0}
+          y={0}
+          width={fillW}
+          height={VB_H}
+          fill={`url(#${bloomId})`}
+          filter={`url(#${blurId})`}
+          opacity={0.85}
         />
       )}
-    </div>
+      {/* crisp fill */}
+      {!silent && fillW > 0 && (
+        <rect
+          x={0}
+          y={0}
+          width={fillW}
+          height={VB_H}
+          fill={`url(#${fillId})`}
+        />
+      )}
+
+      {/* LED segment separators */}
+      <g mask={`url(#${maskId})`}>
+        {Array.from({ length: SEG_COUNT }).map((_, i) => {
+          const segX = ((i + 1) * VB_W) / (SEG_COUNT + 1);
+          return (
+            <line
+              key={`hseg-${i}`}
+              x1={segX.toFixed(1)}
+              y1={0}
+              x2={segX.toFixed(1)}
+              y2={VB_H}
+              stroke="var(--immersive-bg)"
+              strokeWidth={1.2}
+            />
+          );
+        })}
+      </g>
+
+      {/* peak-hold tick */}
+      {showPeak && (
+        <line
+          x1={peakX.toFixed(1)}
+          y1={0}
+          x2={peakX.toFixed(1)}
+          y2={VB_H}
+          stroke={PEAK_HOLD_FILL}
+          strokeWidth={2}
+        />
+      )}
+    </svg>
   );
 }
 

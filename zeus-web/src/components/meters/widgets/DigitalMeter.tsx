@@ -60,10 +60,14 @@ export function DigitalMeter({ value, def, settings }: DigitalMeterProps) {
     display: 'flex',
     flexDirection: 'column',
     gap: 2,
-    padding: '6px 10px',
-    background: 'var(--meter-bg)',
-    border: '1px solid var(--panel-border)',
+    padding: '8px 12px',
+    background:
+      'radial-gradient(80% 100% at 50% 0%, var(--immersive-bloom), transparent 70%),' +
+      ' linear-gradient(180deg, var(--immersive-well) 0%, var(--immersive-well-2) 100%)',
+    border: '1px solid var(--immersive-line)',
     borderRadius: 'var(--r-xs)',
+    boxShadow:
+      'inset 0 1px 0 var(--immersive-rim), inset 0 0 22px rgba(0,0,0,0.35)',
     minWidth: 90,
   };
   const labelStyle: CSSProperties = {
@@ -80,6 +84,14 @@ export function DigitalMeter({ value, def, settings }: DigitalMeterProps) {
     fontFamily: 'var(--font-mono)',
     fontVariantNumeric: 'tabular-nums',
     fontWeight: 600,
+    // Subtle accent-glow on the digits — reads as "lit indicator", same
+    // recipe as the BigArc readout. Switches to tx-glow when the value
+    // crosses dangerAt so the readout pops red without changing colour
+    // mid-frame.
+    textShadow:
+      color === 'var(--tx)'
+        ? '0 0 12px var(--immersive-tx-glow)'
+        : '0 0 10px var(--immersive-accent-glow)',
   };
   const unitStyle: CSSProperties = {
     fontSize: 10,

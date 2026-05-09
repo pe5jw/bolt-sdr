@@ -3,17 +3,18 @@
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
 //
-// Round analog-style dial. Aligned with the HL2 hardware aesthetic — chrome
-// rim, tinted face, white needle on a dark ground. NO neon ring (the AI
-// mock palette is forbidden — see CLAUDE.md).
-//
-// Sweep covers 270° from -135° to +135° (i.e. needle straight up = midpoint).
+// Round dial primitive for the configurable Meters Panel. Visually
+// matches the immersive panel's `BigArc` (180° semicircle, gradient
+// fill, glowing needle pivoting from the hub, ambient ground glow,
+// 0/rated tick highlight). Existing tiles auto-upgrade by keeping the
+// same prop API; only the renderer changed from a 270° analog face to
+// the 180° immersive semicircle.
 
 import type { CSSProperties } from 'react';
 import type { MeterReadingDef } from '../meterCatalog';
 import { resolveZones, zoneColorTokens } from '../meterCatalog';
 import type { WidgetSettings } from '../metersConfig';
-import { _isSilent, _fillColorForValue } from './HBarMeter';
+import { _isSilent } from './HBarMeter';
 
 interface DialMeterProps {
   value: number;
@@ -22,9 +23,9 @@ interface DialMeterProps {
   size?: number;
 }
 
-const SWEEP_START_DEG = -135;
-const SWEEP_END_DEG = 135;
-const SWEEP_RANGE_DEG = SWEEP_END_DEG - SWEEP_START_DEG;
+const CX = 120;
+const CY = 124;
+const R = 92;
 
 function fractionOf(min: number, max: number, value: number): number {
   if (!isFinite(value)) return 0;
@@ -32,149 +33,251 @@ function fractionOf(min: number, max: number, value: number): number {
   return Math.max(0, Math.min(1, (value - min) / (max - min)));
 }
 
-function describeArc(
-  cx: number,
-  cy: number,
-  r: number,
-  startDeg: number,
-  endDeg: number,
-): string {
-  const toRad = (d: number) => ((d - 90) * Math.PI) / 180;
-  const x1 = cx + r * Math.cos(toRad(startDeg));
-  const y1 = cy + r * Math.sin(toRad(startDeg));
-  const x2 = cx + r * Math.cos(toRad(endDeg));
-  const y2 = cy + r * Math.sin(toRad(endDeg));
-  const large = endDeg - startDeg > 180 ? 1 : 0;
-  return `M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2}`;
+function pointAt(fraction: number, radius: number): { x: number; y: number } {
+  // 180° (left) → 360° (right) — the half-turn anchored at the bottom of
+  // the SVG viewBox. Same convention as BigArc.
+  const angleDeg = 180 + 180 * fraction;
+  const a = (angleDeg * Math.PI) / 180;
+  return { x: CX + Math.cos(a) * radius, y: CY + Math.sin(a) * radius };
+}
+
+interface AxisTick {
+  frac: number;
+  label: string;
+  highlight?: boolean;
+}
+
+/** Generate five evenly-spaced tick labels on min..max. The dangerAt or
+ *  warnAt threshold (whichever is most "alarming") gets the red highlight
+ *  so the operator sees the rail at a glance. */
+function ticksForAxis(def: MeterReadingDef, min: number, max: number): ReadonlyArray<AxisTick> {
+  const steps = 5;
+  const decimals = max - min < 10 ? 1 : 0;
+  const highlightAt = def.dangerAt ?? def.warnAt ?? null;
+  return Array.from({ length: steps + 1 }, (_, i) => {
+    const f = i / steps;
+    const v = min + f * (max - min);
+    return {
+      frac: f,
+      label: v.toFixed(decimals),
+      highlight: highlightAt !== null && Math.abs(v - highlightAt) < (max - min) / (2 * steps),
+    };
+  });
+}
+
+function fmtReadout(def: MeterReadingDef, value: number): string {
+  if (_isSilent(value) || !isFinite(value)) return '—';
+  switch (def.unit) {
+    case 'ratio':
+      return value.toFixed(2);
+    case 'W':
+      return value < 10 ? value.toFixed(1) : value.toFixed(0);
+    case 'dB':
+    case 'dBFS':
+    case 'dBm':
+      return value.toFixed(0);
+    default:
+      return value.toFixed(1);
+  }
 }
 
 export function DialMeter({ value, def, settings, size = 96 }: DialMeterProps) {
   const min = settings.min ?? def.defaultMin;
   const max = settings.max ?? def.defaultMax;
   const silent = _isSilent(value);
-  const f = silent ? 0 : fractionOf(min, max, value);
-  const angle = SWEEP_START_DEG + f * SWEEP_RANGE_DEG;
-  const color = _fillColorForValue(def, value);
+  const liveFrac = silent ? 0 : fractionOf(min, max, value);
+  const needleAngle = -90 + 180 * liveFrac;
+  const over = !silent && def.dangerAt !== undefined && value >= def.dangerAt;
 
-  const cx = size / 2;
-  const cy = size / 2;
-  const rOuter = size / 2 - 4;
-  const rInner = rOuter - 6;
+  const ticks = ticksForAxis(def, min, max);
+  const zones = def.colorToken === 'amber-signal' ? [] : resolveZones(def, min, max);
 
-  const arcBgPath = describeArc(cx, cy, rOuter, SWEEP_START_DEG, SWEEP_END_DEG);
-  const arcFillPath = describeArc(cx, cy, rOuter, SWEEP_START_DEG, angle);
+  const fillId = `dial-${def.id.replace(/\W/g, '_')}-fill`;
+  const glowId = `dial-${def.id.replace(/\W/g, '_')}-glow`;
+  const blurId = `dial-${def.id.replace(/\W/g, '_')}-blur`;
+  const ARC_LEN = Math.PI * R;
+  const fillLen = ARC_LEN * liveFrac;
+  const fillDash = `${fillLen.toFixed(1)} ${(ARC_LEN + 5).toFixed(1)}`;
 
-  // Zone arcs — same data model as HBar/VBar bands, projected onto the
-  // 270° sweep. Drawn under the live arc so the operator sees where
-  // healthy/borderline/unexpected ranges are even at idle.
-  const zones = resolveZones(def, min, max);
-  const zoneArcs = zones
-    .map((z, i) => {
-      const lo = Math.max(min, Math.min(z.from, z.to));
-      const hi = Math.min(max, Math.max(z.from, z.to));
-      if (hi <= lo) return null;
-      const startDeg = SWEEP_START_DEG + fractionOf(min, max, lo) * SWEEP_RANGE_DEG;
-      const endDeg = SWEEP_START_DEG + fractionOf(min, max, hi) * SWEEP_RANGE_DEG;
-      return {
-        i,
-        path: describeArc(cx, cy, rOuter, startDeg, endDeg),
-        color: zoneColorTokens(z.level).soft,
-      };
-    })
-    .filter((x): x is { i: number; path: string; color: string } => x !== null);
-
-  const labelStyle: CSSProperties = {
-    position: 'absolute',
-    inset: 0,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    pointerEvents: 'none',
-    fontFamily: 'var(--font-mono)',
-    fontSize: 11,
-    color: 'var(--fg-1)',
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
-    paddingTop: size * 0.45,
+  const containerStyle: CSSProperties = {
+    position: 'relative',
+    width: size,
+    aspectRatio: '240 / 150',
   };
-  const valueStyle: CSSProperties = {
+  const readoutStyle: CSSProperties = {
     position: 'absolute',
-    inset: 0,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    pointerEvents: 'none',
+    left: 0,
+    right: 0,
+    bottom: '4%',
+    textAlign: 'center',
     fontFamily: 'var(--font-mono)',
-    fontSize: 16,
+    fontSize: Math.max(11, size * 0.13),
+    fontWeight: 600,
     fontVariantNumeric: 'tabular-nums',
-    color: 'var(--fg-0)',
-    paddingBottom: size * 0.1,
+    lineHeight: 1,
+    color: over ? '#ffb8a4' : 'var(--fg-0)',
+    textShadow: over
+      ? '0 0 12px var(--immersive-tx-glow)'
+      : '0 0 12px var(--immersive-accent-glow)',
+    pointerEvents: 'none',
   };
 
   return (
-    <div
-      style={{ position: 'relative', width: size, height: size }}
-      aria-hidden="true"
-    >
-      <svg width={size} height={size}>
-        {/* Chrome rim */}
-        <circle
-          cx={cx}
-          cy={cy}
-          r={rOuter + 2}
-          fill="var(--bg-0)"
-          stroke="var(--panel-border)"
-          strokeWidth={1}
-        />
-        {/* Track background arc */}
+    <div style={containerStyle} aria-hidden="true">
+      <svg
+        viewBox="0 0 240 150"
+        preserveAspectRatio="xMidYMid meet"
+        style={{ width: '100%', height: '100%', display: 'block' }}
+      >
+        <defs>
+          <linearGradient id={fillId} x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0" stopColor="var(--immersive-good)" />
+            <stop offset="0.55" stopColor="var(--immersive-good)" />
+            <stop offset="0.78" stopColor="var(--immersive-warn)" />
+            <stop offset="1" stopColor="var(--immersive-tx)" />
+          </linearGradient>
+          <radialGradient id={glowId} cx="50%" cy="100%" r="80%">
+            <stop offset="0" stopColor="var(--immersive-accent)" stopOpacity="0.18" />
+            <stop offset="1" stopColor="var(--immersive-accent)" stopOpacity="0" />
+          </radialGradient>
+          <filter id={blurId} x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur stdDeviation="2.5" />
+          </filter>
+        </defs>
+
+        {/* ambient ground glow */}
+        <ellipse cx={CX} cy={135} rx={110} ry={40} fill={`url(#${glowId})`} />
+
+        {/* zone bands (dim) — drawn as arc segments behind the active fill */}
+        {zones.map((z, i) => {
+          const lo = fractionOf(min, max, z.from);
+          const hi = fractionOf(min, max, z.to);
+          if (hi <= lo) return null;
+          const startAngle = 180 + 180 * lo;
+          const endAngle = 180 + 180 * hi;
+          const sa = (startAngle * Math.PI) / 180;
+          const ea = (endAngle * Math.PI) / 180;
+          const x1 = CX + Math.cos(sa) * R;
+          const y1 = CY + Math.sin(sa) * R;
+          const x2 = CX + Math.cos(ea) * R;
+          const y2 = CY + Math.sin(ea) * R;
+          return (
+            <path
+              key={`dz-${i}`}
+              d={`M ${x1.toFixed(1)} ${y1.toFixed(1)} A ${R} ${R} 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)}`}
+              fill="none"
+              stroke={zoneColorTokens(z.level).soft}
+              strokeWidth={11}
+              strokeLinecap="butt"
+            />
+          );
+        })}
+
+        {/* background arc track (subtle) */}
         <path
-          d={arcBgPath}
+          d={`M ${CX - R} ${CY} A ${R} ${R} 0 0 1 ${CX + R} ${CY}`}
           fill="none"
-          stroke="var(--bg-2)"
-          strokeWidth={5}
+          stroke="rgba(255,255,255,0.05)"
+          strokeWidth={9}
           strokeLinecap="round"
         />
-        {/* Zone arcs — green/amber/red bands at low alpha, sharp ends so
-            adjacent bands abut without rounded gaps */}
-        {zoneArcs.map((z) => (
-          <path
-            key={z.i}
-            d={z.path}
-            fill="none"
-            stroke={z.color}
-            strokeWidth={5}
-            strokeLinecap="butt"
-          />
-        ))}
-        {/* Filled arc */}
-        {!silent && f > 0 && (
-          <path
-            d={arcFillPath}
-            fill="none"
-            stroke={color}
-            strokeWidth={5}
-            strokeLinecap="round"
-          />
-        )}
-        {/* Centre hub */}
-        <circle cx={cx} cy={cy} r={3} fill="var(--fg-2)" />
-        {/* Needle */}
+
+        {/* active fill — bloomed copy + crisp copy */}
         {!silent && (
-          <line
-            x1={cx}
-            y1={cy}
-            x2={cx + rInner * Math.cos(((angle - 90) * Math.PI) / 180)}
-            y2={cy + rInner * Math.sin(((angle - 90) * Math.PI) / 180)}
-            stroke="var(--fg-0)"
-            strokeWidth={2}
-            strokeLinecap="round"
-          />
+          <>
+            <path
+              d={`M ${CX - R} ${CY} A ${R} ${R} 0 0 1 ${CX + R} ${CY}`}
+              fill="none"
+              stroke={`url(#${fillId})`}
+              strokeWidth={9}
+              strokeLinecap="round"
+              strokeDasharray={fillDash}
+              filter={`url(#${blurId})`}
+              opacity={0.85}
+            />
+            <path
+              d={`M ${CX - R} ${CY} A ${R} ${R} 0 0 1 ${CX + R} ${CY}`}
+              fill="none"
+              stroke={`url(#${fillId})`}
+              strokeWidth={6}
+              strokeLinecap="round"
+              strokeDasharray={fillDash}
+            />
+          </>
         )}
+
+        {/* ticks + labels */}
+        <g stroke="rgba(255,255,255,0.30)" strokeWidth={1}>
+          {ticks.map((t, i) => {
+            const inner = pointAt(t.frac, R - 9);
+            const outer = pointAt(t.frac, R + 5);
+            return (
+              <line
+                key={`dt-${i}`}
+                x1={inner.x.toFixed(1)}
+                y1={inner.y.toFixed(1)}
+                x2={outer.x.toFixed(1)}
+                y2={outer.y.toFixed(1)}
+                stroke={t.highlight ? 'var(--immersive-tx)' : 'rgba(255,255,255,0.30)'}
+                strokeWidth={t.highlight ? 1.5 : 1}
+              />
+            );
+          })}
+        </g>
+        <g
+          fontFamily="var(--font-mono)"
+          fontSize={8}
+          fill="var(--fg-3)"
+          textAnchor="middle"
+        >
+          {ticks.map((t, i) => {
+            const lp = pointAt(t.frac, R + 14);
+            return (
+              <text
+                key={`dl-${i}`}
+                x={lp.x.toFixed(1)}
+                y={(lp.y + 3).toFixed(1)}
+                fill={t.highlight ? 'var(--immersive-tx)' : 'var(--fg-3)'}
+              >
+                {t.label}
+              </text>
+            );
+          })}
+        </g>
+
+        {/* needle */}
+        {!silent && (
+          <g transform={`rotate(${needleAngle.toFixed(2)} ${CX} ${CY})`}>
+            <line
+              x1={CX}
+              y1={CY}
+              x2={CX}
+              y2={36}
+              stroke="#dde6f8"
+              strokeWidth={2}
+              strokeLinecap="round"
+            />
+          </g>
+        )}
+
+        {/* hub */}
+        <circle
+          cx={CX}
+          cy={CY}
+          r={9}
+          fill="var(--immersive-panel-2)"
+          stroke="var(--immersive-rim-strong)"
+          strokeWidth={1.4}
+        />
+        <circle
+          cx={CX}
+          cy={CY}
+          r={3}
+          fill="var(--immersive-accent)"
+          style={{ filter: 'drop-shadow(0 0 6px var(--immersive-accent))' }}
+        />
       </svg>
-      <div style={labelStyle}>{def.short}</div>
-      <div style={valueStyle}>
-        {silent ? '—' : value.toFixed(value >= 100 ? 0 : 1)}
-      </div>
+      <div style={readoutStyle}>{fmtReadout(def, value)}</div>
     </div>
   );
 }

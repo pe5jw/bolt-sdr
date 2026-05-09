@@ -69,9 +69,10 @@ export function SparklineMeter({
       width={width}
       height={height}
       style={{
-        background: 'var(--meter-bg)',
-        border: '1px solid var(--panel-border)',
+        background: 'var(--immersive-well-2)',
+        border: '1px solid var(--immersive-line)',
         borderRadius: 'var(--r-xs)',
+        boxShadow: 'inset 0 1px 0 var(--immersive-rim), inset 0 0 16px rgba(0,0,0,0.4)',
       }}
       aria-hidden="true"
     >
@@ -100,7 +101,7 @@ export function SparklineMeter({
         x2={width}
         y1={height / 2}
         y2={height / 2}
-        stroke="var(--panel-border)"
+        stroke="rgba(255,255,255,0.06)"
         strokeWidth={1}
       />
       {points.length >= 2 && (
