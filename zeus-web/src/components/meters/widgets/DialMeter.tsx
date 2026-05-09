@@ -12,7 +12,6 @@
 
 import type { CSSProperties } from 'react';
 import type { MeterReadingDef } from '../meterCatalog';
-import { resolveZones, zoneColorTokens } from '../meterCatalog';
 import type { WidgetSettings } from '../metersConfig';
 import { _isSilent } from './HBarMeter';
 
@@ -90,7 +89,6 @@ export function DialMeter({ value, def, settings, size = 96 }: DialMeterProps) {
   const over = !silent && def.dangerAt !== undefined && value >= def.dangerAt;
 
   const ticks = ticksForAxis(def, min, max);
-  const zones = def.colorToken === 'amber-signal' ? [] : resolveZones(def, min, max);
 
   const fillId = `dial-${def.id.replace(/\W/g, '_')}-fill`;
   const glowId = `dial-${def.id.replace(/\W/g, '_')}-glow`;
@@ -147,31 +145,6 @@ export function DialMeter({ value, def, settings, size = 96 }: DialMeterProps) {
 
         {/* ambient ground glow */}
         <ellipse cx={CX} cy={135} rx={110} ry={40} fill={`url(#${glowId})`} />
-
-        {/* zone bands (dim) — drawn as arc segments behind the active fill */}
-        {zones.map((z, i) => {
-          const lo = fractionOf(min, max, z.from);
-          const hi = fractionOf(min, max, z.to);
-          if (hi <= lo) return null;
-          const startAngle = 180 + 180 * lo;
-          const endAngle = 180 + 180 * hi;
-          const sa = (startAngle * Math.PI) / 180;
-          const ea = (endAngle * Math.PI) / 180;
-          const x1 = CX + Math.cos(sa) * R;
-          const y1 = CY + Math.sin(sa) * R;
-          const x2 = CX + Math.cos(ea) * R;
-          const y2 = CY + Math.sin(ea) * R;
-          return (
-            <path
-              key={`dz-${i}`}
-              d={`M ${x1.toFixed(1)} ${y1.toFixed(1)} A ${R} ${R} 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)}`}
-              fill="none"
-              stroke={zoneColorTokens(z.level).soft}
-              strokeWidth={11}
-              strokeLinecap="butt"
-            />
-          );
-        })}
 
         {/* background arc track (subtle) */}
         <path

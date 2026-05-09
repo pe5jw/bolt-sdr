@@ -18,7 +18,7 @@
 
 import type { CSSProperties } from 'react';
 import type { MeterReadingDef } from '../meterCatalog';
-import { resolveZones, zoneColorTokens } from '../meterCatalog';
+import { zoneColorTokens } from '../meterCatalog';
 import type { WidgetSettings } from '../metersConfig';
 
 export const PEAK_HOLD_FILL = 'rgba(255, 160, 40, 0.4)';
@@ -88,7 +88,6 @@ export function HBarMeter({
     settings.peakHold !== false && peakFrac !== null && peakFrac > liveFrac && !silent;
 
   const isSignalGradient = def.colorToken === 'amber-signal';
-  const zones = isSignalGradient ? [] : resolveZones(def, min, max);
 
   const fillId = `hb-${def.id.replace(/\W/g, '_')}-fill`;
   const bloomId = `hb-${def.id.replace(/\W/g, '_')}-bloom`;
@@ -152,23 +151,6 @@ export function HBarMeter({
           <rect x={0} y={0} width={VB_W} height={VB_H} fill="white" />
         </mask>
       </defs>
-
-      {/* zone bands behind everything */}
-      {zones.map((z, i) => {
-        const lo = fractionOf(min, max, z.from);
-        const hi = fractionOf(min, max, z.to);
-        if (hi <= lo) return null;
-        return (
-          <rect
-            key={`hbz-${i}`}
-            x={lo * VB_W}
-            y={0}
-            width={(hi - lo) * VB_W}
-            height={VB_H}
-            fill={zoneColorTokens(z.level).soft}
-          />
-        );
-      })}
 
       {/* inset top shadow */}
       <rect x={0} y={0} width={VB_W} height={2} fill="rgba(0,0,0,0.5)" />

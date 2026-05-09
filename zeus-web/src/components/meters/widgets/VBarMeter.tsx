@@ -14,7 +14,6 @@
 
 import type { CSSProperties } from 'react';
 import type { MeterReadingDef } from '../meterCatalog';
-import { resolveZones, zoneColorTokens } from '../meterCatalog';
 import type { WidgetSettings } from '../metersConfig';
 import { _isSilent, PEAK_HOLD_FILL } from './HBarMeter';
 
@@ -67,11 +66,6 @@ export function VBarMeter({
   const showZeroRef = min < 0 && max >= 0;
   const zeroFrac = showZeroRef ? dbFracOf(0, min, max) : 0;
   const zeroY = BOT_Y - COL_HEIGHT * zeroFrac;
-
-  // Zone bands behind the fill — draw dim dB-tier hints (green/amber/red)
-  // so the operator sees where healthy / warn / danger live, even before
-  // the bar moves.
-  const zones = isSignalGradient ? [] : resolveZones(def, min, max);
 
   const svgStyle: CSSProperties = {
     width,
@@ -156,28 +150,6 @@ export function VBarMeter({
       />
       {/* inset top shadow */}
       <rect x={COL_X + 0.5} y={TOP_Y + 0.5} width={COL_W - 1} height={2} fill="rgba(0,0,0,0.6)" />
-
-      {/* zone bands — dim coloured tiers so the operator sees where the
-          healthy / warn / danger thresholds sit, even at idle. */}
-      {zones.map((z, i) => {
-        const lo = dbFracOf(z.from, min, max);
-        const hi = dbFracOf(z.to, min, max);
-        if (hi <= lo) return null;
-        const y = BOT_Y - COL_HEIGHT * hi;
-        const h = COL_HEIGHT * (hi - lo);
-        const colour = zoneColorTokens(z.level).soft;
-        return (
-          <rect
-            key={`vbz-${i}`}
-            x={COL_X}
-            y={y}
-            width={COL_W}
-            height={h}
-            fill={colour}
-            mask={`url(#${maskId})`}
-          />
-        );
-      })}
 
       {/* bloom (blurred) layer behind crisp fill */}
       {!silent && (
