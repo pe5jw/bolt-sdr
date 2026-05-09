@@ -31,7 +31,6 @@ import {
 } from 'react';
 import {
   Settings,
-  ChevronLeft,
   ChevronRight,
   ChevronDown,
   ChevronUp,
@@ -489,7 +488,13 @@ export function MetersPanelInner({
     >
       {/* Header — see PanelDef.headerless wiring above. The class
           `workspace-tile-header` makes this strip the RGL drag handle for
-          the surrounding tile. */}
+          the surrounding tile.
+
+          Toolbar layout matches the rest of Zeus's panels: grip on the
+          far left, title in the middle, then the trailing toolbar
+          (settings / add-group / close) on the right. The settings cog
+          used to sit on the left next to the grip; moved right for
+          consistency with every other configurable panel. */}
       <div className="workspace-tile-header">
         <span
           className="workspace-tile-drag-handle"
@@ -498,41 +503,6 @@ export function MetersPanelInner({
         >
           <GripVertical size={12} />
         </span>
-        <button
-          type="button"
-          aria-label={libraryOpen ? 'Close meter library' : 'Open meter library'}
-          aria-pressed={libraryOpen}
-          title={libraryOpen ? 'Close library' : 'Add meters'}
-          onClick={() => setLibraryOpen((o) => !o)}
-          onMouseDown={stopDrag}
-          style={headerBtnStyle}
-          data-testid="meters-library-toggle"
-        >
-          <Settings size={14} />
-        </button>
-        <button
-          type="button"
-          aria-label="Add group"
-          title="Add group"
-          onClick={addGroup}
-          onMouseDown={stopDrag}
-          style={headerBtnStyle}
-          data-testid="meters-add-group"
-        >
-          <FolderPlus size={14} />
-        </button>
-        {libraryOpen ? (
-          <button
-            type="button"
-            aria-label="Collapse drawer"
-            title="Collapse drawer"
-            onClick={() => setLibraryOpen(false)}
-            onMouseDown={stopDrag}
-            style={headerBtnStyle}
-          >
-            <ChevronLeft size={14} />
-          </button>
-        ) : null}
         {editingTitle ? (
           <input
             type="text"
@@ -574,6 +544,33 @@ export function MetersPanelInner({
             extraStyle={titleStyle}
           />
         )}
+        {/* Trailing toolbar — moved here from the leading edge so the cog
+            sits where operators expect it on every other Zeus panel.
+            Order, left → right: add-group, library toggle (settings cog),
+            close-settings (when a widget is selected), close-panel. */}
+        <button
+          type="button"
+          aria-label="Add group"
+          title="Add group"
+          onClick={addGroup}
+          onMouseDown={stopDrag}
+          style={headerBtnStyle}
+          data-testid="meters-add-group"
+        >
+          <FolderPlus size={14} />
+        </button>
+        <button
+          type="button"
+          aria-label={libraryOpen ? 'Close meter library' : 'Open meter library'}
+          aria-pressed={libraryOpen}
+          title={libraryOpen ? 'Close library' : 'Add meters'}
+          onClick={() => setLibraryOpen((o) => !o)}
+          onMouseDown={stopDrag}
+          style={headerBtnStyle}
+          data-testid="meters-library-toggle"
+        >
+          <Settings size={14} />
+        </button>
         {settingsOpen ? (
           <button
             type="button"
