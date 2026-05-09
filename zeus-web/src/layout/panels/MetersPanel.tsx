@@ -896,34 +896,40 @@ function GroupSection({
                   ? 'Empty — drag a widget in from another group.'
                   : 'Empty — tap ⚙ to add a meter.'}
             </div>
-          ) : !mounted ? (
-            // Reserve space silently while ResizeObserver measures.
-            <div style={{ minHeight: 80 }} aria-hidden />
           ) : (
-            <ResponsiveGridLayout
-              className="meters-grid"
-              width={width}
-              breakpoints={{ lg: 0 }}
-              cols={{ lg: METERS_GRID_COLS }}
-              rowHeight={METERS_GRID_ROW_HEIGHT_PX}
-              margin={[6, 6]}
-              containerPadding={[6, 6]}
-              dragConfig={{ handle: '.meter-widget-drag-handle', bounded: false }}
-              onLayoutChange={onLayoutChange}
-              layouts={{
-                lg: widgets.map((w) => ({
-                  i: w.uid,
-                  x: w.layout?.x ?? 0,
-                  y: w.layout?.y ?? 0,
-                  w: w.layout?.w ?? DEFAULT_WIDGET_SPAN[w.kind].w,
-                  h: w.layout?.h ?? DEFAULT_WIDGET_SPAN[w.kind].h,
-                  minW: 2,
-                  minH: 2,
-                })),
+            // Flex row: every widget in the group shares the available
+            // width equally via `flex: 1 1 0`. Single widget → fills the
+            // group. Two widgets → 50/50. Three → 33% each. Mirrors the
+            // immersive TX Stage Meters panel layout (`1fr 1fr` arc row,
+            // `repeat(6, 1fr)` VU cluster) without each widget needing
+            // its own RGL grid cell or per-instance layout coords.
+            //
+            // Operators wanted to drop the "panels in panels" feel of
+            // the old RGL grid — the immersive panel doesn't have it,
+            // so neither does this. `widget.layout` survives in the
+            // schema for forward compatibility but is unused at render.
+            <div
+              ref={containerRef}
+              className="meters-flex-canvas"
+              style={{
+                display: 'flex',
+                flexDirection: 'row',
+                flexWrap: 'wrap',
+                gap: 6,
+                padding: 6,
+                alignItems: 'stretch',
               }}
             >
               {widgets.map((w) => (
-                <div key={w.uid} data-grid-uid={w.uid}>
+                <div
+                  key={w.uid}
+                  data-widget-uid={w.uid}
+                  style={{
+                    flex: '1 1 0',
+                    minWidth: 0,
+                    display: 'flex',
+                  }}
+                >
                   <MeterWidget
                     widget={w}
                     groupCount={groupCount}
@@ -933,7 +939,7 @@ function GroupSection({
                   />
                 </div>
               ))}
-            </ResponsiveGridLayout>
+            </div>
           )}
         </div>
       )}

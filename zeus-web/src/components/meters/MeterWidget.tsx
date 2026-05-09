@@ -161,6 +161,12 @@ export function MeterWidget({
     display: 'flex',
     flexDirection: 'column',
     height: '100%',
+    // Fill the outer flex cell from MetersPanel so legacy widgets share
+    // the group's available width with the immersive ones, instead of
+    // shrink-wrapping to their content (which left them as narrow
+    // pillbox tiles inside otherwise-empty group rows).
+    flex: 1,
+    minWidth: 0,
     boxSizing: 'border-box',
     background: 'var(--bg-1)',
     border: `1px solid ${selected ? 'var(--accent)' : hovered ? 'var(--panel-border)' : 'rgba(0,0,0,0.4)'}`,
@@ -364,6 +370,128 @@ export function MeterWidget({
       break;
   }
 
+  // Immersive kinds (bigarc / vucolumn / pulldown) carry their own
+  // internal label + readout + card chrome inside their SVG. Wrapping
+  // them in a second outer chrome (header bar with grip / gear / close)
+  // produces the "panels in panels" look the operator asked us to drop.
+  // For these kinds we render the primitive directly, sized to fill the
+  // flex cell, with a hover-reveal close-X overlay and a click-anywhere
+  // interaction that opens the Settings drawer.
+  const isImmersive =
+    widget.kind === 'bigarc' || widget.kind === 'vucolumn' || widget.kind === 'pulldown';
+
+  if (isImmersive) {
+    const overlayBtnStyle: CSSProperties = {
+      position: 'absolute',
+      top: 4,
+      width: 18,
+      height: 18,
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 'var(--r-xs)',
+      color: 'var(--fg-2)',
+      background: 'rgba(10, 11, 14, 0.65)',
+      border: '1px solid rgba(255,255,255,0.06)',
+      cursor: 'pointer',
+      transition: 'opacity var(--dur-fast), color var(--dur-fast)',
+      // Only show the chrome on hover so the gauge stays clean at idle.
+      // Selection ring overrides this so the operator sees what's active
+      // even when the cursor is elsewhere.
+      opacity: hovered || selected ? 1 : 0,
+      pointerEvents: hovered || selected ? 'auto' : 'none',
+      zIndex: 2,
+    };
+    return (
+      <div
+        ref={cardRef}
+        role="button"
+        tabIndex={0}
+        aria-label={`${label} widget — click to configure`}
+        aria-pressed={selected}
+        onClick={onSelect}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onSelect();
+          }
+        }}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        style={{
+          position: 'relative',
+          flex: 1,
+          minWidth: 0,
+          display: 'flex',
+          cursor: 'pointer',
+          outline: selected ? '1px solid var(--accent)' : '1px solid transparent',
+          outlineOffset: 1,
+          borderRadius: 'var(--r-sm)',
+          transition: 'outline-color var(--dur-fast)',
+        }}
+        className="meter-widget-card meter-widget-card--immersive"
+        data-widget-uid={widget.uid}
+      >
+        {/* Body is the immersive primitive itself — it owns the card
+            chrome / label / readout. Stretch it to fill the flex cell. */}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>{body}</div>
+
+        {/* Hover-reveal close — keeps the gauge visually clean at idle.
+            Stops propagation so click-to-configure isn't fired. */}
+        {onRemove ? (
+          <button
+            type="button"
+            aria-label={`Remove ${label}`}
+            title="Remove widget"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{ ...overlayBtnStyle, right: 4 }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = 'var(--tx)';
+              e.currentTarget.style.background = 'rgba(10, 11, 14, 0.85)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = 'var(--fg-2)';
+              e.currentTarget.style.background = 'rgba(10, 11, 14, 0.65)';
+            }}
+          >
+            <X size={11} />
+          </button>
+        ) : null}
+
+        {/* Cross-group drag handle — only when the panel has ≥ 2 groups.
+            Same `[data-cross-group-handle]` mime/protocol as before;
+            armCrossGroupDrag toggles `draggable=true` on the parent. */}
+        {groupCount >= 2 ? (
+          <span
+            data-cross-group-handle="true"
+            aria-label={`Drag ${label} to another group`}
+            title="Drag to another group"
+            onPointerDown={armCrossGroupDrag}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              ...overlayBtnStyle,
+              right: 26,
+              cursor: 'grab',
+              color: 'var(--fg-3)',
+            }}
+          >
+            <Move size={10} />
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
+  // Legacy kinds (hbar / sparkline / digital) don't have built-in card
+  // chrome, so they keep the existing tile header with label + readout +
+  // settings + close. Same prop API; only the immersive trio drops it.
   return (
     <div
       ref={cardRef}
