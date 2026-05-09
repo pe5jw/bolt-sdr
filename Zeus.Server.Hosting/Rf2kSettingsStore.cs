@@ -56,6 +56,7 @@ public sealed class Rf2kSettingsStore : IDisposable
                 Host: e.Host,
                 Port: e.Port,
                 VncPort: e.VncPort,
+                VncPassword: e.VncPassword ?? string.Empty,
                 PollingIntervalMs: e.PollingIntervalMs,
                 TuneClickX: e.TuneClickX,
                 TuneClickY: e.TuneClickY,
@@ -77,6 +78,7 @@ public sealed class Rf2kSettingsStore : IDisposable
                     Host = config.Host,
                     Port = config.Port,
                     VncPort = config.VncPort,
+                    VncPassword = config.VncPassword ?? string.Empty,
                     PollingIntervalMs = config.PollingIntervalMs,
                     TuneClickX = config.TuneClickX,
                     TuneClickY = config.TuneClickY,
@@ -91,6 +93,7 @@ public sealed class Rf2kSettingsStore : IDisposable
                 existing.Host = config.Host;
                 existing.Port = config.Port;
                 existing.VncPort = config.VncPort;
+                existing.VncPassword = config.VncPassword ?? string.Empty;
                 existing.PollingIntervalMs = config.PollingIntervalMs;
                 existing.TuneClickX = config.TuneClickX;
                 existing.TuneClickY = config.TuneClickY;
@@ -120,6 +123,7 @@ public sealed class Rf2kConfigEntry
     public string Host { get; set; } = "10.70.120.41";
     public int Port { get; set; } = 8080;
     public int VncPort { get; set; } = 5900;
+    public string VncPassword { get; set; } = string.Empty;
     public int PollingIntervalMs { get; set; } = 500;
     public int TuneClickX { get; set; }
     public int TuneClickY { get; set; }

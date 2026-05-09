@@ -90,6 +90,7 @@ export type Rf2kConfig = {
   host: string;
   port: number;
   vncPort: number;
+  vncPassword: string;
   pollingIntervalMs: number;
   tuneClickX: number;
   tuneClickY: number;

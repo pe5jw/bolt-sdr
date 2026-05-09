@@ -32,6 +32,13 @@ public sealed record Rf2kConfig(
     string Host = "10.70.120.41",
     int Port = 8080,
     int VncPort = 5900,
+    // VNC password (RFB security type 2). Empty = try "None" auth (type 1)
+    // first; required if the amp's vncserver requires a password (which
+    // most do by default — including the RF2K-S firmware). Limited to 8
+    // characters by the RFB password protocol; longer values are
+    // truncated. Stored unencrypted in zeus-prefs.db; treat as low-value
+    // shared-LAN credential, not a sensitive secret.
+    string VncPassword = "",
     int PollingIntervalMs = 500,
     // Tune and Bypass click coordinates on the amp's 1024x600 panel.
     // The amp's UI uses Tk's dynamic grid so there are no static coordinates

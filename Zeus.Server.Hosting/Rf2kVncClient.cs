@@ -32,6 +32,12 @@
 // CPU impact is microseconds per click. Connect → handshake → 2 PointerEvent
 // packets (down, up) → close. That's the entire surface.
 //
+// Auth: supports RFB security types None (1) and VncAuth (2). VncAuth uses
+// DES with the password truncated/padded to 8 bytes and each byte's bits
+// reversed (legacy quirk preserved by basically every vncserver
+// implementation since the original RealVNC). The 16-byte challenge is
+// encrypted as TWO consecutive 8-byte ECB blocks with the same key.
+//
 // RFB protocol reference: https://datatracker.ietf.org/doc/html/rfc6143
 // Tested-against RFB versions: 3.3 (legacy) and 3.7/3.8 (current). The
 // RF2K-S ships some non-standard vncserver flavours (one observed banner
@@ -40,6 +46,7 @@
 
 using System.Buffers.Binary;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Zeus.Server;
@@ -62,7 +69,7 @@ public sealed class Rf2kVncClient
     /// Connect, RFB handshake, send a single button-down/up at (x,y), close.
     /// Returns null on success, error string on failure.
     /// </summary>
-    public async Task<string?> SendClickAsync(string host, int port, ushort x, ushort y, CancellationToken ct)
+    public async Task<string?> SendClickAsync(string host, int port, ushort x, ushort y, string? password, CancellationToken ct)
     {
         try
         {
@@ -76,7 +83,7 @@ public sealed class Rf2kVncClient
             stream.WriteTimeout = (int)ReadTimeout.TotalMilliseconds;
 
             var minor = await NegotiateProtocolVersionAsync(stream, ct);
-            await NegotiateSecurityAsync(stream, minor, ct);
+            await NegotiateSecurityAsync(stream, minor, password ?? string.Empty, ct);
             await ClientInitAsync(stream, ct);
             await ConsumeServerInitAsync(stream, ct);
 
@@ -131,9 +138,13 @@ public sealed class Rf2kVncClient
         return minor;
     }
 
-    /// <summary>RFB 3.7+: server lists types, we pick None (1). RFB 3.3: server picks unilaterally; if not None we fail.</summary>
-    private static async Task NegotiateSecurityAsync(NetworkStream stream, int minor, CancellationToken ct)
+    /// <summary>RFB 3.7+: server lists types, we pick the best supported. RFB 3.3: server picks unilaterally.</summary>
+    private static async Task NegotiateSecurityAsync(NetworkStream stream, int minor, string password, CancellationToken ct)
     {
+        const byte SecNone = 1;
+        const byte SecVncAuth = 2;
+        bool havePassword = password.Length > 0;
+
         if (minor >= 7)
         {
             // Server: 1 byte count, then N bytes of types.
@@ -146,9 +157,26 @@ public sealed class Rf2kVncClient
                 throw new IOException($"VNC server rejected handshake: {reason}");
             }
             var types = await ReadExactlyAsync(stream, count, ct);
-            if (Array.IndexOf(types, (byte)1) < 0)
-                throw new NotSupportedException("VNC server does not offer security type 'None' (1) — auth required, not supported by Rf2kVncClient");
-            await stream.WriteAsync(new byte[] { 1 }, ct);
+
+            // Prefer VncAuth if the user provided a password and the server
+            // offers it; otherwise fall back to None. If neither path is
+            // viable, surface a useful error so the operator knows what's wrong.
+            byte chosen;
+            if (havePassword && Array.IndexOf(types, SecVncAuth) >= 0)
+                chosen = SecVncAuth;
+            else if (Array.IndexOf(types, SecNone) >= 0)
+                chosen = SecNone;
+            else if (Array.IndexOf(types, SecVncAuth) >= 0)
+                throw new NotSupportedException("VNC server requires a password (security type 2) — set VNC Password in the panel settings");
+            else
+                throw new NotSupportedException("VNC server does not offer 'None' (1) or 'VncAuth' (2) security — only those two are supported by Rf2kVncClient");
+
+            await stream.WriteAsync(new byte[] { chosen }, ct);
+
+            if (chosen == SecVncAuth)
+            {
+                await DoVncAuthAsync(stream, password, ct);
+            }
         }
         else
         {
@@ -160,22 +188,88 @@ public sealed class Rf2kVncClient
                 var reason = await ReadFailureReasonAsync(stream, ct);
                 throw new IOException($"VNC server rejected handshake: {reason}");
             }
-            if (type != 1)
-                throw new NotSupportedException($"VNC server demanded security type {type} on RFB 3.3 — only 'None' (1) supported");
-            // RFB 3.3 + None: server skips SecurityResult and goes straight to ClientInit.
-            return;
+            switch (type)
+            {
+                case SecNone:
+                    // Server skips SecurityResult and goes straight to ClientInit on RFB 3.3 + None.
+                    return;
+                case SecVncAuth:
+                    if (!havePassword)
+                        throw new NotSupportedException("VNC server requires a password (security type 2) — set VNC Password in the panel settings");
+                    await DoVncAuthAsync(stream, password, ct);
+                    break;
+                default:
+                    throw new NotSupportedException($"VNC server demanded security type {type} on RFB 3.3 — only None (1) and VncAuth (2) supported");
+            }
         }
 
         // RFB 3.7+ SecurityResult: 4-byte status. 0 = OK, non-zero = failure (with reason on 3.8).
+        // Also reached here for RFB 3.3 + VncAuth — same SecurityResult shape.
         var result = await ReadExactlyAsync(stream, 4, ct);
         var status = BinaryPrimitives.ReadUInt32BigEndian(result);
         if (status != 0)
         {
-            string reason = "VNC server rejected security";
+            string reason = "VNC server rejected security (likely wrong password)";
             if (minor >= 8)
                 reason = await ReadFailureReasonAsync(stream, ct);
             throw new IOException($"VNC SecurityResult failure: {reason}");
         }
+    }
+
+    /// <summary>
+    /// VNC Authentication (RFB security type 2). Receive 16-byte challenge,
+    /// reply with DES-encrypted (with bit-reversed-byte key derived from
+    /// password) ciphertext.
+    /// </summary>
+    private static async Task DoVncAuthAsync(NetworkStream stream, string password, CancellationToken ct)
+    {
+        var challenge = await ReadExactlyAsync(stream, 16, ct);
+        var key = DeriveVncDesKey(password);
+        var response = DesEncryptEcb(key, challenge);
+        await stream.WriteAsync(response, ct);
+        await stream.FlushAsync(ct);
+    }
+
+    /// <summary>
+    /// Build the 8-byte DES key from a password: ASCII bytes, truncate or
+    /// zero-pad to exactly 8 bytes, then bit-reverse each byte. The
+    /// bit-reverse step is a long-standing legacy quirk of the original
+    /// RealVNC implementation — every modern vncserver expects it.
+    /// </summary>
+    private static byte[] DeriveVncDesKey(string password)
+    {
+        var raw = Encoding.ASCII.GetBytes(password);
+        var key = new byte[8];
+        var copy = Math.Min(raw.Length, 8);
+        Buffer.BlockCopy(raw, 0, key, 0, copy);
+        // Remaining bytes (if any) are already zero — that's the spec.
+        for (var i = 0; i < 8; i++)
+        {
+            key[i] = ReverseBits(key[i]);
+        }
+        return key;
+    }
+
+    private static byte ReverseBits(byte b)
+    {
+        // Standard bit-reversal table approach; six shifts is also fine.
+        b = (byte)(((b & 0xF0) >> 4) | ((b & 0x0F) << 4));
+        b = (byte)(((b & 0xCC) >> 2) | ((b & 0x33) << 2));
+        b = (byte)(((b & 0xAA) >> 1) | ((b & 0x55) << 1));
+        return b;
+    }
+
+    /// <summary>DES-ECB encrypt the 16-byte challenge as two consecutive 8-byte blocks under one key.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA5351:Do not use broken cryptographic algorithms",
+        Justification = "RFB VNC Authentication mandates DES — protocol-level requirement, not a security choice")]
+    private static byte[] DesEncryptEcb(byte[] key, byte[] data)
+    {
+        using var des = DES.Create();
+        des.Mode = CipherMode.ECB;
+        des.Padding = PaddingMode.None;
+        des.Key = key;
+        using var enc = des.CreateEncryptor();
+        return enc.TransformFinalBlock(data, 0, data.Length);
     }
 
     /// <summary>1-byte shared flag (1 = let other clients stay connected).</summary>

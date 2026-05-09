@@ -40,6 +40,7 @@ const DEFAULT_CONFIG: Rf2kConfig = {
   host: '10.70.120.41',
   port: 8080,
   vncPort: 5900,
+  vncPassword: '',
   pollingIntervalMs: 1000,
   tuneClickX: 0,
   tuneClickY: 0,

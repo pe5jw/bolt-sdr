@@ -118,6 +118,7 @@ public sealed class Rf2kService : BackgroundService
                 Host = string.IsNullOrWhiteSpace(next.Host) ? "10.70.120.41" : next.Host.Trim(),
                 Port = next.Port is > 0 and < 65536 ? next.Port : 8080,
                 VncPort = next.VncPort is > 0 and < 65536 ? next.VncPort : 5900,
+                VncPassword = next.VncPassword ?? string.Empty,
                 PollingIntervalMs = Math.Clamp(next.PollingIntervalMs, 250, 10_000),
                 TuneClickX = next.TuneClickX is >= 0 and <= 65535 ? next.TuneClickX : 0,
                 TuneClickY = next.TuneClickY is >= 0 and <= 65535 ? next.TuneClickY : 0,
@@ -204,7 +205,7 @@ public sealed class Rf2kService : BackgroundService
         var cfg = _config;
         if (cfg.TuneClickX <= 0 && cfg.TuneClickY <= 0)
             return new Rf2kTestResult(false, "Tune click coordinates not configured. Calibrate from the panel settings.");
-        var err = await _vnc.SendClickAsync(cfg.Host, cfg.VncPort, (ushort)cfg.TuneClickX, (ushort)cfg.TuneClickY, ct);
+        var err = await _vnc.SendClickAsync(cfg.Host, cfg.VncPort, (ushort)cfg.TuneClickX, (ushort)cfg.TuneClickY, cfg.VncPassword, ct);
         return new Rf2kTestResult(err is null, err);
     }
 
@@ -213,7 +214,7 @@ public sealed class Rf2kService : BackgroundService
         var cfg = _config;
         if (cfg.BypassClickX <= 0 && cfg.BypassClickY <= 0)
             return new Rf2kTestResult(false, "Bypass click coordinates not configured. Calibrate from the panel settings.");
-        var err = await _vnc.SendClickAsync(cfg.Host, cfg.VncPort, (ushort)cfg.BypassClickX, (ushort)cfg.BypassClickY, ct);
+        var err = await _vnc.SendClickAsync(cfg.Host, cfg.VncPort, (ushort)cfg.BypassClickX, (ushort)cfg.BypassClickY, cfg.VncPassword, ct);
         return new Rf2kTestResult(err is null, err);
     }
 
@@ -223,7 +224,7 @@ public sealed class Rf2kService : BackgroundService
         if (x is < 0 or > 65535 || y is < 0 or > 65535)
             return new Rf2kTestResult(false, "Coordinates must be in 0..65535");
         var cfg = _config;
-        var err = await _vnc.SendClickAsync(cfg.Host, cfg.VncPort, (ushort)x, (ushort)y, ct);
+        var err = await _vnc.SendClickAsync(cfg.Host, cfg.VncPort, (ushort)x, (ushort)y, cfg.VncPassword, ct);
         return new Rf2kTestResult(err is null, err);
     }
 

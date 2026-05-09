@@ -507,6 +507,7 @@ function Rf2kSettings({ onClose }: { onClose: () => void }) {
   const [host, setHost] = useState(config.host);
   const [port, setPort] = useState(String(config.port));
   const [vncPort, setVncPort] = useState(String(config.vncPort));
+  const [vncPassword, setVncPassword] = useState(config.vncPassword);
   const [tuneX, setTuneX] = useState(String(config.tuneClickX));
   const [tuneY, setTuneY] = useState(String(config.tuneClickY));
   const [bypassX, setBypassX] = useState(String(config.bypassClickX));
@@ -521,6 +522,7 @@ function Rf2kSettings({ onClose }: { onClose: () => void }) {
     setHost(config.host);
     setPort(String(config.port));
     setVncPort(String(config.vncPort));
+    setVncPassword(config.vncPassword);
     setTuneX(String(config.tuneClickX));
     setTuneY(String(config.tuneClickY));
     setBypassX(String(config.bypassClickX));
@@ -539,6 +541,7 @@ function Rf2kSettings({ onClose }: { onClose: () => void }) {
         host: host.trim() || '10.70.120.41',
         port: portNum,
         vncPort: vncPortNum,
+        vncPassword,
         pollingIntervalMs: config.pollingIntervalMs,
         tuneClickX: Number(tuneX) || 0,
         tuneClickY: Number(tuneY) || 0,
@@ -606,6 +609,20 @@ function Rf2kSettings({ onClose }: { onClose: () => void }) {
           <FormField label="REST Port" value={port} onChange={setPort} type="number" mono flex={1} />
           <FormField label="VNC Port" value={vncPort} onChange={setVncPort} type="number" mono flex={1} />
         </div>
+
+        <FormField
+          label="VNC Password"
+          value={vncPassword}
+          onChange={setVncPassword}
+          type="password"
+          mono
+          flex={1}
+        />
+        <p style={{ margin: 0, fontSize: 10, color: 'var(--fg-3)', lineHeight: 1.4 }}>
+          Required if the amp&apos;s vncserver demands authentication (RFB security type 2).
+          Leave blank if VNC is set to allow anonymous connections. Truncated to 8 characters per the
+          RFB password protocol; treated as low-value LAN credential, stored unencrypted in zeus-prefs.db.
+        </p>
 
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <button type="button" className="btn sm" onClick={onTestConnection} disabled={testInFlight}>
@@ -694,7 +711,7 @@ function FormField({
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
-  type?: 'text' | 'number';
+  type?: 'text' | 'number' | 'password';
   mono?: boolean;
   flex?: number;
 }) {
