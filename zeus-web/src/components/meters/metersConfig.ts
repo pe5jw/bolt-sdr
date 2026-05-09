@@ -140,7 +140,34 @@ export interface MetersWidgetInstance {
   settings: WidgetSettings;
   /** Persisted grid placement. Optional for forward/backward compat. */
   layout?: WidgetLayout;
+  /** Operator-defined group this widget belongs to. Optional in serialised
+   *  form for forward/backward compat — when absent (or unknown to the
+   *  current group set) the parser reassigns to the lowest-order group. */
+  groupUid?: string;
 }
+
+/** Operator-defined group of widgets within a Meters tile. Each group has
+ *  its own RGL canvas; the panel renders groups stacked vertically in
+ *  `order`. Renamed via the in-header pencil affordance (commit 4) and
+ *  mutated through the panel's group-management UI. */
+export interface MetersPanelGroup {
+  /** Stable group id. Widgets reference this in their `groupUid` field. */
+  uid: string;
+  /** Operator-visible group label, shown in the group header. */
+  title: string;
+  /** Sort order among siblings; lower numbers render first. Synthetic
+   *  default group is order 0. */
+  order: number;
+  /** Operator-collapsed flag; when true the group's canvas hides but the
+   *  header still renders so cross-group drops still have a target after
+   *  expand. */
+  collapsed?: boolean;
+}
+
+/** Reserved uid for the synthetic default group the parser inserts when
+ *  legacy v1 configs are read or no group exists. Kept stable so the
+ *  widget→group binding survives re-saves. */
+export const DEFAULT_GROUP_UID = 'meters-default-group';
 
 /** 12-column grid, fixed row height, used by react-grid-layout. */
 export const METERS_GRID_COLS = 12;
@@ -160,32 +187,90 @@ export const DEFAULT_WIDGET_SPAN: Record<MetersWidgetKind, { w: number; h: numbe
 
 /** Top-level config blob for one Meters tile instance. */
 export interface MetersPanelConfig {
-  /** Bumped whenever the schema gains a non-additive field. v2+ migrations
-   *  must check this before reading legacy fields; unknown versions reset
-   *  to `EMPTY_METERS_CONFIG`. */
-  schemaVersion: 1;
+  /** Bumped whenever the schema gains a non-additive field. v2 introduced
+   *  the `groups` array; v1 inputs auto-migrate at parse time (see
+   *  `parseMetersPanelConfig`) — operator workspaces never need a manual
+   *  migration step. Unknown versions reset to `EMPTY_METERS_CONFIG`. */
+  schemaVersion: 2;
   widgets: MetersWidgetInstance[];
+  /** Operator-defined groups. Always non-empty after parse — at least the
+   *  synthetic default group exists. Stacked vertically in the panel by
+   *  `order`. */
+  groups: MetersPanelGroup[];
   /** Optional operator-named instance, shown in the panel header. Falls back
    *  to "Meters" when absent. */
   title?: string;
 }
 
+/** The synthetic default group the parser inserts so a v1 config (or a
+ *  v2 config that lost its groups array) still renders something the
+ *  operator can interact with. */
+export const DEFAULT_GROUP: MetersPanelGroup = {
+  uid: DEFAULT_GROUP_UID,
+  title: 'Meters',
+  order: 0,
+};
+
 export const EMPTY_METERS_CONFIG: MetersPanelConfig = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   widgets: [],
+  groups: [DEFAULT_GROUP],
 };
 
 /** Best-effort parse + validation of the opaque `node.getConfig()` blob.
- *  Anything malformed falls through to the empty config — never throws,
- *  never crashes the panel. */
+ *  Accepts both v1 (no groups) and v2 (with groups) inputs. Anything
+ *  malformed falls through to the empty config — never throws, never
+ *  crashes the panel.
+ *
+ *  Migration rules:
+ *  - v1 input: synthesise the default group; every widget gets
+ *    `groupUid: DEFAULT_GROUP_UID`. Output is always v2.
+ *  - v2 input with empty / missing `groups`: re-insert the default group
+ *    so the panel still has somewhere to render.
+ *  - widget with unknown `groupUid`: reassign to the lowest-order group. */
 export function parseMetersPanelConfig(raw: unknown): MetersPanelConfig {
   if (!raw || typeof raw !== 'object') return EMPTY_METERS_CONFIG;
-  const obj = raw as Partial<MetersPanelConfig>;
-  if (obj.schemaVersion !== 1) return EMPTY_METERS_CONFIG;
+  // Use a deliberately loose type at the parser boundary — the on-disk
+  // blob may still carry a v1 `schemaVersion: 1` literal, which is not
+  // assignable to the current `MetersPanelConfig['schemaVersion']: 2`
+  // type. We re-narrow to the public type at the return site.
+  const obj = raw as { schemaVersion?: unknown } & Record<string, unknown>;
+  const ver = obj.schemaVersion;
+  if (ver !== 1 && ver !== 2) {
+    return EMPTY_METERS_CONFIG;
+  }
+  const isLegacyV1 = ver === 1;
   const widgets = Array.isArray(obj.widgets) ? obj.widgets : [];
-  // Filter out entries whose `reading` is no longer in the catalog (e.g. a
-  // future schema removed an ID). A Meters tile that lost a widget is far
-  // less surprising than one that crashes the whole panel.
+
+  // Validate group set first so widget-binding can re-target stragglers.
+  const rawGroups = isLegacyV1 ? [] : Array.isArray(obj.groups) ? obj.groups : [];
+  const validGroups: MetersPanelGroup[] = [];
+  const seenGroupUids = new Set<string>();
+  for (const g of rawGroups) {
+    if (!g || typeof g !== 'object') continue;
+    const grp = g as Partial<MetersPanelGroup>;
+    if (typeof grp.uid !== 'string' || grp.uid === '') continue;
+    if (typeof grp.title !== 'string') continue;
+    if (!Number.isFinite(grp.order)) continue;
+    if (seenGroupUids.has(grp.uid)) continue;
+    seenGroupUids.add(grp.uid);
+    const out: MetersPanelGroup = {
+      uid: grp.uid,
+      title: grp.title,
+      order: grp.order as number,
+    };
+    if (grp.collapsed === true) out.collapsed = true;
+    validGroups.push(out);
+  }
+  // v1 config or a v2 config that lost its groups → synthesise default.
+  if (validGroups.length === 0) {
+    validGroups.push({ ...DEFAULT_GROUP });
+    seenGroupUids.add(DEFAULT_GROUP_UID);
+  }
+  // Sort by order so "lowest-order" lookups are O(1).
+  validGroups.sort((a, b) => a.order - b.order);
+  const fallbackGroupUid = validGroups[0]!.uid;
+
   const validWidgets: MetersWidgetInstance[] = [];
   const currentKindSet = new Set<string>(METERS_WIDGET_KINDS);
   for (const w of widgets) {
@@ -224,6 +309,20 @@ export function parseMetersPanelConfig(raw: unknown): MetersPanelConfig {
         layout = { x: l.x as number, y: l.y as number, w: l.w as number, h: l.h as number };
       }
     }
+    // Group binding: legacy v1 widgets always go to the synthetic default.
+    // v2 widgets keep their stored binding if the group still exists,
+    // else re-target to the lowest-order remaining group.
+    let groupUid: string;
+    if (isLegacyV1) {
+      groupUid = DEFAULT_GROUP_UID;
+    } else if (
+      typeof widget.groupUid === 'string' &&
+      seenGroupUids.has(widget.groupUid)
+    ) {
+      groupUid = widget.groupUid;
+    } else {
+      groupUid = fallbackGroupUid;
+    }
     validWidgets.push({
       uid: widget.uid,
       reading: widget.reading as MeterReadingId,
@@ -232,14 +331,24 @@ export function parseMetersPanelConfig(raw: unknown): MetersPanelConfig {
         widget.settings && typeof widget.settings === 'object'
           ? { ...widget.settings }
           : {},
+      groupUid,
       ...(layout ? { layout } : {}),
     });
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     widgets: validWidgets,
+    groups: validGroups,
     title: typeof obj.title === 'string' ? obj.title : undefined,
   };
+}
+
+/** Generate a stable group uid. Same recipe as `newWidgetUid`. */
+export function newGroupUid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `g-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /** Generate a stable, locally-unique widget UID. Uses crypto.randomUUID()
@@ -251,9 +360,13 @@ export function newWidgetUid(): string {
   return `w-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/** Default widget instance for a freshly-added catalog reading. */
+/** Default widget instance for a freshly-added catalog reading. The
+ *  `groupUid` argument places the widget in the operator's currently
+ *  active group; defaults to the synthetic default group when absent so
+ *  the helper still works in standalone contexts (tests, design previews). */
 export function defaultWidgetForReading(
   id: MeterReadingId,
+  groupUid: string = DEFAULT_GROUP_UID,
 ): MetersWidgetInstance {
   const def = METER_CATALOG[id];
   return {
@@ -261,25 +374,98 @@ export function defaultWidgetForReading(
     reading: id,
     kind: def.defaultKind,
     settings: {},
+    groupUid,
   };
 }
 
-/** Compute a layout placement for a brand-new widget, given the existing
- *  set. Strategy: use the widget kind's default w/h, then place it at the
- *  next free row (y = max existing y+h, x = 0). The grid will compact it
- *  upward into any free space when react-grid-layout renders. */
+/** Compute a layout placement for a brand-new widget. Strategy: use the
+ *  widget kind's default w/h, then place it at the next free row inside
+ *  the same group (y = max existing y+h, x = 0). Widgets from other
+ *  groups are excluded from the maxY calculation so a fresh widget in
+ *  group B doesn't pile up below all of group A's widgets. The grid
+ *  compacts upward when react-grid-layout renders. */
 export function placeWidgetInGrid(
   widget: MetersWidgetInstance,
   others: MetersWidgetInstance[],
 ): MetersWidgetInstance {
   if (widget.layout) return widget;
   const span = DEFAULT_WIDGET_SPAN[widget.kind];
+  const sameGroup = widget.groupUid;
   const maxY = others.reduce((m, w) => {
     if (!w.layout) return m;
+    if (sameGroup !== undefined && w.groupUid !== sameGroup) return m;
     return Math.max(m, w.layout.y + w.layout.h);
   }, 0);
   return {
     ...widget,
     layout: { x: 0, y: maxY, w: span.w, h: span.h },
   };
+}
+
+/** Drop a group from the config and reassign its widgets to the lowest-
+ *  order remaining group, clearing their `layout` so RGL re-flows them
+ *  in the destination canvas. Refuses to remove the last remaining group
+ *  (returns the config unchanged); the panel UI greys out the trash icon
+ *  in that state. */
+export function removeGroup(
+  config: MetersPanelConfig,
+  groupUid: string,
+): MetersPanelConfig {
+  if (config.groups.length <= 1) return config;
+  const remaining = config.groups.filter((g) => g.uid !== groupUid);
+  if (remaining.length === config.groups.length) return config; // no such group
+  // Lowest-order remaining group becomes the destination.
+  const sorted = [...remaining].sort((a, b) => a.order - b.order);
+  const fallbackUid = sorted[0]!.uid;
+  const widgets = config.widgets.map((w) => {
+    if (w.groupUid !== groupUid) return w;
+    const next: MetersWidgetInstance = {
+      ...w,
+      groupUid: fallbackUid,
+    };
+    delete next.layout;
+    return next;
+  });
+  return { ...config, groups: remaining, widgets };
+}
+
+/** Append a brand-new group at the end (`order = max + 1`). Title left
+ *  blank by default — operator commits one via the in-header pencil
+ *  affordance. */
+export function appendGroup(
+  config: MetersPanelConfig,
+  title: string = 'New group',
+): { config: MetersPanelConfig; group: MetersPanelGroup } {
+  const maxOrder = config.groups.reduce((m, g) => Math.max(m, g.order), -1);
+  const group: MetersPanelGroup = {
+    uid: newGroupUid(),
+    title,
+    order: maxOrder + 1,
+  };
+  return { config: { ...config, groups: [...config.groups, group] }, group };
+}
+
+/** Move a widget into a different group, clearing its layout so RGL
+ *  re-flows it in the destination canvas. Returns the config unchanged
+ *  if the widget doesn't exist or the target group is invalid. */
+export function reassignWidgetToGroup(
+  config: MetersPanelConfig,
+  widgetUid: string,
+  targetGroupUid: string,
+): MetersPanelConfig {
+  if (!config.groups.some((g) => g.uid === targetGroupUid)) return config;
+  let changed = false;
+  const widgets = config.widgets.map((w) => {
+    if (w.uid !== widgetUid) return w;
+    if (w.groupUid === targetGroupUid) return w;
+    changed = true;
+    const next: MetersWidgetInstance = {
+      ...w,
+      groupUid: targetGroupUid,
+    };
+    delete next.layout;
+    return next;
+  });
+  if (!changed) return config;
+  return { ...config, widgets };
 }

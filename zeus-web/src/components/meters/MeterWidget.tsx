@@ -19,8 +19,17 @@
 //     they fill roles the immersive trio doesn't (long-term log strip,
 //     RX dBm signal-strength bars, compact numeric readouts).
 
-import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { GripVertical, Settings, X } from 'lucide-react';
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type DragEvent as ReactDragEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react';
+import { GripVertical, Move, Settings, X } from 'lucide-react';
 import { METER_CATALOG, MeterReadingId, zoneTransitionTicks } from './meterCatalog';
 import type { MetersWidgetInstance } from './metersConfig';
 import { useMeterReading } from './useMeterReading';
@@ -35,11 +44,20 @@ import { usePaStore } from '../../state/pa-store';
 
 const PEAK_DECAY_PER_SEC_DEFAULT = 21; // dB/s; full 42 dB level axis in 2 s
 
+/** Stable mime used by the cross-group HTML5 D&D path. Same constant the
+ *  panel's GroupSection drop-handler matches against. Kept here so the
+ *  widget side and the canvas side don't accidentally diverge. */
+const CROSS_GROUP_DT_MIME = 'application/x-zeus-meter-widget-uid';
+
 interface MeterWidgetProps {
   widget: MetersWidgetInstance;
   selected: boolean;
   onSelect: () => void;
   onRemove?: () => void;
+  /** Total number of groups in the parent panel. The cross-group drag
+   *  handle is only rendered when ≥ 2 — single-group panels have nowhere
+   *  to drop to, and showing the handle would just add noise. */
+  groupCount?: number;
 }
 
 function usePeakHold(value: number, decayPerSec = PEAK_DECAY_PER_SEC_DEFAULT) {
@@ -79,12 +97,44 @@ export function MeterWidget({
   selected,
   onSelect,
   onRemove,
+  groupCount = 1,
 }: MeterWidgetProps) {
   const def = METER_CATALOG[widget.reading];
   const value = useMeterReading(widget.reading);
   const peak = usePeakHold(value);
   const [hovered, setHovered] = useState(false);
   const label = widget.settings.label ?? def.label;
+  const cardRef = useRef<HTMLDivElement | null>(null);
+
+  // Cross-group drag flow (only meaningful when ≥ 2 groups exist):
+  //   1. Operator pointerdowns on the [data-cross-group-handle] element.
+  //   2. The handler flips `draggable=true` on the parent card so the
+  //      browser starts an HTML5 drag on the next gesture. RGL's drag
+  //      (which uses bare mousedown + mousemove on the grip element) is
+  //      untouched — its handle is `.meter-widget-drag-handle`.
+  //   3. dragstart sets the dataTransfer mime so GroupSection can detect
+  //      a Zeus-widget drag versus an unrelated browser drag.
+  //   4. dragend clears `draggable` so the card returns to RGL-only mode.
+  const armCrossGroupDrag = useCallback((e: ReactPointerEvent<HTMLElement>) => {
+    e.stopPropagation();
+    const card = cardRef.current;
+    if (card) card.setAttribute('draggable', 'true');
+  }, []);
+  const onDragStart = useCallback(
+    (e: ReactDragEvent<HTMLDivElement>) => {
+      // Only set the mime if the operator initiated via the cross-group
+      // handle (i.e., draggable was just armed). Otherwise this is a
+      // stray browser drag (e.g. from selecting text inside the body)
+      // and we let it pass through.
+      if (cardRef.current?.getAttribute('draggable') !== 'true') return;
+      e.dataTransfer.setData(CROSS_GROUP_DT_MIME, widget.uid);
+      e.dataTransfer.effectAllowed = 'move';
+    },
+    [widget.uid],
+  );
+  const onDragEnd = useCallback(() => {
+    cardRef.current?.removeAttribute('draggable');
+  }, []);
 
   // For TX forward power, the axis top should follow the connected radio's
   // rated wattage (HL2 = 10 W, ANAN-100 = 120 W, 8000DLE = 250 W, etc.) so
@@ -316,6 +366,7 @@ export function MeterWidget({
 
   return (
     <div
+      ref={cardRef}
       role="button"
       tabIndex={0}
       aria-label={`${label} widget — click to configure`}
@@ -329,6 +380,8 @@ export function MeterWidget({
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
       style={rowStyle}
       className="meter-widget-card"
       data-widget-uid={widget.uid}
@@ -351,6 +404,31 @@ export function MeterWidget({
         >
           <GripVertical size={12} />
         </span>
+        {groupCount >= 2 ? (
+          <span
+            data-cross-group-handle="true"
+            aria-label={`Drag ${label} to another group`}
+            title="Drag to another group"
+            // pointerdown arms the parent card for an HTML5 drag; the
+            // grip handle above is *not* armed because it doesn't carry
+            // this attribute, so RGL's intra-group drag continues to use
+            // the existing handle without interference.
+            onPointerDown={armCrossGroupDrag}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 14,
+              height: 14,
+              color: 'var(--fg-3)',
+              cursor: 'grab',
+            }}
+          >
+            <Move size={10} />
+          </span>
+        ) : null}
         <span
           style={{
             ...labelStyle,

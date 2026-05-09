@@ -21,11 +21,22 @@
 // widget canvas — they do not push content. CSS transitions on
 // translateX use the existing --dur-fast / --dur-med tokens.
 
-import { useCallback, useMemo, useState, type CSSProperties } from 'react';
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type DragEvent as ReactDragEvent,
+} from 'react';
 import {
   Settings,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  FolderPlus,
+  Plus,
   X,
   Trash2,
   GripVertical,
@@ -46,6 +57,7 @@ import {
 } from '../../components/meters/meterCatalog';
 import {
   DEFAULT_WIDGET_SPAN,
+  appendGroup,
   defaultWidgetForReading,
   EMPTY_METERS_CONFIG,
   METERS_GRID_COLS,
@@ -53,12 +65,19 @@ import {
   METERS_WIDGET_KINDS,
   parseMetersPanelConfig,
   placeWidgetInGrid,
+  reassignWidgetToGroup,
+  removeGroup,
   widgetKindAllowed,
+  type MetersPanelGroup,
   type MetersWidgetInstance,
   type MetersWidgetKind,
   type MetersPanelConfig,
 } from '../../components/meters/metersConfig';
 import { MeterWidget } from '../../components/meters/MeterWidget';
+
+/** dataTransfer mime used for cross-group widget drag. Stable string —
+ *  changing it breaks in-flight drags on a hot reload. */
+const CROSS_GROUP_DT_MIME = 'application/x-zeus-meter-widget-uid';
 
 interface MetersPanelProps {
   /** Per-instance config blob. Provided by `PanelTile` from the workspace
@@ -120,6 +139,29 @@ export function MetersPanelInner({
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(config.title ?? '');
 
+  // Groups sorted lowest-order-first so cross-group drop fall-through and
+  // "active group for new widgets" both have a stable target.
+  const sortedGroups = useMemo(
+    () => [...config.groups].sort((a, b) => a.order - b.order),
+    [config.groups],
+  );
+
+  // Active group: where library-add lands. Defaults to the lowest-order
+  // group; updated when the operator adds a new group (jumps to it). When
+  // the active group is removed, falls back to the new lowest-order.
+  const [activeGroupUid, setActiveGroupUid] = useState<string>(
+    () => sortedGroups[0]?.uid ?? '',
+  );
+  // If the active group disappears (parser dropped it, operator deleted),
+  // re-anchor to the lowest-order remaining one. Cheap to recompute on
+  // every render — the array is short.
+  const effectiveActiveGroupUid = useMemo(() => {
+    if (sortedGroups.some((g) => g.uid === activeGroupUid)) {
+      return activeGroupUid;
+    }
+    return sortedGroups[0]?.uid ?? '';
+  }, [sortedGroups, activeGroupUid]);
+
   const settingsOpen = selectedUid !== null;
   const selectedWidget = useMemo(
     () => config.widgets.find((w) => w.uid === selectedUid) ?? null,
@@ -155,9 +197,9 @@ export function MetersPanelInner({
 
   const addWidget = useCallback(
     (id: MeterReadingId) => {
-      const fresh = defaultWidgetForReading(id);
-      // Auto-place the new widget at the next free row using the kind's
-      // default span; the grid will compact upward at render time.
+      const fresh = defaultWidgetForReading(id, effectiveActiveGroupUid);
+      // Auto-place the new widget at the next free row inside its group;
+      // the grid will compact upward at render time.
       const placed = placeWidgetInGrid(fresh, config.widgets);
       const next: MetersPanelConfig = {
         ...config,
@@ -168,12 +210,81 @@ export function MetersPanelInner({
       // ready in the Settings drawer if they want to tweak it.
       setSelectedUid(placed.uid);
     },
+    [config, setConfig, effectiveActiveGroupUid],
+  );
+
+  // Append a fresh group, jump the active-group cursor to it so the next
+  // library add lands inside.
+  const addGroup = useCallback(() => {
+    const { config: next, group } = appendGroup(config);
+    setConfig(next);
+    setActiveGroupUid(group.uid);
+  }, [config, setConfig]);
+
+  // Delete a group and reassign its widgets. The metersConfig helper
+  // refuses to remove the last remaining group; we mirror that intent in
+  // the trash button's disabled state.
+  const removeGroupHandler = useCallback(
+    (groupUid: string) => {
+      const next = removeGroup(config, groupUid);
+      if (next === config) return;
+      setConfig(next);
+      // If the active group was the one we just removed, re-anchor to the
+      // first remaining (lowest-order) group.
+      if (activeGroupUid === groupUid) {
+        const sorted = [...next.groups].sort((a, b) => a.order - b.order);
+        setActiveGroupUid(sorted[0]?.uid ?? '');
+      }
+    },
+    [config, setConfig, activeGroupUid],
+  );
+
+  const renameGroup = useCallback(
+    (groupUid: string, nextTitle: string) => {
+      const trimmed = nextTitle.trim();
+      if (trimmed === '') return;
+      let changed = false;
+      const groups = config.groups.map((g) => {
+        if (g.uid !== groupUid) return g;
+        if (g.title === trimmed) return g;
+        changed = true;
+        return { ...g, title: trimmed };
+      });
+      if (!changed) return;
+      setConfig({ ...config, groups });
+    },
     [config, setConfig],
   );
 
-  // Apply auto-placement at render time for any legacy widget that came in
-  // without `layout`. This both feeds RGL the coordinates it requires and
-  // gets persisted on the next layout change. Memoised against widget identity.
+  const toggleGroupCollapsed = useCallback(
+    (groupUid: string) => {
+      const groups = config.groups.map((g) => {
+        if (g.uid !== groupUid) return g;
+        const next: MetersPanelGroup = { ...g, collapsed: !g.collapsed };
+        if (!next.collapsed) delete next.collapsed;
+        return next;
+      });
+      setConfig({ ...config, groups });
+    },
+    [config, setConfig],
+  );
+
+  // Cross-group drop handler: the panel owns the reassign because the
+  // group sections share `setConfig` through here; each GroupSection
+  // wires its own onDragOver/onDrop to a local callback that hits this.
+  const reassignWidget = useCallback(
+    (widgetUid: string, targetGroupUid: string) => {
+      const next = reassignWidgetToGroup(config, widgetUid, targetGroupUid);
+      if (next === config) return;
+      setConfig(next);
+    },
+    [config, setConfig],
+  );
+
+  // Apply auto-placement at render time for any widget that came in without
+  // `layout` (cross-group reassignment clears layout; legacy widgets may
+  // not have one yet). Walk each group independently so widgets in group B
+  // don't pile up below group A's tallest column.
   const placedWidgets = useMemo(() => {
     const out: MetersWidgetInstance[] = [];
     for (const w of config.widgets) {
@@ -186,13 +297,15 @@ export function MetersPanelInner({
     return out;
   }, [config.widgets]);
 
-  const onLayoutChange = useCallback(
-    (next: Layout) => {
-      // Map RGL's layout array back into the widget list. We only persist
-      // when at least one coordinate actually changed to avoid loops.
+  // Per-group layout-change handler. Only updates widgets that belong to
+  // the group whose canvas just emitted the change — RGL passes layouts
+  // for every grid item in that one canvas, so we only touch those.
+  const onGroupLayoutChange = useCallback(
+    (groupUid: string, next: Layout) => {
       const byUid = new Map<string, LayoutItem>(next.map((l) => [l.i, l]));
       let changed = false;
       const widgets = placedWidgets.map((w) => {
+        if (w.groupUid !== groupUid) return w;
         const l = byUid.get(w.uid);
         if (!l) return w;
         const cur = w.layout;
@@ -291,6 +404,17 @@ export function MetersPanelInner({
         >
           <Settings size={14} />
         </button>
+        <button
+          type="button"
+          aria-label="Add group"
+          title="Add group"
+          onClick={addGroup}
+          onMouseDown={stopDrag}
+          style={headerBtnStyle}
+          data-testid="meters-add-group"
+        >
+          <FolderPlus size={14} />
+        </button>
         {libraryOpen ? (
           <button
             type="button"
@@ -370,17 +494,26 @@ export function MetersPanelInner({
         ) : null}
       </div>
 
-      {/* Widget canvas — measured by useContainerWidth so the grid sizes to
-          its parent. Empty-state and the grid itself both render inside the
-          same scroll container so layout is consistent. */}
-      <MetersCanvas
+      {/* Widget canvas stack — one RGL canvas per group, stacked
+          vertically. Groups are rendered lowest-order first; cross-group
+          drops dispatch through the panel's `reassignWidget` callback
+          while intra-group drags keep using the existing RGL grip. */}
+      <GroupCanvasStack
+        groups={sortedGroups}
         widgets={placedWidgets}
+        activeGroupUid={effectiveActiveGroupUid}
         selectedUid={selectedUid}
         onSelectWidget={(uid) =>
           setSelectedUid((current) => (current === uid ? null : uid))
         }
         onRemoveWidget={removeWidget}
-        onLayoutChange={onLayoutChange}
+        onLayoutChange={onGroupLayoutChange}
+        onReassignWidget={reassignWidget}
+        onActivateGroup={setActiveGroupUid}
+        onToggleCollapsed={toggleGroupCollapsed}
+        onRenameGroup={renameGroup}
+        onAddGroup={addGroup}
+        onRemoveGroup={removeGroupHandler}
       />
 
       {/* Library drawer (left) */}
@@ -422,93 +555,428 @@ interface LibraryDrawerProps {
   onClose: () => void;
 }
 
-interface MetersCanvasProps {
+interface GroupCanvasStackProps {
+  groups: ReadonlyArray<MetersPanelGroup>;
   widgets: MetersWidgetInstance[];
+  activeGroupUid: string;
   selectedUid: string | null;
   onSelectWidget: (uid: string) => void;
   onRemoveWidget: (uid: string) => void;
-  onLayoutChange: (next: Layout) => void;
+  onLayoutChange: (groupUid: string, next: Layout) => void;
+  onReassignWidget: (widgetUid: string, targetGroupUid: string) => void;
+  onActivateGroup: (groupUid: string) => void;
+  onToggleCollapsed: (groupUid: string) => void;
+  onRenameGroup: (groupUid: string, nextTitle: string) => void;
+  onAddGroup: () => void;
+  onRemoveGroup: (groupUid: string) => void;
 }
 
-function MetersCanvas({
+function GroupCanvasStack({
+  groups,
   widgets,
+  activeGroupUid,
   selectedUid,
   onSelectWidget,
   onRemoveWidget,
   onLayoutChange,
-}: MetersCanvasProps) {
-  // useContainerWidth uses ResizeObserver to track the parent's pixel width
-  // and feed it into ResponsiveGridLayout. Replaces the legacy WidthProvider
-  // HOC; renders nothing until measured (mounted=false) to avoid a 1280-px
-  // first-paint flash that snaps to actual width on the second tick.
-  const { width, containerRef, mounted } = useContainerWidth();
+  onReassignWidget,
+  onActivateGroup,
+  onToggleCollapsed,
+  onRenameGroup,
+  onAddGroup,
+  onRemoveGroup,
+}: GroupCanvasStackProps) {
+  const totalWidgets = widgets.length;
   return (
     <div
-      ref={containerRef}
       style={{
         flex: 1,
         minHeight: 0,
         overflowY: 'auto',
         position: 'relative',
+        display: 'flex',
+        flexDirection: 'column',
       }}
       data-testid="meters-canvas"
     >
-      {widgets.length === 0 ? (
+      {groups.map((group) => {
+        const groupWidgets = widgets.filter((w) => w.groupUid === group.uid);
+        return (
+          <GroupSection
+            key={group.uid}
+            group={group}
+            widgets={groupWidgets}
+            isOnlyGroup={groups.length <= 1}
+            isActive={group.uid === activeGroupUid}
+            isPanelEmpty={totalWidgets === 0}
+            groupCount={groups.length}
+            selectedUid={selectedUid}
+            onSelectWidget={(uid) => {
+              onActivateGroup(group.uid);
+              onSelectWidget(uid);
+            }}
+            onRemoveWidget={onRemoveWidget}
+            onLayoutChange={(next) => onLayoutChange(group.uid, next)}
+            onReassignWidget={onReassignWidget}
+            onActivate={() => onActivateGroup(group.uid)}
+            onToggleCollapsed={() => onToggleCollapsed(group.uid)}
+            onRename={(title) => onRenameGroup(group.uid, title)}
+            onRemoveSelf={() => onRemoveGroup(group.uid)}
+          />
+        );
+      })}
+      {/* Discoverability ghost-button — same effect as the header's
+          FolderPlus, but lives at the bottom of the canvas where new
+          operators look for "where do I add another section?". */}
+      <button
+        type="button"
+        onClick={onAddGroup}
+        data-testid="meters-add-group-bottom"
+        style={{
+          margin: '6px 6px 12px',
+          padding: '6px 10px',
+          background: 'transparent',
+          border: '1px dashed var(--panel-border)',
+          borderRadius: 'var(--r-xs)',
+          color: 'var(--fg-3)',
+          fontSize: 11,
+          fontFamily: 'var(--font-sans)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 6,
+          cursor: 'pointer',
+        }}
+      >
+        <Plus size={12} />
+        New group
+      </button>
+    </div>
+  );
+}
+
+interface GroupSectionProps {
+  group: MetersPanelGroup;
+  widgets: MetersWidgetInstance[];
+  isOnlyGroup: boolean;
+  isActive: boolean;
+  isPanelEmpty: boolean;
+  groupCount: number;
+  selectedUid: string | null;
+  onSelectWidget: (uid: string) => void;
+  onRemoveWidget: (uid: string) => void;
+  onLayoutChange: (next: Layout) => void;
+  onReassignWidget: (widgetUid: string, targetGroupUid: string) => void;
+  onActivate: () => void;
+  onToggleCollapsed: () => void;
+  onRename: (nextTitle: string) => void;
+  onRemoveSelf: () => void;
+}
+
+function GroupSection({
+  group,
+  widgets,
+  isOnlyGroup,
+  isActive,
+  isPanelEmpty,
+  groupCount,
+  selectedUid,
+  onSelectWidget,
+  onRemoveWidget,
+  onLayoutChange,
+  onReassignWidget,
+  onActivate,
+  onToggleCollapsed,
+  onRename,
+  onRemoveSelf,
+}: GroupSectionProps) {
+  const { width, containerRef, mounted } = useContainerWidth();
+  const [isDropTarget, setIsDropTarget] = useState(false);
+  const dragDepthRef = useRef(0);
+
+  // Cross-group drop: accept the drag when the dataTransfer carries our
+  // mime, set a visible drop-target highlight, dispatch the reassign on
+  // drop. Intra-group RGL drags don't touch dataTransfer at all and so
+  // never trigger this path.
+  const onDragOver = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer.types.includes(CROSS_GROUP_DT_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  }, []);
+  const onDragEnter = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer.types.includes(CROSS_GROUP_DT_MIME)) return;
+    dragDepthRef.current += 1;
+    setIsDropTarget(true);
+  }, []);
+  const onDragLeave = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer.types.includes(CROSS_GROUP_DT_MIME)) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDropTarget(false);
+  }, []);
+  const onDrop = useCallback(
+    (e: ReactDragEvent<HTMLDivElement>) => {
+      const widgetUid = e.dataTransfer.getData(CROSS_GROUP_DT_MIME);
+      if (!widgetUid) return;
+      e.preventDefault();
+      dragDepthRef.current = 0;
+      setIsDropTarget(false);
+      onReassignWidget(widgetUid, group.uid);
+    },
+    [group.uid, onReassignWidget],
+  );
+
+  return (
+    <section
+      data-testid="meters-group-section"
+      data-group-uid={group.uid}
+      onClick={onActivate}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        marginBottom: 6,
+      }}
+    >
+      <GroupHeader
+        group={group}
+        isOnlyGroup={isOnlyGroup}
+        isActive={isActive}
+        widgetCount={widgets.length}
+        onToggleCollapsed={onToggleCollapsed}
+        onRename={onRename}
+        onRemoveSelf={onRemoveSelf}
+      />
+      {!group.collapsed && (
         <div
+          ref={containerRef}
+          data-testid="meters-group-canvas"
+          data-group-uid={group.uid}
+          onDragOver={onDragOver}
+          onDragEnter={onDragEnter}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
           style={{
-            padding: 24,
-            textAlign: 'center',
-            color: 'var(--fg-2)',
-            fontSize: 12,
+            position: 'relative',
+            border: isDropTarget
+              ? '1px dashed var(--accent)'
+              : '1px solid transparent',
+            borderRadius: 'var(--r-xs)',
+            transition: 'border-color var(--dur-fast)',
+            minHeight: 60,
+          }}
+        >
+          {widgets.length === 0 ? (
+            // Empty group canvas — keep a "drag-here" affordance even
+            // when there are no widgets in this group. The first group
+            // also doubles as the panel-wide empty state when no widgets
+            // exist anywhere (preserves the legacy
+            // [data-testid="meters-empty-state"] selector).
+            <div
+              style={{
+                padding: 18,
+                textAlign: 'center',
+                color: 'var(--fg-3)',
+                fontSize: 11,
+                fontFamily: 'var(--font-sans)',
+                fontStyle: 'italic',
+              }}
+              {...(isPanelEmpty ? { 'data-testid': 'meters-empty-state' } : {})}
+            >
+              {isPanelEmpty
+                ? 'No meters yet — tap ⚙ to configure.'
+                : groupCount > 1
+                  ? 'Empty — drag a widget in from another group.'
+                  : 'Empty — tap ⚙ to add a meter.'}
+            </div>
+          ) : !mounted ? (
+            // Reserve space silently while ResizeObserver measures.
+            <div style={{ minHeight: 80 }} aria-hidden />
+          ) : (
+            <ResponsiveGridLayout
+              className="meters-grid"
+              width={width}
+              breakpoints={{ lg: 0 }}
+              cols={{ lg: METERS_GRID_COLS }}
+              rowHeight={METERS_GRID_ROW_HEIGHT_PX}
+              margin={[6, 6]}
+              containerPadding={[6, 6]}
+              dragConfig={{ handle: '.meter-widget-drag-handle', bounded: false }}
+              onLayoutChange={onLayoutChange}
+              layouts={{
+                lg: widgets.map((w) => ({
+                  i: w.uid,
+                  x: w.layout?.x ?? 0,
+                  y: w.layout?.y ?? 0,
+                  w: w.layout?.w ?? DEFAULT_WIDGET_SPAN[w.kind].w,
+                  h: w.layout?.h ?? DEFAULT_WIDGET_SPAN[w.kind].h,
+                  minW: 2,
+                  minH: 2,
+                })),
+              }}
+            >
+              {widgets.map((w) => (
+                <div key={w.uid} data-grid-uid={w.uid}>
+                  <MeterWidget
+                    widget={w}
+                    groupCount={groupCount}
+                    selected={w.uid === selectedUid}
+                    onSelect={() => onSelectWidget(w.uid)}
+                    onRemove={() => onRemoveWidget(w.uid)}
+                  />
+                </div>
+              ))}
+            </ResponsiveGridLayout>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+interface GroupHeaderProps {
+  group: MetersPanelGroup;
+  isOnlyGroup: boolean;
+  isActive: boolean;
+  widgetCount: number;
+  onToggleCollapsed: () => void;
+  onRename: (nextTitle: string) => void;
+  onRemoveSelf: () => void;
+}
+
+function GroupHeader({
+  group,
+  isOnlyGroup,
+  isActive,
+  widgetCount,
+  onToggleCollapsed,
+  onRename,
+  onRemoveSelf,
+}: GroupHeaderProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(group.title);
+  // Keep draft synced when title changes externally (e.g. another tab).
+  // Cheap to do unconditionally — the input only renders while editing.
+  if (!editing && draft !== group.title) {
+    setDraft(group.title);
+  }
+  const commit = () => {
+    setEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed === '' || trimmed === group.title) {
+      setDraft(group.title);
+      return;
+    }
+    onRename(trimmed);
+  };
+  const headerStyle: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '4px 6px',
+    background: 'linear-gradient(90deg, var(--panel-top), var(--panel-bot))',
+    borderTop: '1px solid var(--panel-border)',
+    borderBottom: '1px solid var(--panel-border)',
+    boxShadow: isActive ? 'inset 0 -1px 0 var(--accent)' : undefined,
+  };
+  const chevronBtnStyle: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 18,
+    height: 18,
+    color: 'var(--fg-2)',
+    background: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+  };
+  const titleStyle: CSSProperties = {
+    flex: 1,
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: '0.10em',
+    color: 'var(--fg-1)',
+    cursor: 'text',
+    userSelect: 'none',
+  };
+  const trashBtnStyle: CSSProperties = {
+    ...chevronBtnStyle,
+    color: isOnlyGroup ? 'var(--fg-4)' : 'var(--fg-3)',
+    cursor: isOnlyGroup ? 'not-allowed' : 'pointer',
+    opacity: isOnlyGroup ? 0.4 : 1,
+  };
+  return (
+    <div style={headerStyle} data-testid="meters-group-header">
+      <button
+        type="button"
+        aria-label={group.collapsed ? 'Expand group' : 'Collapse group'}
+        title={group.collapsed ? 'Expand' : 'Collapse'}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleCollapsed();
+        }}
+        style={chevronBtnStyle}
+      >
+        {group.collapsed ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+      </button>
+      {editing ? (
+        <input
+          type="text"
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit();
+            else if (e.key === 'Escape') {
+              setEditing(false);
+              setDraft(group.title);
+            }
+          }}
+          style={{
+            ...titleStyle,
+            background: 'var(--bg-2)',
+            border: '1px solid var(--accent)',
+            borderRadius: 'var(--r-xs)',
+            padding: '0 4px',
+            outline: 'none',
             fontFamily: 'var(--font-sans)',
           }}
-          data-testid="meters-empty-state"
-        >
-          No meters yet — tap ⚙ to configure.
-        </div>
-      ) : !mounted ? (
-        // Reserve space silently while ResizeObserver measures.
-        <div style={{ minHeight: 80 }} aria-hidden />
+        />
       ) : (
-        <ResponsiveGridLayout
-          className="meters-grid"
-          width={width}
-          // Same column count + row geometry across breakpoints — the operator
-          // does pixel-grain placement and we don't want their layout
-          // reflowing when the tile is just a bit narrower.
-          breakpoints={{ lg: 0 }}
-          cols={{ lg: METERS_GRID_COLS }}
-          rowHeight={METERS_GRID_ROW_HEIGHT_PX}
-          margin={[6, 6]}
-          containerPadding={[6, 6]}
-          // Drag only via the small grip in each widget's header — clicks on
-          // the body, gear, or numeric readout don't initiate a drag.
-          dragConfig={{ handle: '.meter-widget-drag-handle', bounded: false }}
-          onLayoutChange={onLayoutChange}
-          layouts={{
-            lg: widgets.map((w) => ({
-              i: w.uid,
-              x: w.layout?.x ?? 0,
-              y: w.layout?.y ?? 0,
-              w: w.layout?.w ?? DEFAULT_WIDGET_SPAN[w.kind].w,
-              h: w.layout?.h ?? DEFAULT_WIDGET_SPAN[w.kind].h,
-              minW: 2,
-              minH: 2,
-            })),
+        <span
+          style={titleStyle}
+          onDoubleClick={() => {
+            setDraft(group.title);
+            setEditing(true);
           }}
+          title="Double-click to rename"
         >
-          {widgets.map((w) => (
-            <div key={w.uid} data-grid-uid={w.uid}>
-              <MeterWidget
-                widget={w}
-                selected={w.uid === selectedUid}
-                onSelect={() => onSelectWidget(w.uid)}
-                onRemove={() => onRemoveWidget(w.uid)}
-              />
-            </div>
-          ))}
-        </ResponsiveGridLayout>
+          {group.title}
+          <span style={{ marginLeft: 6, color: 'var(--fg-3)' }}>
+            ({widgetCount})
+          </span>
+        </span>
       )}
+      <button
+        type="button"
+        aria-label={`Remove group ${group.title}`}
+        title={
+          isOnlyGroup
+            ? 'Cannot remove the last group'
+            : `Remove group "${group.title}"`
+        }
+        disabled={isOnlyGroup}
+        aria-disabled={isOnlyGroup}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!isOnlyGroup) onRemoveSelf();
+        }}
+        data-testid="meters-remove-group"
+        style={trashBtnStyle}
+      >
+        <Trash2 size={12} />
+      </button>
     </div>
   );
 }

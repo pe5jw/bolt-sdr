@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { render, act } from '../../../components/meters/__tests__/harness';
 import { MetersPanelInner } from '../MetersPanel';
 import {
+  DEFAULT_GROUP_UID,
   EMPTY_METERS_CONFIG,
   type MetersPanelConfig,
 } from '../../../components/meters/metersConfig';
@@ -101,13 +102,15 @@ describe('MetersPanel', () => {
 
   it('removes a widget when the Settings drawer remove button is clicked', () => {
     const initial: MetersPanelConfig = {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      groups: [{ uid: DEFAULT_GROUP_UID, title: 'Meters', order: 0 }],
       widgets: [
         {
           uid: 'w1',
           reading: MeterReadingId.TxSwr,
           kind: 'digital',
           settings: {},
+          groupUid: DEFAULT_GROUP_UID,
         },
       ],
     };
@@ -131,6 +134,173 @@ describe('MetersPanel', () => {
     });
 
     expect(state.current.widgets.length).toBe(0);
+    unmount();
+  });
+
+  // ─── group operations (commit 3) ───────────────────────────────────
+
+  it('renders a single synthetic group on an empty config', () => {
+    const { container, unmount } = setup();
+    const groups = container.querySelectorAll(
+      '[data-testid="meters-group-section"]',
+    );
+    expect(groups.length).toBe(1);
+    unmount();
+  });
+
+  it('"+ GROUP" header button creates a new group', () => {
+    const { state, container, unmount } = setup();
+    const addBtn = container.querySelector(
+      '[data-testid="meters-add-group"]',
+    ) as HTMLButtonElement | null;
+    expect(addBtn).not.toBeNull();
+    act(() => {
+      addBtn?.click();
+    });
+    expect(state.current.groups.length).toBe(2);
+    unmount();
+  });
+
+  it('"+ New group" canvas-bottom button also creates a group', () => {
+    const { state, container, unmount } = setup();
+    const bottomBtn = container.querySelector(
+      '[data-testid="meters-add-group-bottom"]',
+    ) as HTMLButtonElement | null;
+    expect(bottomBtn).not.toBeNull();
+    act(() => {
+      bottomBtn?.click();
+    });
+    expect(state.current.groups.length).toBe(2);
+    unmount();
+  });
+
+  it('library add lands in the most-recently-added (active) group', () => {
+    const { state, container, unmount } = setup();
+    // Add a second group; it becomes the active group.
+    const addGroupBtn = container.querySelector(
+      '[data-testid="meters-add-group"]',
+    ) as HTMLButtonElement | null;
+    act(() => {
+      addGroupBtn?.click();
+    });
+    const newGroupUid = state.current.groups.find(
+      (g) => g.uid !== DEFAULT_GROUP_UID,
+    )?.uid;
+    expect(newGroupUid).toBeDefined();
+    // Open library and add a widget.
+    const gear = container.querySelector(
+      '[data-testid="meters-library-toggle"]',
+    ) as HTMLButtonElement | null;
+    act(() => {
+      gear?.click();
+    });
+    const fwdEntry = container.querySelector(
+      `[data-meter-id="${MeterReadingId.TxFwdWatts}"]`,
+    ) as HTMLButtonElement | null;
+    act(() => {
+      fwdEntry?.click();
+    });
+    expect(state.current.widgets.length).toBe(1);
+    expect(state.current.widgets[0]?.groupUid).toBe(newGroupUid);
+    unmount();
+  });
+
+  it('removing a non-last group reassigns its widgets and clears their layout', () => {
+    const initial: MetersPanelConfig = {
+      schemaVersion: 2,
+      groups: [
+        { uid: 'first', title: 'First', order: 0 },
+        { uid: 'doomed', title: 'Doomed', order: 1 },
+      ],
+      widgets: [
+        {
+          uid: 'mover',
+          reading: MeterReadingId.TxFwdWatts,
+          kind: 'bigarc',
+          settings: {},
+          groupUid: 'doomed',
+          layout: { x: 0, y: 0, w: 4, h: 4 },
+        },
+      ],
+    };
+    const { state, container, unmount } = setup(initial);
+    // Each group section renders its own remove-group button — the second
+    // one (doomed) is the one we want to click.
+    const removeButtons = Array.from(
+      container.querySelectorAll('[data-testid="meters-remove-group"]'),
+    ) as HTMLButtonElement[];
+    expect(removeButtons.length).toBe(2);
+    act(() => {
+      removeButtons[1]?.click();
+    });
+    expect(state.current.groups.length).toBe(1);
+    expect(state.current.widgets[0]?.groupUid).toBe('first');
+    expect(state.current.widgets[0]?.layout).toBeUndefined();
+    unmount();
+  });
+
+  it('the trash icon on the only remaining group is disabled', () => {
+    const { container, unmount } = setup();
+    const removeBtn = container.querySelector(
+      '[data-testid="meters-remove-group"]',
+    ) as HTMLButtonElement | null;
+    expect(removeBtn).not.toBeNull();
+    expect(removeBtn?.disabled).toBe(true);
+    expect(removeBtn?.getAttribute('aria-disabled')).toBe('true');
+    unmount();
+  });
+
+  it('cross-group drop reassigns groupUid and clears layout', () => {
+    const initial: MetersPanelConfig = {
+      schemaVersion: 2,
+      groups: [
+        { uid: 'src', title: 'Source', order: 0 },
+        { uid: 'dst', title: 'Destination', order: 1 },
+      ],
+      widgets: [
+        {
+          uid: 'roamer',
+          reading: MeterReadingId.TxSwr,
+          kind: 'bigarc',
+          settings: {},
+          groupUid: 'src',
+          layout: { x: 0, y: 0, w: 4, h: 4 },
+        },
+      ],
+    };
+    const { state, container, unmount } = setup(initial);
+
+    const dstCanvas = container.querySelector(
+      '[data-testid="meters-group-canvas"][data-group-uid="dst"]',
+    ) as HTMLDivElement | null;
+    expect(dstCanvas).not.toBeNull();
+
+    // Synthesise an HTML5 drop event with the cross-group dataTransfer
+    // mime — jsdom's DataTransfer is incomplete but a stub with a
+    // .types array and a .getData function is enough to satisfy the
+    // GroupSection drop handler.
+    const dataMap = new Map<string, string>([
+      ['application/x-zeus-meter-widget-uid', 'roamer'],
+    ]);
+    const dragEvent = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(dragEvent, 'dataTransfer', {
+      value: {
+        types: Array.from(dataMap.keys()),
+        getData: (mime: string) => dataMap.get(mime) ?? '',
+        setData: (mime: string, val: string) => {
+          dataMap.set(mime, val);
+        },
+        dropEffect: 'move',
+        effectAllowed: 'move',
+      },
+    });
+    act(() => {
+      dstCanvas?.dispatchEvent(dragEvent);
+    });
+
+    const moved = state.current.widgets.find((w) => w.uid === 'roamer');
+    expect(moved?.groupUid).toBe('dst');
+    expect(moved?.layout).toBeUndefined();
     unmount();
   });
 });
