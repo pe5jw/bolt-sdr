@@ -10,9 +10,9 @@
 //   - decaying peak-hold (recipe lifted from TxStageMeters.usePeakHold)
 //   - the row chrome (label + numeric readout + click-to-select handler)
 
-import { useRef, useState, type CSSProperties } from 'react';
+import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { GripVertical, Settings, X } from 'lucide-react';
-import { METER_CATALOG } from './meterCatalog';
+import { METER_CATALOG, MeterReadingId } from './meterCatalog';
 import type { MetersWidgetInstance } from './metersConfig';
 import { useMeterReading } from './useMeterReading';
 import { HBarMeter, _isSilent } from './widgets/HBarMeter';
@@ -20,6 +20,8 @@ import { VBarMeter } from './widgets/VBarMeter';
 import { DialMeter } from './widgets/DialMeter';
 import { SparklineMeter } from './widgets/SparklineMeter';
 import { DigitalMeter } from './widgets/DigitalMeter';
+import { useRadioStore } from '../../state/radio-store';
+import { usePaStore } from '../../state/pa-store';
 
 const PEAK_DECAY_PER_SEC_DEFAULT = 21; // dB/s; full 42 dB level axis in 2 s
 
@@ -73,6 +75,23 @@ export function MeterWidget({
   const peak = usePeakHold(value);
   const [hovered, setHovered] = useState(false);
   const label = widget.settings.label ?? def.label;
+
+  // For TX forward power, the axis top should follow the connected radio's
+  // rated wattage (HL2 = 10 W, ANAN-100 = 120 W, 8000DLE = 250 W, etc.) so
+  // the bar isn't blank on a small rig or pegged on a big one. The catalog
+  // ships a conservative `defaultMax: 5` (HL2-tight); we override it here
+  // when no operator override is in effect. Resolution: explicit
+  // settings.max → operator paMaxPowerWatts override → board default →
+  // catalog default.
+  const boardMaxWatts = useRadioStore((s) => s.capabilities.maxPowerWatts);
+  const paMaxWatts = usePaStore((s) => s.settings.global.paMaxPowerWatts);
+  const effectiveSettings = useMemo(() => {
+    if (widget.reading !== MeterReadingId.TxFwdWatts) return widget.settings;
+    if (widget.settings.max !== undefined) return widget.settings;
+    const auto =
+      paMaxWatts > 0 ? paMaxWatts : boardMaxWatts > 0 ? boardMaxWatts : def.defaultMax;
+    return { ...widget.settings, max: auto };
+  }, [widget.reading, widget.settings, paMaxWatts, boardMaxWatts, def.defaultMax]);
 
   // Card chrome — fills the grid cell exactly so the resize handle pins to
   // the visual border, not floating margin. Grid item positioning supplies
@@ -140,7 +159,7 @@ export function MeterWidget({
           value={value}
           peak={peak}
           def={def}
-          settings={widget.settings}
+          settings={effectiveSettings}
         />
       );
       break;
@@ -151,7 +170,7 @@ export function MeterWidget({
             value={value}
             peak={peak}
             def={def}
-            settings={widget.settings}
+            settings={effectiveSettings}
           />
         </div>
       );
