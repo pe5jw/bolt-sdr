@@ -7,6 +7,7 @@
 import { useCallback, useRef } from 'react';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useTxStore } from '../state/tx-store';
+import { useVfoLockStore } from '../state/vfo-lock-store';
 
 const TICK_STRIDE_DB = 10;
 
@@ -45,6 +46,8 @@ export function WfDbScale() {
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
+      // VFO/panel lock — see DbScale.tsx; same gate, separate widget.
+      if (useVfoLockStore.getState().locked) return;
       const rect = e.currentTarget.getBoundingClientRect();
       dragState.current = {
         startY: e.clientY,
