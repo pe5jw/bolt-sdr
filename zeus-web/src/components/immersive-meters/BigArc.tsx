@@ -1,0 +1,421 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+//
+// Big semicircle "final output" gauge. Lift-and-shift of the design
+// prototype's `.arc` SVG (Immersive Meters.html) recreated as a
+// presentational React component, then generalised to two modes:
+//
+//   mode='dbfs'  — log-style audio dBFS (-60..+6) with red 0 dB tick,
+//                  pegs the "over" red readout above 0 dBFS. Used for
+//                  WDSP modulator-output level meters.
+//
+//   mode='watts' — linear forward-watts (0..maxWatts), with five even
+//                  tick steps. Used for the operator-facing "what's on
+//                  the air?" power meter — the meter that actually
+//                  scales with the radio's drive %, unlike WDSP's
+//                  digital OUT meter which sees the modulator at full
+//                  scale during TUNE regardless of RF power.
+//
+// Both modes render the same chrome (gradient fill, ambient glow,
+// needle, hub, peak pip, mono readout). The needle pivots from the hub
+// in viewBox units via SVG `transform="rotate(angle cx cy)"` — a CSS
+// transform-origin would mismatch once the SVG scales to the tile.
+
+import type { CSSProperties } from 'react';
+import { dbToFrac, fmtDb, isSilent } from './dbScale';
+import { usePeakHoldFrac } from './usePeakHold';
+
+interface CommonProps {
+  /** Section/label text — top-left chip. */
+  label: string;
+  /** Subscript chip on top-right (e.g. "dBFS · RMS" or "Watts · PEP"). */
+  units?: string;
+  /** Stable id prefix for SVG `<defs>` so multiple arcs on a page don't
+   *  collide on `id="arcFill"`. Required. */
+  defsId: string;
+}
+
+interface DbfsProps extends CommonProps {
+  mode: 'dbfs';
+  /** Live value in dBFS. ≤ −200 / non-finite renders as bypassed. */
+  valueDb: number;
+}
+
+interface WattsProps extends CommonProps {
+  mode: 'watts';
+  /** Live forward power in watts. */
+  watts: number;
+  /** Top of axis — typically the connected board's MaxPowerWatts. */
+  maxWatts: number;
+}
+
+export type BigArcProps = DbfsProps | WattsProps;
+
+const CX = 120;
+const CY = 124;
+const R = 92;
+const ARC_LEN = Math.PI * R;
+
+function pointAt(fraction: number, radius: number): { x: number; y: number } {
+  // 180° (left) → 360° (right): a half-turn anchored at the bottom.
+  const angleDeg = 180 + 180 * fraction;
+  const a = (angleDeg * Math.PI) / 180;
+  return {
+    x: CX + Math.cos(a) * radius,
+    y: CY + Math.sin(a) * radius,
+  };
+}
+
+interface AxisTick {
+  /** Position along the arc, 0..1 (left → right). */
+  frac: number;
+  /** Tick label; empty string draws a tick mark with no label. */
+  label: string;
+  /** Highlighted tick (e.g. red 0 dB marker). */
+  highlight?: boolean;
+}
+
+const DBFS_TICKS: ReadonlyArray<AxisTick> = [
+  { frac: dbToFrac(-60), label: '60' },
+  { frac: dbToFrac(-40), label: '40' },
+  { frac: dbToFrac(-20), label: '20' },
+  { frac: dbToFrac(-10), label: '10' },
+  { frac: dbToFrac(-6), label: '6' },
+  { frac: dbToFrac(-3), label: '3' },
+  { frac: dbToFrac(0), label: '0', highlight: true },
+  { frac: dbToFrac(3), label: '+3' },
+  { frac: dbToFrac(6), label: '' },
+];
+
+/** Format a watt value tick: small radios get sub-W decimals (HL2 1.0 W),
+ *  big radios round to whole watts (G2-1K 200, 400, 600...). */
+function fmtWattsTick(watts: number, max: number): string {
+  if (max <= 0) return '0';
+  if (max < 10) return watts.toFixed(1);
+  return Math.round(watts).toString();
+}
+
+function wattsTicks(maxWatts: number): ReadonlyArray<AxisTick> {
+  const safeMax = isFinite(maxWatts) && maxWatts > 0 ? maxWatts : 100;
+  return Array.from({ length: 6 }, (_, i) => {
+    const w = (i / 5) * safeMax;
+    return {
+      frac: i / 5,
+      label: fmtWattsTick(w, safeMax),
+      // Red highlight on the rated-max tick — the "you're at the rail" cue
+      // mirrors the dBFS axis's red 0 dB highlight.
+      highlight: i === 5,
+    };
+  });
+}
+
+interface ResolvedAxis {
+  /** Live value as 0..1 along the arc. */
+  liveFrac: number;
+  /** Whether the meter is silent / bypassed (no needle, em-dash readout). */
+  silent: boolean;
+  /** Whether the live value is at-or-past the danger limit (0 dBFS or ratedW). */
+  over: boolean;
+  /** Tick definitions for the chosen axis. */
+  ticks: ReadonlyArray<AxisTick>;
+  /** Big readout text (e.g. "−18.4" or "5.4"). */
+  readoutText: string;
+  /** Small unit suffix shown next to the readout (e.g. "dBFS" or "W"). */
+  readoutUnit: string;
+  /** Live numeric value used by the peak-hold hook (in axis-native units). */
+  rawValue: number;
+  /** Function mapping a live value to a 0..1 fraction (passed to peak-hold). */
+  toFrac: (v: number) => number;
+}
+
+function resolveAxis(props: BigArcProps): ResolvedAxis {
+  if (props.mode === 'dbfs') {
+    const silent = isSilent(props.valueDb);
+    const liveFrac = silent ? 0 : dbToFrac(props.valueDb);
+    return {
+      liveFrac,
+      silent,
+      over: !silent && props.valueDb > 0,
+      ticks: DBFS_TICKS,
+      readoutText: silent ? '—' : fmtDb(props.valueDb),
+      readoutUnit: 'dBFS',
+      rawValue: props.valueDb,
+      toFrac: dbToFrac,
+    };
+  }
+  const { watts, maxWatts } = props;
+  const finite = isFinite(watts) && watts > 0;
+  const safeMax = isFinite(maxWatts) && maxWatts > 0 ? maxWatts : 100;
+  const liveFrac = finite ? Math.max(0, Math.min(1, watts / safeMax)) : 0;
+  const decimals = safeMax < 10 ? 2 : 1;
+  return {
+    liveFrac,
+    silent: !finite,
+    over: liveFrac >= 1.0,
+    ticks: wattsTicks(safeMax),
+    readoutText: finite ? watts.toFixed(decimals) : '—',
+    readoutUnit: 'W',
+    rawValue: finite ? watts : Number.NEGATIVE_INFINITY,
+    toFrac: (v) => (isFinite(v) && v > 0 ? Math.max(0, Math.min(1, v / safeMax)) : 0),
+  };
+}
+
+export function BigArc(props: BigArcProps) {
+  const axis = resolveAxis(props);
+  const peakFrac = usePeakHoldFrac(axis.rawValue, axis.toFrac);
+
+  const fillLen = ARC_LEN * axis.liveFrac;
+  const fillDash = `${fillLen.toFixed(1)} ${(ARC_LEN + 5).toFixed(1)}`;
+  const needleAngle = -90 + 180 * axis.liveFrac;
+  const peakPoint = pointAt(peakFrac, R);
+
+  const fillGradId = `${props.defsId}-fill`;
+  const glowGradId = `${props.defsId}-glow`;
+  const blurFilterId = `${props.defsId}-blur`;
+  const units = props.units ?? axis.readoutUnit;
+
+  const cardStyle: CSSProperties = {
+    position: 'relative',
+    aspectRatio: '1.55 / 1',
+    borderRadius: 7,
+    background:
+      'radial-gradient(95% 70% at 50% 100%, var(--immersive-bloom), transparent 60%),' +
+      ' linear-gradient(180deg, var(--immersive-well) 0%, var(--immersive-well-2) 100%)',
+    border: '1px solid var(--immersive-line)',
+    boxShadow:
+      'inset 0 1px 0 var(--immersive-rim), inset 0 0 50px rgba(0,0,0,0.45)',
+    overflow: 'hidden',
+  };
+  const labelStyle: CSSProperties = {
+    position: 'absolute',
+    top: 9,
+    left: 12,
+    fontSize: 9,
+    letterSpacing: '0.18em',
+    textTransform: 'uppercase',
+    color: 'var(--fg-2)',
+    fontWeight: 700,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+  };
+  const pinStyle: CSSProperties = {
+    width: 5,
+    height: 5,
+    borderRadius: '50%',
+    background: 'var(--immersive-accent)',
+    boxShadow: '0 0 6px var(--immersive-accent-glow)',
+  };
+  const unitsStyle: CSSProperties = {
+    position: 'absolute',
+    top: 9,
+    right: 12,
+    fontFamily: 'var(--font-mono)',
+    fontSize: 9,
+    color: 'var(--fg-3)',
+    letterSpacing: '0.10em',
+    textTransform: 'uppercase',
+  };
+  const readoutStyle: CSSProperties = {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 10,
+    textAlign: 'center',
+    fontFamily: 'var(--font-mono)',
+    fontSize: 24,
+    fontWeight: 600,
+    letterSpacing: '-0.01em',
+    fontVariantNumeric: 'tabular-nums',
+    lineHeight: 1,
+    color: axis.over ? '#ffb8a4' : 'var(--fg-0)',
+    textShadow: axis.over
+      ? '0 0 14px var(--immersive-tx-glow)'
+      : '0 0 14px var(--immersive-accent-glow)',
+  };
+  const unitSpanStyle: CSSProperties = {
+    color: 'var(--fg-3)',
+    fontSize: 10.5,
+    fontWeight: 500,
+    marginLeft: 4,
+    letterSpacing: '0.05em',
+  };
+
+  return (
+    <div style={cardStyle} aria-hidden="true">
+      <span style={labelStyle}>
+        <span style={pinStyle} />
+        {props.label}
+      </span>
+      <span style={unitsStyle}>{units}</span>
+
+      <svg
+        viewBox="0 0 240 150"
+        preserveAspectRatio="xMidYMid meet"
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block' }}
+      >
+        <defs>
+          <linearGradient id={fillGradId} x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0" stopColor="var(--immersive-good)" />
+            <stop offset="0.55" stopColor="var(--immersive-good)" />
+            <stop offset="0.78" stopColor="var(--immersive-warn)" />
+            <stop offset="1" stopColor="var(--immersive-tx)" />
+          </linearGradient>
+          <radialGradient id={glowGradId} cx="50%" cy="100%" r="80%">
+            <stop offset="0" stopColor="var(--immersive-accent)" stopOpacity="0.18" />
+            <stop offset="1" stopColor="var(--immersive-accent)" stopOpacity="0" />
+          </radialGradient>
+          <filter id={blurFilterId} x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur stdDeviation="3" />
+          </filter>
+        </defs>
+
+        {/* ambient ground glow */}
+        <ellipse cx={CX} cy={135} rx={110} ry={40} fill={`url(#${glowGradId})`} />
+
+        {/* background arc — soft track */}
+        <path
+          d={`M 28 ${CY} A ${R} ${R} 0 0 1 212 ${CY}`}
+          fill="none"
+          stroke="rgba(255,255,255,0.06)"
+          strokeWidth={14}
+          strokeLinecap="round"
+        />
+        {/* track shadow */}
+        <path
+          d={`M 28 ${CY} A ${R} ${R} 0 0 1 212 ${CY}`}
+          fill="none"
+          stroke="rgba(0,0,0,0.4)"
+          strokeWidth={10}
+        />
+
+        {/* active fill — bloomed copy + crisp copy on top */}
+        <path
+          d={`M 28 ${CY} A ${R} ${R} 0 0 1 212 ${CY}`}
+          fill="none"
+          stroke={`url(#${fillGradId})`}
+          strokeWidth={9}
+          strokeLinecap="round"
+          strokeDasharray={fillDash}
+          filter={`url(#${blurFilterId})`}
+          opacity={0.85}
+        />
+        <path
+          d={`M 28 ${CY} A ${R} ${R} 0 0 1 212 ${CY}`}
+          fill="none"
+          stroke={`url(#${fillGradId})`}
+          strokeWidth={6}
+          strokeLinecap="round"
+          strokeDasharray={fillDash}
+        />
+
+        {/* ticks */}
+        <g stroke="rgba(255,255,255,0.35)" strokeWidth={1}>
+          {axis.ticks.map((t, i) => {
+            const inner = pointAt(t.frac, R - 9);
+            const outer = pointAt(t.frac, R + 5);
+            const stroke = t.highlight
+              ? 'var(--immersive-tx)'
+              : 'rgba(255,255,255,0.35)';
+            const sw = t.highlight ? 1.6 : 1;
+            return (
+              <line
+                key={`t-${i}`}
+                x1={inner.x.toFixed(1)}
+                y1={inner.y.toFixed(1)}
+                x2={outer.x.toFixed(1)}
+                y2={outer.y.toFixed(1)}
+                stroke={stroke}
+                strokeWidth={sw}
+              />
+            );
+          })}
+        </g>
+        <g
+          fontFamily="var(--font-mono)"
+          fontSize={8}
+          fill="var(--fg-3)"
+          textAnchor="middle"
+        >
+          {axis.ticks
+            .filter((t) => t.label !== '')
+            .map((t, i) => {
+              const lp = pointAt(t.frac, R + 15);
+              return (
+                <text
+                  key={`tl-${i}`}
+                  x={lp.x.toFixed(1)}
+                  y={(lp.y + 3).toFixed(1)}
+                  fill={t.highlight ? 'var(--immersive-tx)' : 'var(--fg-3)'}
+                >
+                  {t.label}
+                </text>
+              );
+            })}
+        </g>
+
+        {/* peak-hold pip on the rim */}
+        {!axis.silent && peakFrac > 0 && (
+          <circle
+            cx={peakPoint.x.toFixed(1)}
+            cy={peakPoint.y.toFixed(1)}
+            r={3}
+            fill="#fff"
+            stroke="var(--immersive-accent)"
+            strokeWidth={1}
+            style={{ filter: 'drop-shadow(0 0 6px var(--immersive-accent))' }}
+          />
+        )}
+
+        {/* needle — pivots around the hub centre (CX, CY) in viewBox
+            units. Pure-SVG rotate, no CSS transform-origin. */}
+        {!axis.silent && (
+          <g transform={`rotate(${needleAngle.toFixed(2)} ${CX} ${CY})`}>
+            <line
+              x1={CX}
+              y1={CY}
+              x2={CX}
+              y2={36}
+              stroke="#dde6f8"
+              strokeWidth={2}
+              strokeLinecap="round"
+            />
+            <line
+              x1={CX}
+              y1={CY}
+              x2={CX}
+              y2={50}
+              stroke="var(--immersive-accent)"
+              strokeWidth={0.8}
+              opacity={0.6}
+            />
+          </g>
+        )}
+
+        {/* hub */}
+        <circle
+          cx={CX}
+          cy={CY}
+          r={9}
+          fill="var(--immersive-panel-2)"
+          stroke="var(--immersive-rim-strong)"
+          strokeWidth={1.4}
+        />
+        <circle
+          cx={CX}
+          cy={CY}
+          r={3}
+          fill="var(--immersive-accent)"
+          style={{ filter: 'drop-shadow(0 0 6px var(--immersive-accent))' }}
+        />
+      </svg>
+
+      <div style={readoutStyle}>
+        {axis.readoutText}
+        <span style={unitSpanStyle}>{axis.readoutUnit}</span>
+      </div>
+    </div>
+  );
+}

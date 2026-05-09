@@ -70,6 +70,41 @@
   --meter-bg:    #0d0e10;
   --meter-fill:  linear-gradient(90deg, #2e7a2e 0%, #4aa04a 55%, #d4a42a 80%, #d04040 100%);
 
+  /* ----- Immersive meter chrome (BigArc / VuColumn / PullDownArc) -----
+     Deeper-than-meter-bg fills used inside the immersive Meters panel so
+     the gauges read as "lit instruments on a black bench" against the
+     surrounding panel-bg. The trio is layered: panel (body), panel-2
+     (section-card top stop), well / well-2 (gauge card gradient).
+     Originally taken from the design prototype's blue-black palette
+     (#161a23 / #11151c / #0c1019) — flattened to neutral greys per the
+     operator's "less blues, more greys" feedback. The *-glow tokens
+     carry the bloom alpha used by SVG drop-shadows + filters. */
+  --immersive-bg:        #07080a;
+  --immersive-panel:     #1a1c20;
+  --immersive-panel-2:   #16181c;
+  --immersive-well:      #101216;
+  --immersive-well-2:    #0a0b0e;
+  --immersive-rim:       rgba(255,255,255,0.06);
+  --immersive-rim-strong:rgba(255,255,255,0.10);
+  --immersive-line:      rgba(255,255,255,0.05);
+  --immersive-line-2:    rgba(255,255,255,0.09);
+  /* Accent for needle / peak pip / hub / section LED. Originally a blue
+     (#5b9aff) — swapped to a warm-neutral light grey that still reads
+     as "lit indicator" against the immersive panel chrome. The signal
+     gradient on the fill arcs (good → warn → tx) is unchanged — it's the
+     whole point of the meter. */
+  --immersive-accent:      #c8ccd6;
+  --immersive-accent-glow: rgba(200,204,214,0.30);
+  /* Subtle neutral elevation glow for arc/vu card backgrounds — replaces
+     the previous blue radial-gradient bloom. */
+  --immersive-bloom:       rgba(255,255,255,0.05);
+  --immersive-good:      #5cd49a;
+  --immersive-good-glow: rgba(92,212,154,0.45);
+  --immersive-warn:      #f4c168;
+  --immersive-warn-glow: rgba(244,193,104,0.45);
+  --immersive-tx:        #ef6b54;
+  --immersive-tx-glow:   rgba(239,107,84,0.45);
+
   /* ----- Type ----- */
   --font-sans: 'Archivo Narrow', 'Arial Narrow', sans-serif;
   --font-mono: 'Archivo Narrow', 'Arial Narrow', sans-serif;
