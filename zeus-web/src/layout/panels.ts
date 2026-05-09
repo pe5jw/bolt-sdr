@@ -60,6 +60,7 @@ import { ModePanel } from './panels/ModePanel';
 import { StepPanel } from './panels/StepPanel';
 import { MetersPanel } from './panels/MetersPanel';
 import { AnalogMeterPanel } from './panels/AnalogMeterPanel';
+import { Rf2kPanel } from './panels/Rf2kPanel';
 
 export type PanelCategory = 'spectrum' | 'vfo' | 'meters' | 'dsp' | 'log' | 'tools' | 'controls';
 
@@ -260,6 +261,13 @@ export const PANELS: Record<string, PanelDef> = {
     tags: ['analog', 'meter', 'smeter', 's-meter', 'signal', 'rx', 'tx', 'power', 'swr', 'needle'],
     component: AnalogMeterPanel,
     headerless: true,
+  },
+  rf2kAmp: {
+    id: 'rf2kAmp',
+    name: 'RF2K-S Amplifier',
+    category: 'tools',
+    tags: ['rf2k', 'rf2k-s', 'rf-kit', 'amp', 'amplifier', 'pa', 'tune', 'standby', 'tci'],
+    component: Rf2kPanel,
   },
 };
 
