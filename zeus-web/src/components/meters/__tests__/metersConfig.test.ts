@@ -11,10 +11,11 @@ import {
   newWidgetUid,
   parseMetersPanelConfig,
   placeWidgetInGrid,
+  widgetKindAllowed,
   type MetersPanelConfig,
   type MetersWidgetInstance,
 } from '../metersConfig';
-import { MeterReadingId } from '../meterCatalog';
+import { METER_CATALOG, MeterReadingId } from '../meterCatalog';
 
 function makeSampleConfig(): MetersPanelConfig {
   return {
@@ -30,7 +31,10 @@ function makeSampleConfig(): MetersPanelConfig {
       {
         uid: 'b',
         reading: MeterReadingId.TxFwdWatts,
-        kind: 'dial',
+        // Updated to the post-rework default kind so the round-trip test
+        // below stays a true round-trip; the dial→bigarc migration path
+        // is exercised by a dedicated test further down.
+        kind: 'bigarc',
         settings: { min: 0, max: 5 },
       },
       {
@@ -119,7 +123,7 @@ describe('metersConfig', () => {
 
   it('defaultWidgetForReading uses the catalog defaultKind', () => {
     const w = defaultWidgetForReading(MeterReadingId.TxFwdWatts);
-    expect(w.kind).toBe('dial');
+    expect(w.kind).toBe('bigarc');
     expect(w.reading).toBe(MeterReadingId.TxFwdWatts);
     expect(w.settings).toEqual({});
   });
@@ -138,7 +142,7 @@ describe('metersConfig', () => {
         {
           uid: 'p1',
           reading: MeterReadingId.TxFwdWatts,
-          kind: 'dial',
+          kind: 'bigarc',
           settings: {},
           layout: { x: 4, y: 2, w: 3, h: 4 },
         },
@@ -170,8 +174,8 @@ describe('metersConfig', () => {
     const placed = placeWidgetInGrid(fresh, existing);
     expect(placed.layout?.y).toBe(2); // next free row below the existing pair
     expect(placed.layout?.x).toBe(0);
-    expect(placed.layout?.w).toBe(DEFAULT_WIDGET_SPAN.dial.w);
-    expect(placed.layout?.h).toBe(DEFAULT_WIDGET_SPAN.dial.h);
+    expect(placed.layout?.w).toBe(DEFAULT_WIDGET_SPAN.bigarc.w);
+    expect(placed.layout?.h).toBe(DEFAULT_WIDGET_SPAN.bigarc.h);
   });
 
   it('placeWidgetInGrid is a no-op for a widget that already has a layout', () => {
@@ -183,5 +187,96 @@ describe('metersConfig', () => {
       layout: { x: 1, y: 2, w: 3, h: 4 },
     };
     expect(placeWidgetInGrid(widget, [])).toBe(widget);
+  });
+
+  it('migrates legacy kind "dial" to "bigarc" on parse', () => {
+    const legacy = {
+      schemaVersion: 1,
+      widgets: [
+        {
+          uid: 'fwd',
+          reading: MeterReadingId.TxFwdWatts,
+          kind: 'dial',
+          settings: { max: 100 },
+        },
+      ],
+    };
+    const parsed = parseMetersPanelConfig(legacy);
+    expect(parsed.widgets.length).toBe(1);
+    expect(parsed.widgets[0]?.kind).toBe('bigarc');
+    // Widget metadata must survive the migration.
+    expect(parsed.widgets[0]?.uid).toBe('fwd');
+    expect(parsed.widgets[0]?.settings).toEqual({ max: 100 });
+  });
+
+  it('migrates legacy "vbar" on a dBFS reading to "vucolumn"', () => {
+    const legacy = {
+      schemaVersion: 1,
+      widgets: [
+        {
+          uid: 'mic',
+          reading: MeterReadingId.TxMicPk,
+          kind: 'vbar',
+          settings: {},
+        },
+      ],
+    };
+    const parsed = parseMetersPanelConfig(legacy);
+    expect(parsed.widgets[0]?.kind).toBe('vucolumn');
+  });
+
+  it('migrates legacy "vbar" on a non-dBFS reading to "hbar" fallback', () => {
+    // RxSignalPk is dBm — VuColumn's fixed dBFS axis would not fit, so the
+    // migrator must fall back to the always-allowed hbar primitive.
+    const legacy = {
+      schemaVersion: 1,
+      widgets: [
+        {
+          uid: 'sig',
+          reading: MeterReadingId.RxSignalPk,
+          kind: 'vbar',
+          settings: {},
+        },
+      ],
+    };
+    const parsed = parseMetersPanelConfig(legacy);
+    expect(parsed.widgets[0]?.kind).toBe('hbar');
+  });
+
+  it('widgetKindAllowed: bigarc rejects dBm, accepts watts/ratio/dBFS', () => {
+    const rxAgcEnvPk = METER_CATALOG[MeterReadingId.RxAgcEnvPk]; // dBm
+    const txFwd = METER_CATALOG[MeterReadingId.TxFwdWatts]; // W
+    const txSwr = METER_CATALOG[MeterReadingId.TxSwr]; // ratio
+    const txMicPk = METER_CATALOG[MeterReadingId.TxMicPk]; // dBFS
+    expect(widgetKindAllowed('bigarc', rxAgcEnvPk)).toBe(false);
+    expect(widgetKindAllowed('bigarc', txFwd)).toBe(true);
+    expect(widgetKindAllowed('bigarc', txSwr)).toBe(true);
+    expect(widgetKindAllowed('bigarc', txMicPk)).toBe(true);
+  });
+
+  it('widgetKindAllowed: pulldown only accepts gain-reduction readings', () => {
+    const txAlcGr = METER_CATALOG[MeterReadingId.TxAlcGr]; // tx-protection
+    const txMicPk = METER_CATALOG[MeterReadingId.TxMicPk]; // tx-stage
+    const rxSig = METER_CATALOG[MeterReadingId.RxSignalPk]; // rx-signal
+    expect(widgetKindAllowed('pulldown', txAlcGr)).toBe(true);
+    expect(widgetKindAllowed('pulldown', txMicPk)).toBe(false);
+    expect(widgetKindAllowed('pulldown', rxSig)).toBe(false);
+  });
+
+  it('widgetKindAllowed: vucolumn restricted to dBFS readings', () => {
+    const rxAdc = METER_CATALOG[MeterReadingId.RxAdcPk]; // dBFS
+    const txMicPk = METER_CATALOG[MeterReadingId.TxMicPk]; // dBFS
+    const txAlcGr = METER_CATALOG[MeterReadingId.TxAlcGr]; // dB (not dBFS)
+    expect(widgetKindAllowed('vucolumn', rxAdc)).toBe(true);
+    expect(widgetKindAllowed('vucolumn', txMicPk)).toBe(true);
+    expect(widgetKindAllowed('vucolumn', txAlcGr)).toBe(false);
+  });
+
+  it('widgetKindAllowed: hbar/sparkline/digital are always allowed', () => {
+    for (const def of Object.values(METER_CATALOG)) {
+      expect(widgetKindAllowed('hbar', def)).toBe(true);
+      expect(widgetKindAllowed('sparkline', def)).toBe(true);
+      expect(widgetKindAllowed('digital', def)).toBe(true);
+    }
   });
 });

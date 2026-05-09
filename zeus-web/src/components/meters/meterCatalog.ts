@@ -63,8 +63,18 @@ export type MeterCategory =
  */
 export type MeterColorToken = 'amber-signal' | 'power' | 'tx' | 'accent';
 
-/** Coarse "what kind of widget should I build by default?" recommendation. */
-export type MeterDefaultKind = 'hbar' | 'dial' | 'digital' | 'sparkline' | 'vbar';
+/** Coarse "what kind of widget should I build by default?" recommendation.
+ *  The three immersive entries (`bigarc` / `vucolumn` / `pulldown`) match
+ *  the widget kinds exposed by the configurable Meters Panel — see
+ *  `metersConfig.MetersWidgetKind`. Legacy `dial` / `vbar` defaults are
+ *  gone; existing operator workspaces auto-migrate at parse time. */
+export type MeterDefaultKind =
+  | 'bigarc'
+  | 'vucolumn'
+  | 'pulldown'
+  | 'hbar'
+  | 'sparkline'
+  | 'digital';
 
 /** Three-level severity used to paint zone bands on meter widgets.
  *  Maps to: ok → --ok green, warn → --power amber, danger → --tx red. */
@@ -274,7 +284,8 @@ const rxAdc = (
   warnAt: -12,
   dangerAt: -3,
   colorToken: 'accent',
-  defaultKind: 'hbar',
+  // dBFS axis fits the immersive VuColumn LED column (its native scale).
+  defaultKind: 'vucolumn',
 });
 
 const rxAgcEnv = (
@@ -308,7 +319,9 @@ const txStageLevel = (
   warnAt: -6,
   dangerAt: 0,
   colorToken: 'accent',
-  defaultKind: 'hbar',
+  // The immersive Signal Chain row uses VuColumn for every level reading;
+  // configurable panel matches by default.
+  defaultKind: 'vucolumn',
 });
 
 const txStageGr = (
@@ -326,7 +339,9 @@ const txStageGr = (
   warnAt: 3,
   dangerAt: 10,
   colorToken: 'tx',
-  defaultKind: 'hbar',
+  // GR is right-anchored "leveler pulling the chain down" — the
+  // PullDownArc's native shape.
+  defaultKind: 'pulldown',
 });
 
 /** Single source of truth: every reading the Meters Panel can render. */
@@ -378,7 +393,8 @@ export const METER_CATALOG: Record<MeterReadingId, MeterReadingDef> = {
     warnAt: 4.5,
     dangerAt: 5,
     colorToken: 'power',
-    defaultKind: 'dial',
+    // BigArc "watts" mode is exactly this meter's job in the immersive panel.
+    defaultKind: 'bigarc',
   },
   [MeterReadingId.TxRefWatts]: {
     id: MeterReadingId.TxRefWatts,
@@ -404,7 +420,8 @@ export const METER_CATALOG: Record<MeterReadingId, MeterReadingDef> = {
     warnAt: 1.5,
     dangerAt: 2,
     colorToken: 'tx',
-    defaultKind: 'digital',
+    // BigArc "swr" mode — same gauge the immersive Final Output row shows.
+    defaultKind: 'bigarc',
   },
   // ---- TX stage levels ----
   // MIC: too quiet (mic broken / OS muted) is just as bad as clipping. Five

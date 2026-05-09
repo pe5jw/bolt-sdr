@@ -94,7 +94,8 @@ describe('MetersPanel', () => {
 
     expect(state.current.widgets.length).toBe(1);
     expect(state.current.widgets[0]?.reading).toBe(MeterReadingId.TxFwdWatts);
-    expect(state.current.widgets[0]?.kind).toBe('dial'); // catalog default
+    // Catalog default for TxFwdWatts post-rework: BigArc (immersive watts).
+    expect(state.current.widgets[0]?.kind).toBe('bigarc');
     unmount();
   });
 

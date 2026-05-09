@@ -4,22 +4,32 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
 //
 // Wrapper that dispatches a configured `MetersWidgetInstance` to the right
-// presentation primitive (HBar / VBar / Dial / Sparkline / Digital) and
-// owns the shared plumbing that doesn't belong inside the primitives:
+// presentation primitive and owns the shared plumbing that doesn't belong
+// inside the primitives:
 //   - reading the live value via `useMeterReading`
 //   - decaying peak-hold (recipe lifted from TxStageMeters.usePeakHold)
 //   - the row chrome (label + numeric readout + click-to-select handler)
+//
+// Renderable kinds:
+//   - bigarc / vucolumn / pulldown — the immersive primitives (same SVG
+//     components rendered inside the TX Stage Meters panel). Zone-
+//     transition ticks are derived from the reading's catalog zones and
+//     fed in via the `zoneTicks` prop landed in commit 1.
+//   - hbar / sparkline / digital — the legacy primitives. Kept because
+//     they fill roles the immersive trio doesn't (long-term log strip,
+//     RX dBm signal-strength bars, compact numeric readouts).
 
-import { useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { GripVertical, Settings, X } from 'lucide-react';
-import { METER_CATALOG, MeterReadingId } from './meterCatalog';
+import { METER_CATALOG, MeterReadingId, zoneTransitionTicks } from './meterCatalog';
 import type { MetersWidgetInstance } from './metersConfig';
 import { useMeterReading } from './useMeterReading';
 import { HBarMeter, _isSilent } from './widgets/HBarMeter';
-import { VBarMeter } from './widgets/VBarMeter';
-import { DialMeter } from './widgets/DialMeter';
 import { SparklineMeter } from './widgets/SparklineMeter';
 import { DigitalMeter } from './widgets/DigitalMeter';
+import { BigArc } from '../immersive-meters/BigArc';
+import { VuColumn } from '../immersive-meters/VuColumn';
+import { PullDownArc } from '../immersive-meters/PullDownArc';
 import { useRadioStore } from '../../state/radio-store';
 import { usePaStore } from '../../state/pa-store';
 
@@ -150,8 +160,12 @@ export function MeterWidget({
     transition: 'color var(--dur-fast), background var(--dur-fast)',
   };
 
-  // Body geometry varies per widget kind; centre the dial and sparkline.
-  let body: React.ReactNode;
+  // Body geometry varies per widget kind. Each immersive primitive sizes
+  // itself from its parent — wrap them in a centring flex container so the
+  // tile chrome's padding doesn't clip the gauge.
+  const min = effectiveSettings.min ?? def.defaultMin;
+  const max = effectiveSettings.max ?? def.defaultMax;
+  let body: ReactNode;
   switch (widget.kind) {
     case 'hbar':
       body = (
@@ -163,25 +177,127 @@ export function MeterWidget({
         />
       );
       break;
-    case 'vbar':
+    case 'bigarc': {
+      // Linear-axis gauge — zone ticks land on the same fraction the
+      // BigArc renders the live fill against, so they line up exactly.
+      const zoneTicks = zoneTransitionTicks(def, min, max);
+      const defsId = `mw-bigarc-${widget.uid}`;
+      let arc: ReactNode;
+      if (def.unit === 'W') {
+        arc = (
+          <BigArc
+            mode="watts"
+            watts={value}
+            maxWatts={max}
+            label={label}
+            defsId={defsId}
+            zoneTicks={zoneTicks}
+          />
+        );
+      } else if (def.unit === 'ratio') {
+        arc = (
+          <BigArc
+            mode="swr"
+            ratio={value}
+            label={label}
+            defsId={defsId}
+            zoneTicks={zoneTicks}
+          />
+        );
+      } else {
+        // dBFS / dB — fall through to BigArc's audio dBFS axis.
+        arc = (
+          <BigArc
+            mode="dbfs"
+            valueDb={value}
+            label={label}
+            defsId={defsId}
+            zoneTicks={zoneTicks}
+          />
+        );
+      }
       body = (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: 4 }}>
-          <VBarMeter
-            value={value}
-            peak={peak}
-            def={def}
-            settings={effectiveSettings}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'stretch',
+            flex: 1,
+            minHeight: 0,
+          }}
+        >
+          {arc}
+        </div>
+      );
+      break;
+    }
+    case 'vucolumn': {
+      // VuColumn's internal axis uses a log dB scale (`dbToFrac`) with
+      // fixed -60..+6 dBFS bounds. Our zone-tick helper returns linear
+      // axis fracs against the operator's configured (min, max). For a
+      // dBFS reading the two axes share the same anchor at 0 dBFS so the
+      // fracs read sensibly as boundary markers; we pass them through
+      // without remapping. Gating in `widgetKindAllowed` keeps non-dBFS
+      // readings out of this branch.
+      const zoneTicks = zoneTransitionTicks(def, min, max);
+      const parts = def.short.split(/\s+/);
+      const name = parts[0] ?? def.short;
+      const sub = parts.slice(1).join(' ');
+      body = (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'stretch',
+            flex: 1,
+            minHeight: 0,
+          }}
+        >
+          <VuColumn
+            valueDb={value}
+            name={name}
+            sub={sub}
+            defsId={`mw-vu-${widget.uid}`}
+            zoneTicks={zoneTicks}
           />
         </div>
       );
       break;
-    case 'dial':
+    }
+    case 'pulldown': {
+      // PullDownArc is right-anchored: its `pointAt(frac)` convention
+      // maps frac=0 → left (max GR) and frac=1 → right (0 dB). Our axis-
+      // space helper returns frac as (boundary - min) / (max - min) =
+      // boundary/maxGr (since min=0 for GR). Flip via `1 - frac` so each
+      // tick lands at the physical position the operator expects to see
+      // a boundary appear on a right-anchored fill.
+      const linearTicks = zoneTransitionTicks(def, min, max);
+      const pulldownTicks = linearTicks.map((t) => ({
+        frac: 1 - t.frac,
+        level: t.level,
+      }));
+      const grValue = isFinite(value) ? Math.max(0, value) : 0;
       body = (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: 4 }}>
-          <DialMeter value={value} def={def} settings={widget.settings} />
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'stretch',
+            flex: 1,
+            minHeight: 0,
+          }}
+        >
+          <PullDownArc
+            gainReductionDb={grValue}
+            label={label}
+            defsId={`mw-pulldown-${widget.uid}`}
+            maxGrDb={max > 0 ? max : 20}
+            zoneTicks={pulldownTicks}
+          />
         </div>
       );
       break;
+    }
     case 'sparkline':
       body = (
         <div style={{ display: 'flex', justifyContent: 'center' }}>

@@ -12,7 +12,7 @@
 // which fires `onModelChange` on the FlexWorkspace, which writes the layout
 // JSON back to `useLayoutStore` and triggers the debounced server PUT.
 
-import { MeterReadingId, METER_CATALOG } from './meterCatalog';
+import { MeterReadingId, METER_CATALOG, type MeterReadingDef } from './meterCatalog';
 
 /** Operator-overridable rendering knobs. All fields optional — defaults come
  *  from `METER_CATALOG[reading]` at render time. */
@@ -28,15 +28,93 @@ export interface WidgetSettings {
   label?: string;
 }
 
-export type MetersWidgetKind = 'hbar' | 'vbar' | 'dial' | 'sparkline' | 'digital';
+/** Widget renderer kinds available to the configurable Meters Panel. The
+ *  three "immersive" entries (`bigarc` / `vucolumn` / `pulldown`) render
+ *  the same SVG primitives used by the TX Stage Meters panel, so the look
+ *  matches across both meter surfaces. The legacy `dial` and `vbar` kinds
+ *  are gone from the union — operator workspaces still containing them
+ *  auto-migrate at parse time (see `parseMetersPanelConfig` below). */
+export type MetersWidgetKind =
+  | 'bigarc'
+  | 'vucolumn'
+  | 'pulldown'
+  | 'hbar'
+  | 'sparkline'
+  | 'digital';
 
 export const METERS_WIDGET_KINDS: ReadonlyArray<MetersWidgetKind> = [
+  'bigarc',
+  'vucolumn',
+  'pulldown',
   'hbar',
-  'vbar',
-  'dial',
   'sparkline',
   'digital',
 ];
+
+/** Kinds the parser recognises but no longer ships in the renderer
+ *  dispatch; their values are remapped to a current kind on read. Stays
+ *  separate from the live union so TS keeps callers honest about which
+ *  kinds the dispatch must handle. */
+const LEGACY_KINDS = new Set(['dial', 'vbar']);
+
+/** Whether a given widget kind is sensible for a given reading. The
+ *  Settings drawer uses this to grey-out incompatible kinds in the kind
+ *  picker (still rendered for discoverability — operators see what's
+ *  possible, just can't pick it). The parser uses the same predicate to
+ *  pick the migration fallback when a legacy `vbar` lands on a non-dBFS
+ *  reading or a `dial` lands on a dBm meter.
+ *
+ *  The rules are deliberately narrow: each immersive primitive has a
+ *  fixed axis convention (BigArc = W/ratio/dBFS; VuColumn = dBFS LED
+ *  column; PullDownArc = right-anchored GR), and forcing the wrong unit
+ *  through them produces a meter that reads consistently wrong. The
+ *  three legacy kinds (`hbar` / `sparkline` / `digital`) accept any
+ *  unit and so are always allowed. */
+export function widgetKindAllowed(
+  kind: MetersWidgetKind,
+  def: MeterReadingDef,
+): boolean {
+  switch (kind) {
+    case 'bigarc':
+      // Linear-axis gauge: watts ramp, SWR ratio, or 0..max dBFS modulator.
+      // dBm signal-strength has too wide a span to fit BigArc's fixed dBFS
+      // axis, and signed dB swings (e.g. RxAgcGain ±40..60) don't fit
+      // either of BigArc's three modes.
+      return def.unit === 'W' || def.unit === 'ratio' || def.unit === 'dBFS';
+    case 'vucolumn':
+      // Vertical LED column with a dBFS log axis. Restricted to dBFS so
+      // the side-tick numerals (0/-3/-6/-10/-20/-40/-60 dB) stay
+      // meaningful and the dashed 0 dBFS reference line lands correctly.
+      return def.unit === 'dBFS';
+    case 'pulldown':
+      // Right-anchored "leveler is pulling the chain down" arc. Only
+      // makes semantic sense for the GR (gain-reduction) readings.
+      return def.category === 'tx-protection';
+    case 'hbar':
+    case 'sparkline':
+    case 'digital':
+      return true;
+  }
+}
+
+/** Translate a legacy widget kind to the current equivalent. Falls back to
+ *  `'hbar'` when the immersive replacement isn't compatible with the
+ *  reading (e.g. a legacy `vbar` on a dBm signal-strength meter would not
+ *  fit `vucolumn`'s dBFS axis — it becomes `hbar` instead). Returns null
+ *  for an unknown legacy kind so the parser can drop the widget. */
+function migrateLegacyKind(
+  legacy: string,
+  def: MeterReadingDef,
+): MetersWidgetKind | null {
+  switch (legacy) {
+    case 'dial':
+      return widgetKindAllowed('bigarc', def) ? 'bigarc' : 'hbar';
+    case 'vbar':
+      return widgetKindAllowed('vucolumn', def) ? 'vucolumn' : 'hbar';
+    default:
+      return null;
+  }
+}
 
 /** Grid-cell placement within the canvas's 12-column grid (react-grid-layout
  *  coordinates). x/y are integer column/row; w/h are integer column/row spans.
@@ -67,11 +145,15 @@ export interface MetersWidgetInstance {
 /** 12-column grid, fixed row height, used by react-grid-layout. */
 export const METERS_GRID_COLS = 12;
 export const METERS_GRID_ROW_HEIGHT_PX = 40;
-/** Per-kind default span when a widget is first added (auto-layout). */
+/** Per-kind default span when a widget is first added (auto-layout).
+ *  Footprints chosen to give each immersive primitive room for its
+ *  intrinsic aspect: BigArc (~1.55:1, semicircle); VuColumn (tall LED
+ *  column); PullDownArc (~1.30:1 horizontal arc). */
 export const DEFAULT_WIDGET_SPAN: Record<MetersWidgetKind, { w: number; h: number }> = {
+  bigarc: { w: 4, h: 4 },
+  vucolumn: { w: 2, h: 5 },
+  pulldown: { w: 4, h: 4 },
   hbar: { w: 6, h: 2 },
-  vbar: { w: 2, h: 4 },
-  dial: { w: 4, h: 4 },
   sparkline: { w: 8, h: 3 },
   digital: { w: 3, h: 2 },
 };
@@ -105,20 +187,30 @@ export function parseMetersPanelConfig(raw: unknown): MetersPanelConfig {
   // future schema removed an ID). A Meters tile that lost a widget is far
   // less surprising than one that crashes the whole panel.
   const validWidgets: MetersWidgetInstance[] = [];
+  const currentKindSet = new Set<string>(METERS_WIDGET_KINDS);
   for (const w of widgets) {
     if (!w || typeof w !== 'object') continue;
-    const widget = w as Partial<MetersWidgetInstance>;
+    const widget = w as Partial<MetersWidgetInstance> & { kind?: unknown };
     if (typeof widget.uid !== 'string') continue;
     if (typeof widget.reading !== 'string') continue;
     if (!(widget.reading in METER_CATALOG)) continue;
-    if (
-      widget.kind !== 'hbar' &&
-      widget.kind !== 'vbar' &&
-      widget.kind !== 'dial' &&
-      widget.kind !== 'sparkline' &&
-      widget.kind !== 'digital'
-    )
-      continue;
+    const rawKind = widget.kind;
+    if (typeof rawKind !== 'string') continue;
+    const isCurrent = currentKindSet.has(rawKind);
+    const isLegacy = LEGACY_KINDS.has(rawKind);
+    if (!isCurrent && !isLegacy) continue;
+    const def = METER_CATALOG[widget.reading as MeterReadingId];
+    let kind: MetersWidgetKind;
+    if (isCurrent) {
+      kind = rawKind as MetersWidgetKind;
+    } else {
+      // Legacy kind — migrate forward; drop widget if the legacy kind has
+      // no current equivalent (defensive: should never happen given the
+      // LEGACY_KINDS set, but keeps the parser total).
+      const migrated = migrateLegacyKind(rawKind, def);
+      if (!migrated) continue;
+      kind = migrated;
+    }
     const layoutRaw = (widget as { layout?: unknown }).layout;
     let layout: WidgetLayout | undefined;
     if (layoutRaw && typeof layoutRaw === 'object') {
@@ -135,7 +227,7 @@ export function parseMetersPanelConfig(raw: unknown): MetersPanelConfig {
     validWidgets.push({
       uid: widget.uid,
       reading: widget.reading as MeterReadingId,
-      kind: widget.kind,
+      kind,
       settings:
         widget.settings && typeof widget.settings === 'object'
           ? { ...widget.settings }

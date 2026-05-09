@@ -53,6 +53,7 @@ import {
   METERS_WIDGET_KINDS,
   parseMetersPanelConfig,
   placeWidgetInGrid,
+  widgetKindAllowed,
   type MetersWidgetInstance,
   type MetersWidgetKind,
   type MetersPanelConfig,
@@ -806,31 +807,48 @@ function SettingsDrawer({
 
           <SettingsField label="Kind">
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-              {METERS_WIDGET_KINDS.map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  aria-pressed={widget.kind === k}
-                  onClick={() => onChange({ kind: k as MetersWidgetKind })}
-                  style={{
-                    padding: '2px 8px',
-                    fontSize: 10,
-                    textTransform: 'uppercase',
-                    borderRadius: 'var(--r-xs)',
-                    color:
-                      widget.kind === k
+              {METERS_WIDGET_KINDS.map((k) => {
+                // Render incompatible kinds greyed-out rather than hiding
+                // them — operators see what kinds exist and learn which
+                // primitives suit which readings, which they wouldn't
+                // discover from a filtered list.
+                const allowed = widgetKindAllowed(k, def);
+                const active = widget.kind === k;
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    aria-pressed={active}
+                    aria-disabled={!allowed}
+                    disabled={!allowed}
+                    onClick={() =>
+                      allowed && onChange({ kind: k as MetersWidgetKind })
+                    }
+                    title={
+                      allowed
+                        ? `Render as ${k}`
+                        : `${k} is not compatible with ${def.label}`
+                    }
+                    style={{
+                      padding: '2px 8px',
+                      fontSize: 10,
+                      textTransform: 'uppercase',
+                      borderRadius: 'var(--r-xs)',
+                      color: active
                         ? 'var(--btn-active-text)'
                         : 'var(--fg-1)',
-                    background:
-                      widget.kind === k
+                      background: active
                         ? 'linear-gradient(180deg, var(--btn-active-top), var(--btn-active-bot))'
                         : 'linear-gradient(180deg, var(--btn-top), var(--btn-bot))',
-                    border: '1px solid var(--btn-edge)',
-                  }}
-                >
-                  {k}
-                </button>
-              ))}
+                      border: '1px solid var(--btn-edge)',
+                      opacity: allowed ? 1 : 0.4,
+                      cursor: allowed ? 'pointer' : 'not-allowed',
+                    }}
+                  >
+                    {k}
+                  </button>
+                );
+              })}
             </div>
           </SettingsField>
 

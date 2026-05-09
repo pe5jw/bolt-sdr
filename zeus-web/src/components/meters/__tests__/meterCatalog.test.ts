@@ -57,12 +57,12 @@ describe('meterCatalog', () => {
     expect(METER_CATALOG[MeterReadingId.TxFwdWatts].colorToken).toBe('power');
   });
 
-  it('TxSwr defaults to a digital widget kind', () => {
-    expect(METER_CATALOG[MeterReadingId.TxSwr].defaultKind).toBe('digital');
+  it('TxSwr defaults to a bigarc widget kind (immersive SWR gauge)', () => {
+    expect(METER_CATALOG[MeterReadingId.TxSwr].defaultKind).toBe('bigarc');
   });
 
-  it('TxFwdWatts defaults to a dial widget kind', () => {
-    expect(METER_CATALOG[MeterReadingId.TxFwdWatts].defaultKind).toBe('dial');
+  it('TxFwdWatts defaults to a bigarc widget kind (immersive watts gauge)', () => {
+    expect(METER_CATALOG[MeterReadingId.TxFwdWatts].defaultKind).toBe('bigarc');
   });
 
   it('library filter "rx" includes signal/adc/agc and excludes tx', () => {
