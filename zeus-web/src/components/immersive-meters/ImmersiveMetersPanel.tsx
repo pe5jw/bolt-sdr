@@ -286,8 +286,9 @@ export function ImmersiveMetersPanel() {
   const paMaxWatts = usePaStore((s) => s.settings.global.paMaxPowerWatts);
   const boardMaxWatts = useRadioStore((s) => s.capabilities.maxPowerWatts);
   const ratedW = paMaxWatts > 0 ? paMaxWatts : boardMaxWatts > 0 ? boardMaxWatts : 100;
-  const { pep, avg: fwdAvg } = useFwdWattsStats(transmitting);
+  const { pep } = useFwdWattsStats(transmitting);
   const fwdNow = useTxStore((s) => s.fwdWatts);
+  const swr = useTxStore((s) => s.swr);
 
   // Footer "Peak" reads the per-keydown PEP. Reads 0 (rendered "—") when
   // not transmitting since the per-keydown ref resets on key-up.
@@ -337,19 +338,18 @@ export function ImmersiveMetersPanel() {
         <div style={arcsStyle}>
           <BigArc
             mode="watts"
-            watts={transmitting ? Math.max(fwdNow, pep) : 0}
+            watts={transmitting ? fwdNow : 0}
             maxWatts={ratedW}
-            label="Final Output · PEP"
-            units="Watts · PEAK"
-            defsId="immersive-arc-fwdpep"
+            label="Forward Power"
+            units="Watts"
+            defsId="immersive-arc-fwd"
           />
           <BigArc
-            mode="watts"
-            watts={transmitting ? fwdAvg : 0}
-            maxWatts={ratedW}
-            label="Final Output · AVG"
-            units="Watts · MEAN"
-            defsId="immersive-arc-fwdavg"
+            mode="swr"
+            ratio={transmitting && isFinite(swr) ? swr : 1.0}
+            label="SWR"
+            units="Ratio · :1"
+            defsId="immersive-arc-swr"
           />
         </div>
       </Section>

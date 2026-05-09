@@ -51,7 +51,13 @@ interface WattsProps extends CommonProps {
   maxWatts: number;
 }
 
-export type BigArcProps = DbfsProps | WattsProps;
+interface SwrProps extends CommonProps {
+  mode: 'swr';
+  /** Live SWR ratio. ≤ 1.0 / non-finite is treated as silent. */
+  ratio: number;
+}
+
+export type BigArcProps = DbfsProps | WattsProps | SwrProps;
 
 const CX = 120;
 const CY = 124;
@@ -111,6 +117,23 @@ function wattsTicks(maxWatts: number): ReadonlyArray<AxisTick> {
   });
 }
 
+// SWR axis: linear 1.0..3.0+, ticks at 1.0/1.5/2.0/2.5/3.0+, with the 2.0
+// tick highlighted red (matches the backend SWR alert trip threshold).
+const SWR_MIN = 1.0;
+const SWR_MAX = 3.0;
+const SWR_TICKS: ReadonlyArray<AxisTick> = [
+  { frac: 0.0, label: '1.0' },
+  { frac: 0.25, label: '1.5' },
+  { frac: 0.5, label: '2.0', highlight: true },
+  { frac: 0.75, label: '2.5' },
+  { frac: 1.0, label: '3+' },
+];
+
+function swrToFrac(ratio: number): number {
+  if (!isFinite(ratio) || ratio < SWR_MIN) return 0;
+  return Math.max(0, Math.min(1, (ratio - SWR_MIN) / (SWR_MAX - SWR_MIN)));
+}
+
 interface ResolvedAxis {
   /** Live value as 0..1 along the arc. */
   liveFrac: number;
@@ -143,6 +166,23 @@ function resolveAxis(props: BigArcProps): ResolvedAxis {
       readoutUnit: 'dBFS',
       rawValue: props.valueDb,
       toFrac: dbToFrac,
+    };
+  }
+  if (props.mode === 'swr') {
+    const { ratio } = props;
+    const finite = isFinite(ratio) && ratio >= SWR_MIN;
+    const liveFrac = finite ? swrToFrac(ratio) : 0;
+    return {
+      liveFrac,
+      silent: !finite,
+      // "over" tints the readout red past 2.0:1 — matches the backend
+      // SWR alert trip threshold and the highlighted 2.0 tick.
+      over: finite && ratio >= 2.0,
+      ticks: SWR_TICKS,
+      readoutText: finite ? ratio.toFixed(2) : '—',
+      readoutUnit: ':1',
+      rawValue: finite ? ratio : Number.NEGATIVE_INFINITY,
+      toFrac: swrToFrac,
     };
   }
   const { watts, maxWatts } = props;
