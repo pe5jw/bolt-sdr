@@ -9,7 +9,7 @@
 //
 // Layout:
 //   ┌─────────────────────────────────────────────────────┐
-//   │ ⚙ ◀  Title (dbl-click to rename)               ▶   │  ← 24 px header
+//   │ ⚙ ▣  Title ✎ (click pencil/title to rename)    ▶   │  ← 24 px header
 //   ├─────────────────────────────────────────────────────┤
 //   │ ┌──────────┐                       ┌──────────┐    │
 //   │ │ LIBRARY  │       widget canvas   │ SETTINGS │    │
@@ -36,6 +36,7 @@ import {
   ChevronDown,
   ChevronUp,
   FolderPlus,
+  Pencil,
   Plus,
   X,
   Trash2,
@@ -118,6 +119,111 @@ export function MetersPanel({
 }
 
 function noop() {}
+
+/* ─── Rename surface ───────────────────────────────────────────────── */
+
+interface RenameSurfaceProps {
+  /** The text shown when not in edit mode. */
+  title: string;
+  /** Optional trailing suffix (e.g. widget count). Greyed out and
+   *  unclickable for edit gestures (rename only mutates `title`). */
+  suffix?: string;
+  /** Open the editor. The caller controls the actual edit-mode toggle so
+   *  the same surface drives both the panel-title and group-title flows. */
+  onBeginEdit: () => void;
+  /** Mousedown handler that prevents the surrounding RGL drag from
+   *  picking up clicks on the surface. */
+  stopDrag: (e: React.MouseEvent) => void;
+  /** Optional additional class for inheriting workspace-tile-title chrome. */
+  className?: string;
+  /** Test hook — `[data-testid]` on the inner pencil button. */
+  testId: string;
+  /** Style applied to the surface container; the title cluster pulls
+   *  font / colour from here. */
+  extraStyle?: CSSProperties;
+}
+
+/** Single-click rename affordance. Renders `[title] [pencil]`; either
+ *  element opens the editor on single-click. Double-click on the title
+ *  text continues to work for back-compat (regression-guard for muscle
+ *  memory built before this commit). The pencil sits at half opacity
+ *  until hover so it stays a discoverability hint, not visual noise. */
+function RenameSurface({
+  title,
+  suffix,
+  onBeginEdit,
+  stopDrag,
+  className,
+  testId,
+  extraStyle,
+}: RenameSurfaceProps) {
+  const [hovered, setHovered] = useState(false);
+  const containerStyle: CSSProperties = {
+    ...(extraStyle ?? {}),
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    cursor: 'text',
+  };
+  return (
+    <span
+      className={className}
+      style={containerStyle}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onMouseDown={stopDrag}
+    >
+      <span
+        // Single-click on the title text opens the editor; double-click
+        // is preserved as a back-compat path so operators with the older
+        // gesture in muscle memory still work.
+        onClick={(e) => {
+          e.stopPropagation();
+          onBeginEdit();
+        }}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          onBeginEdit();
+        }}
+        title="Click to rename"
+      >
+        {title}
+      </span>
+      {suffix ? (
+        <span style={{ color: 'var(--fg-3)', cursor: 'default' }}>
+          {suffix}
+        </span>
+      ) : null}
+      <button
+        type="button"
+        aria-label={`Rename "${title}"`}
+        title="Click to rename"
+        onClick={(e) => {
+          e.stopPropagation();
+          onBeginEdit();
+        }}
+        onMouseDown={stopDrag}
+        data-testid={testId}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 14,
+          height: 14,
+          background: 'transparent',
+          border: 'none',
+          color: 'var(--fg-2)',
+          opacity: hovered ? 1 : 0.5,
+          cursor: 'pointer',
+          padding: 0,
+          transition: 'opacity var(--dur-fast)',
+        }}
+      >
+        <Pencil size={10} />
+      </button>
+    </span>
+  );
+}
 
 interface MetersPanelInnerProps {
   config: MetersPanelConfig;
@@ -452,17 +558,21 @@ export function MetersPanelInner({
             }}
           />
         ) : (
-          <span
-            className="workspace-tile-title"
-            style={{ cursor: 'text' }}
-            onDoubleClick={() => {
+          // Combined title + pencil cluster. Single-click anywhere in
+          // here enters edit mode (the pencil is a discoverability cue).
+          // Double-click is preserved as a regression-guard back-compat
+          // gesture so muscle memory from earlier builds still works.
+          <RenameSurface
+            title={title}
+            onBeginEdit={() => {
               setTitleDraft(title);
               setEditingTitle(true);
             }}
-            title="Double-click to rename"
-          >
-            {title}
-          </span>
+            stopDrag={stopDrag}
+            className="workspace-tile-title"
+            testId="meters-rename-panel"
+            extraStyle={titleStyle}
+          />
         )}
         {settingsOpen ? (
           <button
@@ -944,19 +1054,17 @@ function GroupHeader({
           }}
         />
       ) : (
-        <span
-          style={titleStyle}
-          onDoubleClick={() => {
+        <RenameSurface
+          title={group.title}
+          suffix={`(${widgetCount})`}
+          onBeginEdit={() => {
             setDraft(group.title);
             setEditing(true);
           }}
-          title="Double-click to rename"
-        >
-          {group.title}
-          <span style={{ marginLeft: 6, color: 'var(--fg-3)' }}>
-            ({widgetCount})
-          </span>
-        </span>
+          stopDrag={(e) => e.stopPropagation()}
+          testId="meters-rename-group"
+          extraStyle={titleStyle}
+        />
       )}
       <button
         type="button"

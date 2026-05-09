@@ -303,4 +303,67 @@ describe('MetersPanel', () => {
     expect(moved?.layout).toBeUndefined();
     unmount();
   });
+
+  // ─── single-click rename pencil (commit 4) ────────────────────────
+
+  it('single-click on the panel-title pencil opens the title editor', () => {
+    const { container, unmount } = setup();
+    // No <input> in the header before the click.
+    expect(container.querySelector('.workspace-tile-header input')).toBeNull();
+    const pencil = container.querySelector(
+      '[data-testid="meters-rename-panel"]',
+    ) as HTMLButtonElement | null;
+    expect(pencil).not.toBeNull();
+    act(() => {
+      pencil?.click();
+    });
+    // Edit input now mounted with the current title pre-populated.
+    const input = container.querySelector(
+      '.workspace-tile-header input',
+    ) as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+    expect(input?.value).toBe('Meters');
+    unmount();
+  });
+
+  it('single-click on a group-title pencil opens that group\'s title editor', () => {
+    const { container, unmount } = setup();
+    const groupSection = container.querySelector(
+      '[data-testid="meters-group-section"]',
+    );
+    expect(groupSection).not.toBeNull();
+    expect(groupSection?.querySelector('input')).toBeNull();
+    const pencil = container.querySelector(
+      '[data-testid="meters-rename-group"]',
+    ) as HTMLButtonElement | null;
+    expect(pencil).not.toBeNull();
+    act(() => {
+      pencil?.click();
+    });
+    const input = groupSection?.querySelector('input') as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+    expect(input?.value).toBe('Meters'); // synthetic default group title
+    unmount();
+  });
+
+  it('preserves double-click rename on the panel title (back-compat)', () => {
+    const { container, unmount } = setup();
+    // Double-click the title text inside the rename surface — the older
+    // gesture must continue to enter edit mode so muscle memory keeps
+    // working.
+    const titleSpan = container.querySelector(
+      '.workspace-tile-header .workspace-tile-title > span',
+    ) as HTMLElement | null;
+    expect(titleSpan).not.toBeNull();
+    act(() => {
+      const evt = new MouseEvent('dblclick', { bubbles: true, cancelable: true });
+      titleSpan?.dispatchEvent(evt);
+    });
+    const input = container.querySelector(
+      '.workspace-tile-header input',
+    ) as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+    unmount();
+  });
+
 });
