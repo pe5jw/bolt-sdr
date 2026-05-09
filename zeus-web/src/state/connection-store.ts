@@ -127,7 +127,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   txFilterLowHz: 150,
   txFilterHighHz: 2850,
   sampleRate: 192_000,
-  agcTopDb: 80,
+  agcTopDb: 45,
   autoAgcEnabled: false,
   agcOffsetDb: 0,
   rxAfGainDb: 0,

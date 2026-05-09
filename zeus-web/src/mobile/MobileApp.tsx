@@ -9,7 +9,7 @@
 // type, and controls are the existing Zeus surface (tokens.css + the
 // component library) per the maintainer's brief.
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { setMode, type RxMode } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useQrzStore } from '../state/qrz-store';
@@ -24,6 +24,12 @@ import { TunButton } from '../components/TunButton';
 import { PsToggleButton } from '../components/PsToggleButton';
 import { AudioToggle } from '../components/AudioToggle';
 import { BandButtons } from '../components/BandButtons';
+import { TuningStepWidget } from '../components/TuningStepWidget';
+import { AgcSlider } from '../components/AgcSlider';
+import { DriveSlider } from '../components/DriveSlider';
+import { MicGainSlider } from '../components/MicGainSlider';
+import { TunePowerSlider } from '../components/TunePowerSlider';
+import { useVfoLockStore } from '../state/vfo-lock-store';
 import { ConnectPanel } from '../components/ConnectPanel';
 import { LeafletWorldMap } from '../components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from '../components/design/LeafletMapErrorBoundary';
@@ -58,6 +64,8 @@ export function useIsMobileViewport(): boolean {
   return mobile;
 }
 
+type MobileTab = 'radio' | 'settings';
+
 export function MobileApp() {
   const status = useConnectionStore((s) => s.status);
   const endpoint = useConnectionStore((s) => s.endpoint);
@@ -71,6 +79,8 @@ export function MobileApp() {
   const radioLabel = endpoint || lastEndpoint || '—';
   const bandLabel = bandOf(vfoHz);
   const freqMHz = (vfoHz / 1_000_000).toFixed(3);
+
+  const [activeTab, setActiveTab] = useState<MobileTab>('radio');
 
   // Radio selector overlay. Open from the topbar; auto-close once a connect
   // *transition* completes (status flips Disconnected → Connected) so the
@@ -122,27 +132,46 @@ export function MobileApp() {
             <circle cx="12" cy="12" r="7" fill="none" stroke="var(--accent)" strokeWidth="1" opacity="0.5" />
             <circle cx="12" cy="12" r="11" fill="none" stroke="var(--accent)" strokeWidth="1" opacity="0.25" />
           </svg>
-          <span className="m-brand-text">OpenHpsdr Zeus</span>
+          <span className="m-brand-text">
+            <span className="m-brand-pre">OpenHpsdr</span>
+            <span className="m-brand-name">Zeus</span>
+          </span>
         </div>
+        <nav className="m-tabs" role="tablist" aria-label="Mobile sections">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'radio'}
+            className={`m-tab ${activeTab === 'radio' ? 'on' : ''}`}
+            onClick={() => setActiveTab('radio')}
+          >
+            Radio
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'settings'}
+            className={`m-tab ${activeTab === 'settings' ? 'on' : ''}`}
+            onClick={() => setActiveTab('settings')}
+          >
+            Settings
+          </button>
+        </nav>
         <button
           type="button"
           className="m-conn-btn"
           data-connected={connected}
           onClick={() => setSelectorOpen(true)}
           title={connected ? `Connected to ${radioLabel} — tap to manage` : 'Tap to discover radios'}
+          aria-label={connected ? `Connected to ${radioLabel} — tap to manage` : 'Tap to discover radios'}
         >
-          {connected ? (
-            <>
-              <span className="m-conn-led" aria-hidden />
-              <span className="m-conn-v">{radioLabel}</span>
-              <span className="m-conn-action">Disconnect</span>
-            </>
-          ) : (
-            <>
-              <span className="m-conn-led m-conn-led--off" aria-hidden />
-              <span className="m-conn-action m-conn-action--primary">Connect</span>
-            </>
-          )}
+          <span
+            className={`m-conn-led${connected ? '' : ' m-conn-led--off'}`}
+            aria-hidden
+          />
+          <span className={`m-conn-action${connected ? '' : ' m-conn-action--primary'}`}>
+            {connected ? 'Disconnect' : 'Connect'}
+          </span>
         </button>
       </header>
 
@@ -178,77 +207,111 @@ export function MobileApp() {
       )}
 
       <main className="m-stack">
-        <Section label="Frequency" meta="VFO A">
-          <div className="m-vfo-wrap">
-            <VfoDisplay />
-          </div>
-        </Section>
+        {activeTab === 'radio' ? (
+          <>
+            <Section label="Frequency" meta="VFO A">
+              <div className="m-vfo-grid">
+                <div className="m-vfo-wrap">
+                  <VfoDisplay />
+                </div>
+                <div className="m-vfo-side">
+                  <div className="m-vfo-side-cell"><AudioToggle /></div>
+                  <div className="m-vfo-side-cell"><VfoLockButton /></div>
+                </div>
+              </div>
+            </Section>
 
-        <SMeterSection />
+            <SMeterSection />
 
 
-        <Section label="Panadapter" meta={`${freqMHz} MHz · ${bandLabel}`}>
-          <div className={`m-pan-stack${imageMode ? ' image-mode' : ''}`}>
-            {imageMode && (
-              <div
-                className={`image-layer ${backgroundImageFit}`}
-                style={{ backgroundImage: `url(${backgroundImage})` }}
-              />
-            )}
-            {terminatorActive && effectiveHome && (
-              // The "map-layer visible" pair pulls in the desktop sizing
-              // chain in layout.css:451-470 — without it the inner Leaflet
-              // .leaflet-container collapses to 0×0 and tiles never paint.
-              // .m-map-layer still applies for any mobile-only tweaks.
-              <div className="m-map-layer map-layer visible">
-                <LeafletMapErrorBoundary fallback={null} onError={() => undefined}>
-                  <LeafletWorldMap
-                    home={effectiveHome}
-                    target={null}
-                    active
-                    interactive={false}
+            <Section label="Panadapter" meta={`${freqMHz} MHz · ${bandLabel}`}>
+              <div className={`m-pan-stack${imageMode ? ' image-mode' : ''}`}>
+                {imageMode && (
+                  <div
+                    className={`image-layer ${backgroundImageFit}`}
+                    style={{ backgroundImage: `url(${backgroundImage})` }}
                   />
-                </LeafletMapErrorBoundary>
+                )}
+                {terminatorActive && effectiveHome && (
+                  // The "map-layer visible" pair pulls in the desktop sizing
+                  // chain in layout.css:451-470 — without it the inner Leaflet
+                  // .leaflet-container collapses to 0×0 and tiles never paint.
+                  // .m-map-layer still applies for any mobile-only tweaks.
+                  <div className="m-map-layer map-layer visible">
+                    <LeafletMapErrorBoundary fallback={null} onError={() => undefined}>
+                      <LeafletWorldMap
+                        home={effectiveHome}
+                        target={null}
+                        active
+                        interactive={false}
+                      />
+                    </LeafletMapErrorBoundary>
+                  </div>
+                )}
+                <div className="m-pan-spectrum">
+                  <div className="m-pan">
+                    <Panadapter />
+                  </div>
+                  <div className="m-wf">
+                    {/* Opaque under beam-map: dark Esri tiles + near-black
+                        noise floor blended and the waterfall read as solid
+                        black. Transparent under imageMode so the user's
+                        picture shows through both halves (matches desktop). */}
+                    <Waterfall transparent={imageMode} />
+                  </div>
+                </div>
               </div>
-            )}
-            <div className="m-pan-spectrum">
-              <div className="m-pan">
-                <Panadapter />
-              </div>
-              <div className="m-wf">
-                {/* Opaque under beam-map: dark Esri tiles + near-black noise
-                    floor blended together and the waterfall read as solid
-                    black. Transparent under imageMode so the user's picture
-                    shows through both halves (matches desktop). */}
-                <Waterfall transparent={imageMode} />
+            </Section>
+
+            <div className="m-mox-block">
+              <MicGate />
+              <div className="m-ptt-row">
+                <MobilePttButton />
+                <div className="m-ptt-tun"><TunButton /></div>
               </div>
             </div>
-          </div>
-        </Section>
 
-        <div className="m-mox-block">
-          <MicGate />
-          <MobilePttButton />
-          <div className="m-mox-row">
-            <TunButton />
-            <PsToggleButton />
-            <AudioToggle />
-          </div>
-        </div>
-
-        <Section label="Mode · Band">
-          <div className="m-modeband">
-            <Segmented
-              options={MODES}
-              value={mode}
-              disabled={!connected}
-              onChange={(m) => setMode(m).catch(() => undefined)}
-            />
-            <div className="m-band-row">
-              <BandButtons />
+            <Section label="Mode · Band">
+              <div className="m-controls">
+                <div className="m-control-row m-control-row--2">
+                  <label className="m-control">
+                    <span className="m-control-lbl">Mode</span>
+                    <select
+                      className="m-select"
+                      value={mode}
+                      disabled={!connected}
+                      onChange={(e) => setMode(e.target.value as RxMode).catch(() => undefined)}
+                    >
+                      {MODES.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="m-control">
+                    <span className="m-control-lbl">Band</span>
+                    <BandButtons />
+                  </label>
+                </div>
+              </div>
+            </Section>
+          </>
+        ) : (
+          <Section label="Controls">
+            <div className="m-controls">
+              <div className="m-control-row m-control-row--1">
+                <label className="m-control">
+                  <span className="m-control-lbl">Step</span>
+                  <TuningStepWidget />
+                </label>
+              </div>
+              <div className="m-slider-row"><AgcSlider /></div>
+              <div className="m-slider-row m-slider-row--lbl"><DriveSlider /></div>
+              <div className="m-slider-row m-slider-row--lbl"><TunePowerSlider /></div>
+              <div className="m-slider-row m-slider-row--lbl"><MicGainSlider /></div>
+              <div className="m-ps-row"><PsToggleButton /></div>
             </div>
-          </div>
-        </Section>
+          </Section>
+        )}
       </main>
     </div>
   );
@@ -348,6 +411,51 @@ function SMeterSection() {
   );
 }
 
+// Padlock toggle that pins the VFO. The lock state lives in vfo-lock-store
+// and is consulted by `api/client.setVfo` so finger-drags on the panadapter,
+// band-button taps, scrolls, and digit edits all no-op while engaged. Glyphs
+// are inline SVG so the button looks the same across iOS / Android / desktop
+// without depending on emoji font availability.
+function VfoLockButton() {
+  const locked = useVfoLockStore((s) => s.locked);
+  const toggle = useVfoLockStore((s) => s.toggle);
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-pressed={locked}
+      aria-label={locked ? 'VFO locked — tap to unlock' : 'VFO unlocked — tap to lock'}
+      title={locked ? 'VFO locked — tap to unlock' : 'Lock VFO'}
+      className={`btn m-lock-btn ${locked ? 'on' : ''}`}
+    >
+      {locked ? (
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden>
+          <rect x="5" y="11" width="14" height="9" rx="1.5" fill="currentColor" />
+          <path
+            d="M8 11V8a4 4 0 0 1 8 0v3"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden>
+          <rect x="5" y="11" width="14" height="9" rx="1.5" fill="currentColor" />
+          <path
+            d="M8 11V8a4 4 0 0 1 7.5-2"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      )}
+      <span className="m-lock-lbl">{locked ? 'LOCKED' : 'LOCK'}</span>
+    </button>
+  );
+}
+
 function Section({
   label,
   meta,
@@ -379,50 +487,3 @@ function Section({
   );
 }
 
-function Segmented<T extends string>({
-  options,
-  value,
-  disabled,
-  onChange,
-}: {
-  options: readonly T[];
-  value: T;
-  disabled?: boolean;
-  onChange: (v: T) => void;
-}) {
-  // Optimistic local highlight so the segment lights immediately even before
-  // the StateDto echo lands; the prop value reasserts itself once the server
-  // confirms (or contradicts) the choice.
-  const [pending, setPending] = useState<T | null>(null);
-  const active = pending ?? value;
-
-  const handle = useCallback(
-    (v: T) => {
-      if (disabled) return;
-      setPending(v);
-      Promise.resolve(onChange(v)).finally(() => setPending(null));
-    },
-    [disabled, onChange],
-  );
-
-  return (
-    <div className="m-segmented" role="radiogroup">
-      {options.map((o) => {
-        const on = o === active;
-        return (
-          <button
-            key={o}
-            type="button"
-            role="radio"
-            aria-checked={on}
-            disabled={disabled}
-            onClick={() => handle(o)}
-            className={`m-seg-btn ${on ? 'on' : ''}`}
-          >
-            {o}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
