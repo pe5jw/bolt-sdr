@@ -177,6 +177,71 @@ export function zoneColorTokens(
   }
 }
 
+/** Immersive-palette CSS color for a zone tick rendered on a BigArc /
+ *  VuColumn / PullDownArc widget. The immersive primitives use the
+ *  `--immersive-*` token family rather than the global `--ok / --power /
+ *  --tx` palette so the gauges keep their dark, high-contrast aesthetic. */
+export function immersiveZoneTickColor(level: MeterZoneLevel): string {
+  switch (level) {
+    case 'ok':
+      return 'var(--immersive-good)';
+    case 'warn':
+      return 'var(--immersive-warn)';
+    case 'danger':
+      return 'var(--immersive-tx)';
+  }
+}
+
+/** A coloured tick rendered at a zone-level transition on a meter widget.
+ *  `frac` is the position along the widget's value axis as a 0..1 fraction
+ *  (linear from min..max — widgets with non-linear internal scales such as
+ *  the VuColumn's log dBFS axis must remap before rendering). `level` is
+ *  the colour of the zone ENTERED at this boundary, so the tick reads as
+ *  "you cross into <colour> at this point on the axis". */
+export interface ZoneTick {
+  frac: number;
+  level: MeterZoneLevel;
+}
+
+/** Emit a tick at every zone-level boundary in the widget's resolved zone
+ *  list. Used to mark "the sweet spot lives between this green tick and
+ *  this amber tick" without painting solid colour bands across the gauge
+ *  (which read as a rainbow at idle).
+ *
+ *  Edge rule: skip ticks at `frac < 0.02` to keep them off the gauge
+ *  anchor — a tick at 0 % of the axis is visually attached to the bezel
+ *  and reads as a stray pixel. Ticks at `frac = 1.0` are kept: that is
+ *  the "you're at the rated rail" cue (e.g. the red watts ceiling tick
+ *  on `TxFwdWatts` whose `dangerAt === defaultMax`).
+ *
+ *  Adjacent zones with the same level produce no tick (we mark colour
+ *  changes, not arbitrary zone boundaries). */
+export function zoneTransitionTicks(
+  def: MeterReadingDef,
+  min: number,
+  max: number,
+): ReadonlyArray<ZoneTick> {
+  if (max <= min) return [];
+  const zones = resolveZones(def, min, max);
+  if (zones.length < 2) return [];
+  const span = max - min;
+  const out: ZoneTick[] = [];
+  for (let i = 1; i < zones.length; i++) {
+    const prev = zones[i - 1];
+    const curr = zones[i];
+    if (!prev || !curr) continue;
+    if (prev.level === curr.level) continue;
+    // The boundary is shared between consecutive zones: prev.to === curr.from.
+    // Use curr.from as the canonical boundary value.
+    const boundary = curr.from;
+    if (boundary < min || boundary > max) continue;
+    const frac = (boundary - min) / span;
+    if (frac < 0.02) continue;
+    out.push({ frac, level: curr.level });
+  }
+  return out;
+}
+
 // Convenience factories — keeps the table below readable.
 const rxSignal = (
   id: MeterReadingId,

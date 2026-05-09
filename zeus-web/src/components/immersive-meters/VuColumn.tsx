@@ -12,6 +12,7 @@
 import type { CSSProperties } from 'react';
 import { dbToFrac, fmtDb, isSilent } from './dbScale';
 import { usePeakHoldFrac } from './usePeakHold';
+import { immersiveZoneTickColor, type ZoneTick } from '../meters/meterCatalog';
 
 interface VuColumnProps {
   /** Live value in dBFS. */
@@ -22,6 +23,14 @@ interface VuColumnProps {
   sub: string;
   /** Stable id prefix for SVG `<defs>` — required to avoid collisions. */
   defsId: string;
+  /** Optional green/amber/red tick marks at zone-level boundaries.
+   *  Rendered as short horizontal lines on the right-hand side of the
+   *  column (x=48..54). `frac` is the linear position 0..1 along the
+   *  column (BOT → TOP); callers using a non-linear axis (e.g. dBFS via
+   *  `dbToFrac`) must remap before passing in. The immersive TX Stage
+   *  Meters panel passes none — its colouring already comes from the
+   *  fill gradient + dashed 0 dBFS reference line. */
+  zoneTicks?: ReadonlyArray<ZoneTick>;
 }
 
 const TOP_Y = 12;
@@ -32,7 +41,7 @@ const COL_W = 16;
 const SIDE_TICKS = [0, -3, -6, -10, -20, -40, -60] as const;
 const SEG_COUNT = 17;
 
-export function VuColumn({ valueDb, name, sub, defsId }: VuColumnProps) {
+export function VuColumn({ valueDb, name, sub, defsId, zoneTicks }: VuColumnProps) {
   const silent = isSilent(valueDb);
   const liveFrac = silent ? 0 : dbToFrac(valueDb);
   const peakFrac = usePeakHoldFrac(valueDb, dbToFrac);
@@ -225,6 +234,29 @@ export function VuColumn({ valueDb, name, sub, defsId }: VuColumnProps) {
           strokeDasharray="2 2"
           opacity={0.55}
         />
+
+        {/* zone-transition ticks — short coloured horizontal lines on the
+            right of the column, away from the side-tick numeric labels.
+            Always visible at idle so the operator sees the sweet-spot
+            window even with no signal. */}
+        {zoneTicks && zoneTicks.length > 0 && (
+          <g strokeLinecap="round">
+            {zoneTicks.map((zt, i) => {
+              const y = BOT_Y - COL_HEIGHT * zt.frac;
+              return (
+                <line
+                  key={`zt-${i}`}
+                  x1={48}
+                  y1={y.toFixed(1)}
+                  x2={54}
+                  y2={y.toFixed(1)}
+                  stroke={immersiveZoneTickColor(zt.level)}
+                  strokeWidth={1.6}
+                />
+              );
+            })}
+          </g>
+        )}
       </svg>
       <div style={numStyle}>
         {silent ? '−∞' : fmtDb(valueDb)}

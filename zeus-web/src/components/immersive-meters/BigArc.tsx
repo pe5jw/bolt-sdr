@@ -26,6 +26,7 @@
 import type { CSSProperties } from 'react';
 import { dbToFrac, fmtDb, isSilent } from './dbScale';
 import { usePeakHoldFrac } from './usePeakHold';
+import { immersiveZoneTickColor, type ZoneTick } from '../meters/meterCatalog';
 
 interface CommonProps {
   /** Section/label text — top-left chip. */
@@ -35,6 +36,13 @@ interface CommonProps {
   /** Stable id prefix for SVG `<defs>` so multiple arcs on a page don't
    *  collide on `id="arcFill"`. Required. */
   defsId: string;
+  /** Optional green/amber/red tick marks at zone-level boundaries. Always
+   *  visible at idle; render INSIDE the rim (R-12..R-6) so the live fill
+   *  stroke at radius R never occludes them. The configurable Meters Panel
+   *  passes ticks derived from each reading's `zones`/`warnAt`/`dangerAt`;
+   *  the immersive TX Stage Meters panel passes none (it relies on the
+   *  rim gradient + readout colour for the "you're past the rail" cue). */
+  zoneTicks?: ReadonlyArray<ZoneTick>;
 }
 
 interface DbfsProps extends CommonProps {
@@ -350,6 +358,30 @@ export function BigArc(props: BigArcProps) {
           strokeLinecap="round"
           strokeDasharray={fillDash}
         />
+
+        {/* zone-transition ticks — coloured perpendicular lines at the
+            inner-rim band (R-12..R-6). Rendered before axis ticks so the
+            white axis ticks paint over them in the rare case where a zone
+            boundary coincides with an axis tick. */}
+        {props.zoneTicks && props.zoneTicks.length > 0 && (
+          <g strokeLinecap="round">
+            {props.zoneTicks.map((zt, i) => {
+              const inner = pointAt(zt.frac, R - 12);
+              const outer = pointAt(zt.frac, R - 6);
+              return (
+                <line
+                  key={`zt-${i}`}
+                  x1={inner.x.toFixed(1)}
+                  y1={inner.y.toFixed(1)}
+                  x2={outer.x.toFixed(1)}
+                  y2={outer.y.toFixed(1)}
+                  stroke={immersiveZoneTickColor(zt.level)}
+                  strokeWidth={2.2}
+                />
+              );
+            })}
+          </g>
+        )}
 
         {/* ticks */}
         <g stroke="rgba(255,255,255,0.35)" strokeWidth={1}>

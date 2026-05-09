@@ -15,6 +15,7 @@
 //   Compressing — > 10 dB
 
 import type { CSSProperties } from 'react';
+import { immersiveZoneTickColor, type ZoneTick } from '../meters/meterCatalog';
 
 // Arc geometry — kept at the design's R=118 so the gauge feels big and
 // dramatic, with the viewBox extended above y=0 to fit the entire half-
@@ -50,6 +51,15 @@ interface PullDownArcProps {
   /** Axis floor — defaults to 20 dB to match the design. Caller can crank
    *  this up for ALC-heavy chains where 20 dB is the realistic ceiling. */
   maxGrDb?: number;
+  /** Optional green/amber/red tick marks at zone-level boundaries.
+   *  Rendered as short coloured perpendicular lines on the inner rim
+   *  (R-12..R-6), mirroring the BigArc convention. `frac` is the linear
+   *  position 0..1 along the arc using the same convention as the
+   *  PullDownArc's existing axis ticks (frac=0 → left/max-GR end, frac=1
+   *  → right/0-dB anchor) — callers must remap if their domain axis is
+   *  right-anchored (e.g. GR fraction directly). The immersive TX Stage
+   *  Meters panel passes none. */
+  zoneTicks?: ReadonlyArray<ZoneTick>;
 }
 
 function pointAt(fraction: number, radius: number): { x: number; y: number } {
@@ -77,6 +87,7 @@ export function PullDownArc({
   label,
   defsId,
   maxGrDb = 20,
+  zoneTicks,
 }: PullDownArcProps) {
   const grFrac = fracFromGr(gainReductionDb, maxGrDb);
   const fillLen = ARC_LEN * grFrac;
@@ -266,6 +277,30 @@ export function PullDownArc({
           strokeWidth={11}
           strokeLinecap="round"
         />
+
+        {/* zone-transition ticks — coloured perpendicular lines at the
+            inner-rim band (R-12..R-6), mirroring the BigArc convention.
+            Rendered before axis ticks so the white axis ticks paint over
+            them at any coincident position. */}
+        {zoneTicks && zoneTicks.length > 0 && (
+          <g strokeLinecap="round">
+            {zoneTicks.map((zt, i) => {
+              const inner = pointAt(zt.frac, R - 12);
+              const outer = pointAt(zt.frac, R - 6);
+              return (
+                <line
+                  key={`zt-${i}`}
+                  x1={inner.x.toFixed(1)}
+                  y1={inner.y.toFixed(1)}
+                  x2={outer.x.toFixed(1)}
+                  y2={outer.y.toFixed(1)}
+                  stroke={immersiveZoneTickColor(zt.level)}
+                  strokeWidth={2.2}
+                />
+              );
+            })}
+          </g>
+        )}
 
         {/* ticks + labels */}
         <g stroke="rgba(255,255,255,0.30)" strokeWidth={1}>
