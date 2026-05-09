@@ -82,6 +82,18 @@ export function MobileApp() {
 
   const [activeTab, setActiveTab] = useState<MobileTab>('radio');
 
+  // Force the waterfall into AUTO dB-range whenever the mobile shell mounts.
+  // FIXED mode (the desktop default) reads grainy on a phone where there's
+  // no easy way to drag-shift the range; mobile has the AUTO/FIXED toggle
+  // hidden in mobile.css. We pin AUTO every mount rather than at first-run
+  // only so a value flipped to FIXED on desktop and persisted to
+  // localStorage doesn't leak into a phone session.
+  useEffect(() => {
+    if (!useDisplaySettingsStore.getState().autoRange) {
+      useDisplaySettingsStore.getState().setAutoRange(true);
+    }
+  }, []);
+
   // Radio selector overlay. Open from the topbar; auto-close once a connect
   // *transition* completes (status flips Disconnected → Connected) so the
   // operator lands back on the radio screen without an extra dismiss tap.

@@ -379,11 +379,15 @@
 .m-pan-stack.image-mode .waterfall-canvas { background: transparent !important; }
 
 /* The Panadapter widget brings its own dB scale axis pinned to the left
-   which we keep visible. The Waterfall widget brings two pieces of chrome
+   which we keep visible. The Waterfall widget brings three pieces of chrome
    that don't belong on mobile:
      • γ contrast slider — hidden, takes the same left rail as the dB scale.
-     • Colormap radios + dB:FIXED chip — hidden per maintainer brief, mobile
-       has no room for palette selection in this iteration. */
+     • Colormap radio group — hidden, mobile has no room for palette
+       selection in this iteration.
+     • dB AUTO/FIXED toggle — hidden. Mobile is force-pinned to AUTO at
+       MobileApp mount (see MobileApp.tsx) so the colors track the live
+       p5/p95 of the signal — FIXED mode reads grainy on a phone where
+       the operator has no easy way to drag-shift the range. */
 .m-app [aria-label="Waterfall contrast (γ)"] { display: none !important; }
 .m-app [role="radiogroup"][aria-label="Colormap"],
 .m-app [role="radiogroup"][aria-label="Colormap"] + button { display: none !important; }
@@ -548,7 +552,14 @@
 /* Slider rows (AGC, Drive, Tune, Mic Gain). Each component renders itself as
    a `.knob-group` flex row; on mobile we span the full row width and stretch
    the range input. The `.label-xs` glyph (DRV / TUN / MIC) gets a touch-sized
-   pill so it reads as a row label rather than getting squeezed off-screen. */
+   pill so it reads as a row label rather than getting squeezed off-screen.
+
+   Native `<input type="range">` is restyled into a chunkier track + thumb so
+   it reads more like a hardware slider and the thumb is comfortable to drag
+   on a phone. We keep the native input (rather than pulling in a JS slider
+   lib) so the underlying components — Drive/Tune/Mic/AGC — don't need any
+   markup changes; the per-vendor `::-webkit-slider-thumb` / `::-moz-range-*`
+   pseudos do all the work. */
 .m-slider-row { display: block; }
 .m-slider-row .knob-group {
   display: flex;
@@ -556,8 +567,68 @@
   gap: 8px;
   width: 100%;
   min-width: 0 !important;
+  min-height: 44px;
 }
-.m-slider-row .knob-group input[type='range'] { flex: 1; min-width: 0; }
+.m-slider-row .knob-group input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  height: 28px;                  /* expand touch zone, not visible track */
+  padding: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+.m-slider-row .knob-group input[type='range']:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.m-slider-row .knob-group input[type='range']:focus { outline: none; }
+.m-slider-row .knob-group input[type='range']:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--accent-soft, rgba(74, 158, 255, 0.35));
+}
+/* WebKit/Blink — Safari (iOS), Chrome, Edge */
+.m-slider-row .knob-group input[type='range']::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
+  border: 1px solid var(--btn-edge);
+}
+.m-slider-row .knob-group input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  margin-top: -9px;              /* (track 6 + 2px borders − thumb 22) / 2 */
+  border-radius: 50%;
+  background: linear-gradient(180deg, var(--accent) 0%, #2d6fbf 100%);
+  border: 2px solid var(--bg-0);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--accent-soft, rgba(74, 158, 255, 0.35));
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.m-slider-row .knob-group input[type='range']:active::-webkit-slider-thumb { transform: scale(1.08); }
+/* Firefox — track and progress fill (filled portion) and thumb. */
+.m-slider-row .knob-group input[type='range']::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
+  border: 1px solid var(--btn-edge);
+}
+.m-slider-row .knob-group input[type='range']::-moz-range-progress {
+  height: 6px;
+  border-radius: 999px 0 0 999px;
+  background: var(--accent);
+}
+.m-slider-row .knob-group input[type='range']::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, var(--accent) 0%, #2d6fbf 100%);
+  border: 2px solid var(--bg-0);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+}
 .m-slider-row .knob-group .btn { min-height: 36px; }
 .m-slider-row--lbl .knob-group .label-xs {
   display: inline-block;
