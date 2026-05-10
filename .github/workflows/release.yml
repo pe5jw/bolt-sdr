@@ -106,9 +106,200 @@ jobs:
           echo "is-release=${IS_RELEASE}" >> "$GITHUB_OUTPUT"
           echo "is-draft=${IS_DRAFT}" >> "$GITHUB_OUTPUT"
 
+  # ---------- Native WDSP rebuild (always-fresh natives in releases) -------
+  #
+  # Releases used to ship whatever native binaries were committed at the tag
+  # SHA — leaving a stale-natives race if a native/** source change reached
+  # main without a matching binary commit. These jobs rebuild WDSP for every
+  # shipped platform during the release run and hand the fresh binaries to
+  # build-release via artifacts. The committed Zeus.Dsp/runtimes/ blobs are
+  # ignored for releases (they remain useful only for local `dotnet run`).
+  #
+  # Build steps mirror build-native-libs.yml — see the comment-blocks there
+  # for the per-arch CRT linkage / vcpkg triplet / WDSP_WITH_NR4 reasoning.
+
+  build-native-windows:
+    name: Build native WDSP (windows-${{ matrix.arch }})
+    needs: determine-version
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install FFTW via vcpkg
+        run: |
+          $triplet = if ("${{ matrix.arch }}" -eq "arm64") {
+            "arm64-windows-static"
+          } else {
+            "x64-windows-static-md"
+          }
+          vcpkg install fftw3:$triplet
+          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+
+      - name: Configure CMake
+        run: |
+          $archFlag = if ("${{ matrix.arch }}" -eq "arm64") { "ARM64" } else { "x64" }
+          $triplet = if ("${{ matrix.arch }}" -eq "arm64") {
+            "arm64-windows-static"
+          } else {
+            "x64-windows-static-md"
+          }
+          $cmakeArgs = @(
+            '-S', 'native/wdsp',
+            '-B', 'native/build',
+            '-G', 'Visual Studio 17 2022',
+            '-A', $archFlag,
+            '-T', 'ClangCL',
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake",
+            "-DVCPKG_TARGET_TRIPLET=$triplet",
+            '-DWDSP_WITH_NR3=OFF',
+            '-DWDSP_WITH_NR4=ON'
+          )
+          if ("${{ matrix.arch }}" -eq "arm64") {
+            $cmakeArgs += '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded'
+          }
+          Write-Host "cmake args:"; $cmakeArgs | ForEach-Object { Write-Host "  $_" }
+          & cmake @cmakeArgs
+
+      - name: Build
+        run: cmake --build native/build --config Release --parallel
+
+      - name: Verify SBNR exports
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstall = & $vswhere -latest -property installationPath
+          $dumpbin = Get-ChildItem -Path "$vsInstall\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" |
+                     Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dumpbin) { throw "dumpbin.exe not found under $vsInstall\VC\Tools\MSVC" }
+          $exports = & $dumpbin /EXPORTS native/build/Release/wdsp.dll | Select-String "SetRXASBNR"
+          $count = ($exports | Measure-Object).Count
+          Write-Host "Found $count SetRXASBNR* exports"
+          if ($count -ne 8) { throw "Expected 8 SetRXASBNR* exports, got $count. NR4 did not link correctly." }
+
+      - name: Stage DLL
+        run: |
+          $rid = "win-${{ matrix.arch }}"
+          $destDir = "staged/$rid"
+          New-Item -ItemType Directory -Force -Path $destDir
+          Copy-Item "native/build/Release/wdsp.dll" "$destDir/wdsp.dll"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wdsp-native-win-${{ matrix.arch }}
+          path: staged/win-${{ matrix.arch }}/
+
+  build-native-linux:
+    name: Build native WDSP (linux-x64)
+    needs: determine-version
+    # Pinned to ubuntu-22.04 (glibc 2.35) to match release.yml's linux build
+    # host — see the comment in build-release matrix's linux entry.
+    # linux-arm64 is intentionally not built here: no release artifact ships
+    # for that RID. Use build-native-libs.yml (workflow_dispatch) to refresh
+    # the committed linux-arm64 binary for local dev when needed.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfftw3-dev cmake build-essential pkg-config
+
+      - name: Configure CMake
+        run: |
+          cmake -S native/wdsp -B native/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWDSP_WITH_NR3=OFF \
+            -DWDSP_WITH_NR4=ON
+
+      - name: Build
+        run: cmake --build native/build --config Release --parallel
+
+      - name: Verify SBNR exports
+        run: |
+          count=$(nm -D native/build/libwdsp.so | grep -c "SetRXASBNR" || true)
+          echo "Found $count SetRXASBNR* exports"
+          if [ "$count" -ne 8 ]; then
+            echo "ERROR: Expected 8 SetRXASBNR* exports, got $count. NR4 did not link correctly."
+            exit 1
+          fi
+
+      - name: Stage library + bundled FFTW
+        run: |
+          set -eux
+          destDir="staged/linux-x64"
+          mkdir -p "$destDir"
+          cp native/build/libwdsp.so "$destDir/libwdsp.so"
+          for soname in libfftw3.so.3 libfftw3f.so.3; do
+            src=$(readlink -f "/usr/lib/x86_64-linux-gnu/$soname")
+            cp "$src" "$destDir/$soname"
+          done
+          ls -la "$destDir/"
+          ldd "$destDir/libwdsp.so"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wdsp-native-linux-x64
+          path: staged/linux-x64/
+
+  build-native-macos:
+    name: Build native WDSP (osx-arm64)
+    needs: determine-version
+    runs-on: macos-latest  # Apple Silicon — matches release.yml macos-arm64 host
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          # fftw bottle ships both fftw3 (double, for WDSP) and fftw3f (single,
+          # for libspecbleach / NR4). cmake is preinstalled on macos-latest but
+          # `brew install cmake` is a no-op safety net.
+          brew install fftw cmake
+
+      - name: Configure CMake
+        run: |
+          cmake -S native/wdsp -B native/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWDSP_WITH_NR3=OFF \
+            -DWDSP_WITH_NR4=ON
+
+      - name: Build
+        run: cmake --build native/build --config Release --parallel
+
+      - name: Verify SBNR exports
+        run: |
+          # macOS nm prefixes C symbols with an underscore — match _SetRXASBNR.
+          count=$(nm -gU native/build/libwdsp.dylib | grep -c "_SetRXASBNR" || true)
+          echo "Found $count _SetRXASBNR* exports"
+          if [ "$count" -ne 8 ]; then
+            echo "ERROR: Expected 8 _SetRXASBNR* exports, got $count. NR4 did not link correctly."
+            exit 1
+          fi
+
+      - name: Stage dylib
+        run: |
+          set -eux
+          destDir="staged/osx-arm64"
+          mkdir -p "$destDir"
+          cp native/build/libwdsp.dylib "$destDir/libwdsp.dylib"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wdsp-native-osx-arm64
+          path: staged/osx-arm64/
+
   build-release:
     name: Build (${{ matrix.config.os }})
-    needs: determine-version
+    needs:
+      - determine-version
+      - build-native-windows
+      - build-native-linux
+      - build-native-macos
     runs-on: ${{ matrix.config.runner }}
     strategy:
       fail-fast: false
@@ -157,6 +348,37 @@ jobs:
           VERSION="${{ needs.determine-version.outputs.version }}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Building version: ${VERSION}"
+
+      # Map release matrix RID → native artifact built by the build-native-*
+      # jobs above. Keep this in sync if either set changes.
+      - name: Map RID to native artifact name
+        id: native-artifact
+        shell: bash
+        run: |
+          case "${{ matrix.config.rid }}" in
+            win-x64)    echo "name=wdsp-native-win-x64"    >> "$GITHUB_OUTPUT" ;;
+            win-arm64)  echo "name=wdsp-native-win-arm64"  >> "$GITHUB_OUTPUT" ;;
+            linux-x64)  echo "name=wdsp-native-linux-x64"  >> "$GITHUB_OUTPUT" ;;
+            osx-arm64)  echo "name=wdsp-native-osx-arm64"  >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::No native artifact mapped for RID ${{ matrix.config.rid }}"; exit 1 ;;
+          esac
+
+      # Download natives built fresh in this same workflow run and stage them
+      # into Zeus.Dsp/runtimes/<rid>/native/, overwriting whatever was
+      # committed at the tag SHA. This is what makes releases immune to
+      # stale-committed-natives drift — the binaries that ship are always
+      # built from the exact source the tag points at.
+      - name: Download fresh native WDSP for ${{ matrix.config.rid }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.native-artifact.outputs.name }}
+          path: Zeus.Dsp/runtimes/${{ matrix.config.rid }}/native/
+
+      - name: Verify staged natives
+        shell: bash
+        run: |
+          echo "Native files now staged for ${{ matrix.config.rid }}:"
+          ls -la "Zeus.Dsp/runtimes/${{ matrix.config.rid }}/native/"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
