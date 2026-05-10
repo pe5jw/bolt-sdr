@@ -55,6 +55,10 @@ export function MeterGroupPanel({
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(config.title);
   const [hoveredUid, setHoveredUid] = useState<string | null>(null);
+  // Whole-panel hover tracks whether to fade the toolbar buttons in.
+  // Mirrors the immersive Section card aesthetic: clean header at rest,
+  // affordances reveal on intent.
+  const [panelHover, setPanelHover] = useState(false);
 
   const commit = useCallback(
     (next: MeterGroupConfig) => {
@@ -104,13 +108,17 @@ export function MeterGroupPanel({
   const stopDrag = (e: React.MouseEvent) => e.stopPropagation();
 
   // ── header styles ─────────────────────────────────────────────────
+  // Title styled to mirror the immersive Section.sec-hd label: small caps,
+  // wide letter-spacing, fg-2 muted colour. The LED dot before the title
+  // sits at fg-3 grey to match the idle "neutral" Section header look.
   const titleStyle: CSSProperties = {
     flex: 1,
-    fontSize: 11,
+    fontSize: 9.5,
     fontFamily: 'var(--font-sans)',
     textTransform: 'uppercase',
-    letterSpacing: '0.08em',
-    color: 'var(--fg-1)',
+    letterSpacing: '0.20em',
+    color: 'var(--fg-2)',
+    fontWeight: 700,
     cursor: 'text',
     userSelect: 'none',
     minWidth: 0,
@@ -118,27 +126,31 @@ export function MeterGroupPanel({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   };
+  // Toolbar buttons at low alpha so they don't fight the title at rest;
+  // panel-hover bumps them to full so the operator can grab them when
+  // they actually want to interact.
   const headerBtnStyle: CSSProperties = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 22,
-    height: 22,
-    borderRadius: 'var(--r-xs)',
-    color: 'var(--fg-1)',
-    background: 'transparent',
-    border: 'none',
-    cursor: 'pointer',
-    transition: 'background var(--dur-fast)',
-  };
-  const pencilStyle: CSSProperties = {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     width: 18,
     height: 18,
+    borderRadius: 'var(--r-xs)',
+    color: 'var(--fg-2)',
+    background: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    opacity: panelHover ? 0.85 : 0.25,
+    transition: 'opacity var(--dur-fast), color var(--dur-fast)',
+  };
+  const pencilStyle: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 16,
+    height: 16,
     color: 'var(--fg-3)',
-    opacity: 0.5,
+    opacity: panelHover ? 0.7 : 0,
     cursor: 'pointer',
     transition: 'opacity var(--dur-fast)',
   };
@@ -163,6 +175,8 @@ export function MeterGroupPanel({
   return (
     <div
       data-testid="meter-group-panel"
+      onMouseEnter={() => setPanelHover(true)}
+      onMouseLeave={() => setPanelHover(false)}
       style={{
         position: 'relative',
         display: 'flex',
@@ -182,20 +196,30 @@ export function MeterGroupPanel({
       }}
     >
       {/* ── header — workspace-tile-header so RGL drag works ─────────
-          Styled to mirror the immersive Section header (small dot LED +
-          uppercase title with letter-spacing) so a Meter Group reads
-          like the Final Output / Signal Chain / Gain Reduction sections
-          inside the TX Stage Meters panel. */}
-      <div className="workspace-tile-header">
+          Inline styles override the default `.workspace-tile-header` CSS
+          from all-panels.css (which paints the heavy gradient bar +
+          border-bottom that made the meter group look "tiled"). The
+          immersive Section.sec-hd is borderless and blends into the
+          body — that's what we mirror here. */}
+      <div
+        className="workspace-tile-header"
+        style={{
+          background: 'transparent',
+          borderBottom: 'none',
+          padding: '4px 14px',
+          height: 30,
+          gap: 9,
+        }}
+      >
         <span
           className="workspace-tile-drag-handle"
           aria-hidden="true"
           title="Drag to reposition"
+          style={{ opacity: panelHover ? 0.6 : 0.2, transition: 'opacity var(--dur-fast)' }}
         >
           <GripVertical size={12} />
         </span>
-        {/* LED dot — neutral grey at idle, matches the Final Output /
-            Signal Chain dot styling from ImmersiveMetersPanel.Section. */}
+        {/* LED dot — same idle-grey recipe as ImmersiveMetersPanel.Section. */}
         <span
           aria-hidden="true"
           style={{
@@ -203,7 +227,7 @@ export function MeterGroupPanel({
             height: 5,
             borderRadius: '50%',
             background: 'var(--fg-3)',
-            marginRight: 4,
+            flexShrink: 0,
           }}
         />
 
