@@ -1,16 +1,15 @@
 name: Build Native WDSP Libraries
 
 on:
+  # Manual trigger only. The previous push-based auto-rebuild opened a PR
+  # (auto/native-libs-update) on every native/** change, which produced
+  # noisy follow-up PRs that were almost always functionally no-ops because
+  # the maintainer had already rebuilt and committed the binaries that
+  # mattered inside the source-change PR itself. Run this workflow by hand
+  # ("Run workflow" in the Actions UI) when a native/ source change actually
+  # needs cross-platform binaries rebuilt — then download the per-platform
+  # artifacts from the run summary and commit them.
   workflow_dispatch:
-  push:
-    # Branch scope (not tags): tag pushes don't honor `paths` filters reliably
-    # — a brand-new tag has no "before" SHA, so every path looks like it just
-    # appeared and the filter matches everything. Restricting to branches
-    # keeps tag pushes (e.g. v0.1.0) out of this workflow entirely.
-    branches: [main, develop]
-    paths:
-      - 'native/**'
-      - '.github/workflows/build-native-libs.yml'
 
 jobs:
   build-windows:
@@ -284,80 +283,3 @@ jobs:
           # Directory upload (not a single file) so the bundled FFTW .so.3
           # files in the x64 build land in the artifact alongside libwdsp.so.
           path: Zeus.Dsp/runtimes/linux-${{ matrix.arch }}/native/
-
-  commit-libraries:
-    name: Commit Native Libraries
-    runs-on: ubuntu-latest
-    needs: [build-windows, build-linux]
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Stage all libraries
-        run: |
-          # Each artifact's root contains the runtime files staged by its
-          # build job — a single .dll/.so for windows / linux-arm64, plus the
-          # bundled libfftw3.so.3 / libfftw3f.so.3 for linux-x64. Copy whole
-          # contents into the matching runtimes/<rid>/native/ destination
-          # rather than picking out a single file by name.
-          set -eux
-          for artifact_dir in artifacts/wdsp-*; do
-            artifact_name=$(basename "$artifact_dir")  # e.g. wdsp-windows-x64
-            case "$artifact_name" in
-              wdsp-windows-x64)   destDir=Zeus.Dsp/runtimes/win-x64/native ;;
-              wdsp-windows-arm64) destDir=Zeus.Dsp/runtimes/win-arm64/native ;;
-              wdsp-linux-x64)     destDir=Zeus.Dsp/runtimes/linux-x64/native ;;
-              wdsp-linux-arm64)   destDir=Zeus.Dsp/runtimes/linux-arm64/native ;;
-              *)
-                echo "Unrecognised artifact $artifact_name — refusing to guess destination" >&2
-                exit 1
-                ;;
-            esac
-            mkdir -p "$destDir"
-            cp -p "$artifact_dir"/* "$destDir/"
-          done
-
-      - name: Open or update auto-PR with rebuilt libraries
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Branch protection on main blocks direct pushes by github-actions[bot]
-          # (GH006 "Changes must be made through a pull request"). Push to a
-          # stable bot branch and open / refresh a PR there instead — re-runs
-          # force-push and update the existing PR rather than spawning new ones.
-          set -eux
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Zeus.Dsp/runtimes/
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-            exit 0
-          fi
-
-          branch="auto/native-libs-update"
-          git checkout -b "$branch"
-          git commit -m "build: update native WDSP libraries for Windows and Linux"
-          # Force-push so re-runs replace the bot branch in place.
-          git push --force origin "$branch"
-
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          if [ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')" ]; then
-            echo "PR already open for $branch — branch updated by force-push"
-          else
-            body=$(printf '%s\n\n%s\n\n%s\n' \
-              "Automated rebuild of native WDSP libraries from [build-native-libs run]($run_url)." \
-              "Merge after sanity-checking the staged binaries (size, ldd, dumpbin /EXPORTS, etc)." \
-              "The bot will force-push this branch on every native-libs rebuild — re-runs reuse this PR rather than opening a new one.")
-            gh pr create \
-              --base main --head "$branch" \
-              --title "build: update native WDSP libraries (auto)" \
-              --body "$body"
-          fi

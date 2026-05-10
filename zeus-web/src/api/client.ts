@@ -43,6 +43,7 @@
 // License for details.
 
 import { warnOnce } from '../util/logger';
+import { useVfoLockStore as vfoLockStore } from '../state/vfo-lock-store';
 
 export type ConnectionStatus =
   | 'Disconnected'
@@ -618,6 +619,15 @@ export function setVfo(
   hz: number,
   signal?: AbortSignal,
 ): Promise<RadioStateDto> {
+  // VFO-lock gate. The mobile shell exposes a padlock toggle that suppresses
+  // tuning so a finger drag / band tap / scroll can't pull the radio off
+  // frequency. We re-fetch the canonical state instead of returning a stub
+  // so callers' `.then(applyState)` rolls back any optimistic local vfoHz
+  // they wrote before calling us. `vfo-lock-store` has no api/client deps,
+  // so this static import doesn't create a cycle.
+  if (vfoLockStore.getState().locked) {
+    return fetchState(signal);
+  }
   return jsonFetch(
     '/api/vfo',
     {

@@ -100,6 +100,46 @@ public sealed class DspSettingsStore : IDisposable
     // (pre-CFC) load with all CfcEnabled/CfcBandN* fields at their nullable
     // / zero defaults, which means CfcEnabled is null on a legacy upsert; we
     // return null in that case to preserve the default-OFF promise.
+    // AGC top (max gain). Persisted as a nullable scalar on the existing
+    // DspSettingsEntry — null means "first run, RadioService applies its
+    // baseline default" so the operator's saved AGC-T survives restarts but
+    // a fresh install picks up the maintainer-chosen baseline (currently
+    // 45 dB — see RadioService.cs).
+    public double? GetAgcTopDb(string profileId = "default")
+    {
+        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        return e?.AgcTopDb;
+    }
+
+    public void SetAgcTopDb(double db, string profileId = "default")
+    {
+        var existing = _entries.FindOne(x => x.ProfileId == profileId);
+        if (existing is null)
+        {
+            // Seed a fresh entry with NR defaults so the row is valid for
+            // future NR/CFC writes — same pattern the CFC Upsert uses.
+            var nrSeed = new NrConfig();
+            _entries.Insert(new DspSettingsEntry
+            {
+                ProfileId = profileId,
+                NrMode = nrSeed.NrMode,
+                AnfEnabled = nrSeed.AnfEnabled,
+                SnbEnabled = nrSeed.SnbEnabled,
+                NbpNotchesEnabled = nrSeed.NbpNotchesEnabled,
+                NbMode = nrSeed.NbMode,
+                NbThreshold = nrSeed.NbThreshold,
+                AgcTopDb = db,
+                UpdatedUtc = DateTime.UtcNow,
+            });
+        }
+        else
+        {
+            existing.AgcTopDb = db;
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Update(existing);
+        }
+    }
+
     public CfcConfig? GetCfc(string profileId = "default")
     {
         var e = _entries.FindOne(x => x.ProfileId == profileId);
@@ -312,5 +352,8 @@ public sealed class DspSettingsEntry
     public double CfcBand8Freq { get; set; }  public double CfcBand8Comp { get; set; }  public double CfcBand8Post { get; set; }
     public double CfcBand9Freq { get; set; }  public double CfcBand9Comp { get; set; }  public double CfcBand9Post { get; set; }
     public double CfcBand10Freq { get; set; } public double CfcBand10Comp { get; set; } public double CfcBand10Post { get; set; }
+    // AGC top (max gain) in dB. Null on legacy rows (pre-AGC-persist) so
+    // RadioService can fall back to the baseline default for first-run.
+    public double? AgcTopDb { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

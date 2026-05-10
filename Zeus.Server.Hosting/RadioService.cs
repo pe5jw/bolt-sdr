@@ -204,7 +204,12 @@ public sealed class RadioService : IDisposable
             FilterLowHz: 100,
             FilterHighHz: 2850,
             SampleRate: 192_000,
-            AgcTopDb: 80.0,
+            // Maintainer-chosen baseline of 45 dB (Thetis "AGC slow / fast"
+            // sits in this range and reads less aggressive than the WDSP
+            // 80 dB internal default on quiet bands). Operator overrides
+            // persist via DspSettingsStore.SetAgcTopDb so the value sticks
+            // across restarts; null on first run gets the 45 dB seed.
+            AgcTopDb: _dspSettingsStore.GetAgcTopDb() ?? 45.0,
             AttenDb: 0,
             Nr: persistedNr,
             ZoomLevel: 1,
@@ -951,6 +956,10 @@ public sealed class RadioService : IDisposable
     {
         double clamped = Math.Clamp(topDb, -20.0, 120.0);
         Mutate(s => s with { AgcTopDb = clamped });
+        // Persist so the operator's choice survives a server restart. Only
+        // the user-baseline (AgcTopDb) is persisted — the auto-AGC offset
+        // is recomputed live and isn't worth saving.
+        _dspSettingsStore.SetAgcTopDb(clamped);
         return Snapshot();
     }
 
