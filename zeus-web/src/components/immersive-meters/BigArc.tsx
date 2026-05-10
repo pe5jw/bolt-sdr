@@ -228,13 +228,34 @@ export function BigArc(props: BigArcProps) {
     position: 'relative',
     aspectRatio: '1.55 / 1',
     borderRadius: 7,
+    // Warm-cream "lamp glow" rising from the bottom of the gauge face —
+    // simulates an incandescent bulb illuminating the instrument from
+    // below. Layered: bottom-anchored cream radial → mid pale-yellow
+    // radial → dark linear panel base. The decorative bloom blob is
+    // painted via cardBloomStyle below the SVG.
     background:
-      'radial-gradient(95% 70% at 50% 100%, var(--immersive-bloom), transparent 60%),' +
-      ' linear-gradient(180deg, var(--immersive-well) 0%, var(--immersive-well-2) 100%)',
-    border: '1px solid var(--immersive-line)',
+      'radial-gradient(80% 95% at 50% 95%, var(--immersive-lamp-bloom-1), var(--immersive-lamp-bloom-2) 45%, transparent 72%),' +
+      ' radial-gradient(60% 60% at 50% 70%, var(--immersive-lamp-bloom-3), transparent 65%),' +
+      ' linear-gradient(180deg, #18181a 0%, #0c0c0e 100%)',
+    border: '1px solid var(--immersive-lamp-border)',
     boxShadow:
-      'inset 0 1px 0 var(--immersive-rim), inset 0 0 50px rgba(0,0,0,0.45)',
+      'inset 0 1px 0 var(--immersive-lamp-rim), inset 0 -22px 40px rgba(255,240,180,0.05), inset 0 0 50px rgba(0,0,0,0.55)',
     overflow: 'hidden',
+  };
+  // Decorative bottom-blob bloom — sits behind the SVG and softens the
+  // lamp glow so the cream tone fades up the dial face rather than
+  // banding sharply at 50% height.
+  const cardBloomStyle: CSSProperties = {
+    position: 'absolute',
+    left: '50%',
+    bottom: '-30%',
+    width: '120%',
+    height: '90%',
+    transform: 'translateX(-50%)',
+    background:
+      'radial-gradient(50% 50% at 50% 50%, var(--immersive-lamp-bloom-blob), transparent 70%)',
+    pointerEvents: 'none',
+    filter: 'blur(2px)',
   };
   const labelStyle: CSSProperties = {
     position: 'absolute',
@@ -243,18 +264,19 @@ export function BigArc(props: BigArcProps) {
     fontSize: 9,
     letterSpacing: '0.18em',
     textTransform: 'uppercase',
-    color: 'var(--fg-2)',
+    color: 'var(--immersive-lamp-label)',
     fontWeight: 700,
     display: 'flex',
     alignItems: 'center',
     gap: 6,
+    zIndex: 1,
   };
   const pinStyle: CSSProperties = {
     width: 5,
     height: 5,
     borderRadius: '50%',
-    background: 'var(--immersive-accent)',
-    boxShadow: '0 0 6px var(--immersive-accent-glow)',
+    background: 'var(--immersive-lamp-pin)',
+    boxShadow: '0 0 8px var(--immersive-lamp-pin-glow)',
   };
   const unitsStyle: CSSProperties = {
     position: 'absolute',
@@ -262,9 +284,10 @@ export function BigArc(props: BigArcProps) {
     right: 12,
     fontFamily: 'var(--font-mono)',
     fontSize: 9,
-    color: 'var(--fg-3)',
+    color: 'var(--immersive-lamp-units)',
     letterSpacing: '0.10em',
     textTransform: 'uppercase',
+    zIndex: 1,
   };
   const readoutStyle: CSSProperties = {
     position: 'absolute',
@@ -278,13 +301,13 @@ export function BigArc(props: BigArcProps) {
     letterSpacing: '-0.01em',
     fontVariantNumeric: 'tabular-nums',
     lineHeight: 1,
-    color: axis.over ? '#ffb8a4' : 'var(--fg-0)',
+    color: axis.over ? '#ffb8a4' : 'var(--immersive-lamp-readout)',
     textShadow: axis.over
       ? '0 0 14px var(--immersive-tx-glow)'
-      : '0 0 14px var(--immersive-accent-glow)',
+      : '0 0 14px var(--immersive-lamp-readout-glow)',
   };
   const unitSpanStyle: CSSProperties = {
-    color: 'var(--fg-3)',
+    color: 'var(--immersive-lamp-corner-em)',
     fontSize: 10.5,
     fontWeight: 500,
     marginLeft: 4,
@@ -293,6 +316,7 @@ export function BigArc(props: BigArcProps) {
 
   return (
     <div style={cardStyle} aria-hidden="true">
+      <div style={cardBloomStyle} />
       <span style={labelStyle}>
         <span style={pinStyle} />
         {props.label}
@@ -312,15 +336,15 @@ export function BigArc(props: BigArcProps) {
             <stop offset="1" stopColor="var(--immersive-tx)" />
           </linearGradient>
           <radialGradient id={glowGradId} cx="50%" cy="100%" r="80%">
-            <stop offset="0" stopColor="var(--immersive-accent)" stopOpacity="0.18" />
-            <stop offset="1" stopColor="var(--immersive-accent)" stopOpacity="0" />
+            <stop offset="0" stopColor="#ffffff" stopOpacity="0.10" />
+            <stop offset="1" stopColor="#ffffff" stopOpacity="0" />
           </radialGradient>
           <filter id={blurFilterId} x="-40%" y="-40%" width="180%" height="180%">
             <feGaussianBlur stdDeviation="3" />
           </filter>
         </defs>
 
-        {/* ambient ground glow */}
+        {/* ambient ground glow — pale white over the warm-cream lamp wash */}
         <ellipse cx={CX} cy={135} rx={110} ry={40} fill={`url(#${glowGradId})`} />
 
         {/* background arc — soft track */}
@@ -383,14 +407,16 @@ export function BigArc(props: BigArcProps) {
           </g>
         )}
 
-        {/* ticks */}
-        <g stroke="rgba(255,255,255,0.35)" strokeWidth={1}>
+        {/* ticks — warm-cream lamp tone, except `highlight` ticks (e.g.
+            rated-max / 0 dB / SWR 2.0) which keep the tx red as a "hot"
+            cue. */}
+        <g strokeWidth={1}>
           {axis.ticks.map((t, i) => {
             const inner = pointAt(t.frac, R - 9);
             const outer = pointAt(t.frac, R + 5);
             const stroke = t.highlight
               ? 'var(--immersive-tx)'
-              : 'rgba(255,255,255,0.35)';
+              : 'var(--immersive-lamp-tick)';
             const sw = t.highlight ? 1.6 : 1;
             return (
               <line
@@ -408,7 +434,6 @@ export function BigArc(props: BigArcProps) {
         <g
           fontFamily="var(--font-mono)"
           fontSize={8}
-          fill="var(--fg-3)"
           textAnchor="middle"
         >
           {axis.ticks
@@ -420,7 +445,7 @@ export function BigArc(props: BigArcProps) {
                   key={`tl-${i}`}
                   x={lp.x.toFixed(1)}
                   y={(lp.y + 3).toFixed(1)}
-                  fill={t.highlight ? 'var(--immersive-tx)' : 'var(--fg-3)'}
+                  fill={t.highlight ? 'var(--immersive-tx)' : 'var(--immersive-lamp-label)'}
                 >
                   {t.label}
                 </text>
@@ -428,21 +453,21 @@ export function BigArc(props: BigArcProps) {
             })}
         </g>
 
-        {/* peak-hold pip on the rim */}
+        {/* peak-hold pip on the rim — warm-cream pearl with cream halo */}
         {!axis.silent && peakFrac > 0 && (
           <circle
             cx={peakPoint.x.toFixed(1)}
             cy={peakPoint.y.toFixed(1)}
             r={3}
             fill="#fff"
-            stroke="var(--immersive-accent)"
+            stroke="var(--immersive-lamp-pin)"
             strokeWidth={1}
-            style={{ filter: 'drop-shadow(0 0 6px var(--immersive-accent))' }}
+            style={{ filter: 'drop-shadow(0 0 6px var(--immersive-lamp-pin))' }}
           />
         )}
 
-        {/* needle — pivots around the hub centre (CX, CY) in viewBox
-            units. Pure-SVG rotate, no CSS transform-origin. */}
+        {/* needle — warm-cream tapered ribbon over a pale-yellow centerline.
+            Pivots around the hub centre (CX, CY) in viewBox units. */}
         {!axis.silent && (
           <g transform={`rotate(${needleAngle.toFixed(2)} ${CX} ${CY})`}>
             <line
@@ -450,7 +475,7 @@ export function BigArc(props: BigArcProps) {
               y1={CY}
               x2={CX}
               y2={36}
-              stroke="#dde6f8"
+              stroke="var(--immersive-lamp-needle)"
               strokeWidth={2}
               strokeLinecap="round"
             />
@@ -459,28 +484,28 @@ export function BigArc(props: BigArcProps) {
               y1={CY}
               x2={CX}
               y2={50}
-              stroke="var(--immersive-accent)"
+              stroke="var(--immersive-lamp-needle-bri)"
               strokeWidth={0.8}
-              opacity={0.6}
+              opacity={0.65}
             />
           </g>
         )}
 
-        {/* hub */}
+        {/* hub — dark cap with cream rim and a warm pin centre */}
         <circle
           cx={CX}
           cy={CY}
           r={9}
-          fill="var(--immersive-panel-2)"
-          stroke="var(--immersive-rim-strong)"
+          fill="#15151a"
+          stroke="rgba(245,240,210,0.38)"
           strokeWidth={1.4}
         />
         <circle
           cx={CX}
           cy={CY}
           r={3}
-          fill="var(--immersive-accent)"
-          style={{ filter: 'drop-shadow(0 0 6px var(--immersive-accent))' }}
+          fill="var(--immersive-lamp-needle)"
+          style={{ filter: 'drop-shadow(0 0 5px var(--immersive-lamp-hub-glow))' }}
         />
       </svg>
 

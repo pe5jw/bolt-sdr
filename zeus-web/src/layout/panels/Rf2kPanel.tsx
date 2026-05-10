@@ -543,8 +543,11 @@ function Chip({
   tone?: 'good' | 'warn' | 'bad';
   dim?: boolean;
 }) {
-  let valueColor = 'var(--fg-0)';
-  let glow: string | undefined;
+  // Untoned chip values now read in warm-cream so the chip strip looks
+  // backlit by the same lamp that lights the gauges. Semantic tones
+  // (good/warn/bad) keep their green/amber/red colour cues.
+  let valueColor: string = 'var(--immersive-lamp-chip-text)';
+  let glow: string | undefined = '0 0 8px var(--immersive-lamp-chip-text-glow)';
   if (tone === 'good') {
     valueColor = 'var(--immersive-good)';
     glow = '0 0 8px var(--immersive-good-glow)';
@@ -556,6 +559,7 @@ function Chip({
     glow = '0 0 8px var(--immersive-tx-glow)';
   } else if (dim) {
     valueColor = 'var(--fg-2)';
+    glow = undefined;
   }
   return (
     <div
@@ -566,10 +570,14 @@ function Chip({
         gap: 10,
         padding: '8px 11px',
         borderRadius: 6,
+        // Lamp-glow recipe: cream radial bloom rising from the bottom
+        // edge over a dark linear base, mirroring the gauge cards.
         background:
-          'linear-gradient(180deg, var(--immersive-well) 0%, var(--immersive-well-2) 100%)',
-        border: '1px solid var(--immersive-line)',
-        boxShadow: 'inset 0 1px 0 var(--immersive-rim)',
+          'radial-gradient(80% 100% at 50% 100%, var(--immersive-lamp-chip-bloom), transparent 70%),' +
+          ' linear-gradient(180deg, #161618 0%, #0c0c0e 100%)',
+        border: '1px solid var(--immersive-lamp-border)',
+        boxShadow:
+          'inset 0 1px 0 var(--immersive-lamp-rim), inset 0 -8px 14px rgba(255,240,180,0.03)',
       }}
     >
       <span
@@ -658,16 +666,17 @@ function SegBtn({
   onClick: () => void;
   children: ReactNode;
 }) {
-  // Match Amplifier.html: operate => bright neutral white pill, standby =>
-  // tx-orange tinted pill (the "armed but not transmitting" colour that
-  // Thetis and the RF2K-S share).
+  // Match Amplifier.html (chat12 final state): operate => warm-cream lit
+  // pill (lamp-glow tone matching the gauge faces), standby => tx-orange
+  // tinted pill (the "armed but not transmitting" colour that Thetis
+  // and the RF2K-S share).
   const activeStyle: CSSProperties =
     variant === 'operate'
       ? {
-          color: 'var(--fg-0)',
-          background: 'linear-gradient(180deg,#2a2d35,#1d2027)',
+          color: '#fbf8ec',
+          background: 'linear-gradient(180deg,#33332e,#1f1f1c)',
           boxShadow:
-            'inset 0 1px 0 rgba(255,255,255,0.22), 0 0 0 1px rgba(255,255,255,0.22), 0 0 14px rgba(255,255,255,0.16)',
+            'inset 0 1px 0 rgba(255,250,220,0.26), 0 0 0 1px rgba(245,240,200,0.32), 0 0 16px var(--immersive-lamp-active-glow)',
         }
       : {
           color: '#ffd0c5',
@@ -897,11 +906,12 @@ function Pill({
         }
       : active
         ? {
-            color: 'var(--fg-0)',
-            background: 'linear-gradient(180deg,#2a2d35,#1c1f26)',
-            borderColor: 'rgba(255,255,255,0.35)',
+            // Warm-cream lit pill matching the gauge-face lamp glow.
+            color: '#fbf8ec',
+            background: 'linear-gradient(180deg,#33332f,#1f1f1d)',
+            borderColor: 'rgba(245,240,200,0.45)',
             boxShadow:
-              'inset 0 1px 0 rgba(255,255,255,0.18), 0 0 10px rgba(255,255,255,0.10)',
+              'inset 0 1px 0 rgba(255,250,220,0.20), 0 0 12px var(--immersive-lamp-active-glow)',
           }
         : {};
   return (
@@ -1032,19 +1042,35 @@ function Toast({
   tone?: 'tx' | 'idle';
   children: ReactNode;
 }) {
-  const baseColor = tone === 'idle' ? 'var(--fg-3)' : ok ? 'var(--immersive-good)' : 'var(--immersive-tx)';
+  // The disabled / idle toast was reading as grey-on-black, which is
+  // hard to scan over the dark panel chrome. Promote disabled-state
+  // copy to amber (it's a "you need to do something" warning, not a
+  // success or an error) and bump the success copy to bright cream so
+  // it pops against the green-tinted bg without losing contrast.
+  const baseColor =
+    tone === 'idle'
+      ? 'var(--immersive-warn)'
+      : ok
+        ? '#d8f5e4'
+        : '#ffd7cc';
   const baseBg =
     tone === 'idle'
-      ? 'rgba(255,255,255,0.03)'
+      ? 'rgba(244,193,104,0.10)'
       : ok
         ? 'rgba(92,212,154,0.10)'
-        : 'rgba(239,107,84,0.10)';
+        : 'rgba(239,107,84,0.12)';
   const borderColor =
     tone === 'idle'
-      ? 'var(--immersive-line)'
+      ? 'rgba(244,193,104,0.45)'
       : ok
         ? 'rgba(92,212,154,0.45)'
         : 'rgba(239,107,84,0.45)';
+  const glow =
+    tone === 'idle'
+      ? '0 0 8px var(--immersive-warn-glow)'
+      : ok
+        ? '0 0 8px var(--immersive-good-glow)'
+        : '0 0 8px var(--immersive-tx-glow)';
   return (
     <div
       style={{
@@ -1054,6 +1080,8 @@ function Toast({
         background: baseBg,
         border: `1px solid ${borderColor}`,
         borderRadius: 6,
+        textShadow: glow,
+        lineHeight: 1.45,
       }}
     >
       {children}

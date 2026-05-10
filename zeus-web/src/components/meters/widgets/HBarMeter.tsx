@@ -23,7 +23,7 @@
 
 import type { CSSProperties } from 'react';
 import type { MeterReadingDef, MeterUnit } from '../meterCatalog';
-import { immersiveZoneTickColor, zoneColorTokens, type ZoneTick } from '../meterCatalog';
+import { immersiveZoneTickColor, type ZoneTick } from '../meterCatalog';
 import type { WidgetSettings } from '../widgetSettings';
 
 interface HBarMeterProps {
@@ -44,30 +44,6 @@ const SENTINEL_THRESHOLD = -200;
 
 function isSilent(v: number): boolean {
   return !isFinite(v) || v <= SENTINEL_THRESHOLD;
-}
-
-function fillColorForValue(def: MeterReadingDef, value: number): string {
-  if (def.colorToken === 'amber-signal') return '#FFA028';
-  if (def.zones && def.zones.length > 0 && isFinite(value)) {
-    for (const z of def.zones) {
-      const lo = Math.min(z.from, z.to);
-      const hi = Math.max(z.from, z.to);
-      if (value >= lo && value <= hi) {
-        return zoneColorTokens(z.level).hard;
-      }
-    }
-  }
-  if (def.dangerAt !== undefined && value >= def.dangerAt) return 'var(--tx)';
-  if (def.warnAt !== undefined && value >= def.warnAt) return 'var(--power)';
-  switch (def.colorToken) {
-    case 'power':
-      return 'var(--power)';
-    case 'tx':
-      return 'var(--tx)';
-    case 'accent':
-    default:
-      return 'var(--accent)';
-  }
 }
 
 function fractionOf(min: number, max: number, value: number): number {

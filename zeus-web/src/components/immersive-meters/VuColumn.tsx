@@ -60,14 +60,18 @@ export function VuColumn({ valueDb, name, sub, defsId, zoneTicks }: VuColumnProp
 
   const cardStyle: CSSProperties = {
     position: 'relative',
+    // Same warm-cream lamp glow recipe as BigArc — three radial layers
+    // over a dark linear base, so the VU columns and the hero arcs read
+    // as a single illuminated instrument cluster.
     background:
-      'radial-gradient(80% 60% at 50% 100%, var(--immersive-bloom), transparent 60%),' +
-      ' linear-gradient(180deg, var(--immersive-well) 0%, var(--immersive-well-2) 100%)',
-    border: '1px solid var(--immersive-line)',
+      'radial-gradient(80% 95% at 50% 100%, var(--immersive-lamp-bloom-1), var(--immersive-lamp-bloom-2) 50%, transparent 75%),' +
+      ' radial-gradient(60% 60% at 50% 70%, var(--immersive-lamp-bloom-3), transparent 65%),' +
+      ' linear-gradient(180deg, #18181a 0%, #0c0c0e 100%)',
+    border: '1px solid var(--immersive-lamp-border)',
     borderRadius: 7,
     padding: '10px 4px 10px',
     boxShadow:
-      'inset 0 1px 0 var(--immersive-rim), inset 0 0 22px rgba(0,0,0,0.40)',
+      'inset 0 1px 0 var(--immersive-lamp-rim), inset 0 -18px 32px rgba(255,240,180,0.04), inset 0 0 22px rgba(0,0,0,0.40)',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
@@ -78,27 +82,29 @@ export function VuColumn({ valueDb, name, sub, defsId, zoneTicks }: VuColumnProp
     fontSize: 9,
     letterSpacing: '0.16em',
     textTransform: 'uppercase',
-    color: 'var(--fg-1)',
+    color: 'var(--immersive-lamp-readout)',
     fontWeight: 700,
   };
   const subStyle: CSSProperties = {
     fontSize: 8.5,
     letterSpacing: '0.14em',
     textTransform: 'uppercase',
-    color: 'var(--fg-3)',
+    color: 'var(--immersive-lamp-label)',
     fontWeight: 600,
   };
   const numStyle: CSSProperties = {
     fontFamily: 'var(--font-mono)',
     fontSize: 11,
-    color: isOver ? '#ffb8a4' : 'var(--fg-0)',
+    color: isOver ? '#ffb8a4' : 'var(--immersive-lamp-readout)',
     fontWeight: 600,
     fontVariantNumeric: 'tabular-nums',
     marginTop: 2,
-    textShadow: isOver ? '0 0 10px var(--immersive-tx-glow)' : undefined,
+    textShadow: isOver
+      ? '0 0 10px var(--immersive-tx-glow)'
+      : '0 0 8px var(--immersive-lamp-readout-glow)',
   };
   const numUnitStyle: CSSProperties = {
-    color: 'var(--fg-3)',
+    color: 'var(--immersive-lamp-corner-em)',
     fontWeight: 500,
     fontSize: 8.5,
     marginLeft: 2,
@@ -131,26 +137,25 @@ export function VuColumn({ valueDb, name, sub, defsId, zoneTicks }: VuColumnProp
           </mask>
         </defs>
 
-        {/* side ticks + numeric labels */}
+        {/* side ticks + numeric labels — warm-cream lamp tone, with the
+            0 dBFS ticks staying in tx-red as the "rail" cue. */}
         <g
-          stroke="rgba(255,255,255,0.10)"
           strokeWidth={0.6}
           fontFamily="var(--font-mono)"
           fontSize={6}
-          fill="var(--fg-4)"
           textAnchor="end"
         >
           {SIDE_TICKS.map((db) => {
             const f = dbToFrac(db);
             const y = BOT_Y - COL_HEIGHT * f;
             const zero = db === 0;
-            const tickStroke = zero ? 'var(--immersive-tx)' : 'rgba(255,255,255,0.18)';
+            const tickStroke = zero ? 'var(--immersive-tx)' : 'var(--immersive-lamp-tick)';
             const tickWidth = zero ? 1 : 0.6;
             return (
               <g key={`vt-${db}`}>
                 <line x1={14} y1={y} x2={COL_X} y2={y} stroke={tickStroke} strokeWidth={tickWidth} />
                 <line x1={COL_X + COL_W} y1={y} x2={COL_X + COL_W + 8} y2={y} stroke={tickStroke} strokeWidth={tickWidth} />
-                <text x={13} y={y + 2} fill={zero ? 'var(--immersive-tx)' : 'var(--fg-4)'}>
+                <text x={13} y={y + 2} fill={zero ? 'var(--immersive-tx)' : 'var(--immersive-lamp-label)'}>
                   {zero ? '0' : Math.abs(db)}
                 </text>
               </g>
@@ -209,17 +214,17 @@ export function VuColumn({ valueDb, name, sub, defsId, zoneTicks }: VuColumnProp
           })}
         </g>
 
-        {/* peak-hold tick */}
+        {/* peak-hold tick — warm-cream pearl matching the BigArc peak pip */}
         {!silent && peakFrac > 0 && (
           <line
             x1={20}
             y1={peakY.toFixed(1)}
             x2={40}
             y2={peakY.toFixed(1)}
-            stroke="#fff"
+            stroke="var(--immersive-lamp-needle-bri)"
             strokeWidth={1.4}
-            opacity={0.9}
-            style={{ filter: 'drop-shadow(0 0 4px #fff)' }}
+            opacity={0.92}
+            style={{ filter: 'drop-shadow(0 0 4px var(--immersive-lamp-pin))' }}
           />
         )}
 

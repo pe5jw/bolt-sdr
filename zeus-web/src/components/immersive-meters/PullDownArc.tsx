@@ -121,12 +121,17 @@ export function PullDownArc({
     // aspect = 280/216 ≈ 1.30/1.
     aspectRatio: '280 / 216',
     borderRadius: 7,
+    // Warm-cream lamp glow matching BigArc / VuColumn — the GR cards
+    // sit alongside the hero arcs, so they share the same lit-instrument
+    // base. The pre-existing amber bias (0.07) was a leftover from when
+    // GR was the only warm-tinted card; the lamp wash now does that job.
     background:
-      'radial-gradient(60% 100% at 30% 50%, rgba(244,193,104,0.07), transparent 65%),' +
-      ' linear-gradient(180deg, var(--immersive-well) 0%, var(--immersive-well-2) 100%)',
-    border: '1px solid var(--immersive-line)',
+      'radial-gradient(80% 95% at 50% 100%, var(--immersive-lamp-bloom-1), var(--immersive-lamp-bloom-2) 50%, transparent 75%),' +
+      ' radial-gradient(60% 60% at 50% 70%, var(--immersive-lamp-bloom-3), transparent 65%),' +
+      ' linear-gradient(180deg, #18181a 0%, #0c0c0e 100%)',
+    border: '1px solid var(--immersive-lamp-border)',
     boxShadow:
-      'inset 0 1px 0 var(--immersive-rim), inset 0 0 40px rgba(0,0,0,0.45)',
+      'inset 0 1px 0 var(--immersive-lamp-rim), inset 0 -22px 40px rgba(255,240,180,0.05), inset 0 0 40px rgba(0,0,0,0.45)',
     overflow: 'hidden',
   };
   const labelStyle: CSSProperties = {
@@ -302,8 +307,10 @@ export function PullDownArc({
           </g>
         )}
 
-        {/* ticks + labels */}
-        <g stroke="rgba(255,255,255,0.30)" strokeWidth={1}>
+        {/* ticks + labels — warm-cream lamp tone, with the 0 dB anchor
+            tick rendered in slightly brighter cream so the "no-GR rest
+            point" still reads as an anchor. */}
+        <g strokeWidth={1}>
           {TICKS.map((db) => {
             // tick fraction: 0 dB → 1 (right), -20 dB → 0 (left)
             const f = (db + 20) / 20;
@@ -317,7 +324,7 @@ export function PullDownArc({
                 y1={inner.y.toFixed(1)}
                 x2={outer.x.toFixed(1)}
                 y2={outer.y.toFixed(1)}
-                stroke={isZero ? '#dde6f8' : 'rgba(255,255,255,0.30)'}
+                stroke={isZero ? 'var(--immersive-lamp-needle-bri)' : 'var(--immersive-lamp-tick)'}
                 strokeWidth={isZero ? 1.4 : 1}
               />
             );
@@ -326,7 +333,6 @@ export function PullDownArc({
         <g
           fontFamily="var(--font-mono)"
           fontSize={8}
-          fill="var(--fg-3)"
           textAnchor="middle"
         >
           {TICKS.map((db) => {
@@ -338,7 +344,7 @@ export function PullDownArc({
                 key={`gtl-${db}`}
                 x={lp.x.toFixed(1)}
                 y={(lp.y + 3).toFixed(1)}
-                fill={isZero ? '#dde6f8' : 'var(--fg-3)'}
+                fill={isZero ? 'var(--immersive-lamp-needle-bri)' : 'var(--immersive-lamp-label)'}
               >
                 {Math.abs(db)}
               </text>
@@ -367,17 +373,19 @@ export function PullDownArc({
           strokeDasharray={fillDash}
         />
 
-        {/* 0 dB anchor pin (right end of arc) */}
-        <circle cx={ARC_X_RIGHT} cy={CY} r={4} fill="var(--immersive-panel-2)" stroke="rgba(255,255,255,0.4)" strokeWidth={1} />
-        <circle cx={ARC_X_RIGHT} cy={CY} r={1.8} fill="#dde6f8" />
+        {/* 0 dB anchor pin (right end of arc) — dark cap with cream rim */}
+        <circle cx={ARC_X_RIGHT} cy={CY} r={4} fill="#15151a" stroke="rgba(245,240,210,0.4)" strokeWidth={1} />
+        <circle cx={ARC_X_RIGHT} cy={CY} r={1.8} fill="var(--immersive-lamp-needle)" />
 
-        {/* moving leading-edge head */}
+        {/* moving leading-edge head — warm cream pearl with amber halo
+            (warn-glow remains intact so "compression is happening" still
+            reads as the legacy amber cue). */}
         {grFrac > 0.001 && (
           <circle
             cx={headX.toFixed(1)}
             cy={headY.toFixed(1)}
             r={4.5}
-            fill="#fff5d8"
+            fill="var(--immersive-lamp-needle-bri)"
             style={{ filter: 'drop-shadow(0 0 6px var(--immersive-warn))' }}
           />
         )}
