@@ -34,7 +34,7 @@ import {
   type MeterGroupWidget,
 } from './meterGroupConfig';
 import { MeterRenderer } from './MeterRenderer';
-import { LibraryDrawer } from './LibraryDrawer';
+import { AddMeterModal } from './AddMeterModal';
 import { MeterReadingId, METER_CATALOG } from '../meters/meterCatalog';
 
 interface MeterGroupPanelProps {
@@ -427,12 +427,19 @@ export function MeterGroupPanel({
         )}
       </div>
 
-      {/* ── library drawer ─────────────────────────────────────────── */}
-      <LibraryDrawer
-        open={libraryOpen}
-        onAdd={addWidget}
-        onClose={() => setLibraryOpen(false)}
-      />
+      {/* ── add-meter modal — popover, not a slide-in drawer, so the
+            library doesn't fight a small/narrow Meter Group tile for
+            screen real-estate. Modelled on the workspace's AddPanelModal
+            for consistent UX. */}
+      {libraryOpen ? (
+        <AddMeterModal
+          existingReadings={
+            new Set(config.widgets.map((w) => w.reading as string))
+          }
+          onAdd={addWidget}
+          onClose={() => setLibraryOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }
