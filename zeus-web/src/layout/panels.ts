@@ -60,8 +60,17 @@ import { ModePanel } from './panels/ModePanel';
 import { StepPanel } from './panels/StepPanel';
 import { MeterGroupPanel } from '../components/meter-group/MeterGroupPanel';
 import { AnalogMeterPanel } from './panels/AnalogMeterPanel';
+import { Rf2kPanel } from './panels/Rf2kPanel';
 
-export type PanelCategory = 'spectrum' | 'vfo' | 'meters' | 'dsp' | 'log' | 'tools' | 'controls';
+export type PanelCategory =
+  | 'spectrum'
+  | 'vfo'
+  | 'meters'
+  | 'dsp'
+  | 'log'
+  | 'tools'
+  | 'amplifiers'
+  | 'controls';
 
 /** Human-friendly category labels for the Add Panel modal's left rail. The
  *  rail shows these in a fixed order; "All" is rendered separately as a
@@ -73,6 +82,7 @@ export const PANEL_CATEGORIES: ReadonlyArray<PanelCategory> = [
   'dsp',
   'log',
   'tools',
+  'amplifiers',
   'controls',
 ];
 export const PANEL_CATEGORY_LABELS: Record<PanelCategory, string> = {
@@ -82,6 +92,7 @@ export const PANEL_CATEGORY_LABELS: Record<PanelCategory, string> = {
   dsp: 'DSP',
   log: 'Log',
   tools: 'Tools',
+  amplifiers: 'Amplifiers',
   controls: 'Controls',
 };
 
@@ -259,6 +270,16 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'meters',
     tags: ['analog', 'meter', 'smeter', 's-meter', 'signal', 'rx', 'tx', 'power', 'swr', 'needle'],
     component: AnalogMeterPanel,
+    headerless: true,
+  },
+  rf2kAmp: {
+    id: 'rf2kAmp',
+    name: 'RF2K-S Amplifier',
+    category: 'amplifiers',
+    tags: ['rf2k', 'rf2k-s', 'rf-kit', 'amp', 'amplifier', 'pa', 'tune', 'standby', 'tci'],
+    component: Rf2kPanel,
+    // Draws its own workspace-tile-header so the Settings cog can sit
+    // inline next to the title (matches AnalogMeterPanel's pattern).
     headerless: true,
   },
 };

@@ -40,6 +40,7 @@ describe('AddPanelModal', () => {
       'dsp',
       'log',
       'tools',
+      'amplifiers',
       'controls',
     ]) {
       expect(
@@ -54,8 +55,8 @@ describe('AddPanelModal', () => {
     const cards = container.querySelectorAll(
       '[data-testid="add-panel-cards"] .add-panel-card',
     );
-    // 17 panels in registry.
-    expect(cards.length).toBe(17);
+    // 18 panels in registry.
+    expect(cards.length).toBe(18);
     unmount();
   });
 
