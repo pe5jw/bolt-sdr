@@ -19,7 +19,7 @@
 import type { CSSProperties } from 'react';
 import type { MeterReadingDef } from '../meterCatalog';
 import { zoneColorTokens } from '../meterCatalog';
-import type { WidgetSettings } from '../metersConfig';
+import type { WidgetSettings } from '../widgetSettings';
 
 export const PEAK_HOLD_FILL = 'rgba(255, 160, 40, 0.4)';
 

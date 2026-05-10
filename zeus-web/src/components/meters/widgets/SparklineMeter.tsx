@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MeterReadingDef } from '../meterCatalog';
 import { resolveZones, zoneColorTokens } from '../meterCatalog';
-import type { WidgetSettings } from '../metersConfig';
+import type { WidgetSettings } from '../widgetSettings';
 import { _isSilent, _fillColorForValue } from './HBarMeter';
 
 const DEFAULT_BUFFER = 60;

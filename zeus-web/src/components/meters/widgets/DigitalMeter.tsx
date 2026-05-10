@@ -10,7 +10,7 @@
 import type { CSSProperties } from 'react';
 import type { MeterReadingDef } from '../meterCatalog';
 import { zoneColorTokens } from '../meterCatalog';
-import type { WidgetSettings } from '../metersConfig';
+import type { WidgetSettings } from '../widgetSettings';
 import { _isSilent } from './HBarMeter';
 
 interface DigitalMeterProps {

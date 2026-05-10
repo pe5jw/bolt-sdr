@@ -58,7 +58,7 @@ import { PsFlexPanel } from './panels/PsFlexPanel';
 import { BandPanel } from './panels/BandPanel';
 import { ModePanel } from './panels/ModePanel';
 import { StepPanel } from './panels/StepPanel';
-import { MetersPanel } from './panels/MetersPanel';
+import { MeterGroupPanel } from '../components/meter-group/MeterGroupPanel';
 import { AnalogMeterPanel } from './panels/AnalogMeterPanel';
 
 export type PanelCategory = 'spectrum' | 'vfo' | 'meters' | 'dsp' | 'log' | 'tools' | 'controls';
@@ -244,12 +244,12 @@ export const PANELS: Record<string, PanelDef> = {
     tags: ['step', 'tuning', 'frequency', 'increment'],
     component: StepPanel,
   },
-  meters: {
-    id: 'meters',
-    name: 'Meters',
+  metergroup: {
+    id: 'metergroup',
+    name: 'Meter Group',
     category: 'meters',
-    tags: ['meters', 'rx', 'tx', 'signal', 'power', 'agc', 'alc', 'configurable'],
-    component: MetersPanel,
+    tags: ['meters', 'rx', 'tx', 'signal', 'power', 'agc', 'alc', 'group', 'row', 'column'],
+    component: MeterGroupPanel,
     multiInstance: true,
     headerless: true,
   },
