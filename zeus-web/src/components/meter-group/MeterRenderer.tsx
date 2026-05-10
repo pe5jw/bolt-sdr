@@ -20,8 +20,6 @@ import { BigArc } from '../immersive-meters/BigArc';
 import { VuColumn } from '../immersive-meters/VuColumn';
 import { PullDownArc } from '../immersive-meters/PullDownArc';
 import { HBarMeter, _isSilent } from '../meters/widgets/HBarMeter';
-import { SparklineMeter } from '../meters/widgets/SparklineMeter';
-import { DigitalMeter } from '../meters/widgets/DigitalMeter';
 import { useRadioStore } from '../../state/radio-store';
 import { usePaStore } from '../../state/pa-store';
 import {
@@ -142,37 +140,14 @@ export function MeterRenderer({ widget }: MeterRendererProps) {
           value={value}
           peak={value}
           def={def}
+          label={label}
           settings={{
             min: settings.min,
             max: settings.max,
             label: settings.label,
             peakHold: settings.peakHold,
           }}
-        />
-      );
-      break;
-    case 'sparkline':
-      body = (
-        <SparklineMeter
-          value={value}
-          def={def}
-          settings={{
-            min: settings.min,
-            max: settings.max,
-          }}
-        />
-      );
-      break;
-    case 'digital':
-      body = (
-        <DigitalMeter
-          value={value}
-          def={def}
-          settings={{
-            min: settings.min,
-            max: settings.max,
-            label: settings.label,
-          }}
+          zoneTicks={zoneTicks}
         />
       );
       break;

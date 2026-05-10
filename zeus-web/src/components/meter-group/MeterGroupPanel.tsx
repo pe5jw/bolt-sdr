@@ -32,10 +32,14 @@ import {
   newWidgetUid,
   type MeterGroupConfig,
   type MeterGroupWidget,
+  type MeterGroupWidgetSettings,
 } from './meterGroupConfig';
 import { MeterRenderer } from './MeterRenderer';
 import { AddMeterModal } from './AddMeterModal';
-import { MeterReadingId, METER_CATALOG } from '../meters/meterCatalog';
+import {
+  MeterReadingId,
+  type MeterDefaultKind,
+} from '../meters/meterCatalog';
 
 interface MeterGroupPanelProps {
   /** Per-instance config blob from the workspace store. */
@@ -83,16 +87,20 @@ export function MeterGroupPanel({
   );
 
   const addWidget = useCallback(
-    (reading: MeterReadingId) => {
-      const def = METER_CATALOG[reading];
+    (
+      reading: MeterReadingId,
+      kind: MeterDefaultKind,
+      settings: MeterGroupWidgetSettings,
+    ) => {
       const widget: MeterGroupWidget = {
         uid: newWidgetUid(),
         reading,
-        kind: def.defaultKind,
+        kind,
+        ...(Object.keys(settings).length > 0 ? { settings } : {}),
       };
       commit({ ...config, widgets: [...config.widgets, widget] });
-      // Close the drawer so the operator sees the new widget land in the
-      // group rather than peering at it from behind the library overlay.
+      // Close the modal so the operator sees the new widget land in the
+      // group rather than peering at it from behind the modal scrim.
       setLibraryOpen(false);
     },
     [commit, config],

@@ -12,7 +12,12 @@
 // Widget axis range / explicit kind override go in `widget.settings` as a
 // loose record so the schema doesn't have to chase per-meter knobs.
 
-import { MeterReadingId, METER_CATALOG, type MeterDefaultKind } from '../meters/meterCatalog';
+import {
+  MeterReadingId,
+  METER_CATALOG,
+  METER_KINDS,
+  type MeterDefaultKind,
+} from '../meters/meterCatalog';
 
 export type MeterGroupDirection = 'row' | 'column';
 
@@ -73,8 +78,10 @@ export function parseMeterGroupConfig(raw: unknown): MeterGroupConfig {
       const reading = typeof w.reading === 'string' ? (w.reading as MeterReadingId) : null;
       if (!reading || !METER_CATALOG[reading]) continue;
       const uid = typeof w.uid === 'string' && w.uid ? w.uid : newWidgetUid();
+      // Auto-migrate legacy 'sparkline' / 'digital' overrides — drop the
+      // override so the widget falls back to the catalog default.
       const kind =
-        typeof w.kind === 'string'
+        typeof w.kind === 'string' && (METER_KINDS as ReadonlyArray<string>).includes(w.kind)
           ? (w.kind as MeterDefaultKind)
           : undefined;
       const settings: MeterGroupWidgetSettings = {};
