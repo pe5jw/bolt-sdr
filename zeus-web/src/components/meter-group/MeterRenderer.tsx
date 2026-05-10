@@ -19,7 +19,7 @@ import { useMeterReading } from '../meters/useMeterReading';
 import { BigArc } from '../immersive-meters/BigArc';
 import { VuColumn } from '../immersive-meters/VuColumn';
 import { PullDownArc } from '../immersive-meters/PullDownArc';
-import { HBarMeter, _isSilent } from '../meters/widgets/HBarMeter';
+import { HBarMeter } from '../meters/widgets/HBarMeter';
 import { useRadioStore } from '../../state/radio-store';
 import { usePaStore } from '../../state/pa-store';
 import {
@@ -122,7 +122,7 @@ export function MeterRenderer({ widget }: MeterRendererProps) {
       // raw axis; remap via `1 - frac` so they land at the visually
       // matching position on the right-anchored arc.
       const remapped = zoneTicks.map((t) => ({ ...t, frac: 1 - t.frac }));
-      const grValue = isFinite(value) && !_isSilent(value) ? Math.max(0, value) : 0;
+      const grValue = isFinite(value) && value > -200 ? Math.max(0, value) : 0;
       body = (
         <PullDownArc
           gainReductionDb={grValue}
