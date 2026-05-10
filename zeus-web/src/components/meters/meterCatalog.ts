@@ -63,18 +63,31 @@ export type MeterCategory =
  */
 export type MeterColorToken = 'amber-signal' | 'power' | 'tx' | 'accent';
 
-/** Coarse "what kind of widget should I build by default?" recommendation.
- *  The three immersive entries (`bigarc` / `vucolumn` / `pulldown`) match
- *  the widget kinds exposed by the configurable Meters Panel — see
- *  `metersConfig.MetersWidgetKind`. Legacy `dial` / `vbar` defaults are
- *  gone; existing operator workspaces auto-migrate at parse time. */
-export type MeterDefaultKind =
-  | 'bigarc'
-  | 'vucolumn'
-  | 'pulldown'
-  | 'hbar'
-  | 'sparkline'
-  | 'digital';
+/** The four meter shapes the operator can pick from. `bigarc` is the
+ *  half-circle analog gauge (Forward Power / SWR), `vucolumn` is the
+ *  vertical LED column (signal-chain levels), `pulldown` is the
+ *  right-anchored arc for gain reduction, `hbar` is the horizontal LED
+ *  bar (the row-friendly counterpart of `vucolumn`). Legacy `sparkline`
+ *  and `digital` kinds were dropped — operator workspaces persisting
+ *  them auto-migrate to the catalog default at parse time. */
+export type MeterDefaultKind = 'bigarc' | 'vucolumn' | 'pulldown' | 'hbar';
+
+/** All four kinds, in display order — used by the AddMeter modal to lay
+ *  out the kind picker. */
+export const METER_KINDS: ReadonlyArray<MeterDefaultKind> = [
+  'bigarc',
+  'vucolumn',
+  'pulldown',
+  'hbar',
+];
+
+/** Operator-facing label for each kind — shown in the AddMeter kind picker. */
+export const METER_KIND_LABELS: Record<MeterDefaultKind, string> = {
+  bigarc: 'Analog gauge',
+  vucolumn: 'Vertical bar',
+  pulldown: 'Pull-down arc',
+  hbar: 'Horizontal bar',
+};
 
 /** Three-level severity used to paint zone bands on meter widgets.
  *  Maps to: ok → --ok green, warn → --power amber, danger → --tx red. */

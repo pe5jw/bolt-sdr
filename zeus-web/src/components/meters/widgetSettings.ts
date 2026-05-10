@@ -3,10 +3,9 @@
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
 //
-// Lightweight settings shape consumed by the legacy widget primitives
-// (HBarMeter / SparklineMeter / DigitalMeter). Pulled into its own file
-// when the heavier metersConfig.ts was retired alongside the old
-// MetersPanel — the primitives still need a way to take operator-level
+// Lightweight settings shape consumed by HBarMeter. Pulled into its own
+// file when the heavier metersConfig.ts was retired alongside the old
+// MetersPanel — the primitive still needs a way to take operator-level
 // axis-range and label overrides without dragging in the deleted
 // per-tile-config machinery.
 
