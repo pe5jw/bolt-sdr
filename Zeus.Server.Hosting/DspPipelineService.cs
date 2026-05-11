@@ -180,9 +180,6 @@ public class DspPipelineService : BackgroundService
     // see issue #81. volatile because MoxChanged fires on the caller's thread
     // and Tick reads from the pipeline thread.
     private volatile bool _keyed;
-    // PERF_PASS_3_DEBUG: tracks _keyed across audio-broadcast ticks so we
-    // log the first un-keyed broadcast (t3). Uncommitted.
-    private bool _prevKeyedAtAudioTick;
     // RX S-meter broadcast throttle. Pipeline ticks at 30 Hz; broadcasting
     // every 6 ticks = 5 Hz gives a smoother meter than Thetis's 4 Hz baseline
     // without spamming the WS (30 Hz dBm readouts add nothing a UI can use).
@@ -1145,11 +1142,7 @@ public class DspPipelineService : BackgroundService
         // race window — visible as a brief flash of the fake waterfall right
         // when the user clicked Connect. The synthetic engine never produces
         // real-radio data, so suppressing it unconditionally is correct.
-        // PERF_PASS_3_DEBUG: in perf-test mode, let the synthetic path through so
-        // the audio broadcast loop drains the engine's silence frames and the
-        // client-side scheduling instrumentation gets exercised. Uncommitted.
-        if (engine is SyntheticDspEngine
-            && Environment.GetEnvironmentVariable("ZEUS_PERF_TEST") != "1") return;
+        if (engine is SyntheticDspEngine) return;
 
         engine.SetVfoHz(channel, state.VfoHz);
 
@@ -1276,13 +1269,6 @@ public class DspPipelineService : BackgroundService
                     SampleRateHz: (uint)AudioOutputRateHz,
                     SampleCount: (ushort)audioSampleCount,
                     Samples: new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
-                // PERF_PASS_3_DEBUG: t3 — first audio broadcast after MOX-off. Uncommitted.
-                if (_prevKeyedAtAudioTick && !_keyed)
-                {
-                    _log.LogInformation("rx.audio.firstBroadcast ts={Ts} samples={N}",
-                        System.Diagnostics.Stopwatch.GetTimestamp(), audioSampleCount);
-                }
-                _prevKeyedAtAudioTick = _keyed;
                 _hub.Broadcast(audioFrame);
                 RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
             }
