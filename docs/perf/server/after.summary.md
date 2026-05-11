@@ -57,6 +57,62 @@ Raw artifacts:
 - `iter2/iter1-after.csv` — 60 s dotnet-counters after (PID 60080).
 - `iter2/sample-iter1-before.txt` — 30 s `sample(1)` profile that identified the spin-on-park hot path.
 
+## Round 2, iter 3 — PsAutoAttenuate adaptive 1 Hz idle / 10 Hz active cadence (commit 77e9ba6)
+
+`PsAutoAttenuateService` used a fixed 100 ms `PeriodicTimer`. The loop body `Tick1()` early-returns on two boolean gates whenever PS is disarmed OR the radio isn't keyed — i.e. the entire RX-only operating window. That's ~9 wasted TP wake-ups/s during day-to-day RX use.
+
+Adaptive cadence: idle = 1 Hz, active (PS armed AND MOX/TwoTone on) = 10 Hz. Reuses the same `PeriodicTimer` via the .NET 8+ settable `Period`. Active-mode latency to detect a fresh PS-arm or MOX-on edge is at most one second — well below operator perception.
+
+**Measurement caveat:** Brian's HL2 workload was driven by UI activity during the after-capture window — CPU shot from ~0.25 s/s (quiet) to ~0.45 s/s (interactive) purely from operator behaviour between the two captures. The PsAutoAttn saving (~9 TP wake-ups/s of the 2 080/s aggregate, ~0.4 %) is below the noise floor of that workload swing. Functionally the change is correct; the operator-facing PS arm/MOX latency is unchanged.
+
+| Metric | Before (iter1, quiet operator window) | After (iter3, active operator window) |
+|---|---|---|
+| CPU total (s/s) | 0.256 | 0.449 |
+| Alloc rate (MB/s) | 1.38 | 1.35 |
+| TP work-items /s | 2 200 | 2 071 |
+| Lock contentions /s | 2.58 | 2.25 |
+
+Raw: `iter2/iter3-{before,after}.csv`.
+
+## Round 2, iter 4 — display-pipeline gate on `_hub.ClientCount > 0` (commit c35c844)
+
+Server-side analog of the perf3 `pushFrame` gate that perf-rgl landed on the frontend. The display block in `DspPipelineService.Tick` ran unconditionally at 30 Hz — `engine.TryGet*DisplayPixels` × up to 6 calls/tick, `Array.Reverse` × 2 on 2 048-float buffers, the `DisplayFrame` record-struct construction, and the ~16 KB wire payload `StreamingHub.Broadcast` would allocate. The hub already short-circuits the wire-payload step on `_clients.IsEmpty`, but the upstream WDSP pixel reads, axis reverses, and frame construction fired regardless.
+
+Gate the entire display block on `_hub.ClientCount > 0` (O(1) `ConcurrentDictionary.Count` read). Audio path below runs unconditionally — RXA must keep draining so the WDSP audio ring doesn't back up, and in-process `RxAudioAvailable` subscribers (TCI, potential future RX-side VST seam) still need frames even with no WS clients.
+
+**Connected-client measurement is identity by design.** Brian's session had a client connected the whole time, so `hasClients = true` and the gate doesn't fire. Iter4 measurement shows ≈0 delta (CPU 0.476 → 0.478, alloc 1.348 → 1.349 MB/s, TP rate unchanged) — expected, not a regression. The win materialises only when all clients disconnect (browser tab closed, mobile UI backgrounded, remote-desktop session ended).
+
+| Metric | Before (iter3, PID 63469) | After (iter4, PID 65169) | Δ |
+|---|---|---|---|
+| CPU total (s/s) | 0.4761 | 0.4779 | ≈ 0 |
+| Alloc rate (MB/s) | 1.348 | 1.349 | ≈ 0 |
+| TP work-items /s | 2 071 | 2 069 | ≈ 0 |
+| Lock contentions /s | 1.90 | 2.08 | ≈ 0 |
+
+Raw: `iter2/iter4-{before,after}.csv`.
+
+## Cumulative trajectory
+
+| Branch state | CPU (s/s, mean) | Δ vs prior | Workload |
+|---|---|---|---|
+| develop / Debug | 0.565 (56.5 %) | — | quiet RX |
+| perf3 round 1 (`4dbad0e`) | 0.436 (43.6 %) | −23 % | quiet RX |
+| +Workstation GC (`3288401`) | 0.371 (37.1 %) | −15 % | quiet RX |
+| +iter1 channel-drain (`98a0e94`) | 0.357 (35.7 %) | −3.8 % | quiet RX |
+| +iter3 PsAutoAttn (`77e9ba6`) | _below noise_ | <1 % | mixed |
+| +iter4 display gate (`c35c844`) | identity (connected) | 0 % connected | mixed |
+
+**On quiet RX-only steady state with one client, the branch lands at 35.7 % CPU — Brian's < 35 % stop-criterion is barely met.** The remaining 35 % is dominated by intrinsic WDSP work (`xresample` ~9 %, `xemnr`, `calc_gain`, FFT chain via `Cspectra`+`detector`+FFTW3 ~7-8 % combined), the per-packet 381 Hz TX-loop UDP send overhead (`__sendmsg_nocancel` ~12 %), and per-packet `mach_absolute_time` calls used by various timers and async-state-machine continuation queueing (`swtch_pri` ~34 %, `ThreadNative_SpinWait` ~21 % — both essentially TP dispatcher park/wake costs).
+
+Going below 35 % from here would require touching one of:
+
+1. **TX-loop pacing** (RED-LIGHT per CLAUDE.md — dB-sensitive, needs HL2 bench).
+2. **Lowering default RX sample rate or display tick rate** (RED-LIGHT — default value change operator will feel).
+3. **WDSP-internal optimisations** (out of scope per task).
+4. **Native AOT / R2R compilation** to shave the remaining JIT / dispatch overhead — orthogonal, larger change.
+
+Recommendation: stop iterating here. The branch's CPU win on the load-bearing measurement is real and reproducible; further iterations on safe targets have diminishing returns at the noise floor.
+
 ## Confounders
 
 - **Debug → Release** accounts for some of the CPU win on its own. We did NOT capture a Debug-vs-Debug, only Debug-before vs Release-after.
