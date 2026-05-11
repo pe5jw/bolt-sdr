@@ -174,6 +174,28 @@ public sealed class Protocol1Client : IProtocol1Client
 
     public ChannelReader<PsFeedbackFrame> PsFeedbackFrames => _psFeedbackFrames.Reader;
 
+    // ---- Synchronous RX sink (iter5: collapse pumps onto RxLoop thread) -----
+    // Optional sink attached via AttachRxSink. When non-null, RxLoop calls
+    // sink.OnIqFrame / sink.OnPsFeedbackFrame DIRECTLY instead of writing to
+    // the channels — this eliminates the Channel<T> -> WaitToReadAsync ->
+    // ThreadPool wake-up amplification we measured in iter4. We keep the
+    // channel-write fallback for the no-sink case so tests / in-process
+    // probes (e.g. Zeus.Protocol1.Tests, tools/zeus-dump) continue to work.
+    //
+    // Read via Volatile.Read at the top of every packet so a runtime swap
+    // (rare; Interlocked.Exchange) is visible without a lock.
+    private IRxPacketSink? _rxSink;
+
+    /// <inheritdoc />
+    public void AttachRxSink(IRxPacketSink sink)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        Interlocked.Exchange(ref _rxSink, sink);
+    }
+
+    /// <inheritdoc />
+    public void DetachRxSink() => Interlocked.Exchange(ref _rxSink, null);
+
     // Small ring of the most-recent TX-IQ samples we wrote to the wire.
     // When PS+MOX is on, the RX loop pulls a "TX side" out of this ring
     // for each DDC1 feedback sample so the calcc state machine receives
@@ -281,7 +303,25 @@ public sealed class Protocol1Client : IProtocol1Client
             };
             var memory = new ReadOnlyMemory<double>(rented, 0, 2 * samples);
             var frame = new IqFrame(memory, samples, rateHz, seq, NowNs());
-            if (_channel.Writer.TryWrite(frame))
+            // iter5: if a synchronous sink is attached, hand the frame off
+            // directly on the RX thread (no Channel hop). Sink takes ownership
+            // of `rented` on success; on throw, we return the buffer ourselves
+            // so a buggy consumer can't leak the pool.
+            var sinkSnap = Volatile.Read(ref _rxSink);
+            if (sinkSnap != null)
+            {
+                try
+                {
+                    sinkSnap.OnIqFrame(in frame);
+                    publishedToIqChannel = true; // sink now owns `rented`
+                }
+                catch (Exception ex)
+                {
+                    _log.LogError(ex, "p1.rx.sink_threw kind=iq");
+                    ArrayPool<double>.Shared.Return(rented);
+                }
+            }
+            else if (_channel.Writer.TryWrite(frame))
             {
                 publishedToIqChannel = true; // channel now owns `rented`
             }
@@ -311,8 +351,20 @@ public sealed class Protocol1Client : IProtocol1Client
                     Array.Copy(_psTxQ, txQ, PsFeedbackBlockSize);
                     Array.Copy(_psRxI, rxI, PsFeedbackBlockSize);
                     Array.Copy(_psRxQ, rxQ, PsFeedbackBlockSize);
-                    _psFeedbackFrames.Writer.TryWrite(new PsFeedbackFrame(
-                        txI, txQ, rxI, rxQ, _psBlockStartSeq));
+                    var psFrame = new PsFeedbackFrame(txI, txQ, rxI, rxQ, _psBlockStartSeq);
+                    // iter5: prefer the synchronous sink when attached. PS-feedback
+                    // buffers are plain float[] (not pooled), so a sink-throws path
+                    // just drops the block — no ArrayPool fallout.
+                    var psSinkSnap = Volatile.Read(ref _rxSink);
+                    if (psSinkSnap != null)
+                    {
+                        try { psSinkSnap.OnPsFeedbackFrame(in psFrame); }
+                        catch (Exception ex) { _log.LogError(ex, "p1.rx.sink_threw kind=psfb"); }
+                    }
+                    else
+                    {
+                        _psFeedbackFrames.Writer.TryWrite(psFrame);
+                    }
                     _psBlockFill = 0;
 
                     // Heartbeat: every Nth block, log block-peak magnitudes so
@@ -724,10 +776,28 @@ public sealed class Protocol1Client : IProtocol1Client
 
                 var memory = new ReadOnlyMemory<double>(rented, 0, 2 * samples);
                 var frame = new IqFrame(memory, samples, rateHz, seq, NowNs());
-                // DropOldest: full-channel writes never block; oldest frame is discarded.
-                // Its rented buffer is not returned to ArrayPool — we accept that the pool
-                // will re-allocate rather than complicate ownership for MVP.
-                _channel.Writer.TryWrite(frame);
+                // iter5: prefer the synchronous sink when attached — the sink
+                // takes ownership of `rented` on a successful (non-throwing)
+                // return and must arrange the ArrayPool return when done. On
+                // throw, we return the buffer here so a broken consumer
+                // can't leak the pool.
+                var sinkSnap = Volatile.Read(ref _rxSink);
+                if (sinkSnap != null)
+                {
+                    try { sinkSnap.OnIqFrame(in frame); }
+                    catch (Exception ex)
+                    {
+                        _log.LogError(ex, "p1.rx.sink_threw kind=iq");
+                        ArrayPool<double>.Shared.Return(rented);
+                    }
+                }
+                else
+                {
+                    // DropOldest: full-channel writes never block; oldest frame is discarded.
+                    // Its rented buffer is not returned to ArrayPool — we accept that the pool
+                    // will re-allocate rather than complicate ownership for MVP.
+                    _channel.Writer.TryWrite(frame);
+                }
             }
         }
         finally
