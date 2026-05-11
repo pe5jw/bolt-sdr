@@ -107,13 +107,6 @@ public sealed class Rf2kSettingsStore : IDisposable
 
     public void Dispose() => _db.Dispose();
 
-    private static string GetDatabasePath()
-    {
-        var appDataDir = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData,
-            Environment.SpecialFolderOption.Create);
-        return Path.Combine(appDataDir, "Zeus", "zeus-prefs.db");
-    }
 }
 
 public sealed class Rf2kConfigEntry

@@ -168,13 +168,6 @@ public sealed class BandPlanStore : IDisposable
         }
     }
 
-    private static string GetDatabasePath()
-    {
-        var appDataDir = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData,
-            Environment.SpecialFolderOption.Create);
-        return Path.Combine(appDataDir, "Zeus", "zeus-prefs.db");
-    }
 
     // JSON deserialisation shape — camelCase keys in file, nullable-friendly
     private sealed class SegmentJson
