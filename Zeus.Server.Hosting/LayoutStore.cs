@@ -70,7 +70,7 @@ public sealed class LayoutStore : IDisposable
     public LayoutStore(ILogger<LayoutStore> log)
     {
         _log = log;
-        var dbPath = GetDatabasePath();
+        var dbPath = PrefsDbPath.Get();
 
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))

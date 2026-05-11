@@ -60,7 +60,7 @@ public sealed class BandMemoryStore : IDisposable
     public BandMemoryStore(ILogger<BandMemoryStore> log)
     {
         _log = log;
-        var dbPath = GetDatabasePath();
+        var dbPath = PrefsDbPath.Get();
 
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))

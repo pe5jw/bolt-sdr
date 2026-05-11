@@ -33,7 +33,7 @@ public sealed class Rf2kSettingsStore : IDisposable
     public Rf2kSettingsStore(ILogger<Rf2kSettingsStore> log, string? dbPathOverride = null)
     {
         _log = log;
-        var dbPath = dbPathOverride ?? GetDatabasePath();
+        var dbPath = dbPathOverride ?? PrefsDbPath.Get();
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);

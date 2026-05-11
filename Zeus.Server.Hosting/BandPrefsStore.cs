@@ -22,7 +22,7 @@ public sealed class BandPrefsStore : IDisposable
 
     public BandPrefsStore()
     {
-        var dbPath = GetDatabasePath();
+        var dbPath = PrefsDbPath.Get();
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);

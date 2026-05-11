@@ -40,7 +40,7 @@ public sealed class BandPlanStore : IDisposable
     {
         _log = log;
 
-        var dbPath = GetDatabasePath();
+        var dbPath = PrefsDbPath.Get();
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);

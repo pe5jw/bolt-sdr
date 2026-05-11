@@ -53,7 +53,7 @@ public sealed class FilterPresetStore : IDisposable
         _log = log;
         EnsureMapperRegistered();
 
-        var dbPath = GetDatabasePath();
+        var dbPath = PrefsDbPath.Get();
 
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))

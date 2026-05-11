@@ -49,7 +49,7 @@ public sealed class PreferredRadioStore : IDisposable
     public PreferredRadioStore(ILogger<PreferredRadioStore> log, string? dbPathOverride = null)
     {
         _log = log;
-        var dbPath = dbPathOverride ?? GetDatabasePath();
+        var dbPath = dbPathOverride ?? PrefsDbPath.Get();
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);

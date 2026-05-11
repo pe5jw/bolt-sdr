@@ -79,7 +79,7 @@ public sealed class LiteDbVstChainPersistence : IVstChainPersistence, IDisposabl
         string? dbPathOverride = null)
     {
         _log = log;
-        var dbPath = dbPathOverride ?? GetDatabasePath();
+        var dbPath = dbPathOverride ?? PrefsDbPath.Get();
 
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
