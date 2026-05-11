@@ -449,17 +449,36 @@ public class DspPipelineService : BackgroundService
         // instance picks up the canonical state instead of running on its
         // field defaults.
         bool resync = _psResyncRequired;
-        if (resync || s.PsHwPeak != _appliedPsHwPeak)
+        // All three blocks below issue WDSP calls that perturb calcc state —
+        // SetPSHWPeak rewrites hw_scale and forces an internal re-bin;
+        // SetPsAdvanced/SetPsControl issue SetPSControl(reset=1, ...) which
+        // flips the calcc state machine back through LRESET, truncating any
+        // in-flight polynomial fit. Doing any of that mid-MOX is the
+        // sporadic-splatter trigger: any unrelated Mutate() during a live
+        // key-down (e.g. RX ADC overload nudging _attOffsetDb at 10 Hz, S-meter
+        // retracking, panadapter zoom, operator UI nudge) would otherwise
+        // reset PS and bloom IMD3 sidebands for 50-500 ms until calcc
+        // walked back to LSTAYON. Thetis avoids this by construction —
+        // PSForm only issues SetPSControl from explicit state-machine
+        // transitions, never from a generic dispatcher.
+        //
+        // While _keyed is true (MOX or TUN), defer the apply; OnRadioMoxChanged
+        // re-invokes OnRadioStateChanged on the falling edge to pick up
+        // anything that was deferred during the key-down. SetPsEnabled
+        // (arm/disarm) is intentionally NOT guarded — the operator must
+        // be able to disable PS mid-TX to stop a splatter event.
+        var psApplyDeferred = _keyed;
+        if (!psApplyDeferred && (resync || s.PsHwPeak != _appliedPsHwPeak))
         {
             engine.SetPsHwPeak(s.PsHwPeak);
             _appliedPsHwPeak = s.PsHwPeak;
         }
-        if (resync
+        if (!psApplyDeferred && (resync
             || s.PsPtol != _appliedPsPtol
             || s.PsMoxDelaySec != _appliedPsMoxDelaySec
             || s.PsLoopDelaySec != _appliedPsLoopDelaySec
             || s.PsAmpDelayNs != _appliedPsAmpDelayNs
-            || s.PsIntsSpiPreset != _appliedPsIntsSpiPreset)
+            || s.PsIntsSpiPreset != _appliedPsIntsSpiPreset))
         {
             (int ints, int spi) = ParseIntsSpi(s.PsIntsSpiPreset);
             engine.SetPsAdvanced(
@@ -476,7 +495,7 @@ public class DspPipelineService : BackgroundService
             _appliedPsAmpDelayNs = s.PsAmpDelayNs;
             _appliedPsIntsSpiPreset = s.PsIntsSpiPreset;
         }
-        if (resync || s.PsAuto != _appliedPsAuto || s.PsSingle != _appliedPsSingle)
+        if (!psApplyDeferred && (resync || s.PsAuto != _appliedPsAuto || s.PsSingle != _appliedPsSingle))
         {
             engine.SetPsControl(s.PsAuto, s.PsSingle);
             _appliedPsAuto = s.PsAuto;
@@ -969,6 +988,17 @@ public class DspPipelineService : BackgroundService
     {
         _keyed = on;
         _p2Client?.SetMox(on);
+        // Falling edge: pick up any PS knob changes that OnRadioStateChanged
+        // deferred while we were keyed (HwPeak / Ptol / Advanced / Control).
+        // Without this re-trigger a deferred change would sit unapplied until
+        // the next unrelated StateChanged event, which could be several seconds
+        // away. The state-change handler is idempotent against equality checks,
+        // so re-invoking it when nothing was deferred is harmless.
+        if (!on)
+        {
+            try { OnRadioStateChanged(_radio.Snapshot()); }
+            catch (Exception ex) { _log.LogWarning(ex, "dsp.pipeline mox-off restate failed"); }
+        }
     }
 
     private void OnRadioTunActiveChanged(bool on)
