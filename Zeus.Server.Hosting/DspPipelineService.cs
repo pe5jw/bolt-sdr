@@ -761,17 +761,26 @@ public class DspPipelineService : BackgroundService
         _psFeedbackPumpCts = cts;
         _psFeedbackPumpTask = Task.Run(async () =>
         {
+            // perf3: same async-iterator → direct ChannelReader.ReadAsync
+            // rewrite as StartIqPump. PS-feedback runs at ~188 frame/s when
+            // PS is armed (192 kHz / 1024 paired samples), 0 when idle —
+            // smaller absolute saving than the IQ pump but identical alloc
+            // pattern and free to take.
+            var reader = client.PsFeedbackFrames;
+            var token = cts.Token;
             try
             {
-                await foreach (var frame in client.PsFeedbackFrames.ReadAllAsync(cts.Token).ConfigureAwait(false))
+                while (true)
                 {
+                    Zeus.Protocol2.PsFeedbackFrame frame;
+                    try { frame = await reader.ReadAsync(token).ConfigureAwait(false); }
+                    catch (ChannelClosedException) { break; }
                     IDspEngine? engine;
                     lock (_engineLock) { engine = _engine; }
                     engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
                 }
             }
             catch (OperationCanceledException) { }
-            catch (ChannelClosedException) { }
             catch (Exception ex)
             {
                 _log.LogWarning(ex, "dsp.pipeline p2 ps-feedback-pump exited with error");
@@ -796,17 +805,23 @@ public class DspPipelineService : BackgroundService
         _psFeedbackPumpCts = cts;
         _psFeedbackPumpTask = Task.Run(async () =>
         {
+            // perf3: same async-iterator → direct ChannelReader.ReadAsync
+            // rewrite as the IQ pumps and P2 PS-feedback pump above.
+            var reader = client.PsFeedbackFrames;
+            var token = cts.Token;
             try
             {
-                await foreach (var frame in client.PsFeedbackFrames.ReadAllAsync(cts.Token).ConfigureAwait(false))
+                while (true)
                 {
+                    Zeus.Protocol1.PsFeedbackFrame frame;
+                    try { frame = await reader.ReadAsync(token).ConfigureAwait(false); }
+                    catch (ChannelClosedException) { break; }
                     IDspEngine? engine;
                     lock (_engineLock) { engine = _engine; }
                     engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
                 }
             }
             catch (OperationCanceledException) { }
-            catch (ChannelClosedException) { }
             catch (Exception ex)
             {
                 _log.LogWarning(ex, "dsp.pipeline p1 ps-feedback-pump exited with error");
@@ -1130,7 +1145,11 @@ public class DspPipelineService : BackgroundService
         // race window — visible as a brief flash of the fake waterfall right
         // when the user clicked Connect. The synthetic engine never produces
         // real-radio data, so suppressing it unconditionally is correct.
-        if (engine is SyntheticDspEngine) return;
+        // PERF_PASS_3_DEBUG: in perf-test mode, let the synthetic path through so
+        // the audio broadcast loop drains the engine's silence frames and the
+        // client-side scheduling instrumentation gets exercised. Uncommitted.
+        if (engine is SyntheticDspEngine
+            && Environment.GetEnvironmentVariable("ZEUS_PERF_TEST") != "1") return;
 
         engine.SetVfoHz(channel, state.VfoHz);
 
