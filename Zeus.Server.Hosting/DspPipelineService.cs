@@ -180,6 +180,9 @@ public class DspPipelineService : BackgroundService
     // see issue #81. volatile because MoxChanged fires on the caller's thread
     // and Tick reads from the pipeline thread.
     private volatile bool _keyed;
+    // PERF_PASS_3_DEBUG: tracks _keyed across audio-broadcast ticks so we
+    // log the first un-keyed broadcast (t3). Uncommitted.
+    private bool _prevKeyedAtAudioTick;
     // RX S-meter broadcast throttle. Pipeline ticks at 30 Hz; broadcasting
     // every 6 ticks = 5 Hz gives a smoother meter than Thetis's 4 Hz baseline
     // without spamming the WS (30 Hz dBm readouts add nothing a UI can use).
@@ -665,10 +668,27 @@ public class DspPipelineService : BackgroundService
         _iqPumpCts = cts;
         _iqPumpTask = Task.Run(async () =>
         {
+            // perf3: replace `await foreach (... ReadAllAsync(ct))` with a
+            // direct ChannelReader.ReadAsync(ct) loop. The async-iterator
+            // returned by ReadAllAsync is `IAsyncEnumerable<T>`; iterating
+            // it produces a compiler-generated state machine that allocates
+            // a fresh `ManualResetValueTaskSourceCore`-wrapping box on every
+            // suspension (perf3 baseline measured ~13.5% of total server
+            // alloc-rate on HL2 192 kHz). ChannelReader.ReadAsync returns
+            // ValueTask<T> directly off the channel's pooled completion
+            // source, which is allocation-free in the fast path (data
+            // already in the queue) and shares a single source on slow
+            // path. Functionally identical: same packet ordering, same
+            // cancellation, same ChannelClosedException terminator.
+            var reader = client.IqFrames;
+            var token = cts.Token;
             try
             {
-                await foreach (var frame in client.IqFrames.ReadAllAsync(cts.Token).ConfigureAwait(false))
+                while (true)
                 {
+                    Zeus.Protocol1.IqFrame frame;
+                    try { frame = await reader.ReadAsync(token).ConfigureAwait(false); }
+                    catch (ChannelClosedException) { break; }
                     IDspEngine? engine;
                     int channel;
                     lock (_engineLock) { engine = _engine; channel = _channelId; }
@@ -691,7 +711,6 @@ public class DspPipelineService : BackgroundService
                 }
             }
             catch (OperationCanceledException) { }
-            catch (ChannelClosedException) { }
             catch (Exception ex)
             {
                 _log.LogWarning(ex, "dsp.pipeline iq-pump exited with error");
@@ -705,10 +724,18 @@ public class DspPipelineService : BackgroundService
         _iqPumpCts = cts;
         _iqPumpTask = Task.Run(async () =>
         {
+            // perf3: same async-iterator → direct ChannelReader.ReadAsync
+            // rewrite as the P1 pump above. P2 has lower packet rate but
+            // the alloc pattern is identical.
+            var reader = client.IqFrames;
+            var token = cts.Token;
             try
             {
-                await foreach (var frame in client.IqFrames.ReadAllAsync(cts.Token).ConfigureAwait(false))
+                while (true)
                 {
+                    Zeus.Protocol2.IqFrame frame;
+                    try { frame = await reader.ReadAsync(token).ConfigureAwait(false); }
+                    catch (ChannelClosedException) { break; }
                     IDspEngine? engine;
                     int channel;
                     lock (_engineLock) { engine = _engine; channel = _channelId; }
@@ -717,7 +744,6 @@ public class DspPipelineService : BackgroundService
                 }
             }
             catch (OperationCanceledException) { }
-            catch (ChannelClosedException) { }
             catch (Exception ex)
             {
                 _log.LogWarning(ex, "dsp.pipeline p2 iq-pump exited with error");
@@ -1231,6 +1257,13 @@ public class DspPipelineService : BackgroundService
                     SampleRateHz: (uint)AudioOutputRateHz,
                     SampleCount: (ushort)audioSampleCount,
                     Samples: new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
+                // PERF_PASS_3_DEBUG: t3 — first audio broadcast after MOX-off. Uncommitted.
+                if (_prevKeyedAtAudioTick && !_keyed)
+                {
+                    _log.LogInformation("rx.audio.firstBroadcast ts={Ts} samples={N}",
+                        System.Diagnostics.Stopwatch.GetTimestamp(), audioSampleCount);
+                }
+                _prevKeyedAtAudioTick = _keyed;
                 _hub.Broadcast(audioFrame);
                 RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
             }
