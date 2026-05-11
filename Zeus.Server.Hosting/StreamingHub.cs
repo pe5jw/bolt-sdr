@@ -341,10 +341,26 @@ public sealed class StreamingHub
 
         private async Task SendLoopAsync(CancellationToken ct)
         {
+            // perf3: replaced `await foreach (... ReadAllAsync(ct))` with a
+            // direct ChannelReader.ReadAsync(ct) loop to skip the
+            // async-iterator state-machine box. At the steady-state ~60 frame/s
+            // per client (display+audio+meters combined), each MoveNextAsync
+            // suspension allocates a ManualResetValueTaskSourceCore-wrapping
+            // box. ChannelReader.ReadAsync returns ValueTask<T> off the
+            // channel's pooled IValueTaskSource and is allocation-free in
+            // the synchronous-fast-path (item already queued). Channel is
+            // CreateBounded(DropOldest, SingleReader=true) so semantics are
+            // identical: same drop-oldest behaviour, same cancellation, same
+            // ChannelClosedException terminator when Writer.TryComplete is
+            // called from RunAsync.
+            var reader = _queue.Reader;
             try
             {
-                await foreach (var frame in _queue.Reader.ReadAllAsync(ct))
+                while (true)
                 {
+                    byte[] frame;
+                    try { frame = await reader.ReadAsync(ct).ConfigureAwait(false); }
+                    catch (ChannelClosedException) { break; }
                     if (_ws.State != WebSocketState.Open) break;
                     await _ws.SendAsync(frame, WebSocketMessageType.Binary, true, ct);
                 }
