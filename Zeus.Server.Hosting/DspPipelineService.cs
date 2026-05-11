@@ -1140,94 +1140,120 @@ public class DspPipelineService : BackgroundService
 
         engine.SetVfoHz(channel, state.VfoHz);
 
-        // While keyed (MOX or TUN — see _keyed comment) pull from the TX
-        // analyzer so the panadapter shows the transmitted signal instead of
-        // the RX front end's TX bleed (issue #81). If the TX analyzer isn't
-        // ready (not yet produced an FFT, or engine doesn't have a TX
-        // analyzer — e.g. Synthetic), TryGetTxDisplayPixels returns false and
-        // we fall through to the RX analyzer, matching the pre-issue-#81
-        // behaviour. This fallback also covers the first ~1 tick after
-        // keying before the analyzer averaging has settled.
-        //
-        // Issue #121 layered on top: if the operator has the "Monitor PA
-        // output" toggle on AND PS is armed AND PS has converged
-        // (info[14]==1, surfaced via GetPsStageMeters().Correcting), prefer
-        // the PS-feedback analyzer (post-PA loopback IQ). Falls back to the
-        // TX analyzer if the PS-FB analyzer hasn't produced a fresh FFT yet
-        // — same shape as the existing TX → RX fallback. Default-off
-        // toggle: when off the codepath is identical to pre-#121, byte for
-        // byte, on every board.
+        // perf3 iter4: skip the entire display pipeline when no client is
+        // subscribed. Saves: 2× engine.TryGet*DisplayPixels P/Invoke per tick
+        // (each reads from the WDSP analyzer slot under its lock), Array.Reverse
+        // on two 2 048-float buffers, the DisplayFrame record construction, and
+        // the 16 KB-ish byte[] payload that StreamingHub.Broadcast(DisplayFrame)
+        // would allocate. Hub.Broadcast already short-circuits on _clients.IsEmpty
+        // at the wire-payload step (see StreamingHub.cs:161), but the upstream
+        // work (TryGetDisplayPixels, Array.Reverse, DisplayFrame ctor) runs
+        // anyway. At 30 Hz that's a measurable native + managed cost. Audio
+        // path below still runs unconditionally — RXA must keep draining so the
+        // WDSP audio ring doesn't back up, and RxAudioAvailable subscribers
+        // (TCI, future VST RX seam) may still want frames even with no WS
+        // client. Cheap O(1) read of ConcurrentDictionary.Count.
+        bool hasClients = _hub.ClientCount > 0;
+        // Audio path uses nowMs too (it runs even when no clients are connected,
+        // for in-process RxAudioAvailable subscribers like TCI). Hoisted above
+        // the display gate to keep one timestamp call per tick.
+        double nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         bool pan = false, wf = false;
         bool psFbPanUsed = false, psFbWfUsed = false;
-        if (_keyed)
+        if (hasClients)
         {
-            if (_appliedPsEnabled && _psMonitorEnabled
-                && engine.GetPsStageMeters().Correcting)
+            // While keyed (MOX or TUN — see _keyed comment) pull from the TX
+            // analyzer so the panadapter shows the transmitted signal instead of
+            // the RX front end's TX bleed (issue #81). If the TX analyzer isn't
+            // ready (not yet produced an FFT, or engine doesn't have a TX
+            // analyzer — e.g. Synthetic), TryGetTxDisplayPixels returns false and
+            // we fall through to the RX analyzer, matching the pre-issue-#81
+            // behaviour. This fallback also covers the first ~1 tick after
+            // keying before the analyzer averaging has settled.
+            //
+            // Issue #121 layered on top: if the operator has the "Monitor PA
+            // output" toggle on AND PS is armed AND PS has converged
+            // (info[14]==1, surfaced via GetPsStageMeters().Correcting), prefer
+            // the PS-feedback analyzer (post-PA loopback IQ). Falls back to the
+            // TX analyzer if the PS-FB analyzer hasn't produced a fresh FFT yet
+            // — same shape as the existing TX → RX fallback. Default-off
+            // toggle: when off the codepath is identical to pre-#121, byte for
+            // byte, on every board.
+            if (_keyed)
             {
-                pan = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Panadapter, panBuf);
-                wf = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Waterfall, wfBuf);
-                psFbPanUsed = pan;
-                psFbWfUsed = wf;
+                if (_appliedPsEnabled && _psMonitorEnabled
+                    && engine.GetPsStageMeters().Correcting)
+                {
+                    pan = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Panadapter, panBuf);
+                    wf = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+                    psFbPanUsed = pan;
+                    psFbWfUsed = wf;
+                }
+                if (!pan) pan = engine.TryGetTxDisplayPixels(DisplayPixout.Panadapter, panBuf);
+                if (!wf) wf = engine.TryGetTxDisplayPixels(DisplayPixout.Waterfall, wfBuf);
             }
-            if (!pan) pan = engine.TryGetTxDisplayPixels(DisplayPixout.Panadapter, panBuf);
-            if (!wf) wf = engine.TryGetTxDisplayPixels(DisplayPixout.Waterfall, wfBuf);
-        }
-        if (_keyed && _psMonitorEnabled)
-        {
-            _psMonitorTickCount++;
-            if (_psMonitorTickCount % 30 == 0)
+            if (_keyed && _psMonitorEnabled)
             {
-                var m = engine.GetPsStageMeters();
-                _log.LogInformation(
-                    "psMonitor.gate keyed=1 psEn={PsEn} mon=1 corr={Corr} psFbPan={Pan} psFbWf={Wf}",
-                    _appliedPsEnabled, m.Correcting, psFbPanUsed, psFbWfUsed);
+                _psMonitorTickCount++;
+                if (_psMonitorTickCount % 30 == 0)
+                {
+                    var m = engine.GetPsStageMeters();
+                    _log.LogInformation(
+                        "psMonitor.gate keyed=1 psEn={PsEn} mon=1 corr={Corr} psFbPan={Pan} psFbWf={Wf}",
+                        _appliedPsEnabled, m.Correcting, psFbPanUsed, psFbWfUsed);
+                }
             }
+            else
+            {
+                _psMonitorTickCount = 0;
+            }
+            if (!pan) pan = engine.TryGetDisplayPixels(channel, DisplayPixout.Panadapter, panBuf);
+            if (!wf) wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
+
+            // Flip to display order (low freq left, high freq right). WDSP emits
+            // pixel 0 = highest positive frequency — see doc 03 §10 and
+            // doc 08 §3 "Pixel axis reversal". SyntheticDspEngine already emits
+            // in WDSP order so this reversal applies to both engines. Guarded by
+            // the freshness flag: TryGetDisplayPixels leaves the buffer untouched
+            // when no new FFT is ready, so an unconditional reverse would alternate
+            // the orientation on every stale tick and broadcast mirrored garbage
+            // (still flagged invalid, but bandwidth wasted and timing-sensitive).
+            if (pan) Array.Reverse(panBuf);
+            if (wf) Array.Reverse(wfBuf);
+
+            var flags = DisplayBodyFlags.None;
+            if (pan) flags |= DisplayBodyFlags.PanValid;
+            if (wf) flags |= DisplayBodyFlags.WfValid;
+
+            // Zoom narrows the analyzer's display span to sampleRate/level around
+            // the VFO, so hzPerPixel shrinks by the same factor. Client re-uses
+            // this for axis labels and planWaterfallUpdate horizontal shift — no
+            // extra contract field needed, per task #7 scope note.
+            int zoomLevel = Math.Max(1, state.ZoomLevel);
+            float hzPerPixel = (float)((double)sampleRate / zoomLevel / Width);
+            var frame = new DisplayFrame(
+                Seq: ++_seq,
+                TsUnixMs: nowMs,
+                RxId: 0,
+                BodyFlags: flags,
+                Width: Width,
+                // Panadapter centres on the radio's actual LO, which equals
+                // VfoHz outside CW and VfoHz ∓ cw_pitch in CWU/CWL. The CW filter
+                // (audio passband centred on cw_pitch) then renders on top of
+                // the dial line via PassbandOverlay's `centerHz + filterLow..high`.
+                CenterHz: CwOffset.EffectiveLoHz(state),
+                HzPerPixel: hzPerPixel,
+                PanDb: panBuf,
+                WfDb: wfBuf);
+
+            _hub.Broadcast(frame);
         }
         else
         {
+            // Still reset the PS-monitor tick counter on no-client ticks so a
+            // fresh client doesn't pick up a stale gate counter.
             _psMonitorTickCount = 0;
         }
-        if (!pan) pan = engine.TryGetDisplayPixels(channel, DisplayPixout.Panadapter, panBuf);
-        if (!wf) wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
-
-        // Flip to display order (low freq left, high freq right). WDSP emits
-        // pixel 0 = highest positive frequency — see doc 03 §10 and
-        // doc 08 §3 "Pixel axis reversal". SyntheticDspEngine already emits
-        // in WDSP order so this reversal applies to both engines. Guarded by
-        // the freshness flag: TryGetDisplayPixels leaves the buffer untouched
-        // when no new FFT is ready, so an unconditional reverse would alternate
-        // the orientation on every stale tick and broadcast mirrored garbage
-        // (still flagged invalid, but bandwidth wasted and timing-sensitive).
-        if (pan) Array.Reverse(panBuf);
-        if (wf) Array.Reverse(wfBuf);
-
-        var flags = DisplayBodyFlags.None;
-        if (pan) flags |= DisplayBodyFlags.PanValid;
-        if (wf) flags |= DisplayBodyFlags.WfValid;
-
-        // Zoom narrows the analyzer's display span to sampleRate/level around
-        // the VFO, so hzPerPixel shrinks by the same factor. Client re-uses
-        // this for axis labels and planWaterfallUpdate horizontal shift — no
-        // extra contract field needed, per task #7 scope note.
-        int zoomLevel = Math.Max(1, state.ZoomLevel);
-        float hzPerPixel = (float)((double)sampleRate / zoomLevel / Width);
-        double nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var frame = new DisplayFrame(
-            Seq: ++_seq,
-            TsUnixMs: nowMs,
-            RxId: 0,
-            BodyFlags: flags,
-            Width: Width,
-            // Panadapter centres on the radio's actual LO, which equals
-            // VfoHz outside CW and VfoHz ∓ cw_pitch in CWU/CWL. The CW filter
-            // (audio passband centred on cw_pitch) then renders on top of
-            // the dial line via PassbandOverlay's `centerHz + filterLow..high`.
-            CenterHz: CwOffset.EffectiveLoHz(state),
-            HzPerPixel: hzPerPixel,
-            PanDb: panBuf,
-            WfDb: wfBuf);
-
-        _hub.Broadcast(frame);
 
         // Audio broadcast — when TX monitor is on, replace RX audio with the
         // monitor channel's demodulated TX audio so the operator hears the
