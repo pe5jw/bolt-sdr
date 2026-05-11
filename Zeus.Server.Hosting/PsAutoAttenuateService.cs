@@ -61,6 +61,13 @@ public sealed class PsAutoAttenuateService : BackgroundService
     // 10 Hz tick. Same cadence Thetis runs timer2code at when PS is armed and
     // the form has focus (PSForm.cs:204-209, m_bQuckAttenuate=false default).
     private static readonly TimeSpan Tick = TimeSpan.FromMilliseconds(100);
+    // perf3 iter3: idle cadence used when PS is disarmed or the radio isn't
+    // keyed. At 1 Hz we still notice an arm-edge or MOX-on within a second
+    // (which is plenty — the operator's own click latency is more than that),
+    // while shedding 90 % of the steady-state TP wake-ups. The Tick1 body
+    // early-returns in ≤2 lock-free checks on the idle gates, so the wake
+    // cost is small per-tick; the win is the 10× lower wake rate.
+    private static readonly TimeSpan IdleTick = TimeSpan.FromSeconds(1);
 
     // Hardware bounds for the TX step attenuator (Thetis network.c:1238-1242
     // writes a single byte 0..31 dB per ADC tap).
@@ -157,7 +164,15 @@ public sealed class PsAutoAttenuateService : BackgroundService
         _log.LogInformation("psAutoAttn.start");
         try
         {
-            using var timer = new PeriodicTimer(Tick);
+            // perf3 iter3: adaptive tick cadence. Start in the idle cadence
+            // (1 Hz) and switch to the active cadence (10 Hz) the moment PS
+            // arms AND the radio is keyed. Brings TP wake-ups down by ~90 %
+            // for the steady-state RX-only operator scenario where this
+            // service used to spin at 10 Hz purely to evaluate two booleans
+            // and return. PeriodicTimer.Period (settable since .NET 8) lets
+            // us reuse the same timer instance — no dispose/recreate churn.
+            using var timer = new PeriodicTimer(IdleTick);
+            var currentPeriod = IdleTick;
             while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
             {
                 try
@@ -169,6 +184,19 @@ public sealed class PsAutoAttenuateService : BackgroundService
                     // Swallow — the loop must keep running so a transient
                     // engine race doesn't permanently disable auto-attn.
                     _log.LogWarning(ex, "psAutoAttn.tick failed");
+                }
+                // Decide the cadence for the NEXT tick. Active when PS is
+                // armed and the radio is keyed (MOX or TwoTone) — the only
+                // window where Tick1 does work other than early-returning.
+                // Snapshot is a struct copy on RadioService's cached state;
+                // ~free.
+                var s = _radio.Snapshot();
+                var wantActive = s.PsEnabled && (_tx.IsMoxOn || _tx.IsTwoToneOn);
+                var wantPeriod = wantActive ? Tick : IdleTick;
+                if (wantPeriod != currentPeriod)
+                {
+                    timer.Period = wantPeriod;
+                    currentPeriod = wantPeriod;
                 }
             }
         }
