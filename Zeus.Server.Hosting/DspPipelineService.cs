@@ -42,6 +42,8 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
@@ -52,7 +54,9 @@ using Zeus.Protocol1;
 
 namespace Zeus.Server;
 
-public class DspPipelineService : BackgroundService
+public class DspPipelineService : BackgroundService,
+    Zeus.Protocol1.IRxPacketSink,
+    Zeus.Protocol2.IRxPacketSink
 {
     private const int Width = 2048;
     private const int SyntheticSampleRateHz = 192_000;
@@ -186,6 +190,46 @@ public class DspPipelineService : BackgroundService
     private int _rxMeterTickMod;
     private const int RxMeterTickModulus = 6;
 
+    // ---- iter5 single-DSP-thread scaffolding -----------------------------
+    // The pipeline now owns its hot path via IRxPacketSink: when a radio
+    // connects we AttachRxSink to the protocol client and every IQ/PS-feedback
+    // packet flows synchronously into OnIqFrame/OnPsFeedbackFrame on the RX
+    // OS thread. WDSP calls happen inline on that thread. The 30 Hz display
+    // Tick is piggybacked: OnIqFrame checks Stopwatch.GetTimestamp() and
+    // fires Tick inline when >= 33.33 ms have elapsed since the last tick.
+    //
+    // While a sink is attached the ExecuteAsync PeriodicTimer skips Tick
+    // (the "watcher" pauses). With no sink attached (synthetic mode, pre-
+    // connect, or post-disconnect) the PeriodicTimer drives Tick at 30 Hz
+    // so the display chain stays live even when no IQ is flowing.
+    //
+    // Cross-thread mutations (engine swaps, OnRadioStateChanged engine
+    // calls, SetMox/SetTxTune) post Action commands here; the DSP thread
+    // drains the queue at the top of every IqFrame (and every Tick when no
+    // sink is attached). Pass 1: queue exists + drains, but cross-thread
+    // callers haven't been routed through it yet — they still take
+    // _engineLock as before. Pass 2 will move them onto the queue.
+    private volatile bool _rxSinkAttached;
+    // Reference to the protocol client this pipeline is currently sinking RX
+    // packets from. Cached so we can explicitly DetachRxSink on disconnect —
+    // RadioService nulls its ActiveClient before raising Disconnected, so the
+    // event handler can't pull the client off that surface.
+    private IProtocol1Client? _attachedSinkP1;
+    private Zeus.Protocol2.Protocol2Client? _attachedSinkP2;
+    private long _lastTickStopwatchTicks;
+    private static readonly long TickPeriodStopwatchTicks =
+        (long)(Stopwatch.Frequency / 30.0);
+    private readonly ConcurrentQueue<Action> _dspCommands = new();
+
+    // DSP-thread-owned scratch buffers. Allocated once at construction so
+    // both the PeriodicTimer-driven Tick (synthetic mode) and the inline
+    // RX-thread Tick (sink mode) share the same memory. Sink-mode and
+    // timer-mode are mutually exclusive (see _rxSinkAttached gate in
+    // ExecuteAsync), so no synchronisation is needed.
+    private readonly float[] _panBuf = new float[Width];
+    private readonly float[] _wfBuf = new float[Width];
+    private readonly float[] _audioBuf = new float[AudioDrainCapacity];
+
     public DspPipelineService(RadioService radio, StreamingHub hub, ILoggerFactory loggerFactory)
     {
         _radio = radio;
@@ -207,16 +251,25 @@ public class DspPipelineService : BackgroundService
         // Wire up Auto-AGC: feed RX meter readings to RadioService control loop
         RxMeterUpdated += (channelId, dbm) => _radio.HandleRxMeterForAutoAgc(dbm, Environment.TickCount64);
 
-        var panBuf = new float[Width];
-        var wfBuf = new float[Width];
-        var audioBuf = new float[AudioDrainCapacity];
         using var timer = new PeriodicTimer(TickPeriod);
 
         try
         {
             while (await timer.WaitForNextTickAsync(ct))
             {
-                Tick(panBuf, wfBuf, audioBuf);
+                // iter5: when a radio is connected, the sink (called on the
+                // RX OS thread) drives Tick inline via Stopwatch elapsed
+                // checks — see OnIqFrame. Skip the timer-driven Tick to avoid
+                // a double-tick and keep WDSP truly single-thread-owned on
+                // the hot path. The "no sink attached" branch keeps the
+                // synthetic-mode display alive when there's no radio.
+                if (_rxSinkAttached) continue;
+                // Drain any cross-thread commands posted while no sink was
+                // attached (rare — most commands arrive while a radio is
+                // connected and the sink is the consumer).
+                DrainDspCommands();
+                Tick(_panBuf, _wfBuf, _audioBuf);
+                _lastTickStopwatchTicks = Stopwatch.GetTimestamp();
             }
         }
         catch (OperationCanceledException) { }
@@ -324,6 +377,14 @@ public class DspPipelineService : BackgroundService
         _log.LogInformation("dsp.pipeline engine=wdsp channel={Id} rate={Rate}", channelId, rate);
         RaiseEngineChanged(wdsp);
 
+        // iter5: attach as the synchronous RX sink BEFORE the legacy channel
+        // pumps start. With the sink attached, Protocol1Client.RxLoop calls
+        // OnIqFrame/OnPsFeedbackFrame directly instead of writing the
+        // Channel<T> — so the legacy pumps below will sit on WaitToReadAsync
+        // forever (no frames flow through the channel path). Pass 1 keeps
+        // them running as a "dead but recoverable" fallback; pass 2 deletes
+        // them entirely once the sink path is proven on the bench.
+        AttachRxSinkP1(client);
         StartIqPump(client);
         StartPsFeedbackPumpP1(client);
         // Force the next OnRadioStateChanged to re-push every PS field into
@@ -344,6 +405,10 @@ public class DspPipelineService : BackgroundService
 
     private void OnRadioDisconnected()
     {
+        // iter5: detach the synchronous RX sink BEFORE stopping the legacy
+        // channel pumps. We use a locally-cached client reference because
+        // RadioService nulls _activeClient before raising Disconnected.
+        DetachRxSinkP1();
         StopIqPumpAsync().GetAwaiter().GetResult();
 
         var synth = new SyntheticDspEngine();
@@ -959,6 +1024,9 @@ public class DspPipelineService : BackgroundService
             client.SetAttenuator(nowAttDb);
             _appliedEffectiveAttDb = nowAttDb;
         }
+        // iter5: attach as the synchronous RX sink BEFORE the legacy channel
+        // pumps start. See AttachRxSinkP1 in OnRadioConnected for full rationale.
+        AttachRxSinkP2(client);
         StartIqPumpP2(client);
         StartPsFeedbackPumpP2(client);
         // Force the next OnRadioStateChanged to re-push every PS field into
@@ -1037,6 +1105,8 @@ public class DspPipelineService : BackgroundService
         _p2Client = null;
         if (client is null) return;
 
+        // iter5: detach the sink before stopping the (now-starved) channel pumps.
+        DetachRxSinkP2();
         await StopIqPumpAsync().ConfigureAwait(false);
         await StopPsFeedbackPumpAsync().ConfigureAwait(false);
         try { await client.StopAsync(ct).ConfigureAwait(false); } catch { }
@@ -1074,6 +1144,179 @@ public class DspPipelineService : BackgroundService
     }
 
     public Zeus.Protocol2.Protocol2Client? ActiveP2Client => _p2Client;
+
+    // ---- IRxPacketSink (Protocol 1) -----------------------------------------
+    // Called synchronously on Protocol1Client.RxLoop's OS thread. The body
+    // does, in order:
+    //   1) drain the cross-thread DSP command queue,
+    //   2) read a snapshot of the engine/channel/rate (volatile-ish: under
+    //      _engineLock for pass 1 — pass 2 will drop the lock entirely),
+    //   3) feed the IQ into WDSP,
+    //   4) fire the RxIqAvailable test seam,
+    //   5) return the ArrayPool buffer that Protocol1Client.RxLoop rented,
+    //   6) check whether 33.33 ms have elapsed since the last Tick and, if
+    //      so, run Tick INLINE on this thread (no PeriodicTimer involvement).
+    //
+    // Exceptions cannot propagate — the protocol client catches and logs at
+    // p1.rx.sink_threw, then continues. Sink-thrown exceptions still leak the
+    // ArrayPool buffer (the client returns it on our behalf when we throw),
+    // so we do our own try/finally inside the body to keep ownership tight.
+    void Zeus.Protocol1.IRxPacketSink.OnIqFrame(in Zeus.Protocol1.IqFrame frame)
+    {
+        try
+        {
+            DrainDspCommands();
+            IDspEngine? engine;
+            int channel;
+            lock (_engineLock) { engine = _engine; channel = _channelId; }
+            if (engine is not null)
+            {
+                engine.FeedIq(channel, frame.InterleavedSamples.Span);
+                RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
+            }
+            MaybeTickInline();
+        }
+        finally
+        {
+            // Return the rented buffer regardless of whether the engine was
+            // null or the call threw — the protocol client transferred
+            // ownership to us on a non-throwing return, but we want a single
+            // return path even on the throw branch (the client's catch will
+            // ALSO try to return the buffer on our throw; ArrayPool.Return is
+            // idempotent in the sense that returning a non-pooled array is
+            // a no-op, but double-return of a pooled array is technically
+            // undefined behaviour — we keep ownership here and re-throw
+            // nothing, so the client's catch path won't see an exception).
+            if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(
+                    frame.InterleavedSamples, out var seg) && seg.Array is { } arr)
+            {
+                System.Buffers.ArrayPool<double>.Shared.Return(arr);
+            }
+        }
+    }
+
+    void Zeus.Protocol1.IRxPacketSink.OnPsFeedbackFrame(in Zeus.Protocol1.PsFeedbackFrame frame)
+    {
+        DrainDspCommands();
+        IDspEngine? engine;
+        lock (_engineLock) { engine = _engine; }
+        engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+        // No Tick on PS-feedback — display cadence is paced by IQ frames.
+    }
+
+    // ---- IRxPacketSink (Protocol 2) -----------------------------------------
+    // Same shape as P1; P2 doesn't ArrayPool its sample buffer (per
+    // Protocol2Client.cs:1024 — a freshly allocated double[] per packet), so
+    // no buffer return is required.
+    void Zeus.Protocol2.IRxPacketSink.OnIqFrame(in Zeus.Protocol2.IqFrame frame)
+    {
+        DrainDspCommands();
+        IDspEngine? engine;
+        int channel;
+        lock (_engineLock) { engine = _engine; channel = _channelId; }
+        if (engine is not null)
+        {
+            engine.FeedIq(channel, frame.InterleavedSamples.Span);
+            RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
+        }
+        MaybeTickInline();
+    }
+
+    void Zeus.Protocol2.IRxPacketSink.OnPsFeedbackFrame(in Zeus.Protocol2.PsFeedbackFrame frame)
+    {
+        DrainDspCommands();
+        IDspEngine? engine;
+        lock (_engineLock) { engine = _engine; }
+        engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+    }
+
+    /// <summary>
+    /// Drain every queued cross-thread command synchronously on the calling
+    /// thread (the DSP thread — either the RxLoop thread when a sink is
+    /// attached, or the ExecuteAsync PeriodicTimer thread otherwise).
+    /// ConcurrentQueue.TryDequeue is wait-free; an exception in a command
+    /// is logged and the remaining commands still drain.
+    /// </summary>
+    private void DrainDspCommands()
+    {
+        while (_dspCommands.TryDequeue(out var cmd))
+        {
+            try { cmd(); }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "dsp.pipeline command threw");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Post a command for execution on the DSP thread. Reserved for the
+    /// pass-2 migration of OnRadioStateChanged / SetMox / SetTxTune; pass 1
+    /// keeps those callers on the existing <see cref="_engineLock"/> path so
+    /// they don't change behaviour while the sink scaffolding is bedding in.
+    /// </summary>
+    internal void PostDspCommand(Action cmd)
+    {
+        ArgumentNullException.ThrowIfNull(cmd);
+        _dspCommands.Enqueue(cmd);
+    }
+
+    private void MaybeTickInline()
+    {
+        long now = Stopwatch.GetTimestamp();
+        long last = _lastTickStopwatchTicks;
+        if (last == 0 || (now - last) >= TickPeriodStopwatchTicks)
+        {
+            _lastTickStopwatchTicks = now;
+            Tick(_panBuf, _wfBuf, _audioBuf);
+        }
+    }
+
+    /// <summary>
+    /// Attach this pipeline as the synchronous RX sink for a Protocol-1
+    /// client. Must be called AFTER the engine has been swapped to point at
+    /// the new client's WDSP instance — once this returns, the RxLoop will
+    /// start firing OnIqFrame on the DSP thread and any older engine reference
+    /// must already be unused.
+    /// </summary>
+    private void AttachRxSinkP1(IProtocol1Client client)
+    {
+        // Reset the tick clock so the first IQ frame on the new connection
+        // gets a fresh display tick (avoids a stale ~33 ms gap if the timer
+        // was running synthetic ticks just before connect).
+        _lastTickStopwatchTicks = 0;
+        _attachedSinkP1 = client;
+        client.AttachRxSink(this);
+        _rxSinkAttached = true;
+        _log.LogInformation("dsp.pipeline rx-sink attached protocol=p1");
+    }
+
+    private void DetachRxSinkP1()
+    {
+        var client = _attachedSinkP1;
+        _attachedSinkP1 = null;
+        _rxSinkAttached = false;
+        client?.DetachRxSink();
+        _log.LogInformation("dsp.pipeline rx-sink detached protocol=p1");
+    }
+
+    private void AttachRxSinkP2(Zeus.Protocol2.Protocol2Client client)
+    {
+        _lastTickStopwatchTicks = 0;
+        _attachedSinkP2 = client;
+        client.AttachRxSink(this);
+        _rxSinkAttached = true;
+        _log.LogInformation("dsp.pipeline rx-sink attached protocol=p2");
+    }
+
+    private void DetachRxSinkP2()
+    {
+        var client = _attachedSinkP2;
+        _attachedSinkP2 = null;
+        _rxSinkAttached = false;
+        client?.DetachRxSink();
+        _log.LogInformation("dsp.pipeline rx-sink detached protocol=p2");
+    }
 
     private async Task StopIqPumpAsync()
     {
