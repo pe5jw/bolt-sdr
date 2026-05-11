@@ -304,22 +304,18 @@ public class DspPipelineService : BackgroundService,
 
     public void SetMox(bool on)
     {
-        // iter5 pass-2: route the engine.SetMox call through the DSP-thread
-        // command queue so WDSP is touched by exactly one thread (the
-        // sink-bound RX thread, or the PeriodicTimer thread in synthetic
-        // mode). TxService.cs:140 logs the t1 timestamp BEFORE this call —
-        // queue-drain latency (up to ~3 ms at 192 kSps) is well below the
-        // radio's own MOX-wire round-trip (~tens of ms) and does not affect
-        // the t1 measurement.
-        // SyntheticDspEngine.SetMox is a no-op per the interface contract;
-        // we still forward so the engine type stays opaque to TxService.
-        PostDspCommand(() => Volatile.Read(ref _engine)?.SetMox(on));
+        // Direct call, not queued: HL2 stops RX while MOX is asserted, so a
+        // PostDspCommand queued from the HTTP thread would not drain until
+        // MOX releases — TXA stays in RX state and TX produces buzz. WDSP
+        // tolerates concurrent state edges from the HTTP thread vs the RX
+        // sink thread via its own internal locking, and SetMox/SetTxTune
+        // are rare operator-edge events (not the per-frame hot path).
+        lock (_engineLock) { _engine?.SetMox(on); }
     }
 
     public void SetTxTune(bool on)
     {
-        // iter5 pass-2: queue-routed for the same reason as SetMox.
-        PostDspCommand(() => Volatile.Read(ref _engine)?.SetTxTune(on));
+        lock (_engineLock) { _engine?.SetTxTune(on); }
     }
 
     /// <summary>Current engine snapshot (may be <see cref="SyntheticDspEngine"/>

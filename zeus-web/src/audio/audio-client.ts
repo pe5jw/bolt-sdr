@@ -64,12 +64,12 @@ export type AudioStats = {
 
 type Listener = (state: AudioClientState, stats: AudioStats | null) => void;
 
-// 100 ms over-corrected for LAN — added a ~100 ms re-anchor floor to every
-// TX→RX transition. Picked from measured live audio inter-arrival on a
-// healthy LAN: p99 ≈ 45 ms, so 50 ms covers tail jitter with margin while
-// halving the perceived TX→RX gap. Remote / flaky-link operators may need
-// to raise this back; future work could adapt from observed jitter.
-const BUFFER_TARGET_SECS = 0.05;
+// 100 ms re-anchor floor. The 50 ms experiment (commit 503e0d2) was right
+// at the p99 LAN inter-arrival edge — any tail past p99 caused audible
+// underrun on RX, regardless of server-side pipeline. Back to 100 ms; the
+// TX→RX gap is slightly more perceptible than at 50 ms but RX is clean.
+// Future work could adapt the floor from observed jitter stats instead.
+const BUFFER_TARGET_SECS = 0.1;
 const BUFFER_MAX_SECS = 0.5;
 const STATS_INTERVAL_MS = 500;
 
@@ -228,7 +228,7 @@ class AudioClient {
         const arr = w.__zeusPerf3?.captures;
         if (arr && arr.length > 0) {
           const last = arr[arr.length - 1];
-          if (last.t4_audio_scheduled === undefined) {
+          if (last && last.t4_audio_scheduled === undefined) {
             last.t4_audio_scheduled = performance.now();
             last.nextPlayTime = this.nextPlayTime;
             last.now = now;
