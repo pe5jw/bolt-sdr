@@ -91,6 +91,97 @@ Gate the entire display block on `_hub.ClientCount > 0` (O(1) `ConcurrentDiction
 
 Raw: `iter2/iter4-{before,after}.csv`.
 
+## Round 3, iter 5 — single-thread DSP ownership (commits `b341495`, `cbba6c6`, `a244196`, `eeb4052`, `141492b`, `d6180d4`)
+
+The cumulative-trajectory analysis at the bottom of the iter4 writeup flagged the residual: `swtch_pri ~34%` + `ThreadNative_SpinWait ~21%` on the prior `sample(1)` profile — both essentially TP-dispatcher park/wake amplification across the four channel-fed consumer pumps (P1 IQ, P2 IQ, P1 PS-FB, P2 PS-FB) plus the 30 Hz display `PeriodicTimer`. Each pump did one `await Channel.WaitToReadAsync` + drain + `lock(_engineLock)` per packet — five separate parked-task wake-up sites compounding into ~55% of busy CPU at 381 IQ frames/s (a given packet only feeds the protocol's own pump, but every pump that is alive contributes its own park/wake cycle). Iter5 attacks it architecturally rather than incrementally.
+
+**The move:** collapse the four pumps and the 30 Hz display tick onto a single OS thread (`Protocol1Client.RxLoop` / `Protocol2Client.RxLoop`), make WDSP single-thread-owned on that loop, and drop `_engineLock` from the per-frame hot path entirely.
+
+Six commits over two days:
+
+| # | Commit | Subject |
+|---|---|---|
+| 1 | `b341495` | feat(rx-sink): IRxPacketSink seam on Protocol1/2 RxLoop for iter5 pump-collapse |
+| 2 | `cbba6c6` | feat(spsc-ring): lock-free SPSC ring for DSP-thread → hub frame handoff |
+| 3 | `a244196` | perf(dsp-pipeline): pass 1 — DspPipelineService as IRxPacketSink + cmd queue |
+| 4 | `eeb4052` | perf(dsp-pipeline): pass 2 — delete channel pumps + drop _engineLock from hot path |
+| 5 | `141492b` | docs(perf): iter5 hub-broadcast ring decision — no-op for iter5 |
+| 6 | `d6180d4` | docs(dsp-pipeline): refresh stale pump-era comments after iter5 task #4 |
+
+Key pieces of the new shape:
+
+- **`IRxPacketSink` (b341495).** A synchronous sink interface on the RX OS thread. `Protocol1Client.AttachRxSink` / `DetachRxSink` use `Interlocked.Exchange` to install; `Protocol1Client.RxLoop` does a `Volatile.Read` snapshot at the top of each packet and calls `sink.OnIqFrame(in …)` directly — no `Channel<T>` hop, no `WaitToReadAsync`, no TP wake. Channel-write fallback stays live when no sink is attached so unit-tests and in-process probes keep working untouched. Mirror class on `Zeus.Protocol2`.
+- **`DspPipelineService` becomes the sink (a244196 + eeb4052).** The four `StartIqPump` / `StartIqPumpP2` / `StartPsFeedbackPumpP1` / `StartPsFeedbackPumpP2` `Task.Run` consumers are deleted. The service implements both protocol sinks; `OnIqFrame` calls into WDSP directly on the RX thread. Each Channel hop saved ~1 200 TP wake/s (P1 hot path) + the PS-FB pair (~190 wake/s each when armed).
+- **`_engineLock` removed from hot path (eeb4052).** Readers (`OnIqFrame`, `OnPsFeedbackFrame`, the inline display Tick) now use `Volatile.Read` of `_engine` / `_channelId` / `_sampleRateHz`. The lock survives as writer-side serialisation only — six call sites, listed below.
+- **Inline 30 Hz display Tick (eeb4052).** The `PeriodicTimer.WaitForNextTickAsync` loop is paused while a radio sink is attached. Display work runs inline on `OnIqFrame` via a `Stopwatch.GetTimestamp()` elapsed check (33 ms gate). When the radio disconnects, the PeriodicTimer is unpaused so meter/spectrum still update against the synthetic engine. Same 30 Hz cadence; the wake-up source is the IQ packet itself rather than a separate timer.
+- **Cross-thread command queue (a244196).** `DspPipelineService.SetMox` and `SetTxTune` — called from `TxService` on the MOX/TUN interlock edge — no longer touch WDSP directly. They enqueue onto a `ConcurrentQueue<Action>` that the RX thread drains at the top of each packet, so WDSP TXA-state edges run on the same thread that feeds RX IQ. The MOX-latency probe (`t1` log at `TxService.cs:144`) still fires synchronously at the call site BEFORE the queue post, so the t1 timestamp is unaffected by queue-drain latency. Scope note: `OnRadioStateChanged` (NR / EMNR / AGC / filter / mode mutators from `/api/state` PUTs) and the standalone HTTP endpoint setters (`/api/mic-gain`, `/api/tx/leveler-max-gain`, `/api/tx/ps/reset`, etc.) still call `engine.*` directly after a `Volatile.Read` of the engine pointer — see the caveat below. Strict single-thread-WDSP for those paths is a deferred follow-up.
+- **SPSC ring is shelved (cbba6c6 + 141492b).** Task #2 built `SpscRing<T>` (lock-free, 19 unit tests) for a DSP-thread → hub-sender handoff. Iter5 measurement (below) shows the hub-broadcast path already sits at ~65 TP wake/s after the pump collapse — two orders of magnitude below the ~4 800/s the ring was meant to absorb. Decision A in `docs/perf/server/iter2/iter5-hub-decision.md`: keep the ring compiled and tested in tree for a future iter, do not wire it for iter5 because it would relocate work rather than reduce it.
+
+### Live HL2 deltas (28400 kHz USB / 192 kHz / RX-only / no SignalR client / no MOX)
+
+Measured against the bare-metal HL2 at 192.168.100.21. PIDs 96984 (before, cbba6c6) and 97750 (after, d6180d4). Both Release builds, same machine, same radio, same VFO/mode/sample-rate.
+
+| Metric | Before — cbba6c6 | After — d6180d4 | Δ |
+|---|---|---|---|
+| CPU user (s/s) | 0.2289 | 0.1729 | **−24.5 %** |
+| CPU system (s/s) | 0.0994 | 0.0700 | **−29.6 %** |
+| **CPU total (s/s)** | **0.3283 (32.8 %)** | **0.2429 (24.3 %)** | **−26.0 %** |
+| Alloc rate (B/s) | 606 147 | 460 189 | **−24.1 %** |
+| **TP work-items /s** | **1 956.5** | **432.2** | **−77.9 %** |
+| Lock contentions /s | 0.93 | 1.37 | +47 % (sub-2/s, see caveats) |
+| Gen0 collect /s | 0.051 | 0.034 | −33 % |
+| Working set (MB) | 275 | 276 | ≈ |
+
+Raw: `iter2/iter5-{before,after}.csv`.
+
+### `sample(1)` stack-fingerprint delta (30 s each, same PIDs)
+
+| Frame | Before samples | After samples | Δ |
+|---|---|---|---|
+| `swtch_pri` (TP park/wake) | 3 042 | 973 | **−68 %** |
+| `ThreadNative_SpinWait` (spin-then-park) | 1 868 | 891 | **−52 %** |
+| `xresample` (WDSP work) | 1 113 | 1 204 | ≈ flat |
+
+`swtch_pri` and `ThreadNative_SpinWait` are the exact two frames iter4's closing analysis identified as the residual TP-dispatcher cost. They both halved-or-more, which is the direct fingerprint of the four-pump collapse: fewer parked TP workers means fewer wakes, means less spin-then-park churn. `xresample` (the WDSP polyphase resampler used inside the RX chain) stays flat — iter5 attacks dispatch overhead, not DSP throughput. We did not touch WDSP.
+
+Raw: `iter2/iter5-before-sample.txt`, `iter2/iter5-after-sample.txt`.
+
+### Synthetic deltas (idle, ZEUS_PERF_TEST=1 :6070, no client, no IQ)
+
+Captured for symmetry — measures the TP wake-up floor when no radio is attached, so the pump-collapse can only show up as the removed PeriodicTimer / TP-worker overhead, not as the dropped per-frame channel hops.
+
+| Metric | Before — cbba6c6 | After — d6180d4 | Δ |
+|---|---|---|---|
+| CPU total (s/s) | 0.0214 | 0.0153 | −28 % |
+| Alloc rate (B/s) | 33 015 | 32 189 | −2.5 % |
+| TP work-items /s | 49.1 | 49.2 | ≈ (timer-driven, no pumps to collapse at idle) |
+| Lock contentions /s | 0 | 0 | — |
+
+Raw: `iter2/iter5-{before,after}-synthetic.csv`, `iter2/iter5-{before,after}-synthetic-sample.txt`.
+
+### Six surviving `_engineLock` sites — all writer-side
+
+After iter5 the `_engineLock` is held only by code paths that mutate the `_engine` / `_channelId` / `_sampleRateHz` pointers. The hot path (`OnIqFrame`, `OnPsFeedbackFrame`, the inline display Tick) reads them via `Volatile.Read`. The six callers:
+
+Line numbers below point to the method declaration in `Zeus.Server.Hosting/DspPipelineService.cs` at HEAD `d6180d4`; the `lock (_engineLock)` block sits 4–14 lines inside each.
+
+1. **`OpenSynthetic`** (line 360, lock at 370) — initial bring-up when no radio is connected. Holds the lock while opening a `SyntheticDspEngine` channel and writing the pointers.
+2. **`OnRadioConnected`** (line 380, lock at 394) — invoked by `RadioService` on P1 connect. Swaps from synthetic to WDSP-on-real-IQ, attaches the RX sink.
+3. **`OnRadioDisconnected`** (line 429, lock at 443) — invoked by `RadioService` on P1 disconnect. Detaches the RX sink, tears down WDSP, opens a fresh synthetic engine.
+4. **`ConnectP2Async`** (line 801, lock at 862) — the P2 connect path. Opens a P2 WDSP engine with separate channel/TX-channel, writes the pointers.
+5. **`DisconnectP2Async`** (line 969, lock at 989) — P2 teardown counterpart.
+6. **`CloseCurrentEngine`** (line 1192, lock at 1196) — final shutdown / disposal.
+
+Justification: each of these is invoked from an HTTP request thread (`/api/connect`, `/api/disconnect`, `/api/connect/p2`, `/api/disconnect/p2`) or from a `RadioService` event handler running on a TP worker. They need to serialise against each other — racing a `/api/disconnect` and a `/api/connect/p2` could otherwise tear the engine pointer between the `Volatile.Write` calls. The hot path doesn't acquire the lock; it only reads via `Volatile.Read`, which is correctly ordered against the release fence on `_engineLock`-exit by writers.
+
+### Caveats
+
+- **Lock-contention uptick (0.93 → 1.37 /s).** Pipeline-arch removed `_engineLock` from the hot path, so this residue is somewhere else. `ConcurrentQueue<Action>` is itself lock-free (CAS-based, no `Monitor.Enter`) so the new command-queue drain is NOT the source. The two plausible candidates are (a) the `StreamingHub.Broadcast` enumeration of `_clients.Values` — `ConcurrentDictionary.Values` materialises a snapshot under the dictionary's internal lock, and every Tick broadcast now runs inline on the RX thread instead of the old PeriodicTimer worker so the contention shows up differently in the counter, and (b) the per-client `Channel<byte[]>` writer side — created with `SingleReader=true, SingleWriter=false`, so the writer path takes a lightweight lock to serialise itself against the reader's wake. Absolute rate is sub-2/s; not a regression worth blocking on, flagged in follow-ups.
+- **No SignalR client attached during the captures.** Both before and after were measured without a browser session connected (just `curl /api/state` polling). The display block now gates broadcast on `ClientCount > 0` (iter4), so without a client the display Tick still runs every 33 ms but emits no wire payload. This is identical workload on both sides of the comparison — the delta is real — but the absolute CPU numbers will be slightly higher with a real client doing SignalR fan-out. Estimated overhead: ~50 TP wake/s × 1 client per iter4 instrumentation.
+- **Build mode identical (Release ↔ Release).** Unlike Round 1, this iter does not mix Debug↔Release.
+- **VFO / mode / sample-rate identical (28400 kHz USB, 192 kHz).** Both captures explicitly retuned to 28400 after connect.
+- **`OnRadioStateChanged` still does direct `engine.*` calls** (`Volatile.Read` of the engine pointer, no command-queue hop). Pipeline-arch flagged this in the task #4 summary as a judgement call: state-change paths are infrequent and the cross-thread call is cheap. Listed in follow-ups for revisit if strict single-thread WDSP becomes desirable for those paths too.
+
 ## Cumulative trajectory
 
 | Branch state | CPU (s/s, mean) | Δ vs prior | Workload |
@@ -101,17 +192,13 @@ Raw: `iter2/iter4-{before,after}.csv`.
 | +iter1 channel-drain (`98a0e94`) | 0.357 (35.7 %) | −3.8 % | quiet RX |
 | +iter3 PsAutoAttn (`77e9ba6`) | _below noise_ | <1 % | mixed |
 | +iter4 display gate (`c35c844`) | identity (connected) | 0 % connected | mixed |
+| +iter5 single-thread DSP (`d6180d4`) | **0.243 (24.3 %)** | **−26 %** | RX-only no-client |
 
-**On quiet RX-only steady state with one client, the branch lands at 35.7 % CPU — Brian's < 35 % stop-criterion is barely met.** The remaining 35 % is dominated by intrinsic WDSP work (`xresample` ~9 %, `xemnr`, `calc_gain`, FFT chain via `Cspectra`+`detector`+FFTW3 ~7-8 % combined), the per-packet 381 Hz TX-loop UDP send overhead (`__sendmsg_nocancel` ~12 %), and per-packet `mach_absolute_time` calls used by various timers and async-state-machine continuation queueing (`swtch_pri` ~34 %, `ThreadNative_SpinWait` ~21 % — both essentially TP dispatcher park/wake costs).
+The iter4 closing analysis identified `swtch_pri ~34%` + `ThreadNative_SpinWait ~21%` as TP-dispatcher park/wake amplification across four pumps + a 30 Hz timer, and recommended stopping there because the four named exits to going below 35 % were all red-light or out-of-scope. That reasoning was sound at the time — every candidate on the list (TX-loop pacing, default-value changes, WDSP internals, AOT) was correctly flagged.
 
-Going below 35 % from here would require touching one of:
+Per the user's "leave nothing on the table" mandate for perf-pass-3, iter5 took a fifth exit that the iter4 list did not enumerate: **architectural restructure of the consumer side of the DSP pipeline, no defaults touched, no WDSP touched, no native AOT.** Four `Task.Run` consumer pumps + the 30 Hz `PeriodicTimer` collapse onto the `Protocol1/2 RxLoop` OS thread via `IRxPacketSink`; `_engineLock` drops off the hot path (six writer-side sites survive); MOX edges marshal via a `ConcurrentQueue` drained on the same RX thread. WDSP itself is untouched. The win lands on the load-bearing measurement: **−78 % TP work-items, −68 % `swtch_pri`, −52 % `ThreadNative_SpinWait`, −26 % live CPU.**
 
-1. **TX-loop pacing** (RED-LIGHT per CLAUDE.md — dB-sensitive, needs HL2 bench).
-2. **Lowering default RX sample rate or display tick rate** (RED-LIGHT — default value change operator will feel).
-3. **WDSP-internal optimisations** (out of scope per task).
-4. **Native AOT / R2R compilation** to shave the remaining JIT / dispatch overhead — orthogonal, larger change.
-
-Recommendation: stop iterating here. The branch's CPU win on the load-bearing measurement is real and reproducible; further iterations on safe targets have diminishing returns at the noise floor.
+The new floor is **24.3 % live CPU** (HL2 RX-only, no client, 192 kHz). Going below ~20 % from here would still require touching one of the four iter4-listed exits — TX-loop pacing, default-value changes, WDSP-internal opts, or AOT/R2R — all of which remain red-light or orthogonal. Iter5 is the last safe architectural step inside the scope of this perf pass; stop iterating here.
 
 ## Confounders
 
@@ -155,3 +242,9 @@ dotnet-counters collect \
 
 - Confirm allocation surprise by capturing an Instruments.app `Allocations` trace before/after on the same Release build.
 - A Debug-vs-Debug or Release-vs-Release run would isolate the perf3 contribution from the build-mode contribution; this measurement does not.
+- **iter5 lock-contention uptick (0.93 → 1.37 /s).** Sub-2/s absolute. `ConcurrentQueue<Action>` is itself lock-free; the residue is most likely the `StreamingHub` `_clients.Values` snapshot (taken under `ConcurrentDictionary`'s internal lock once per broadcast) or the per-client `Channel<byte[]>` writer-side (`SingleWriter=false`, takes a lightweight lock to serialise against the reader wake). Profile under a real SignalR client + MOX cycling to localise; not blocking iter5 ship.
+- **Hub-broadcast SPSC ring is a deferred drop-in.** `Zeus.Server.Hosting/SpscRing.cs` + 19 passing tests are in tree; the iter5 hub-decision doc (`docs/perf/server/iter2/iter5-hub-decision.md`) records Decision A — keep compiled, do not wire. If iter6 measurement shows TP residue on the `SendLoopAsync` path, the ring drops in without further design work.
+- **`OnRadioStateChanged` strict single-thread WDSP.** Iter5 left this path on direct `engine.*` calls (Volatile-Read of the engine pointer, no command-queue hop) per the task #4 judgement call: rare operator-edge path, cross-thread call is cheap, the engine's own disposed-check guards cover the swap-mid-call race. Routing it through `PostDspCommand` is a follow-up if a future iter wants strict single-thread WDSP for state changes too. Same applies to the HTTP endpoint setters (`/api/mic-gain`, `/api/tx/leveler-max-gain`, `/api/tx/ps/{reset,save,restore}`) that read `CurrentEngine` and call the engine directly.
+- **Live-with-client capture.** The iter5 live HL2 captures were RX-only with no SignalR client attached. iter4's `ClientCount > 0` display gate means the actual wire-fan-out cost is invisible in this measurement. A follow-up capture with one (or several) real browser sessions connected would localise the residual hub-broadcast / SignalR-send cost and validate the Decision-A reasoning empirically.
+- **`OnRadioStateChanged` still does direct `engine.*` calls** via `Volatile.Read` of the engine pointer, not via the command-queue hop. Infrequent path so the cost is negligible, but if strict single-thread WDSP becomes desirable across state-change paths too (e.g. for a future P2 board that has a stricter threading contract on TXA mutators), reroute these through the command queue.
+- **Live-HL2 capture under real client load.** Iter5 live captures were RX-only with no SignalR client connected (just `curl /api/state` polling). The branch's full operational delta with the Vite browser session connected hasn't been measured. Estimated additional overhead: ~50 TP wake/s × 1 client per iter4 instrumentation; should not change the iter5 fingerprint qualitatively.

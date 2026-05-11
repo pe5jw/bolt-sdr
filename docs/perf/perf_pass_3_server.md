@@ -1,5 +1,7 @@
 # perf-pass-3 — server (Zeus.Server) fixes
 
+> **Update 2026-05-11:** iter5 (single-thread DSP ownership) landed — live HL2 CPU 32.8 % → 24.3 % (−26 %), TP work-items 1 957/s → 432/s (−78 %), `swtch_pri` −68 %, `ThreadNative_SpinWait` −52 %. See `server/after.summary.md` "Round 3, iter 5" section for the full writeup.
+
 One row per fix. Each row gives file:line, what changed, the hotspot
 quantification from `perf_pass_3_baseline.md` §3, and the expected delta
 on the alloc-rate / work-item / CPU axes captured from Brian's live HL2
