@@ -15,6 +15,25 @@ Captured 2026-05-11. Same machine, same HL2 (192.168.100.21), Protocol 1 @ 192 k
 | Lock contentions /s | 8.37 | 4.22 | −50 % |
 | OS top % one core (top -l) | ~25 steady / ~48 interactive | ~42–47 sustained | matches counter |
 
+## Round 1.5 — Workstation GC (commit 3288401)
+
+ASP.NET Core defaults to Server GC (one GC thread per logical core). On Brian's 10-core host that's 10 idle GC threads, each appearing as a low-amplitude `PollGCWorker` waker every few seconds. The `dotnet-trace cpu-sampling` profile attributed ~3 % CPU to `Thread.PollGCWorker` plus a notable slice of `LowLevelLifoSemaphore.WaitForSignal` idle churn to those threads.
+
+Switched to Workstation GC via `<ServerGarbageCollection>false</ServerGarbageCollection>` in `Zeus.Server.csproj`. Concurrent GC stays enabled. Pause budget is tighter per collection but Zeus's ~1.4 MB/s alloc rate keeps each pause sub-millisecond.
+
+| Metric | Before — Round 1 (Server GC, Release) | After — Round 1.5 (Workstation GC) | Δ |
+|---|---|---|---|
+| CPU user (s/s) | 0.291 | 0.226 | −22 % |
+| CPU system (s/s) | 0.145 | 0.145 | ≈ |
+| **CPU total (s/s)** | **0.436 (43.6 %)** | **0.371 (37.1 %)** | **−15 %** |
+| Alloc rate (MB/s) | 1.875 | 1.407 | **−25 %** |
+| Working set (MB) | 315 | 186 | **−41 %** |
+| Threads | 46 | 34 | −12 (10 GC threads gone + ~2 TP) |
+| Lock contentions /s | 4.22 | 3.27 | −23 % |
+
+Raw artifacts:
+- `iter2/wgc-counters.csv` — 60 s dotnet-counters under Workstation GC.
+
 ## Round 2, iter 1 — WaitToReadAsync+TryRead batching (commit 98a0e94)
 
 `sample(1)` against PID 56859 surfaced the residual hot path: ~52 % of busy CPU was on TP workers in `ThreadNative_SpinWait` + `swtch_pri` blocked downstream on `WaitHandle_WaitOnePrioritized` — i.e. the TP dispatcher's spin-then-park phase. At 381 IQ frames/s with one work-item-per-`ReadAsync`-continuation, that spin tax compounds.
