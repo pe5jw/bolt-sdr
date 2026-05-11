@@ -665,45 +665,42 @@ public class DspPipelineService : BackgroundService
         _iqPumpCts = cts;
         _iqPumpTask = Task.Run(async () =>
         {
-            // perf3: replace `await foreach (... ReadAllAsync(ct))` with a
-            // direct ChannelReader.ReadAsync(ct) loop. The async-iterator
-            // returned by ReadAllAsync is `IAsyncEnumerable<T>`; iterating
-            // it produces a compiler-generated state machine that allocates
-            // a fresh `ManualResetValueTaskSourceCore`-wrapping box on every
-            // suspension (perf3 baseline measured ~13.5% of total server
-            // alloc-rate on HL2 192 kHz). ChannelReader.ReadAsync returns
-            // ValueTask<T> directly off the channel's pooled completion
-            // source, which is allocation-free in the fast path (data
-            // already in the queue) and shares a single source on slow
-            // path. Functionally identical: same packet ordering, same
-            // cancellation, same ChannelClosedException terminator.
+            // perf3 iter2: WaitToReadAsync+TryRead drain. The previous
+            // `await reader.ReadAsync(ct)` per item lands a TP work-item per
+            // suspension; sampling Brian's HL2 session (~381 frame/s) showed
+            // 5 TP worker threads burning ~52 % of busy CPU in
+            // ThreadNative_SpinWait + swtch_pri before parking on
+            // WaitHandle_WaitOnePrioritized — the TP dispatcher's spin phase
+            // amortised across each work-item dispatch. Drain pattern:
+            // ONE WaitToReadAsync(ct) suspends; TryRead pulls every
+            // currently-queued frame synchronously (no TP dispatch per item).
+            // When packets bunch up (RxLoop emits several before this loop
+            // catches up — common under GC pause or scheduler stalls), all of
+            // them dispatch on the same continuation. Strictly fewer TP
+            // wake-ups for the same throughput. Cancellation: WaitToReadAsync
+            // throws OperationCanceledException on ct; Writer.Complete() makes
+            // it return false → clean exit.
             var reader = client.IqFrames;
             var token = cts.Token;
             try
             {
-                while (true)
+                while (await reader.WaitToReadAsync(token).ConfigureAwait(false))
                 {
-                    Zeus.Protocol1.IqFrame frame;
-                    try { frame = await reader.ReadAsync(token).ConfigureAwait(false); }
-                    catch (ChannelClosedException) { break; }
-                    IDspEngine? engine;
-                    int channel;
-                    lock (_engineLock) { engine = _engine; channel = _channelId; }
-                    engine?.FeedIq(channel, frame.InterleavedSamples.Span);
-                    RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
-                    // Return the underlying double[] to ArrayPool now that the
-                    // frame has been consumed. Protocol1Client.RxLoop rents
-                    // ~2 KB per packet from ArrayPool<double>.Shared and the
-                    // contract on RxIqAvailable says the memory is only valid
-                    // for the duration of the synchronous handler — so once
-                    // FeedIq + the event have returned, the buffer is dead.
-                    // Without this return the rented arrays drop straight to
-                    // GC at ~381/s on HL2 (≈750 KB/s of gen0 garbage),
-                    // forcing the pool to allocate fresh on the next Rent.
-                    if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(
-                            frame.InterleavedSamples, out var seg) && seg.Array is { } arr)
+                    while (reader.TryRead(out var frame))
                     {
-                        System.Buffers.ArrayPool<double>.Shared.Return(arr);
+                        IDspEngine? engine;
+                        int channel;
+                        lock (_engineLock) { engine = _engine; channel = _channelId; }
+                        engine?.FeedIq(channel, frame.InterleavedSamples.Span);
+                        RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
+                        // Return the underlying double[] to ArrayPool now that
+                        // the frame has been consumed (perf3 contract from
+                        // Protocol1Client.RxLoop — see 3287724 commit).
+                        if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(
+                                frame.InterleavedSamples, out var seg) && seg.Array is { } arr)
+                        {
+                            System.Buffers.ArrayPool<double>.Shared.Return(arr);
+                        }
                     }
                 }
             }
@@ -721,23 +718,23 @@ public class DspPipelineService : BackgroundService
         _iqPumpCts = cts;
         _iqPumpTask = Task.Run(async () =>
         {
-            // perf3: same async-iterator → direct ChannelReader.ReadAsync
-            // rewrite as the P1 pump above. P2 has lower packet rate but
-            // the alloc pattern is identical.
+            // perf3 iter2: WaitToReadAsync+TryRead drain — same rationale as
+            // the P1 pump above. P2 has a different packet shape but the TP
+            // dispatch saving is independent of arrival rate.
             var reader = client.IqFrames;
             var token = cts.Token;
             try
             {
-                while (true)
+                while (await reader.WaitToReadAsync(token).ConfigureAwait(false))
                 {
-                    Zeus.Protocol2.IqFrame frame;
-                    try { frame = await reader.ReadAsync(token).ConfigureAwait(false); }
-                    catch (ChannelClosedException) { break; }
-                    IDspEngine? engine;
-                    int channel;
-                    lock (_engineLock) { engine = _engine; channel = _channelId; }
-                    engine?.FeedIq(channel, frame.InterleavedSamples.Span);
-                    RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
+                    while (reader.TryRead(out var frame))
+                    {
+                        IDspEngine? engine;
+                        int channel;
+                        lock (_engineLock) { engine = _engine; channel = _channelId; }
+                        engine?.FeedIq(channel, frame.InterleavedSamples.Span);
+                        RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
+                    }
                 }
             }
             catch (OperationCanceledException) { }
@@ -758,23 +755,21 @@ public class DspPipelineService : BackgroundService
         _psFeedbackPumpCts = cts;
         _psFeedbackPumpTask = Task.Run(async () =>
         {
-            // perf3: same async-iterator → direct ChannelReader.ReadAsync
-            // rewrite as StartIqPump. PS-feedback runs at ~188 frame/s when
-            // PS is armed (192 kHz / 1024 paired samples), 0 when idle —
-            // smaller absolute saving than the IQ pump but identical alloc
-            // pattern and free to take.
+            // perf3 iter2: WaitToReadAsync+TryRead drain — see StartIqPump.
+            // PS-feedback runs at ~188 frame/s when PS is armed; less when
+            // idle. Same TP-dispatch-amortisation rationale.
             var reader = client.PsFeedbackFrames;
             var token = cts.Token;
             try
             {
-                while (true)
+                while (await reader.WaitToReadAsync(token).ConfigureAwait(false))
                 {
-                    Zeus.Protocol2.PsFeedbackFrame frame;
-                    try { frame = await reader.ReadAsync(token).ConfigureAwait(false); }
-                    catch (ChannelClosedException) { break; }
-                    IDspEngine? engine;
-                    lock (_engineLock) { engine = _engine; }
-                    engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+                    while (reader.TryRead(out var frame))
+                    {
+                        IDspEngine? engine;
+                        lock (_engineLock) { engine = _engine; }
+                        engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+                    }
                 }
             }
             catch (OperationCanceledException) { }
@@ -802,20 +797,19 @@ public class DspPipelineService : BackgroundService
         _psFeedbackPumpCts = cts;
         _psFeedbackPumpTask = Task.Run(async () =>
         {
-            // perf3: same async-iterator → direct ChannelReader.ReadAsync
-            // rewrite as the IQ pumps and P2 PS-feedback pump above.
+            // perf3 iter2: WaitToReadAsync+TryRead drain — see StartIqPump.
             var reader = client.PsFeedbackFrames;
             var token = cts.Token;
             try
             {
-                while (true)
+                while (await reader.WaitToReadAsync(token).ConfigureAwait(false))
                 {
-                    Zeus.Protocol1.PsFeedbackFrame frame;
-                    try { frame = await reader.ReadAsync(token).ConfigureAwait(false); }
-                    catch (ChannelClosedException) { break; }
-                    IDspEngine? engine;
-                    lock (_engineLock) { engine = _engine; }
-                    engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+                    while (reader.TryRead(out var frame))
+                    {
+                        IDspEngine? engine;
+                        lock (_engineLock) { engine = _engine; }
+                        engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+                    }
                 }
             }
             catch (OperationCanceledException) { }
