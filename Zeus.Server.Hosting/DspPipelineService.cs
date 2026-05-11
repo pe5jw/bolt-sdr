@@ -765,11 +765,15 @@ public class DspPipelineService : BackgroundService,
     // OnIqFrame / OnPsFeedbackFrame above. The ArrayPool return for P1 IQ
     // happens in the OnIqFrame finally block (same contract).
 
-    // Best-effort drain of in-flight paired frames after PS disarm. Called
-    // synchronously from OnRadioStateChanged so by the time the next state
-    // change tries to re-arm, the channel is empty. The pump task itself is
-    // not stopped — only the buffered backlog is drained. Drains either
-    // active client (P1 or P2 — only one is non-null at a time).
+    // Best-effort drain of any in-flight paired frames after PS disarm.
+    // Called synchronously from OnRadioStateChanged so the channel is empty
+    // by the next re-arm. Iter5: with the sink path live, the protocol
+    // clients invoke OnPsFeedbackFrame INSTEAD of writing the channel, so
+    // the channels here are normally empty already — this function is a
+    // near-no-op (one TryRead returning false) but stays as defensive
+    // belt-and-suspenders for the rare case where a sink swap is in
+    // flight or a non-sink consumer (test, probe) is in use.
+    // Drains either active client (P1 or P2 — only one is non-null at a time).
     private void DrainPsFeedback()
     {
         var p2 = _p2Client;
@@ -790,8 +794,9 @@ public class DspPipelineService : BackgroundService,
     /// <summary>
     /// Connect to a Protocol 2 radio and start streaming RX IQ into the DSP
     /// engine. Parallel path to RadioService.ConnectAsync (which is Protocol 1
-    /// only); both swap the engine to WDSP and start a pump. Only one client
-    /// at a time.
+    /// only); both swap the engine to WDSP and attach this pipeline as the
+    /// synchronous RX sink on the client (iter5 — no more Task.Run pumps).
+    /// Only one client at a time.
     /// </summary>
     public async Task ConnectP2Async(IPEndPoint radioEndpoint, int sampleRateKhz, byte numAdc, CancellationToken ct)
     {
