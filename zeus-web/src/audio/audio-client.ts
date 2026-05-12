@@ -64,6 +64,11 @@ export type AudioStats = {
 
 type Listener = (state: AudioClientState, stats: AudioStats | null) => void;
 
+// 100 ms re-anchor floor. The 50 ms experiment (commit 503e0d2) was right
+// at the p99 LAN inter-arrival edge — any tail past p99 caused audible
+// underrun on RX, regardless of server-side pipeline. Back to 100 ms; the
+// TX→RX gap is slightly more perceptible than at 50 ms but RX is clean.
+// Future work could adapt the floor from observed jitter stats instead.
 const BUFFER_TARGET_SECS = 0.1;
 const BUFFER_MAX_SECS = 0.5;
 const STATS_INTERVAL_MS = 500;
@@ -196,6 +201,43 @@ class AudioClient {
     };
     this.pending.add(source);
     source.start(this.nextPlayTime);
+    // PERF_PASS_3_DEBUG: t4 — first audio frame after MOX-off. Uncommitted.
+    {
+      const w = window as unknown as {
+        __zeusFirstAudioAfterMox?: boolean;
+        __zeusPerf3?: {
+          captures: Array<{
+            cycle: number;
+            t0_mox_off: number;
+            t4_audio_scheduled?: number;
+            nextPlayTime?: number;
+            now?: number;
+            delta_ms?: number;
+          }>;
+        };
+      };
+      if (w.__zeusFirstAudioAfterMox) {
+        const delta_ms = (this.nextPlayTime - now) * 1000;
+        console.log(
+          'audio.scheduled',
+          performance.now(),
+          'nextPlayTime=', this.nextPlayTime,
+          'now=', now,
+          'delta_ms=', delta_ms,
+        );
+        const arr = w.__zeusPerf3?.captures;
+        if (arr && arr.length > 0) {
+          const last = arr[arr.length - 1];
+          if (last && last.t4_audio_scheduled === undefined) {
+            last.t4_audio_scheduled = performance.now();
+            last.nextPlayTime = this.nextPlayTime;
+            last.now = now;
+            last.delta_ms = delta_ms;
+          }
+        }
+        w.__zeusFirstAudioAfterMox = false;
+      }
+    }
 
     this.nextPlayTime += frame.sampleCount / frame.sampleRateHz;
   }
