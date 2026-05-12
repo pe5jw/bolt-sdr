@@ -573,7 +573,17 @@ public sealed class Protocol1Client : IProtocol1Client
         var sock = _socket!;
         var ct = _loopCts!.Token;
         var buffer = new byte[PacketParser.PacketLength];
-        EndPoint remote = new IPEndPoint(IPAddress.Any, 0);
+        // perf3: reuse one SocketAddress across receives. The pre-.NET-8
+        // `ReceiveFrom(..., ref EndPoint)` overload allocates a fresh
+        // IPEndPoint via EndPoint.Create() on every call (per .NET runtime
+        // source — SocketAddress -> IPEndPoint conversion). At 381 RX
+        // pkt/s that's the largest single allocator on the receive path
+        // (~16% of total alloc-rate per perf3 baseline). The remote
+        // address is written into `sockAddr` but never read by RxLoop —
+        // HL2 is the only peer the bound socket sees. .NET 8+ exposes a
+        // ReceiveFrom overload that fills a reusable SocketAddress in
+        // place, eliminating the per-call allocation entirely.
+        var sockAddr = new SocketAddress(sock.AddressFamily);
         int consecutiveTimeouts = 0;
         // TX-pacing counter — every Nth successfully-parsed RX packet signals
         // TxLoopAsync to emit one EP2 packet. N = rxRate / 48 kHz because the
@@ -587,7 +597,7 @@ public sealed class Protocol1Client : IProtocol1Client
                 int n;
                 try
                 {
-                    n = sock.ReceiveFrom(buffer, 0, buffer.Length, SocketFlags.None, ref remote);
+                    n = sock.ReceiveFrom(buffer, SocketFlags.None, sockAddr);
                 }
                 catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
                 {

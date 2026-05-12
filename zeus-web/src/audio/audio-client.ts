@@ -179,8 +179,13 @@ class AudioClient {
     }
 
     const buffer = ctx.createBuffer(1, frame.sampleCount, frame.sampleRateHz);
-    // copyToChannel needs Float32Array<ArrayBuffer>; wrap to satisfy strict generic.
-    buffer.copyToChannel(new Float32Array(frame.samples), 0);
+    // copyToChannel reads our floats into the buffer's own storage, so we can
+    // pass frame.samples directly — the previous `new Float32Array(frame.samples)`
+    // wrap copied the data twice (DOM + extra heap alloc) at 30 Hz. The cast
+    // satisfies lib.dom.d.ts's `Float32Array<ArrayBuffer>` constraint; the value
+    // is already that shape because `decodeAudioFrame` constructs it from an
+    // ArrayBuffer view in `frame.ts`.
+    buffer.copyToChannel(frame.samples as Float32Array<ArrayBuffer>, 0);
 
     const source = ctx.createBufferSource();
     source.buffer = buffer;
