@@ -113,6 +113,13 @@ See [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md) for the full provenance statement,
 per-component licensing, and the per-file header convention OpenHPSDR Zeus
 uses to carry this acknowledgement through every source file.
 
+## Contributing
+
+Bug reports, feature suggestions, and PRs welcome. Please read
+[`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a PR — it covers the
+branch model, what's red-light vs green-light, hot paths to leave alone, and
+the commit / review conventions the project follows.
+
 ## License
 
 OpenHPSDR Zeus is free software: you can redistribute it and/or modify it
