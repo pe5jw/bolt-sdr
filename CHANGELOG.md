@@ -125,7 +125,7 @@ clean shutdown captures your last action.
 
 ## [0.7.0] — 2026-05-10
 
-Operator-visible highlights from the [v0.7.0 release page](https://github.com/brianbruff/openhpsdr-zeus/releases/tag/v0.7.0):
+Operator-visible highlights from the [v0.7.0 release page](https://github.com/Kb2uka/openhpsdr-zeus/releases/tag/v0.7.0):
 
 ### Added
 - **RF2K-S amplifier panel** — drive your amp directly from Zeus with
@@ -162,4 +162,4 @@ Operator-visible highlights from the [v0.7.0 release page](https://github.com/br
 
 ## Earlier releases
 
-For releases prior to 0.7.0, see the [GitHub Releases page](https://github.com/brianbruff/openhpsdr-zeus/releases).
+For releases prior to 0.7.0, see the [GitHub Releases page](https://github.com/Kb2uka/openhpsdr-zeus/releases).
