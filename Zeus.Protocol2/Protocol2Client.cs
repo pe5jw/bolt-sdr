@@ -734,7 +734,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // pihpsdr new_protocol.c:746-757 both set bit 1 whenever the radio
         // should key — covers both mic-MOX and TUN. Without this bit the
         // radio stays in RX regardless of drive / tune state.
-        p[4] = (byte)((_moxOn ? 0x02 : 0x00) | (run ? 0x01 : 0x00));
+        p[4] = (byte)((_moxOn || _tuneActive ? 0x02 : 0x00) | (run ? 0x01 : 0x00));
 
         // Frequency field is a PHASE word (general[37] bit 3 set) — radio
         // reads a 32-bit phase increment, not Hz. pihpsdr computes this as
@@ -771,7 +771,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // a global override layered on top of the per-band OC TX mask could
         // hand an external amp a confused band-select state during a steady
         // tune carrier and damage the finals. Thetis behaves this way too.
-        byte ocBits = _moxOn ? _ocTxMask : _ocRxMask;
+        byte ocBits = (_moxOn || _tuneActive) ? _ocTxMask : _ocRxMask;
         p[1401] = (byte)((ocBits & 0x7F) << 1);
 
         // Mercury attenuator byte: bit 0 = RX0 preamp, bit 1 = RX1 preamp
@@ -790,7 +790,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // through the RX filters and DAC images radiate as out-of-band
         // harmonics. Alex1 additionally gets RX_GNDonTX to short the RX input
         // while keyed, protecting the ADC.
-        bool xmit = _moxOn;
+        bool xmit = _moxOn || _tuneActive;
         uint alexCommon = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: 1);
         uint alex0 = alexCommon | (xmit ? ALEX_TX_RELAY : 0u);
         uint alex1 = alexCommon | (xmit ? ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX : 0u);
