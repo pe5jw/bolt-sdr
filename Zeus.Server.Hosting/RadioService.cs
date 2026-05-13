@@ -425,6 +425,18 @@ public sealed class RadioService : IDisposable
             if (client.BoardKind == HpsdrBoardKind.HermesLite2)
                 client.SetHasN2adr(true);
 
+            // HL2 Band Volts PWM enable (issue #279) — rehydrate the
+            // persisted operator preference into the fresh client so the
+            // very first outgoing Config frame carries the correct bit.
+            // Honoured on HL2 only; on every other board the flag is set
+            // but the wire effect (legacy LT2208 DITHER) is not requested
+            // here, since Zeus only flips it from the HL2 settings panel.
+            if (client.BoardKind == HpsdrBoardKind.HermesLite2
+                && _preferredRadioStore is not null)
+            {
+                client.EnableHl2BandVolts = _preferredRadioStore.GetEnableHl2BandVolts();
+            }
+
             Mutate(s => s with { Status = ConnectionStatus.Connected });
             _log.LogInformation("radio.connected endpoint={Ep} rate={Rate}", ipEndpoint, hpsdrRate);
             Connected?.Invoke(client);
@@ -957,6 +969,39 @@ public sealed class RadioService : IDisposable
     // fresh connection sees the current PA snapshot without waiting for the
     // next state change.
     public void ReplayPaSnapshot() => RecomputePaAndPush();
+
+    /// <summary>
+    /// HL2 Band Volts PWM enable (issue #279). Updates the persisted
+    /// per-radio preference AND any live Protocol-1 client so the next
+    /// outgoing Config frame carries the new bit. Honoured on HL2 only;
+    /// non-HL2 boards never see this bit on the wire because Zeus' UI gate
+    /// (<c>HasHl2OptionalToggles</c>) hides the control there. Returns the
+    /// effective value (echoes the input — present for symmetry with other
+    /// state setters that may sanitize).
+    /// </summary>
+    public bool SetHl2BandVolts(bool enabled)
+    {
+        // Write-through to persistent storage first so a crash between the
+        // store write and the live-client push can't lose the preference.
+        _preferredRadioStore?.SetEnableHl2BandVolts(enabled);
+        // Then push to the live client (if any) so the bit lands on the wire
+        // immediately. Safe on non-HL2 boards: SnapshotState's C3-bit-3
+        // encoding fires regardless of board, but the gate at the UI /
+        // capability level keeps non-HL2 operators from ever flipping it.
+        if (_activeClient is not null)
+        {
+            _activeClient.EnableHl2BandVolts = enabled;
+        }
+        return enabled;
+    }
+
+    /// <summary>
+    /// Reads the persisted HL2 Band Volts preference. Surfaced for the
+    /// <c>/api/radio/hl2-options</c> GET endpoint. Returns <c>false</c> when
+    /// no preferences store is wired (test factories) or no row exists yet.
+    /// </summary>
+    public bool GetHl2BandVolts() =>
+        _preferredRadioStore?.GetEnableHl2BandVolts() ?? false;
 
     // Compute the current drive byte + OC masks + PA enable from _drivePct,
     // PaSettingsStore, and the current VFO band. Push to the active P1 client

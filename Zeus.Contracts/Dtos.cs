@@ -450,6 +450,20 @@ public sealed record RadioSelectionSetRequest(
 // against the OrionMkIIVariant enum. Empty / unknown rejected with 400.
 public sealed record RadioVariantSetRequest(string Variant);
 
+// HL2-specific optional toggles surfaced via /api/radio/hl2-options.
+// Shape is an object (not a bare bool) so future mi0bot HL2 toggles can
+// slot in without breaking the contract. Currently carries Band Volts
+// PWM enable (issue #279) — the C3 bit 3 Protocol-1 Config flag the HL2
+// fork repurposes from the obsolete LT2208 DITHER bit; lit, HL2 emits
+// per-band-tagged PWM voltage on the FAN connector so an external amp
+// (Xiegu XPA125B etc.) can auto-band-switch.
+public sealed record Hl2OptionsDto(bool BandVolts);
+
+// Mutating version — currently a passthrough of Hl2OptionsDto but kept
+// distinct so the GET-vs-PUT request shapes can diverge in the future
+// (e.g. PUT becoming a partial update with nullable fields).
+public sealed record Hl2OptionsSetRequest(bool BandVolts);
+
 // Panadapter background settings — Mode is one of "basic" | "beam-map" |
 // "image"; Fit is one of "fit" | "fill" | "stretch". Image bytes are NOT
 // shipped in this DTO; HasImage signals whether GET /api/display-settings/image
