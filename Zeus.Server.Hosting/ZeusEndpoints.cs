@@ -837,6 +837,29 @@ public static class ZeusEndpoints
             return Results.Ok(new { Variant = variant.ToString() });
         });
 
+        // HL2-specific optional toggles (issue #279). Currently a single
+        // field — Band Volts PWM enable — but the response is an object so
+        // future mi0bot HL2 toggles slot in without breaking the contract.
+        // GET always returns 200 with the persisted value regardless of the
+        // connected board; the UI gates visibility on
+        // BoardCapabilities.HasHl2OptionalToggles (HL2 only) so non-HL2
+        // operators never see the controls. PUT writes the persisted value
+        // AND pushes through to any live Protocol-1 client so the bit lands
+        // on the wire immediately. Honoured on HL2 only on the wire.
+        app.MapGet("/api/radio/hl2-options", (RadioService radio) =>
+        {
+            return Results.Ok(new Hl2OptionsDto(BandVolts: radio.GetHl2BandVolts()));
+        });
+
+        app.MapPut("/api/radio/hl2-options", (Hl2OptionsSetRequest req, RadioService radio) =>
+        {
+            if (req is null)
+                return Results.BadRequest(new { error = "body required" });
+
+            var effective = radio.SetHl2BandVolts(req.BandVolts);
+            return Results.Ok(new Hl2OptionsDto(BandVolts: effective));
+        });
+
         // UI layout: flexlayout-react panel arrangement, persisted per operator profile.
         // GET returns 404 when no layout has been saved yet (frontend falls back to
         // DEFAULT_LAYOUT). PUT replaces; DELETE resets to default on next load.
