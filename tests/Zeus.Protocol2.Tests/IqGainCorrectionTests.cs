@@ -65,4 +65,20 @@ public class IqGainCorrectionTests
     {
         Assert.Equal(1.0, Protocol2Client.IqGainCorrection(board, rateKhz));
     }
+
+    [Theory]
+    [InlineData(48)]
+    [InlineData(96)]
+    [InlineData(192)]
+    [InlineData(384)]
+    public void HermesII_Never_Applies_Scaler(int rateKhz)
+    {
+        // ANAN-10E / ANAN-100B firmware (wire byte 0x02) shares the
+        // single-ADC DDC0 wire shape with Hermes/Brick2 but does NOT exhibit
+        // the +29 dB lift at 48 kHz — deskhpsdr only gates the scaler on
+        // NEW_DEVICE_HERMES (0x01). Widening it to HermesII would knock
+        // 29 dB off legitimate ANAN-10E / ANAN-100B RX. Pin to 1.0 at every
+        // P2 sample rate so a future refactor can't silently drift the gate.
+        Assert.Equal(1.0, Protocol2Client.IqGainCorrection(HpsdrBoardKind.HermesII, rateKhz));
+    }
 }
