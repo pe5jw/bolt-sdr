@@ -42,7 +42,7 @@
   --fg-4: #3a3a40;          /* extra-muted for borders/sep */
 
   /* ----- Accents — blue as accent ONLY, not a surface tint ----- */
-  --accent:        #2e8eff;
+  --accent:        #0c5f9c;
   --accent-bright: #4ea6ff;
   --accent-soft:   rgba(46,142,255,0.14);
   --accent-line:   rgba(46,142,255,0.55);
