@@ -1345,6 +1345,12 @@
 /* ===== QRZ card — gradient panel w/ portrait + rows ===== */
 .qrz-empty { padding: 20px; display: flex; align-items: center; justify-content: center; text-align: center; min-height: 140px; color: var(--fg-2); }
 .qrz-card { padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--bg-1); }
+/* qrz-card-main: two-column body — operator info on the left, big portrait
+   on the right. Portrait spans the full height of the info column so it
+   reads as the dominant visual (matches the v2 QRZ panel rework). */
+.qrz-card-main { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: stretch; }
+.qrz-info-col { display: flex; flex-direction: column; min-width: 0; }
+/* Legacy alias — kept for any consumer that still renders the old shape. */
 .qrz-header { display: flex; gap: 10px; align-items: stretch; }
 .qrz-id { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 2px; }
 .qrz-call { font-size: 20px; font-weight: 700; color: var(--accent); text-shadow: 0 0 10px rgba(74,158,255,0.4); letter-spacing: 0.04em; font-family: var(--font-mono, 'Archivo Narrow', sans-serif); line-height: 1; }
@@ -1364,7 +1370,10 @@
   color: var(--fg-2); padding-bottom: 2px; border-bottom: 1px solid rgba(74,158,255,0.2);
   margin-top: 4px;
 }
-.qrz-grid-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; }
+/* Single-column stack — the right column now hosts the 2× portrait, so
+   the data rows take the full info-column width. Each .qrz-row is its own
+   flex container that handles the k / v justify-between layout. */
+.qrz-grid-rows { display: flex; flex-direction: column; gap: 0; }
 .qrz-grid-rows .qrz-row { border-bottom: 1px dotted rgba(255,255,255,0.06); }
 .qrz-footer {
   display: flex; align-items: center; padding-top: 6px; margin-top: 2px;
@@ -1383,6 +1392,17 @@
   justify-content: center;
   box-shadow: none;
 }
+/* 2× portrait variant — anchored top-right inside .qrz-card-main, fills
+   the full height of the info column so the operator photo reads as the
+   dominant visual instead of a 72 px thumbnail. align-self: stretch makes
+   the grid row supply the height; aspect-ratio keeps it square. */
+.qrz-portrait.qrz-portrait--large {
+  width: 150px;
+  height: auto;
+  aspect-ratio: 1;
+  align-self: stretch;
+}
+.qrz-portrait.qrz-portrait--large .qrz-portrait-initials { font-size: 56px; }
 .qrz-portrait-bg { position: absolute; inset: 0; background: repeating-linear-gradient(45deg, rgba(255,255,255,0.03) 0 4px, transparent 4px 8px); }
 .qrz-grid {
   position: absolute; inset: 0;
@@ -1398,16 +1418,20 @@
 @keyframes qrz-scan { from { transform: translateY(-100%); } to { transform: translateY(100%); } }
 
 .qrz-rows { flex: 1; display: grid; grid-template-columns: 1fr; gap: 2px; min-width: 0; }
+/* Fixed-width label column + value column that hugs the label. Previously
+   used justify-content: space-between which pushed the value all the way
+   to the right edge of the info column, leaving it visually touching the
+   portrait now that the portrait sits in the right column. */
 .qrz-row {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 88px 1fr;
   align-items: baseline;
-  gap: 8px;
+  gap: 12px;
   padding: 2px 0;
   border-bottom: 1px dotted rgba(255,255,255,0.08);
 }
 .qrz-row .k { color: var(--fg-1); font-size: 11px; font-weight: 600; }
-.qrz-row .v { color: var(--fg-0); font-size: 12px; font-weight: 700; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qrz-row .v { color: var(--fg-0); font-size: 12px; font-weight: 700; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qrz-row .v.accent { color: var(--accent); }
 
 .cs-input {
