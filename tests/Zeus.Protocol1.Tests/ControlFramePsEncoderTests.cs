@@ -37,7 +37,7 @@ public class ControlFramePsEncoderTests
         Atten: HpsdrAtten.Zero,
         RxAntenna: HpsdrAntenna.Ant1,
         Mox: false,
-        EnableHl2Dither: false,
+        EnableHl2BandVolts: false,
         Board: HpsdrBoardKind.HermesLite2,
         PsEnabled: psEnabled);
 
