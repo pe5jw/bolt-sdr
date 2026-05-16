@@ -44,15 +44,38 @@
 
 import { useEffect, useState } from 'react';
 import { getAudioClient, type AudioClientState } from '../audio/audio-client';
+import { useCapabilitiesStore } from '../state/capabilities-store';
 
 export function AudioToggle() {
   const [state, setState] = useState<AudioClientState>({ kind: 'idle' });
+  // Phase 2c — in desktop mode the host process renders RX audio through
+  // its native miniaudio sink, so the Mute/Unmute button (which gates an
+  // in-browser AudioContext) is meaningless. Render a passive status
+  // indicator in its place. The AF slider next door still drives the
+  // server-side WDSP gain, so volume control is fully functional in both
+  // modes without touching this component.
+  const hostMode = useCapabilitiesStore((s) => s.capabilities?.host ?? null);
+  const nativeAudio = hostMode === 'desktop';
 
   useEffect(() => {
     return getAudioClient().subscribe((s) => {
       setState(s);
     });
   }, []);
+
+  if (nativeAudio) {
+    return (
+      <div
+        style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+        title="RX audio is playing through the host's default output device."
+      >
+        <span className="chip">
+          <span className="k">AUDIO</span>
+          <span className="v">native (default device)</span>
+        </span>
+      </div>
+    );
+  }
 
   const onClick = async () => {
     const client = getAudioClient();

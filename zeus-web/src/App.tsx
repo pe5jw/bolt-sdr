@@ -73,6 +73,7 @@ import { bearingDeg, distanceKm } from './components/design/geo';
 import { startRealtime } from './realtime/ws-client';
 import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
+import { setAudioHostMode } from './audio/host-mode';
 import { useMicUplink } from './audio/use-mic-uplink';
 import { fetchState } from './api/client';
 import { useConnectionStore } from './state/connection-store';
@@ -172,6 +173,14 @@ export default function App() {
   // UI rather than rendering broken controls.
   useEffect(() => {
     void useCapabilitiesStore.getState().refresh();
+    // Mirror the resolved host mode into the audio-host-mode flag so the
+    // non-React consumers (audio-client, ws-client, mic-uplink) can opt
+    // out of browser audio paths in desktop mode without each needing its
+    // own Zustand subscription on the hot path.
+    return useCapabilitiesStore.subscribe((state) => {
+      const host = state.capabilities?.host;
+      if (host) setAudioHostMode(host === 'desktop' ? 'native' : 'browser');
+    });
   }, []);
 
   useEffect(() => {
