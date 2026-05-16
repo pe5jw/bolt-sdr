@@ -46,6 +46,7 @@ import { useEffect } from 'react';
 import { startMicUplink, type MicUplinkHandle } from './mic-uplink';
 import { sendMicPcm } from '../realtime/ws-client';
 import { useTxStore } from '../state/tx-store';
+import { useCapabilitiesStore } from '../state/capabilities-store';
 import { warnOnce } from '../util/logger';
 
 // Silence floor for the mic meter — below this we clamp so the UI doesn't
@@ -73,7 +74,23 @@ const MIC_VISUAL_INTERVAL_MS = 50;
  * subsequent page loads once the operator has allowed it once.
  */
 export function useMicUplink(): void {
+  // Phase 2c — wait for /api/capabilities before deciding whether to open
+  // the mic. In desktop mode the host process captures TX audio natively
+  // via miniaudio (Phase 2b); calling getUserMedia in the webview would
+  // pop a redundant OS permission prompt and a second device would race
+  // the native capture.
+  const capsLoaded = useCapabilitiesStore((s) => s.loaded);
+  const hostMode = useCapabilitiesStore((s) => s.capabilities?.host ?? null);
+
   useEffect(() => {
+    if (!capsLoaded) return; // wait for the capabilities snapshot
+    if (hostMode === 'desktop') {
+      // Clear any stale "mic unavailable" error from a previous server-mode
+      // session so the operator doesn't see a misleading red banner.
+      useTxStore.getState().setMicError(null);
+      return;
+    }
+
     let handle: MicUplinkHandle | null = null;
     let disposed = false;
     let windowPeak = 0;
@@ -115,5 +132,5 @@ export function useMicUplink(): void {
       handle = null;
       if (h) void h.stop();
     };
-  }, []);
+  }, [capsLoaded, hostMode]);
 }

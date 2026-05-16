@@ -53,6 +53,8 @@
 // request for sampleRate: 48000 — most browsers honor this; if not, the
 // worklet will mis-frame (resampler is a future concern).
 
+import { isNativeAudio } from './host-mode';
+
 // `peak` is the max(abs(sample)) across the 20 ms block, linear [0..1].
 // Callers convert to dBFS via 20 * log10(peak); floor at −100 for silence.
 export type MicUplinkBlockHandler = (samples: Float32Array, peak: number) => void;
@@ -77,6 +79,14 @@ const EXPECTED_BLOCK_SAMPLES = 960;
 export async function startMicUplink(
   onBlock: MicUplinkBlockHandler,
 ): Promise<MicUplinkHandle> {
+  // Phase 2c — desktop mode runs a native miniaudio capture in the host
+  // process; calling getUserMedia in the webview would race the device
+  // with the native sink and pop a redundant OS permission prompt. The
+  // primary gate is in use-mic-uplink.ts; this is a belt-and-braces guard
+  // for any future direct caller.
+  if (isNativeAudio()) {
+    return { stop: async () => { /* no-op */ } };
+  }
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
     throw new Error('getUserMedia not available in this environment');
   }

@@ -45,6 +45,7 @@
 import { decodeDisplayFrame, FrameDecodeError, MSG_TYPE_DISPLAY_FRAME } from './frame';
 import { AudioFrameDecodeError, MSG_TYPE_AUDIO_PCM, decodeAudioFrame } from '../audio/frame';
 import { getAudioClient } from '../audio/audio-client';
+import { isNativeAudio } from '../audio/host-mode';
 import { useConnectionStore, type WisdomPhase } from '../state/connection-store';
 import { hasActiveFrameConsumers, useDisplayStore } from '../state/display-store';
 import { useTxStore } from '../state/tx-store';
@@ -147,6 +148,12 @@ function wsUrl(path: string): string {
  * needing to gate on connection state.
  */
 export function sendMicPcm(samples: Float32Array): void {
+  // Phase 2c — desktop mode captures mic natively in the host process
+  // (Phase 2b). The hook in use-mic-uplink.ts already skips startMicUplink
+  // entirely in this mode, but if any future caller emits 0x20 frames
+  // directly we still must not put them on the wire (the server's native
+  // capture would race the duplicate uplink).
+  if (isNativeAudio()) return;
   const ws = activeWs;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   if (samples.length !== MIC_PCM_SAMPLES) {
@@ -228,6 +235,12 @@ export function startRealtime(path = '/ws'): () => void {
           return;
         }
         if (peekType === MSG_TYPE_AUDIO_PCM) {
+          // Phase 2c — desktop-mode opt-out. When the host process renders
+          // RX audio natively, the server should not emit 0x02 frames at
+          // all (Phase 2b). Drop here without decoding so an in-flight
+          // frame at the moment of mode switch doesn't allocate a
+          // Float32Array we'd immediately throw away.
+          if (isNativeAudio()) return;
           const audio = decodeAudioFrame(ev.data);
           getAudioClient().push(audio);
           return;
