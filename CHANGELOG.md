@@ -10,6 +10,18 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.7.5] — 2026-05-16
+
+Same-day hotfix for v0.7.4 — fixes a TX-audio regression introduced by v0.7.4's PR #343. If you installed v0.7.4 today and heard chopped / intermittent carrier on SSB mic or WSJT-X / JTDX over TCI, **install this build — it's the fix**. Browser-based UI was unaffected; the regression only bit Photino-based `Zeus.Desktop` users.
+
+### Fixed
+
+- **Choppy TX audio on Zeus.Desktop after v0.7.4 — both SSB mic uplink and TCI (WSJT-X) transmission.** *(KB2UKA-Agent, PR #351, fixes #346 — reported by @rampa069)*
+  - **Root cause:** v0.7.4's PR #343 (`MoxStateFrame` broadcast for TCI TX-meter visibility) flipped the frontend `moxOn` flag on **any** MOX edge, including TCI-driven ones. The browser mic uplink worklet was gated on `moxOn`, so a TCI key-up caused the browser to start pushing silent mic PCM blocks into `TxAudioIngest._accumulator` in parallel with the TCI audio path. Both producers appended into the same `_accumulator` under `_sync`, interleaving WSJT-X tone blocks with near-silence blocks at 50 Hz. WDSP TXA processed alternating signal/silence, producing the audible "carrier cuts in and out every ~1 second" symptom and the on-wire signature `peak=1386 / 380 / 500 / 0 / 32641 …`.
+  - **Fix:** new `localMicArmed` flag in `tx-store`, raised only by local operator interaction (`MoxButton` click, spacebar PTT, `MobilePttButton` press) and lowered on the corresponding release, on server-forced MOX-off (`MoxStateFrame` off-edge, SWR trip, TCI key-up), and on WS close. `use-mic-uplink.ts` is now gated on `localMicArmed` instead of `moxOn`. Server-driven MOX-on (the TCI case) never raises the flag — that asymmetry closes the dual-feed path without breaking any of the v0.7.4 TCI TX-meter wiring. Six frontend files, no backend changes. `MoxStateFrame` wire format and the `moxOn` UI indicator are untouched.
+
+---
+
 ## [0.7.4] — 2026-05-16
 
 A correctness, capability, and polish release. **Hermes-class Protocol-1 boards
