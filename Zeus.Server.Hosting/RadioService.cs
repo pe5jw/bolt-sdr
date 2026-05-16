@@ -1349,6 +1349,15 @@ public sealed class RadioService : IDisposable
         });
     }
 
+    // Surface calcc-stall state to the frontend. PsAutoAttenuateService raises
+    // this when info5 stays at 0 for >5s while keyed; the frontend renders a
+    // banner pointing operator at HW peak. No-ops if the flag isn't changing.
+    public void SetPsCalibrationStalled(bool stalled)
+    {
+        if (Snapshot().PsCalibrationStalled == stalled) return;
+        Mutate(s => s with { PsCalibrationStalled = stalled });
+    }
+
     /// <summary>
     /// Resolves the operator-correct PS hardware-peak default for the given
     /// protocol + board kind. Sources:
@@ -1379,7 +1388,12 @@ public sealed class RadioService : IDisposable
         // on connect — keeps Synthetic + tests deterministic.
         (isProtocol2, board) switch
         {
-            (false, HpsdrBoardKind.HermesLite2)              => 0.233,
+            // HL2: bench-measured 2026-05-16 — standard drive into a
+            // resonant antenna produces DDC3(tx) envelope peak ≈ 0.190
+            // (info5 stays 0 with default 0.233 because calcc bin 15 never
+            // fills). 0.20 puts the operator inside calcc's convergence
+            // window out of the box; the panel lets them retune per setup.
+            (false, HpsdrBoardKind.HermesLite2)              => 0.20,
             (false, _)                                        => 0.4072,
             // 0x0A wire byte: Saturn FPGA (G2 / G2-1K) reports the high
             // peak per Thetis clsHardwareSpecific.cs:313; everything else
@@ -1392,7 +1406,8 @@ public sealed class RadioService : IDisposable
                 OrionMkIIVariant.G2_1K  => 0.6121,
                 _                        => 0.2899,
             },
-            (true,  HpsdrBoardKind.HermesLite2)               => 0.233,
+            // HL2 P2: same bench measurement as P1 above.
+            (true,  HpsdrBoardKind.HermesLite2)               => 0.20,
             (true,  _)                                        => 0.2899,
         };
 

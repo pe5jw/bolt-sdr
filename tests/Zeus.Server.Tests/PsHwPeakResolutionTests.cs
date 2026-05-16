@@ -57,12 +57,18 @@ public class PsHwPeakResolutionTests
     }
 
     [Fact]
-    public void HermesLite2_Both_Protocols_Use_0_233()
+    public void HermesLite2_Both_Protocols_Use_0_20()
     {
-        // MI0BOT special-case (HL2 only). Same value either protocol —
+        // *** DEVIATION FROM mi0bot *** mi0bot returns 0.233 (PSDefaultPeak
+        // in clsHardwareSpecific.cs). Zeus drops to 0.20 based on bench
+        // measurement 2026-05-16 — typical HL2 drive into a resonant
+        // antenna produces a DDC3(tx) envelope peak ≈ 0.190. With 0.233
+        // calcc bin 15 never fills, COLLECT never advances, info5 pinned
+        // at 0 and PS is silently dead. 0.20 puts the operator inside the
+        // convergence window out of the box. Same value either protocol —
         // the HL2 hardware peak is determined by the mod, not the protocol.
-        Assert.Equal(0.233, RadioService.ResolvePsHwPeak(false, HpsdrBoardKind.HermesLite2));
-        Assert.Equal(0.233, RadioService.ResolvePsHwPeak(true, HpsdrBoardKind.HermesLite2));
+        Assert.Equal(0.20, RadioService.ResolvePsHwPeak(false, HpsdrBoardKind.HermesLite2));
+        Assert.Equal(0.20, RadioService.ResolvePsHwPeak(true, HpsdrBoardKind.HermesLite2));
     }
 
     [Theory]

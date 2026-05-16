@@ -88,6 +88,7 @@ export function PsSettingsPanel() {
   const psCorrecting = useTxStore((s) => s.psCorrecting);
   const psCorrectionDb = useTxStore((s) => s.psCorrectionDb);
   const psMaxTxEnvelope = useTxStore((s) => s.psMaxTxEnvelope);
+  const psCalibrationStalled = useTxStore((s) => s.psCalibrationStalled);
   const setPsAuto = useTxStore((s) => s.setPsAuto);
   const setPsSingle = useTxStore((s) => s.setPsSingle);
   const setPsPtol = useTxStore((s) => s.setPsPtol);
@@ -567,6 +568,17 @@ export function PsSettingsPanel() {
             Hardware
             <span className="ps-card-hint">advanced — most users won't change</span>
           </h4>
+
+          {psCalibrationStalled ? (
+            <div
+              className="ps-stall-banner"
+              role="status"
+              aria-live="polite"
+              title="PureSignal has been keyed for more than 5 seconds without completing a calibration fit. This almost always means HW peak is set higher than the actual TX envelope peak — calcc bin 15 never fills."
+            >
+              ⚠ PS not converging — try lowering HW peak below your observed TX peak.
+            </div>
+          ) : null}
 
           <FieldRow
             label="HW peak"
