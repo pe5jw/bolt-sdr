@@ -130,4 +130,15 @@ public enum MsgType : byte
     // Allows the frontend to track transmit state even when the source of
     // the edge is not the web UI (e.g. TCI client sends trx:0,true;).
     MoxState = 0x1C,
+
+    // Server → client (mic peak level). Broadcast at ~10 Hz by
+    // NativeMicCapture only in desktop host mode — the SPA's getUserMedia
+    // analyser is intentionally disabled there (Phase 2c) so the MicMeter
+    // would otherwise be flat. Server mode never emits this frame; remote
+    // browser operators continue to drive their MicMeter via getUserMedia.
+    // Payload: [type:1][peakDbfs:f32 LE][tsUnixMs:i64 LE] = 13 bytes total.
+    // See MicPeakFrame.cs. Originally 0x1C on the audio-native branch;
+    // renumbered to 0x1D on merge with develop to resolve the collision
+    // with MoxState above.
+    MicPeak = 0x1D,
 }
