@@ -12,7 +12,9 @@ see the corresponding GitHub Release page.
 
 ## [0.7.5] — 2026-05-16
 
-Same-day hotfix for v0.7.4 — fixes a TX-audio regression introduced by v0.7.4's PR #343. If you installed v0.7.4 today and heard chopped / intermittent carrier on SSB mic or WSJT-X / JTDX over TCI, **install this build — it's the fix**. Browser-based UI was unaffected; the regression only bit Photino-based `Zeus.Desktop` users.
+> **🛠 THIS IS A HOTFIX RELEASE FOR v0.7.4.** If you installed v0.7.4 earlier today and heard chopped / intermittent carrier on SSB mic or WSJT-X / JTDX over TCI on the Photino-based **Zeus.Desktop** build, **install v0.7.5 — it's the fix**. Browser-based UI users on v0.7.4 were unaffected. **All v0.7.4 Zeus.Desktop operators should upgrade.**
+
+Huge thanks to **@rampa069 (Ramon Martinez)** for catching this on his bench the day v0.7.4 went out and filing a precise reproduction (#346) with on-wire packet captures that pinpointed the dual-feed pattern. That kind of report-with-evidence is what made the same-day hotfix possible.
 
 ### Fixed
 
