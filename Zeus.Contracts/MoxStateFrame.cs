@@ -42,10 +42,36 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { AzimuthMap } from '../../components/design/AzimuthMap';
-import { useWorkspace } from '../WorkspaceContext';
+using System.Buffers;
 
-export function AzimuthPanel() {
-  const { contact } = useWorkspace();
-  return <AzimuthMap target={contact} myGrid="EM48" />;
+namespace Zeus.Contracts;
+
+// MOX/TUN state edge frame. 3 bytes:
+//   [0x1C][moxOn:u8][tunOn:u8]
+//
+// Broadcast on every MOX or TUN edge from any source (UI, TCI, SWR trip,
+// TX timeout). The frontend updates useTxStore.moxOn / tunOn on receipt so
+// TCI-driven TX keying is reflected in the meter panel without a round-trip
+// through the HTTP REST endpoint.
+public readonly record struct MoxStateFrame(bool MoxOn, bool TunOn)
+{
+    public const int ByteLength = 3;
+
+    public void Serialize(IBufferWriter<byte> writer)
+    {
+        var span = writer.GetSpan(ByteLength);
+        span[0] = (byte)MsgType.MoxState;
+        span[1] = MoxOn ? (byte)1 : (byte)0;
+        span[2] = TunOn ? (byte)1 : (byte)0;
+        writer.Advance(ByteLength);
+    }
+
+    public static MoxStateFrame Deserialize(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < ByteLength)
+            throw new InvalidDataException($"MoxStateFrame requires {ByteLength} bytes, got {bytes.Length}");
+        if (bytes[0] != (byte)MsgType.MoxState)
+            throw new InvalidDataException($"expected MoxState (0x{(byte)MsgType.MoxState:X2}), got 0x{bytes[0]:X2}");
+        return new MoxStateFrame(MoxOn: bytes[1] != 0, TunOn: bytes[2] != 0);
+    }
 }

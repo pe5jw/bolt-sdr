@@ -252,6 +252,17 @@ public class DspPipelineService : BackgroundService,
     private readonly float[] _wfBuf = new float[Width];
     private readonly float[] _audioBuf = new float[AudioDrainCapacity];
 
+    // Cached panadapter snapshot for the frequency-calibration service
+    // (issue #325). Tick fills this every cycle that produced a valid
+    // pan frame; the cal service reads it without racing for the WDSP
+    // "fresh frame" flag. Single-writer (Tick) + occasional reader
+    // (cal) — protected by _calPanLock.
+    private readonly float[] _calPanSnapshot = new float[Width];
+    private float _calPanHzPerPixel;
+    private long _calPanCenterHz;
+    private long _calPanSnapshotMs;
+    private readonly object _calPanLock = new();
+
     public DspPipelineService(RadioService radio, StreamingHub hub, ILoggerFactory loggerFactory)
     {
         _radio = radio;
@@ -270,6 +281,10 @@ public class DspPipelineService : BackgroundService,
         _radio.MoxChanged += OnRadioMoxChanged;
         _radio.TunActiveChanged += OnRadioTunActiveChanged;
         _radio.PreampChanged += OnRadioPreampChanged;
+        // Frequency-correction factor (issue #325) — RadioService can't
+        // push to the P2 client directly (ActiveClient is P1-only), so we
+        // listen for changes here and forward them to the live P2 client.
+        _radio.FrequencyCorrectionFactorChanged += OnFrequencyCorrectionFactorChanged;
         // Wire up Auto-AGC: feed RX meter readings to RadioService control loop
         RxMeterUpdated += (channelId, dbm) => _radio.HandleRxMeterForAutoAgc(dbm, Environment.TickCount64);
 
@@ -304,6 +319,7 @@ public class DspPipelineService : BackgroundService,
             _radio.MoxChanged -= OnRadioMoxChanged;
             _radio.TunActiveChanged -= OnRadioTunActiveChanged;
             _radio.PreampChanged -= OnRadioPreampChanged;
+            _radio.FrequencyCorrectionFactorChanged -= OnFrequencyCorrectionFactorChanged;
             // iter5: no more pump tasks to stop — the sink path runs on the
             // protocol client's RX thread, which the protocol client tears
             // down via its own StopAsync. Detach defensively in case a
@@ -857,6 +873,10 @@ public class DspPipelineService : BackgroundService,
         int initialAttDb = _radio.EffectiveAttenDb;
         client.SetPreamp(initialPreamp);
         client.SetAttenuator(initialAttDb);
+        // Frequency-correction factor (issue #325) — rehydrate before the
+        // first CmdHighPriority(run=1) so the operator's calibration applies
+        // to the very first NCO phase-word. 1.0 = factory default, no-op.
+        client.SetFrequencyCorrectionFactor(_radio.GetFrequencyCorrectionFactor());
         await client.StartAsync(sampleRateKhz, ct).ConfigureAwait(false);
 
         int rateHz = sampleRateKhz * 1000;
@@ -1010,6 +1030,13 @@ public class DspPipelineService : BackgroundService,
         _appliedPreampOn = on;
     }
 
+    private void OnFrequencyCorrectionFactorChanged(double factor)
+    {
+        // RadioService handles the P1 client + the re-tune; we only have
+        // to forward to the live P2 client here. No-op when no P2 is up.
+        _p2Client?.SetFrequencyCorrectionFactor(factor);
+    }
+
     /// <summary>
     /// Forward a WDSP TXA block of interleaved float IQ to the live P2 client.
     /// No-op when P2 isn't connected; safe to call from TxTuneDriver / future
@@ -1066,6 +1093,51 @@ public class DspPipelineService : BackgroundService,
     }
 
     public Zeus.Protocol2.Protocol2Client? ActiveP2Client => _p2Client;
+
+    /// <summary>
+    /// Panadapter pixel column width — exposed so the frequency-calibration
+    /// service (issue #325) can size its capture buffer correctly without
+    /// hard-coding the constant.
+    /// </summary>
+    public static int PanadapterWidth => Width;
+
+    /// <summary>
+    /// Reads the latest cached panadapter snapshot (dB values, display
+    /// order — low frequency left). Caches are filled by <see cref="Tick"/>
+    /// at 30 Hz; the frequency-calibration service (issue #325) reads from
+    /// here to avoid racing for WDSP's once-per-frame "fresh data" flag,
+    /// which Tick is also consuming and would always win.
+    /// </summary>
+    /// <param name="dest">Buffer of length <see cref="PanadapterWidth"/>.</param>
+    /// <param name="hzPerPixel">Hz spacing between adjacent pixels (out).</param>
+    /// <param name="centerHz">Frequency of the centre pixel — the radio's LO
+    /// (out). In CW modes this is dial ± cw_pitch; outside CW it equals dial.</param>
+    /// <param name="maxAgeMs">Reject the cached snapshot if it is older than
+    /// this many milliseconds. Default 200 ms — six analyzer frames at 30 Hz,
+    /// generous tolerance for a one-off cal measurement without risking
+    /// pre-tune stale data.</param>
+    public bool TryCapturePanadapterSnapshot(
+        Span<float> dest,
+        out float hzPerPixel,
+        out long centerHz,
+        long maxAgeMs = 200)
+    {
+        hzPerPixel = 0;
+        centerHz = 0;
+        if (dest.Length != Width) return false;
+
+        lock (_calPanLock)
+        {
+            if (_calPanSnapshotMs == 0) return false;
+            long ageMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - _calPanSnapshotMs;
+            if (ageMs > maxAgeMs) return false;
+
+            _calPanSnapshot.AsSpan().CopyTo(dest);
+            hzPerPixel = _calPanHzPerPixel;
+            centerHz = _calPanCenterHz;
+        }
+        return true;
+    }
 
     // ---- IRxPacketSink (Protocol 1) -----------------------------------------
     // Called synchronously on Protocol1Client.RxLoop's OS thread. The body
@@ -1381,6 +1453,24 @@ public class DspPipelineService : BackgroundService,
             // extra contract field needed, per task #7 scope note.
             int zoomLevel = Math.Max(1, state.ZoomLevel);
             float hzPerPixel = (float)((double)sampleRate / zoomLevel / Width);
+            long centerHz = CwOffset.EffectiveLoHz(state);
+
+            // Cache for the frequency-calibration service (issue #325). The
+            // cal reads from this cache to avoid racing for WDSP's "fresh
+            // frame" flag — Tick consumes that flag at 30 Hz, leaving no
+            // window for a parallel consumer. Cache only when we actually
+            // got pan data this tick.
+            if (pan)
+            {
+                lock (_calPanLock)
+                {
+                    Array.Copy(panBuf, _calPanSnapshot, Width);
+                    _calPanHzPerPixel = hzPerPixel;
+                    _calPanCenterHz = centerHz;
+                    _calPanSnapshotMs = (long)nowMs;
+                }
+            }
+
             var frame = new DisplayFrame(
                 Seq: ++_seq,
                 TsUnixMs: nowMs,
@@ -1391,7 +1481,7 @@ public class DspPipelineService : BackgroundService,
                 // VfoHz outside CW and VfoHz ∓ cw_pitch in CWU/CWL. The CW filter
                 // (audio passband centred on cw_pitch) then renders on top of
                 // the dial line via PassbandOverlay's `centerHz + filterLow..high`.
-                CenterHz: CwOffset.EffectiveLoHz(state),
+                CenterHz: centerHz,
                 HzPerPixel: hzPerPixel,
                 PanDb: panBuf,
                 WfDb: wfBuf);

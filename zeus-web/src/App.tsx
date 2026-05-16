@@ -63,6 +63,7 @@ import { PaTempChip } from './components/PaTempChip';
 import { QrzStatusPill } from './components/QrzStatusPill';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
 import { SettingsView, type SettingsTabId } from './components/SettingsMenu';
+import { ThemeApplier } from './components/ThemeApplier';
 import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
 import { BOARD_LABELS } from './api/radio';
@@ -642,6 +643,7 @@ export default function App() {
   if (isMobile) {
     return (
       <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
+        <ThemeApplier />
         <MobileApp />
       </SpectrumWheelActionsContext.Provider>
     );
@@ -651,6 +653,7 @@ export default function App() {
     <BandPlanProvider>
     <WorkspaceContext.Provider value={workspaceCtx}>
     <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
+    <ThemeApplier />
     <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
       {/* Left layout bar — issue #241. Spans the full app height; lists named
           layouts for the active radio with switch/add/delete/reset actions. */}
