@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "Brian Keating (EI6LF)",
   "description": "Synthetic external-amplifier monitor + control. Replace state with your hardware driver to ship a real plugin.",
-  "homepage": "https://github.com/brianbruff/openhpsdr-zeus",
+  "homepage": "https://github.com/Kb2uka/openhpsdr-zeus",
   "license": "GPL-2.0-or-later",
   "sdk": { "abi": 1, "minVersion": "1.0.0" },
   "entrypoint": {

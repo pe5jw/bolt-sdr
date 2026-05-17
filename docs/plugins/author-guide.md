@@ -184,7 +184,7 @@ If you need custom DSP instead, implement `IAudioPlugin` — see `docs/plugins/a
 
 ## 7. Publishing to the registry
 
-PR your plugin entry to `github.com/brianbruff/openhpsdr-zeus-plugins`:
+PR your plugin entry to `github.com/Kb2uka/openhpsdr-zeus-plugins`:
 
 ```json
 {
