@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Plugins.Host;
+using Zeus.Plugins.Host.Registry;
 using DotnetHost = Microsoft.Extensions.Hosting.Host;
 
 namespace Zeus.Plugins.Host.Tests;
@@ -131,7 +132,19 @@ public class SamplePluginTests : IDisposable
             .ConfigureWebHost(web =>
             {
                 web.UseTestServer();
-                web.ConfigureServices(s => s.AddRouting());
+                web.ConfigureServices(s =>
+                {
+                    s.AddRouting();
+                    // Registry + installer stubs — required because the
+                    // /api/plugins/registry + /install endpoints inject
+                    // them. Behaviour is exercised in dedicated tests.
+                    s.AddSingleton<IRegistryClient>(new StubRegistry());
+                    s.AddSingleton(sp => new PluginInstaller(
+                        http: new HttpClient(),
+                        registry: sp.GetRequiredService<IRegistryClient>(),
+                        manager: manager,
+                        pluginRoot: Path.GetTempPath()));
+                });
                 web.Configure(app =>
                 {
                     app.UseRouting();
@@ -144,6 +157,13 @@ public class SamplePluginTests : IDisposable
 
         var host = await builder.StartAsync();
         return host;
+    }
+
+    private sealed class StubRegistry : IRegistryClient
+    {
+        public string SourceUrl => "stub://test";
+        public Task<Zeus.Plugins.Contracts.Registry.RegistryCatalog> FetchAsync(CancellationToken ct)
+            => Task.FromResult(new Zeus.Plugins.Contracts.Registry.RegistryCatalog());
     }
 
     private sealed record AmpStatus

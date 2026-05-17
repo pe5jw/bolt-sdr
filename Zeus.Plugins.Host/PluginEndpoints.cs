@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Zeus.Plugins.Contracts;
 using Zeus.Plugins.Contracts.Extensions;
+using Zeus.Plugins.Host.Registry;
 
 namespace Zeus.Plugins.Host;
 
@@ -31,6 +33,60 @@ public static class PluginEndpoints
         {
             var p = manager.Find(id);
             return p is null ? Results.NotFound() : Results.Ok(ToDto(p));
+        });
+
+        app.MapGet("/api/plugins/registry", async (
+            IRegistryClient registry, CancellationToken ct) =>
+        {
+            try
+            {
+                var catalog = await registry.FetchAsync(ct);
+                return Results.Ok(new RegistryResponse { SourceUrl = registry.SourceUrl, Catalog = catalog });
+            }
+            catch (RegistryFetchException ex)
+            {
+                return Results.Problem(
+                    detail: ex.Message,
+                    title: "registry-fetch-failed",
+                    statusCode: StatusCodes.Status502BadGateway);
+            }
+        });
+
+        app.MapPost("/api/plugins/install", async (
+            InstallRequest req, PluginInstaller installer, CancellationToken ct) =>
+        {
+            try
+            {
+                InstalledPlugin installed = req.Source switch
+                {
+                    "url"      => await installer.InstallFromUrlAsync(req.Url ?? "", req.Sha256, ct),
+                    "file"     => await installer.InstallFromZipFileAsync(req.FilePath ?? "", ct),
+                    "registry" => await installer.InstallFromRegistryAsync(req.Id ?? "", req.Version ?? "", ct),
+                    _          => throw new PluginInstallException($"unknown source '{req.Source}'"),
+                };
+                return Results.Ok(ToDto(installed.Activated));
+            }
+            catch (PluginInstallException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
+        app.MapDelete("/api/plugins/{id}", async (
+            string id, PluginInstaller installer, CancellationToken ct) =>
+        {
+            try
+            {
+                await installer.UninstallAsync(id, ct);
+                return Results.NoContent();
+            }
+            catch (PluginInstallException ex)
+            {
+                return Results.Problem(
+                    detail: ex.Message,
+                    title: "plugin-uninstall-deferred",
+                    statusCode: StatusCodes.Status202Accepted);
+            }
         });
 
         // Per-plugin endpoints from IBackendPlugin
@@ -136,4 +192,32 @@ public sealed record PluginAudioDto
     public string Slot { get; init; } = "";
     public int Channels { get; init; }
     public int SampleRate { get; init; }
+}
+
+public sealed record RegistryResponse
+{
+    public string SourceUrl { get; init; } = "";
+    public Zeus.Plugins.Contracts.Registry.RegistryCatalog Catalog { get; init; }
+        = new Zeus.Plugins.Contracts.Registry.RegistryCatalog();
+}
+
+public sealed record InstallRequest
+{
+    /// <summary>One of: "url", "file", "registry".</summary>
+    public string Source { get; init; } = "url";
+
+    /// <summary>HTTPS download URL. Used when Source = "url".</summary>
+    public string? Url { get; init; }
+
+    /// <summary>Absolute path to a .zip on disk. Used when Source = "file".</summary>
+    public string? FilePath { get; init; }
+
+    /// <summary>Optional hex SHA-256 of the zip, verified before extraction.</summary>
+    public string? Sha256 { get; init; }
+
+    /// <summary>Plugin id. Used when Source = "registry".</summary>
+    public string? Id { get; init; }
+
+    /// <summary>Plugin version. Used when Source = "registry".</summary>
+    public string? Version { get; init; }
 }
