@@ -379,7 +379,15 @@ public sealed class TxMetersService : BackgroundService
                         _refAdcPeak = 0;
                     }
                     var cal = RadioCalibrations.For(_radio.ConnectedBoardKind, _radio.EffectiveOrionMkIIVariant);
-                    var (fwdW, refW, swrVal) = ComputeMeters(fwdAdc, refAdc, cal);
+                    // Watts use peak-hold (matches LP-100A peak-reading
+                    // wattmeter). SWR uses the smoothed ADC pair instead:
+                    // peak(FWD) vs peak(REF) are two uncorrelated transient
+                    // maxima and their ratio is not a physical standing-wave
+                    // ratio — on HL2 both rails can saturate together during
+                    // PA-on / LPF-relay transients, with REF clamping a few
+                    // counts above FWD, which the trip logic reads as 9:1.
+                    var (fwdW, refW, _) = ComputeMeters(fwdAdc, refAdc, cal);
+                    var (_, _, swrVal) = ComputeMeters(fwdAdcSmoothed, refAdcSmoothed, cal);
                     swr = swrVal;
                     // Stage meters are published by WdspDspEngine.ProcessTxBlock;
                     // may lag the first TX block by a few ticks at MOX-on, which
