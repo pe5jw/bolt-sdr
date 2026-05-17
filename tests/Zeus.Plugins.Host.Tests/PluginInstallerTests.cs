@@ -43,20 +43,50 @@ public class PluginInstallerTests : IDisposable
 
     public void Dispose()
     {
+        foreach (var f in _addedFixtures) f.Dispose();
         _manager.DisposeAsync().AsTask().GetAwaiter().GetResult();
         try { Directory.Delete(_root, recursive: true); } catch { /* ignore */ }
     }
 
-    private static string SampleAsmDir() =>
-        Path.Combine(AppContext.BaseDirectory, "sample-plugins", "HelloWorld");
+    private const string FixtureSource = """
+        using System.Threading;
+        using System.Threading.Tasks;
+        using Zeus.Plugins.Contracts;
 
-    private static (byte[] zipBytes, string sha256Hex) BuildZipFromSample()
+        namespace Openhpsdr.Zeus.Samples.HelloWorld;
+
+        public sealed class HelloWorldPlugin : IZeusPlugin
+        {
+            public Task InitializeAsync(IPluginContext context, CancellationToken ct) => Task.CompletedTask;
+            public Task ShutdownAsync(CancellationToken ct) => Task.CompletedTask;
+        }
+        """;
+
+    private const string FixtureManifest = """
+        {
+          "schemaVersion": 1,
+          "id": "com.openhpsdr.zeus.samples.helloworld",
+          "name": "Hello World",
+          "version": "1.0.0",
+          "sdk": { "abi": 1, "minVersion": "1.0.0" },
+          "entrypoint": { "assembly": "HelloWorld.dll", "type": "Openhpsdr.Zeus.Samples.HelloWorld.HelloWorldPlugin" }
+        }
+        """;
+
+    /// <summary>Builds a self-contained plugin zip in memory by
+    /// Roslyn-compiling a HelloWorld-shaped fixture and packaging its
+    /// dll + plugin.json. Replaces the older "read from sample-plugins
+    /// bin output" approach now that samples live in the registry
+    /// repo, not the Zeus core repo.</summary>
+    private (byte[] zipBytes, string sha256Hex) BuildZipFromFixture()
     {
-        var src = SampleAsmDir();
+        var fixture = RoslynFixture.Create("HelloWorld", FixtureSource, FixtureManifest);
+        _addedFixtures.Add(fixture);
+
         using var ms = new MemoryStream();
         using (var archive = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
         {
-            foreach (var f in Directory.EnumerateFiles(src))
+            foreach (var f in Directory.EnumerateFiles(fixture.PluginDir))
             {
                 var entry = archive.CreateEntry(Path.GetFileName(f), CompressionLevel.Fastest);
                 using var es = entry.Open();
@@ -69,10 +99,12 @@ public class PluginInstallerTests : IDisposable
         return (bytes, sha);
     }
 
+    private readonly List<RoslynFixture> _addedFixtures = new();
+
     [Fact]
     public async Task InstallFromZipFile_RoundTrips()
     {
-        var (bytes, _) = BuildZipFromSample();
+        var (bytes, _) = BuildZipFromFixture();
         var zip = Path.Combine(_root, "in.zip");
         await File.WriteAllBytesAsync(zip, bytes);
 
@@ -87,7 +119,7 @@ public class PluginInstallerTests : IDisposable
     [Fact]
     public async Task InstallFromUrl_VerifyHash_HappyPath()
     {
-        var (bytes, sha) = BuildZipFromSample();
+        var (bytes, sha) = BuildZipFromFixture();
         _http.Body = bytes;
 
         var installed = await _installer.InstallFromUrlAsync("https://example.com/plug.zip", sha, default);
@@ -99,7 +131,7 @@ public class PluginInstallerTests : IDisposable
     [Fact]
     public async Task InstallFromUrl_HashMismatch_Rejects_AndLeavesNoFiles()
     {
-        var (bytes, _) = BuildZipFromSample();
+        var (bytes, _) = BuildZipFromFixture();
         _http.Body = bytes;
         var wrongHash = new string('0', 64);
 
@@ -153,7 +185,7 @@ public class PluginInstallerTests : IDisposable
     [Fact]
     public async Task Uninstall_DeactivatesAndRemovesDirectory()
     {
-        var (bytes, _) = BuildZipFromSample();
+        var (bytes, _) = BuildZipFromFixture();
         var zip = Path.Combine(_root, "in.zip");
         await File.WriteAllBytesAsync(zip, bytes);
         var installed = await _installer.InstallFromZipFileAsync(zip, default);
