@@ -173,6 +173,10 @@ public sealed class WdspDspEngine : IDspEngine
     // Counter throttles fexchange2-error logging so a persistent wire-protocol
     // mismatch doesn't flood the log. First 8 errors are visible then suppressed.
     private int _txFexchangeErrLogged;
+    // Same throttle for TX-audio plugin handler exceptions — first 4 visible,
+    // then suppressed. The handler should never throw, but a buggy plugin
+    // shouldn't take down TX or flood the log.
+    private int _txPluginErrLogged;
     private int? _txaChannelId;
     // Tracked so SetTxMode can re-sign bandpass bounds (LSB family wants negative,
     // USB family positive) the same way RXA does through ApplyBandpassForMode.
@@ -1418,6 +1422,36 @@ public sealed class WdspDspEngine : IDspEngine
         _log.LogInformation("wdsp.setTxPanelGain linear={Gain:F3}", linearGain);
     }
 
+    /// <summary>
+    /// Pre-WDSP TX-audio plugin hook. Implementer (Zeus.Server.Hosting's
+    /// <c>AudioPluginBridge</c>) wraps the host's audio-plugin chain and
+    /// installs this delegate at startup. Pass <c>null</c> to detach.
+    /// Volatile single-pointer read on the audio thread; no virtual
+    /// dispatch into Zeus.Plugins.Host from Zeus.Dsp.
+    /// </summary>
+    /// <param name="input">Mic-monaural float32, length = <c>frames</c>.</param>
+    /// <param name="output">Caller-owned buffer the plugin writes; length = <c>frames</c>.</param>
+    /// <param name="frames">Block size in frames. Currently matches the TXA input block.</param>
+    /// <param name="channels">Always 1 in the current TX path.</param>
+    /// <param name="sampleRate">Always 48000 in the current TX path.</param>
+    public delegate void TxAudioBlockHandler(
+        ReadOnlySpan<float> input,
+        Span<float> output,
+        int frames,
+        int channels,
+        int sampleRate);
+
+    private volatile TxAudioBlockHandler? _txAudioPluginHandler;
+
+    /// <summary>Install / detach the realtime TX-audio plugin handler. Safe to call
+    /// from any thread; the audio thread sees the new value on its next block.</summary>
+    public void SetTxAudioPluginHandler(TxAudioBlockHandler? handler)
+        => _txAudioPluginHandler = handler;
+
+    /// <summary>True iff a handler is currently installed. Used by Zeus.Server.Hosting
+    /// to surface "audio plugin active" in <c>/api/capabilities</c>.</summary>
+    public bool HasTxAudioPluginHandler => _txAudioPluginHandler is not null;
+
     public void SetTxLevelerMaxGain(double maxGainDb)
     {
         if (_disposed != 0) return;
@@ -2284,7 +2318,37 @@ public sealed class WdspDspEngine : IDspEngine
         // both — max combined footprint is 512 + 512 + 2048 + 2048 = 5120 floats
         // ≈ 20 KiB, well inside the default stack budget.
         Span<float> iin = stackalloc float[inSize];
-        micMono.CopyTo(iin);
+
+        // TX-audio plugin seam. Zeus.Server.Hosting wires this delegate at
+        // startup (via SetTxAudioPluginHandler) once PluginManager has
+        // surfaced any IAudioPlugin instances. Single volatile read on the
+        // realtime path; null = fall through to the original mic copy.
+        // Plugins see mic-monaural float32 at _txaInputRateHz (48 kHz) at
+        // the configured TXA input block size; output buffer is iin, which
+        // fexchange2 consumes directly. Bit-identical to "no plugins" when
+        // the handler is null.
+        var pluginHandler = _txAudioPluginHandler;
+        if (pluginHandler is null)
+        {
+            micMono.CopyTo(iin);
+        }
+        else
+        {
+            try
+            {
+                pluginHandler(micMono, iin, inSize, channels: 1, sampleRate: _txaInputRateHz);
+            }
+            catch (Exception ex)
+            {
+                // Audio thread: never throw upward. Degrade to pass-through.
+                // The handler should never throw, but a buggy plugin or a
+                // wrapper bug shouldn't take down TX.
+                micMono.CopyTo(iin);
+                if (++_txPluginErrLogged <= 4)
+                    _log.LogWarning(ex, "wdsp.tx-plugin handler threw (suppressed after 4)");
+            }
+        }
+
         Span<float> qin = stackalloc float[inSize];
         qin.Clear();
         Span<float> iout = stackalloc float[outSize];

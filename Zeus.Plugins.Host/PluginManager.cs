@@ -43,6 +43,19 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
     /// <summary>Try to find an active plugin by id.</summary>
     public ActivatedPlugin? Find(string id) => _active.TryGetValue(id, out var p) ? p : null;
 
+    /// <summary>Raised AFTER a plugin's IZeusPlugin.InitializeAsync returns
+    /// cleanly and the plugin is registered in <see cref="Active"/>.
+    /// Subscribers run synchronously on whichever thread called
+    /// <see cref="ActivateAsync"/>; throws from subscribers are logged and
+    /// swallowed so a buggy subscriber can't break activation.</summary>
+    public event Action<ActivatedPlugin>? PluginActivated;
+
+    /// <summary>Raised BEFORE the plugin's ShutdownAsync is called. The
+    /// plugin is already removed from <see cref="Active"/>; subscribers
+    /// can free per-plugin host-side resources (audio chain slots, HTTP
+    /// route entries, etc.).</summary>
+    public event Action<ActivatedPlugin>? PluginDeactivated;
+
     public async Task StartAsync(CancellationToken ct)
     {
         if (_options.SafeMode)
@@ -128,6 +141,10 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
 
         var activated = new ActivatedPlugin(loaded, ctx);
         _active[id] = activated;
+
+        try { PluginActivated?.Invoke(activated); }
+        catch (Exception ex) { _log.LogWarning(ex, "PluginActivated subscriber threw for {Id}", id); }
+
         return activated;
     }
 
@@ -145,6 +162,12 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
         // see a half-shutdown plugin. Idempotent: the public
         // DeactivateAsync(id) path also TryRemoves before calling us.
         _active.TryRemove(id, out _);
+
+        // Notify subscribers BEFORE the plugin's own ShutdownAsync so
+        // host-side per-plugin resources (audio chain slots, etc.) can
+        // be released while the plugin instance is still alive.
+        try { PluginDeactivated?.Invoke(entry); }
+        catch (Exception ex) { _log.LogWarning(ex, "PluginDeactivated subscriber threw for {Id}", id); }
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(_options.ShutdownTimeout);

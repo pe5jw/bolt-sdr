@@ -273,6 +273,13 @@ public static class ZeusHost
         // mounted below via PluginEndpoints.MapAll under /api/plugins/...
         builder.Services.AddZeusPlugins(prefsDbPathProvider: PrefsDbPath.Get);
 
+        // AudioPluginBridge wires PluginManager's audio-bearing plugins
+        // into WdspDspEngine's realtime TX seam. No-op when no plugins
+        // declare an audio component; subscribes to engine swaps so it
+        // survives a Synthetic→WDSP transition mid-session.
+        builder.Services.AddSingleton<AudioPluginBridge>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioPluginBridge>());
+
         // TCI (Transceiver Control Interface) — ExpertSDR3-compatible WebSocket server
         // for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),
         // and SDR display tools. Disabled by default; enable via appsettings.json Tci:Enabled=true.
