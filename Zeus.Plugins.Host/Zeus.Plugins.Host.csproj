@@ -4,6 +4,10 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Required for the LibraryImport source-gen path used by
+         Audio/VstBridgeNative.cs (P/Invoke into zeus-vst-bridge).
+         Unsafe usage is bounded to that file's pointer marshaling. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
