@@ -40,63 +40,60 @@ internal sealed class RoslynFixture : IDisposable
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempRoot);
 
-        // Reference assemblies — assembled from three sources in
-        // PRIORITY ORDER (first-wins, dedupe by assembly file name so
-        // CS1705 version-mismatches don't bite when a runtime-shared
-        // framework and a NuGet-package copy of the same dll both
-        // surface):
-        //
-        //   1. Microsoft.AspNetCore.App shared framework — highest
-        //      priority. Zeus.Plugins.Contracts.dll links against the
-        //      framework's 10.0.x assemblies; CI image's
-        //      Microsoft.AspNetCore.Mvc.Testing transitively brings in
-        //      9.0.0 copies of Microsoft.AspNetCore.Routing.dll under
-        //      bin/, which Roslyn would otherwise prefer.
-        //   2. Test binary's output dir — Mvc.Testing infrastructure,
-        //      xunit, Zeus assemblies.
-        //   3. AppDomain.GetAssemblies() — catches anything loaded
-        //      via reflection that wasn't on disk in the above paths.
+        // Reference assemblies — built from TRUSTED_PLATFORM_ASSEMBLIES
+        // (the runtime's resolved assembly list, canonical across
+        // every .NET install layout) with explicit shared-framework
+        // preference when two copies of the same dll exist. Required
+        // because some packages (e.g. Microsoft.NET.Test.Sdk) drop
+        // older copies of Microsoft.Extensions.Logging.Abstractions
+        // into bin/ that don't match the runtime's 10.0.x copy in
+        // Microsoft.AspNetCore.App / Microsoft.NETCore.App. Without
+        // the framework preference, Roslyn picks the older bin/
+        // copy and CS1705 (version mismatch) fires when
+        // Zeus.Plugins.Contracts.dll references the newer runtime
+        // assembly.
         var byName = new Dictionary<string, MetadataReference>(StringComparer.OrdinalIgnoreCase);
 
-        void TryAdd(string dllPath)
+        static bool IsSharedFramework(string p)
+            => p.Contains($"{Path.DirectorySeparatorChar}shared{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
+
+        void Consider(string dllPath)
         {
+            if (string.IsNullOrEmpty(dllPath) || !File.Exists(dllPath)) return;
             var key = Path.GetFileName(dllPath);
-            if (byName.ContainsKey(key)) return;
-            if (!File.Exists(dllPath)) return;
+            if (byName.TryGetValue(key, out var existing))
+            {
+                // Shared framework copy preferred over package copies
+                // (the runtime activates the framework version at
+                // execution time anyway).
+                var existingPath = existing.Display ?? "";
+                var existingIsShared = IsSharedFramework(existingPath);
+                var thisIsShared = IsSharedFramework(dllPath);
+                if (existingIsShared || !thisIsShared) return;
+                // current is shared, existing isn't — overwrite.
+            }
             try { byName[key] = MetadataReference.CreateFromFile(dllPath); }
             catch { /* non-managed dll, skip */ }
         }
 
-        // 1. Shared framework first — wins ties.
-        var coreDir = Path.GetDirectoryName(typeof(object).Assembly.Location);
-        if (coreDir is not null)
+        // 1. Trusted platform assemblies — the canonical list.
+        if (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") is string tpa)
         {
-            var sharedRoot = Path.GetFullPath(Path.Combine(coreDir, "..", "..", "Microsoft.AspNetCore.App"));
-            if (Directory.Exists(sharedRoot))
-            {
-                var aspnetVersionDir = Directory.EnumerateDirectories(sharedRoot)
-                    .OrderByDescending(d => d)
-                    .FirstOrDefault();
-                if (aspnetVersionDir is not null)
-                {
-                    foreach (var dll in Directory.EnumerateFiles(aspnetVersionDir, "*.dll"))
-                        TryAdd(dll);
-                }
-            }
-            // Also the NETCore.App shared framework so System.* refs are present.
-            foreach (var dll in Directory.EnumerateFiles(coreDir, "*.dll"))
-                TryAdd(dll);
+            foreach (var path in tpa.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+                Consider(path);
         }
 
-        // 2. Test binary's output dir.
+        // 2. Test binary's output dir — picks up ProjectReference outputs
+        //    (Zeus.Plugins.Contracts.dll, Zeus.Plugins.Host.dll) that
+        //    aren't in the TPA list because they're not framework refs.
         foreach (var dll in Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll"))
-            TryAdd(dll);
+            Consider(dll);
 
         // 3. Anything loaded via reflection not yet covered.
         foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
         {
             if (a.IsDynamic || string.IsNullOrEmpty(a.Location)) continue;
-            TryAdd(a.Location);
+            Consider(a.Location);
         }
 
         var refs = byName.Values.ToList();
