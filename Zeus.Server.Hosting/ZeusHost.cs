@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Contracts;
 using Zeus.Dsp.Wdsp;
+using Zeus.Plugins.Host;
 using Zeus.Protocol1;
 using Zeus.Protocol1.Discovery;
 using Zeus.Server.Tci;
@@ -266,6 +267,12 @@ public static class ZeusHost
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton<CapabilitiesService>();
 
+        // Plugin system v2 (docs/proposals/plugin-system-v2.md). PluginManager
+        // is registered as IHostedService so plugin discovery / activation
+        // runs as part of normal app startup; plugin REST endpoints are
+        // mounted below via PluginEndpoints.MapAll under /api/plugins/...
+        builder.Services.AddZeusPlugins(prefsDbPathProvider: PrefsDbPath.Get);
+
         // TCI (Transceiver Control Interface) — ExpertSDR3-compatible WebSocket server
         // for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),
         // and SDR display tools. Disabled by default; enable via appsettings.json Tci:Enabled=true.
@@ -366,6 +373,8 @@ public static class ZeusHost
         }
 
         app.MapZeusEndpoints();
+        Zeus.Plugins.Host.PluginEndpoints.MapAll(app,
+            app.Services.GetRequiredService<Zeus.Plugins.Host.PluginManager>());
 
         // Optional startup banner — service mode prints to its console window
         // (operator-facing UI), desktop mode hides the console and skips this.
