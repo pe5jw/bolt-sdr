@@ -36,9 +36,33 @@ public static class ZeusEndpoints
 
         // Capabilities snapshot — host-mode + platform + feature gates.
         // Frontend fetches once on app mount and hides UI for unavailable
-        // features (e.g. TX Audio Tools when vstHost.available=false).
+        // features (e.g. TX Audio Tools when vstHost.available=false). The
+        // HttpContext-aware Snapshot overload lets desktop + ShareOverLan
+        // report host="server" to LAN clients while loopback Photino keeps
+        // host="desktop" — see CapabilitiesService.Snapshot(HttpContext).
         app.MapGet("/api/capabilities",
-            (CapabilitiesService caps) => Results.Ok(caps.Snapshot()));
+            (HttpContext ctx, CapabilitiesService caps) => Results.Ok(caps.Snapshot(ctx)));
+
+        // Native RX audio (miniaudio) — desktop-mode mute control. The
+        // Mute/Unmute button in the Photino window POSTs here to silence
+        // the OS playback device. NativeAudioSink is only registered in
+        // desktop mode, so GetService returns null in server mode and the
+        // endpoint reports supported=false; the SPA's AudioToggle uses
+        // its in-browser AudioContext path there instead.
+        app.MapGet("/api/audio/native", (IServiceProvider sp) =>
+        {
+            var sink = sp.GetService<NativeAudioSink>();
+            return sink is null
+                ? Results.Ok(new { supported = false, muted = false })
+                : Results.Ok(new { supported = true, muted = sink.IsMuted });
+        });
+        app.MapPost("/api/audio/native/mute", (NativeMuteRequest body, IServiceProvider sp) =>
+        {
+            var sink = sp.GetService<NativeAudioSink>();
+            if (sink is null) return Results.NotFound(new { error = "native audio not active in this host mode" });
+            sink.SetMuted(body.Muted);
+            return Results.Ok(new { supported = true, muted = sink.IsMuted });
+        });
 
         app.MapGet("/api/state", (RadioService r) => r.Snapshot());
 
@@ -1596,3 +1620,5 @@ public static class ZeusEndpoints
         _ => throw new ArgumentOutOfRangeException(nameof(hz), hz, "validate before calling"),
     };
 }
+
+internal sealed record NativeMuteRequest(bool Muted);
