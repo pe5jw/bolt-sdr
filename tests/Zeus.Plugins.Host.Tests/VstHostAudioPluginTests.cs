@@ -23,7 +23,13 @@ public class VstHostAudioPluginTests
             await plugin.InitializeAudioAsync(new StubHost(), default);
 
             Assert.True(bridge.InitCalled);
-            Assert.Equal(vst3Abs, bridge.LastLoadPath);
+            // VstHostAudioPlugin builds the absolute path via Path.Combine
+            // with the manifest's vst3Path "vst3/Fake.vst3". On Windows
+            // that mixes forward+back slashes; canonicalise both sides
+            // before comparing.
+            Assert.Equal(
+                Path.GetFullPath(vst3Abs),
+                Path.GetFullPath(bridge.LastLoadPath!));
             await plugin.ShutdownAudioAsync(default);
             Assert.Equal(1, bridge.UnloadCount);
         }

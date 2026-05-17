@@ -118,7 +118,7 @@ public sealed class PluginInstaller
         if (Directory.Exists(destDir))
         {
             try { Directory.Delete(destDir, recursive: true); }
-            catch (IOException ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 throw new PluginInstallException(
                     $"cannot overwrite '{destDir}' — files may still be in use. Restart Zeus and retry.", ex);
