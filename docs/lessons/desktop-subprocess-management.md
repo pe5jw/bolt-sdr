@@ -49,7 +49,7 @@ app.StopAsync().GetAwaiter().GetResult();
 ## Zeus.Server (Separate Process Architecture)
 
 **Platform:** Windows, macOS, Linux
-**Entry Point:** `Zeus.Server/Program.cs`
+**Entry Point:** `OpenhpsdrZeus/Program.cs`
 **Process Model:** Backend runs as standalone process, browser connects as client
 
 The installer packages for Zeus.Server include launcher scripts that:
@@ -269,6 +269,5 @@ Before sending signals, we check if the process exists with `kill -0 "$SERVER_PI
 ## See Also
 
 - `Zeus.Desktop/Program.cs` — In-process backend hosting
-- `Zeus.Server/Program.cs` — Signal handlers for graceful shutdown
-- `Zeus.PluginHost/Native/SidecarProcess.cs` — Subprocess management for VST plugin host
+- `OpenhpsdrZeus/Program.cs` — Signal handlers for graceful shutdown
 - `docs/lessons/wdsp-init-gotchas.md` — DSP initialization ordering

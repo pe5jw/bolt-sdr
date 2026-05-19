@@ -1,3 +1,5 @@
+> **SUPERSEDED 2026-05-17** by docs/proposals/plugin-system-v2.md.
+
 # PRD — Plugins System Architecture
 
 **Status:** Draft (2026-04-28) — Architectural proposal for maintainer review
@@ -275,7 +277,7 @@ public interface IPluginContext
 
 **Lifecycle:**
 ```csharp
-// Zeus.Server/Plugins/PluginManager.cs
+// Zeus.Plugins.Host/PluginManager.cs
 public class PluginManager : IHostedService
 {
     private readonly List<AssemblyLoadContext> _contexts = new();
@@ -369,7 +371,7 @@ message RadioEvent {
 
 **Lifecycle:**
 ```csharp
-// Zeus.Server/Plugins/PluginProcess.cs
+// Zeus.Plugins.Host/PluginProcess.cs
 public class PluginProcess : IAsyncDisposable
 {
     private Process? _process;
@@ -642,7 +644,7 @@ Each plugin ships with `plugin.json` alongside its `.dll`:
 ### 5.4 Plugin lifecycle
 
 ```csharp
-// Zeus.Server/Plugins/PluginManager.cs (simplified)
+// Zeus.Plugins.Host/PluginManager.cs (simplified)
 public class PluginManager : IHostedService
 {
     private readonly List<PluginInstance> _plugins = new();
@@ -963,7 +965,7 @@ MyPlugin/
 
 ```
 Zeus.Contracts/Plugins/       — Plugin interfaces, DTOs
-Zeus.Server/Plugins/          — PluginManager, PluginContext, loader
+Zeus.Plugins.Host/          — PluginManager, PluginContext, loader
 Zeus.PluginHost/              — Separate process host (for isolated plugins)
 Zeus.Plugin.Template/         — dotnet new template
 ```
@@ -984,7 +986,7 @@ app.MapPluginEndpoints();  // Extension method iterates plugins, calls IPluginHt
 Plugins can subscribe to hub events:
 
 ```csharp
-// Zeus.Server/StreamingHub.cs
+// Zeus.Server.Hosting/StreamingHub.cs
 public event Action<DisplayFrame>? DisplayFrameReceived;
 public event Action<FrequencyChanged>? FrequencyChanged;
 // ... existing events become public for plugins
@@ -1031,7 +1033,7 @@ export function PluginLoader() {
 Each plugin gets scoped LiteDB collection:
 
 ```csharp
-// Zeus.Server/Plugins/PluginSettingsStore.cs
+// Zeus.Plugins.Host/PluginSettingsStore.cs
 public class PluginSettingsStore
 {
     private readonly ILiteDatabase _db;
@@ -1068,7 +1070,7 @@ public class PluginSettingsStore
 
 **Deliverables:**
 - `Zeus.Contracts/Plugins/` — interfaces.
-- `Zeus.Server/Plugins/PluginManager.cs` — loads `.dll` from `plugins/` dir.
+- `Zeus.Plugins.Host/PluginManager.cs` — loads `.dll` from `plugins/` dir.
 - Sample plugin: `HelloWorldPlugin` (logs "Hello from plugin!" on init).
 - REST API: `GET /api/plugins` (list), `POST /api/plugins/{id}/enable`.
 - zeus-web: `/settings/plugins` page.

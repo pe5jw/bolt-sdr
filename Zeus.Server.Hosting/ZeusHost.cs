@@ -11,7 +11,7 @@ using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Contracts;
 using Zeus.Dsp.Wdsp;
-using Zeus.PluginHost;
+using Zeus.Plugins.Host;
 using Zeus.Protocol1;
 using Zeus.Protocol1.Discovery;
 using Zeus.Server.Tci;
@@ -99,28 +99,34 @@ public static class ZeusHost
 
         // HTTPS bind for mobile-browser parity. Browsers refuse getUserMedia on a
         // non-secure context, which kills mic-uplink TX from any phone reaching
-        // the server by LAN IP. Desktop mode skips HTTPS entirely (Photino
-        // webview is same-origin localhost, no cert needed).
+        // the server by LAN IP. Plain desktop mode skips HTTPS entirely (Photino
+        // webview is same-origin localhost, no cert needed); desktop + ShareOverLan
+        // re-enables HTTPS on the LAN so a phone can pick up the session while the
+        // operator is away from the shack PC.
         var httpsPort = options.UseHttpsLanCert
             ? (options.HttpsPort > 0 ? options.HttpsPort : LanCertificate.GetHttpsPort())
             : 0;
         var lanCert = options.UseHttpsLanCert ? LanCertificate.GetOrCreate() : null;
+        var httpsAnyIp = options.BindAllInterfaces || options.ShareOverLan;
 
         builder.WebHost.ConfigureKestrel(k =>
         {
-            // BindAllInterfaces=true (service mode) makes the SPA + API reachable
-            // from other hosts on the LAN (doc 01 §Deployment: local single-user,
-            // same LAN as radio). Desktop mode (false) binds explicit loopback.
-            // Kestrel rejects ListenLocalhost(0) — use Listen(IPAddress.Loopback,
-            // 0) when we want an OS-assigned port for desktop mode.
+            // HTTP listener: BindAllInterfaces=true (service mode) reaches the
+            // SPA + API from other LAN hosts. Desktop mode (false) binds explicit
+            // loopback — Photino webview only. Kestrel rejects ListenLocalhost(0),
+            // so use Listen(IPAddress.Loopback, 0) for an OS-assigned loopback port.
             if (options.BindAllInterfaces)
                 k.ListenAnyIP(options.HttpPort);
             else
                 k.Listen(IPAddress.Loopback, options.HttpPort);
 
+            // HTTPS listener: decoupled from the HTTP listener so desktop +
+            // ShareOverLan keeps HTTP on loopback (Photino) while exposing HTTPS
+            // to the LAN (phone). Plain service mode hits the same ListenAnyIP
+            // branch as before the option was introduced.
             if (httpsPort > 0 && lanCert is not null)
             {
-                if (options.BindAllInterfaces)
+                if (httpsAnyIp)
                     k.ListenAnyIP(httpsPort, l => l.UseHttps(lanCert));
                 else
                     k.Listen(IPAddress.Loopback, httpsPort, l => l.UseHttps(lanCert));
@@ -155,6 +161,68 @@ public static class ZeusHost
             sp.GetRequiredService<Zeus.Protocol1.TxIqRing>());
         builder.Services.AddSingleton<RadioService>();
         builder.Services.AddSingleton<StreamingHub>();
+        // RX audio publish seam (Phase 1). DspPipelineService.PublishAudio
+        // fans each AudioFrame across every registered IRxAudioSink.
+        //
+        //  - Server mode → WebSocketAudioSink (default): bit-for-bit
+        //    equivalent of the pre-seam direct hub broadcast.
+        //  - Desktop mode → NativeAudioSink (Phase 2b): pushes RX audio
+        //    straight to the OS default output device via miniaudio,
+        //    bypassing the WS path entirely. The SPA's audio decoder is
+        //    opted out by Phase 2c so the browser never tries to play
+        //    audio it isn't being sent.
+        if (options.HostMode == ZeusHostMode.Desktop)
+        {
+            // Singleton so the same instance serves both the IRxAudioSink
+            // collection (consumed by DspPipelineService) and the
+            // IHostedService collection (responsible for opening + closing
+            // the playback device alongside the host lifecycle).
+            builder.Services.AddSingleton<NativeAudioSink>();
+            builder.Services.AddSingleton<IRxAudioSink>(sp =>
+                sp.GetRequiredService<NativeAudioSink>());
+            // Same singleton serves the Audio Suite pre-MOX audition sink
+            // so the audition mix happens in the same playback path the
+            // operator already hears RX audio through. Browser mode (the
+            // else branch below) gets a NoOp impl so DI is satisfied
+            // without forcing audition feature branches in callers.
+            builder.Services.AddSingleton<IAuditionAudioSink>(sp =>
+                sp.GetRequiredService<NativeAudioSink>());
+            builder.Services.AddHostedService(sp =>
+                sp.GetRequiredService<NativeAudioSink>());
+
+            // ShareOverLan: also register the WebSocket sink so any LAN
+            // browser hitting https://<lan-ip>:6443 gets RX audio. The hub
+            // short-circuits on _clients.IsEmpty, so with zero LAN clients
+            // attached this is effectively a no-op (one virtual call + one
+            // atomic int read per AudioFrame).
+            if (options.ShareOverLan)
+            {
+                builder.Services.AddSingleton<IRxAudioSink, WebSocketAudioSink>();
+            }
+
+            // Mic capture: replaces the browser → WS MicPcm uplink in
+            // desktop mode. TxAudioIngest still subscribes to
+            // StreamingHub.MicPcmReceived — with ShareOverLan on, that
+            // subscription becomes the live phone-mic path, so a paired
+            // phone can MOX and transmit. NativeMicCapture continues to
+            // feed OnMicPcmBytes directly for the shack-PC mic. Either
+            // source goes through the same TxAudioIngest entry point so
+            // WDSP / IQ ring / protocol packers don't see a transport
+            // difference.
+            builder.Services.AddSingleton<NativeMicCapture>();
+            builder.Services.AddHostedService(sp =>
+                sp.GetRequiredService<NativeMicCapture>());
+        }
+        else
+        {
+            builder.Services.AddSingleton<IRxAudioSink, WebSocketAudioSink>();
+            // Audition is desktop-only in v1; browser mode gets the no-op
+            // implementation so AudioPluginBridge has a non-null sink to
+            // call into. Browser parity is a future phase that will
+            // stream audition over the SignalR hub for the worklet to
+            // mix client-side.
+            builder.Services.AddSingleton<IAuditionAudioSink, NoOpAuditionAudioSink>();
+        }
         // WDSPwisdom bootstrap: run FFTW plan caching on a worker at app start so the
         // first /api/connect isn't blocked for ~2 min while WDSP plans FFTs 64..262144.
         // Clients are told to keep Connect disabled until phase=Ready.
@@ -194,6 +262,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<FilterPresetStore>();
         builder.Services.AddSingleton<DisplaySettingsStore>();
         builder.Services.AddSingleton<NrUiPrefsStore>();
+        builder.Services.AddSingleton<ThemeSettingsStore>();
         builder.Services.AddSingleton<BottomPinStore>();
         builder.Services.AddSingleton<RadioStateStore>();
         builder.Services.AddSingleton<QrzService>();
@@ -211,36 +280,39 @@ public static class ZeusHost
         // rotctld (hamlib rotator daemon) client. BackgroundService with persistent
         // TCP and reconnect-on-failure. Singleton so config/state survive across
         // requests; hosted-service registration runs ExecuteAsync.
+        builder.Services.AddSingleton<RotctldConfigStore>();
         builder.Services.AddSingleton<RotctldService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<RotctldService>());
 
-        // RF2K-S amplifier client. BackgroundService that polls the amp's
-        // REST API on TCP/8080 and exposes Tune/Bypass via Rf2kVncClient
-        // (RFB click injection on TCP/5900, the only firmware path that
-        // remotely engages those buttons — see Rf2kVncClient.cs preamble).
-        builder.Services.AddSingleton<Rf2kSettingsStore>();
-        builder.Services.AddSingleton<Rf2kVncClient>();
-        builder.Services.AddSingleton<Rf2kService>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<Rf2kService>());
-
-        // VST plugin-host (Wave 6a). PluginHostManager owns the sidecar
-        // lifecycle; VstHostHostedService bridges it to the WDSP TX-mic seam,
-        // LiteDB persistence, REST surface (/api/plughost/*), and the
-        // SignalR-style VstHostEvent broadcasts. Sidecar is launched lazily
-        // — VstHostHostedService.StartAsync only starts it when the persisted
-        // master flag is true.
-        builder.Services.AddZeusPluginHost();
-        builder.Services.AddSingleton<IVstChainPersistence, LiteDbVstChainPersistence>();
-        builder.Services.AddSingleton<VstHostHostedService>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<VstHostHostedService>());
-
         // Capabilities snapshot for /api/capabilities. Captures host-mode,
-        // platform, and feature gates (currently just vstHost) once at
-        // construction. The frontend uses this to hide unsupported UI
-        // (e.g. TX Audio Tools tab on macOS/Windows where the C++ sidecar
-        // binary isn't shipped yet).
+        // platform, and version info once at construction. The frontend
+        // queries this on connect to surface host metadata.
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton<CapabilitiesService>();
+
+        // Plugin system v2 (docs/proposals/plugin-system-v2.md). PluginManager
+        // is registered as IHostedService so plugin discovery / activation
+        // runs as part of normal app startup; plugin REST endpoints are
+        // mounted below via PluginEndpoints.MapAll under /api/plugins/...
+        builder.Services.AddZeusPlugins(prefsDbPathProvider: PrefsDbPath.Get);
+
+        // ChainOrderService — owns the canonical Audio Suite plugin
+        // chain order (drag-droppable tile sequence in the Audio Suite
+        // window). Persists to zeus-prefs.db via ChainOrderStore so the
+        // operator's order survives backend restarts. Broadcasts
+        // AudioChainOrderFrame (0x1E) on every change so other
+        // connected clients (LAN-share phone, second browser) update
+        // their tile strip without polling. AudioPluginBridge subscribes
+        // to OrderChanged and re-slots the runtime chain.
+        builder.Services.AddSingleton<ChainOrderStore>();
+        builder.Services.AddSingleton<ChainOrderService>();
+
+        // AudioPluginBridge wires PluginManager's audio-bearing plugins
+        // into WdspDspEngine's realtime TX seam. No-op when no plugins
+        // declare an audio component; subscribes to engine swaps so it
+        // survives a Synthetic→WDSP transition mid-session.
+        builder.Services.AddSingleton<AudioPluginBridge>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioPluginBridge>());
 
         // TCI (Transceiver Control Interface) — ExpertSDR3-compatible WebSocket server
         // for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),
@@ -342,6 +414,15 @@ public static class ZeusHost
         }
 
         app.MapZeusEndpoints();
+        // PluginEndpoints.MapAll iterates manager.Active to wire each
+        // IBackendPlugin's MapEndpoints into the route table. The hosted-
+        // service StartAsync fires later (during app.Run), so we have to
+        // activate plugins synchronously here or their routes never land.
+        // ActivateAsync is idempotent per id, so the runtime's StartAsync
+        // call below is a no-op.
+        var pluginManager = app.Services.GetRequiredService<Zeus.Plugins.Host.PluginManager>();
+        pluginManager.StartAsync(default).GetAwaiter().GetResult();
+        Zeus.Plugins.Host.PluginEndpoints.MapAll(app, pluginManager);
 
         // Optional startup banner — service mode prints to its console window
         // (operator-facing UI), desktop mode hides the console and skips this.

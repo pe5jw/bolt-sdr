@@ -43,6 +43,7 @@
 // License for details.
 
 import type { DecodedAudioFrame } from './frame';
+import { isNativeAudio } from './host-mode';
 
 // createBuffer + scheduled-playback model ported from ProjectLongBanana
 // commit 4acc255b, herpes-client audioPlayer.ts. Drops the AudioWorklet +
@@ -54,6 +55,11 @@ export type AudioClientState =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'playing' }
+  // `'native'` means the host process owns the audio device directly
+  // (desktop mode, miniaudio sink) so the browser is not allowed to open
+  // an AudioContext. UI surfaces show a passive "native (default device)"
+  // indicator instead of the mute toggle in this state.
+  | { kind: 'native' }
   | { kind: 'error'; message: string };
 
 export type AudioStats = {
@@ -119,6 +125,15 @@ class AudioClient {
   }
 
   async start(): Promise<void> {
+    // Phase 2c — desktop mode opt-out. The host process plays RX audio
+    // through its native sink, so we must not create an AudioContext here
+    // (a second consumer of the same /api/rx audio source would double-up
+    // and fight for the device). Surface `'native'` so AudioToggle can
+    // render the passive indicator and return.
+    if (isNativeAudio()) {
+      this.setState({ kind: 'native' });
+      return;
+    }
     if (this.state.kind === 'playing') return;
     if (this.starting) return this.starting;
     this.starting = this.doStart().finally(() => { this.starting = null; });
@@ -188,6 +203,11 @@ class AudioClient {
   }
 
   push(frame: DecodedAudioFrame) {
+    // Defensive: in desktop mode the server should never emit 0x02 frames
+    // (Phase 2b), and ws-client drops them at the dispatch layer. If one
+    // sneaks through anyway, silently discard before allocating the
+    // AudioBuffer the no-context fast-path below would have wasted.
+    if (isNativeAudio()) return;
     const ctx = this.context;
     const gain = this.gain;
     if (!ctx || !gain) return;

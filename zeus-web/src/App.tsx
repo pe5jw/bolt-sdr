@@ -48,6 +48,7 @@ import { FlexWorkspace } from './layout/FlexWorkspace';
 import { AfGainSlider } from './components/AfGainSlider';
 import { AgcSlider } from './components/AgcSlider';
 import { AlertBanner } from './components/AlertBanner';
+import { AudioSuiteWindow } from './components/AudioSuiteWindow';
 import { AttenuatorSlider } from './components/AttenuatorSlider';
 import { AudioToggle } from './components/AudioToggle';
 import { BandFavorites } from './components/toolbar/BandFavorites';
@@ -74,6 +75,7 @@ import { bearingDeg, distanceKm } from './components/design/geo';
 import { startRealtime } from './realtime/ws-client';
 import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
+import { setAudioHostMode } from './audio/host-mode';
 import { useMicUplink } from './audio/use-mic-uplink';
 import { fetchState } from './api/client';
 import { useConnectionStore } from './state/connection-store';
@@ -173,6 +175,14 @@ export default function App() {
   // UI rather than rendering broken controls.
   useEffect(() => {
     void useCapabilitiesStore.getState().refresh();
+    // Mirror the resolved host mode into the audio-host-mode flag so the
+    // non-React consumers (audio-client, ws-client, mic-uplink) can opt
+    // out of browser audio paths in desktop mode without each needing its
+    // own Zustand subscription on the hot path.
+    return useCapabilitiesStore.subscribe((state) => {
+      const host = state.capabilities?.host;
+      if (host) setAudioHostMode(host === 'desktop' ? 'native' : 'browser');
+    });
   }, []);
 
   useEffect(() => {
@@ -642,10 +652,12 @@ export default function App() {
   // still required because Panadapter depends on the gesture context.
   if (isMobile) {
     return (
-      <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
-        <ThemeApplier />
-        <MobileApp />
-      </SpectrumWheelActionsContext.Provider>
+      <WorkspaceContext.Provider value={workspaceCtx}>
+        <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
+          <ThemeApplier />
+          <MobileApp />
+        </SpectrumWheelActionsContext.Provider>
+      </WorkspaceContext.Provider>
     );
   }
 
@@ -734,6 +746,13 @@ export default function App() {
           <FlexWorkspace key={activeLayoutId} />
         )}
       </div>
+
+      {/* Audio Suite floating window — position:fixed overlay rendered
+          outside the workspace grid so it can drift to wherever the
+          operator drags it without getting clipped by a parent. Mounted
+          unconditionally (returns null when closed) so the open/close
+          state in the store is the single source of truth. */}
+      <AudioSuiteWindow />
 
       {/* Transport — MOX/TUN + audio + mic + macro buttons on the left,
           PA/PRE chips, then the per-radio status (radio IP, rotator, QRZ)

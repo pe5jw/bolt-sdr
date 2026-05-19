@@ -45,12 +45,13 @@
 import { decodeDisplayFrame, FrameDecodeError, MSG_TYPE_DISPLAY_FRAME } from './frame';
 import { AudioFrameDecodeError, MSG_TYPE_AUDIO_PCM, decodeAudioFrame } from '../audio/frame';
 import { getAudioClient } from '../audio/audio-client';
+import { isNativeAudio } from '../audio/host-mode';
+import { useMicPeakStore } from '../audio/mic-peak-store';
 import { useConnectionStore, type WisdomPhase } from '../state/connection-store';
 import { hasActiveFrameConsumers, useDisplayStore } from '../state/display-store';
 import { useTxStore } from '../state/tx-store';
 import { useBandPlanStore } from '../state/bandPlan';
 import { useRxMetersStore } from '../state/rx-meters-store';
-import { useVstHostStore } from '../state/vst-host-store';
 import { warnOnce } from '../util/logger';
 import { wsUrl as buildWsUrl } from '../serverUrl';
 
@@ -123,15 +124,9 @@ const MOX_STATE_BYTES = 3;
 export const MSG_TYPE_WISDOM_STATUS = 0x15;
 const WISDOM_STATUS_MIN_BYTES = 1 + 1;
 
-// VST host event (issue #106 / Wave 6a). 1 type byte + UTF-8 colon-delimited
-// payload, max 256 event bytes (Zeus.Contracts/VstHostEventFrame.cs).
-// Payload tags emitted by VstHostHostedService:
-//   snapshot, slotEditorClosed:N, slotEditorResized:N:W:H,
-//   slotStateChanged:N, chainEnabledChanged:0|1,
-//   parameterChanged:N:ID:VAL, sidecarExited:CODE.
-// All routed into useVstHostStore.applyEvent which decides whether to
-// re-fetch state, patch a slot, or surface a notice.
-export const MSG_TYPE_VST_HOST_EVENT = 0x1a;
+// 0x1a — reserved. Previously VstHostEvent on the drifted plugin-host
+// branch; left as a wire-gap so a stale frontend build can't accidentally
+// decode whatever lands at this slot next.
 
 // Mic uplink (client → server). Payload: 960 × f32le = 3840 bytes preceded by
 // the 1-byte type, total 3841 bytes. 960 samples = 20 ms @ 48 kHz mono.
@@ -139,6 +134,25 @@ export const MSG_TYPE_VST_HOST_EVENT = 0x1a;
 export const MSG_TYPE_MIC_PCM = 0x20;
 const MIC_PCM_SAMPLES = 960;
 const MIC_PCM_BYTES = 1 + MIC_PCM_SAMPLES * 4;
+
+// Mic peak telemetry (server → client). Only emitted by NativeMicCapture in
+// desktop host mode (the SPA's own AudioWorklet path is disabled there by
+// Phase 2c). Payload: [0x1D][peakDbfs:f32 LE][tsUnixMs:i64 LE] = 13 bytes.
+// Browser mode never receives this frame; if it ever does, we drop it
+// defensively (the AnalyserNode path keeps driving the meter).
+// Contract: Zeus.Contracts/MicPeakFrame.cs. Originally 0x1C on the
+// audio-native branch; renumbered to 0x1D on merge with develop to
+// resolve the collision with MoxState above.
+export const MSG_TYPE_MIC_PEAK = 0x1d;
+const MIC_PEAK_BYTES = 1 + 4 + 8;
+
+// Audio Suite chain-order broadcast. Server pushes this whenever the
+// operator reorders the chain via the tile strip (any client), or
+// when a plugin is installed / uninstalled — so other connected
+// clients update their tile sequence without polling. Payload:
+// [0x1E][csvUtf8…] — comma-separated plugin IDs in chain order.
+// Contract: Zeus.Contracts/AudioChainOrderFrame.cs.
+export const MSG_TYPE_AUDIO_CHAIN_ORDER = 0x1e;
 
 // Shared by startRealtime / sendMicPcm. Single WS instance at a time; writes
 // are no-ops when the socket isn't open.
@@ -154,6 +168,12 @@ function wsUrl(path: string): string {
  * needing to gate on connection state.
  */
 export function sendMicPcm(samples: Float32Array): void {
+  // Phase 2c — desktop mode captures mic natively in the host process
+  // (Phase 2b). The hook in use-mic-uplink.ts already skips startMicUplink
+  // entirely in this mode, but if any future caller emits 0x20 frames
+  // directly we still must not put them on the wire (the server's native
+  // capture would race the duplicate uplink).
+  if (isNativeAudio()) return;
   const ws = activeWs;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   if (samples.length !== MIC_PCM_SAMPLES) {
@@ -237,6 +257,12 @@ export function startRealtime(path = '/ws'): () => void {
           return;
         }
         if (peekType === MSG_TYPE_AUDIO_PCM) {
+          // Phase 2c — desktop-mode opt-out. When the host process renders
+          // RX audio natively, the server should not emit 0x02 frames at
+          // all (Phase 2b). Drop here without decoding so an in-flight
+          // frame at the moment of mode switch doesn't allocate a
+          // Float32Array we'd immediately throw away.
+          if (isNativeAudio()) return;
           const audio = decodeAudioFrame(ev.data);
           getAudioClient().push(audio);
           return;
@@ -271,6 +297,42 @@ export function startRealtime(path = '/ws'): () => void {
             alcGr: dv.getFloat32(69, true),
             outPk: dv.getFloat32(73, true),
             outAv: dv.getFloat32(77, true),
+          });
+          return;
+        }
+        if (peekType === MSG_TYPE_MIC_PEAK) {
+          // Phase 4 — desktop-mode mic level. In browser mode the server
+          // does not emit this frame (NativeMicCapture isn't registered);
+          // if a misconfigured server ever pushes it, the existing
+          // AudioWorklet path is authoritative and we drop the wire frame.
+          if (!isNativeAudio()) return;
+          if (ev.data.byteLength < MIC_PEAK_BYTES) {
+            warnOnce(
+              'ws-mic-peak-short',
+              `mic peak frame too short: ${ev.data.byteLength}`,
+            );
+            return;
+          }
+          const dv = new DataView(ev.data);
+          const peakDbfs = dv.getFloat32(1, true);
+          // i64 LE — DataView gives us BigInt; convert to number (safe up
+          // to 2^53 ms ≈ year +287,000 AD, comfortably beyond any wall
+          // clock we'll see).
+          const tsUnixMs = Number(dv.getBigInt64(5, true));
+          useMicPeakStore.getState().setPeak(peakDbfs, tsUnixMs);
+          return;
+        }
+        if (peekType === MSG_TYPE_AUDIO_CHAIN_ORDER) {
+          // Variable-length CSV payload — empty payload encodes the
+          // "no plugins installed" empty-chain case.
+          const bytes = new Uint8Array(ev.data, 1);
+          const csv = new TextDecoder('utf-8').decode(bytes);
+          const ids = csv.length === 0 ? [] : csv.split(',');
+          // Lazy import keeps the audio-suite-store out of the ws-client
+          // module graph for clients that never open the Audio Suite
+          // window (e.g. the no-plugins-installed first-run experience).
+          void import('../state/audio-suite-store').then((m) => {
+            m.useAudioSuiteStore.getState().setChainOrderFromServer(ids);
           });
           return;
         }
@@ -356,18 +418,6 @@ export function startRealtime(path = '/ws'): () => void {
           const store = useConnectionStore.getState();
           store.setWisdomPhase(phase);
           store.setWisdomStatus(status);
-          return;
-        }
-        if (peekType === MSG_TYPE_VST_HOST_EVENT) {
-          // Bytes 1..end are the UTF-8 event tag (e.g. "slotStateChanged:3").
-          // Frame may be just the type byte (empty tag); guard accordingly.
-          const tag =
-            ev.data.byteLength > 1
-              ? new TextDecoder('utf-8').decode(new Uint8Array(ev.data, 1))
-              : '';
-          if (tag.length > 0) {
-            useVstHostStore.getState().applyEvent(tag);
-          }
           return;
         }
         if (peekType === MSG_TYPE_ALERT) {

@@ -55,7 +55,8 @@ describe('AddPanelModal', () => {
     const cards = container.querySelectorAll(
       '[data-testid="add-panel-cards"] .add-panel-card',
     );
-    // 19 panels in registry.
+    // 19 panels in registry (RF-2K panel was extracted to a plugin;
+    // Rotator Dial was added in #385).
     expect(cards.length).toBe(19);
     unmount();
   });

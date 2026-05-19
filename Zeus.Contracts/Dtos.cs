@@ -241,7 +241,20 @@ public sealed record StateDto(
     // Nullable so legacy state frames (no Cfc field) deserialize unchanged;
     // null at the engine seam means "use CfcConfig.Default" — same pattern
     // as the Nr field above. Persisted globally via DspSettingsStore.
-    CfcConfig? Cfc = null);
+    CfcConfig? Cfc = null,
+
+    // ---- Drive slider state ----
+    // Operator drive slider position 0..100 (% of MaxPowerWatts via the
+    // per-board PA-gain table). Server is authoritative: persisted to LiteDB
+    // via RadioStateStore, hydrated on construction, and broadcast on every
+    // SetDrive so a fresh frontend connect lands on the persisted value
+    // instead of pushing its own localStorage default back over the wire.
+    // Default 0 mirrors RadioService._drivePct seed.
+    int DrivePct = 0,
+    // Independent TUN drive slider 0..100. Same persistence pattern as
+    // DrivePct. Default 10 mirrors RadioService._tunePct seed — a 0 default
+    // would make pressing TUN appear to do nothing on first key.
+    int TunePct = 10);
 
 public sealed record RadioInfo(
     string MacAddress,
@@ -499,6 +512,21 @@ public sealed record NrUiPrefsSetRequest(
     bool Nr1Expanded,
     bool Nr2Expanded,
     bool Nr4Expanded);
+
+// Operator UI theme + per-token colour overrides. `Theme` is one of "dark"
+// | "light" — the theme overlay attribute set on <html data-theme="…">.
+// `Overrides` maps CSS custom-property names (e.g. "--accent") to upper-case
+// 6-digit hex strings; an empty/missing map means "use stylesheet defaults".
+// Server-side LiteDB persistence (previously localStorage) so the operator's
+// look-and-feel follows them across browsers and devices pointed at the
+// same Zeus instance — same pattern as DisplaySettingsStore / NrUiPrefsStore.
+public sealed record ThemeSettingsDto(
+    string Theme,
+    IReadOnlyDictionary<string, string> Overrides);
+
+public sealed record ThemeSettingsSetRequest(
+    string Theme,
+    IReadOnlyDictionary<string, string> Overrides);
 
 // Per-slot pin state for the classic-layout bottom row (Logbook + TX
 // Stage Meters). True = panel is pinned (full body visible). False =

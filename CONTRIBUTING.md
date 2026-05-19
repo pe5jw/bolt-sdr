@@ -50,10 +50,12 @@ Three things to know before you write a line of code:
 The repo's README has full details; the short version:
 
 ```bash
-# Backend (listens on :6060)
-dotnet run --project Zeus.Server
+# Backend (listens on :6060). OpenhpsdrZeus is the executable host;
+# Zeus.Server.Hosting next to it is a class library — don't pass it to dotnet run.
+dotnet run --project OpenhpsdrZeus
 
-# Frontend (Vite dev server on :5173, proxies /api and /ws to :6060)
+# Frontend (Vite dev server on :5173, proxies /api and /ws to :6060;
+# `vite build` writes the production bundle into Zeus.Server.Hosting/wwwroot)
 npm --prefix zeus-web run dev
 ```
 
@@ -75,9 +77,7 @@ For external contributors (anyone without write access to this repo):
 2. **Branch** from `develop` on your fork. Name it something descriptive:
    `your-handle/cw-apf-filter`, `your-handle/fix-zoom-overflow`, etc.
 3. **Build clean** before opening the PR — `dotnet build Zeus.slnx` must be
-   0 warnings, 0 errors. Tests should pass: `dotnet test Zeus.slnx`
-   (the 16 `Zeus.PluginHost.Tests` failures on macOS are pre-existing and
-   unrelated to any contribution — anything else failing is on your change).
+   0 warnings, 0 errors. Tests should pass: `dotnet test Zeus.slnx`.
 4. **Open the PR against `develop`** on `Kb2uka/openhpsdr-zeus`. Never `main`.
 5. **Wait for review.** KB2UKA reviews backend wiring and most code; @brianbruff
    reviews UI/UX/defaults. Reviews are usually within a day, sometimes same day.
@@ -215,10 +215,12 @@ any DSP, protocol, or layout code that those lessons cover.
 ## Tests
 
 - Build clean: `dotnet build Zeus.slnx` → 0 warnings, 0 errors.
-- Run tests: `dotnet test Zeus.slnx`. The 16 `Zeus.PluginHost.Tests` failures
-  on macOS are pre-existing and unrelated to contributions (missing VST3
-  sidecar binary). Anything else failing is on your change — fix it before
-  PR.
+- Run tests: `dotnet test Zeus.slnx`. Anything failing is on your change
+  — fix it before PR. The native VST3 bridge tests under
+  `Zeus.Plugins.Host.Tests/VstBridgeNativeRealTests.cs` skip with a
+  friendly message if the bridge dylib isn't built locally (see
+  `native/zeus-vst-bridge/README.md`); that's expected and not a
+  failure.
 - **Add tests for new behaviour** where it's reasonable to do so. The bar
   isn't every method; the bar is "if this regresses, would someone notice?"
   Persistence stores, protocol parsers, calibration math — yes. UI shape — no

@@ -5,24 +5,22 @@
 // availability once at construction and serves the same snapshot for the
 // lifetime of the process.
 //
-// Probe-once-at-startup is deliberate. Sidecar binaries don't appear or
-// disappear at runtime in normal operation; revisit if/when we ship a
-// hot-install path. The frontend caches the response anyway.
-//
-// Adding a new feature gate (issue #185 — amp manager, MIDI, …):
-//   1. Probe its availability here in the constructor.
-//   2. Add a field to FeatureMatrix and populate it in Snapshot().
-//   3. Update zeus-web/src/api/capabilities.ts to mirror the shape.
+// Probe-once-at-startup is deliberate. The frontend caches the response
+// anyway. Feature-gate fields will be reintroduced as the new plugin
+// system lands; the FeatureMatrix is kept as an empty record so callers
+// can rely on a stable JSON shape.
 
+using System.Net;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using Zeus.PluginHost.Native;
+using Microsoft.AspNetCore.Http;
 
 namespace Zeus.Server;
 
 public sealed class CapabilitiesService
 {
     private readonly CapabilitiesSnapshot _snapshot;
+    private readonly bool _shareOverLan;
 
     public CapabilitiesService(ZeusHostOptions options)
     {
@@ -38,36 +36,30 @@ public sealed class CapabilitiesService
             Platform: platform,
             Architecture: architecture,
             Version: version,
-            Features: new FeatureMatrix(VstHost: ProbeVstHost(platform)));
+            Features: new FeatureMatrix());
+
+        _shareOverLan = options.HostMode == ZeusHostMode.Desktop && options.ShareOverLan;
     }
 
     public CapabilitiesSnapshot Snapshot() => _snapshot;
 
-    // VST host availability gate. Today the C++ sidecar only ships for
-    // Linux; macOS and Windows builds are not in this release. The
-    // platform check stays here (server-side) so the frontend never has
-    // to duplicate the OS-support matrix. When we add macOS / Windows
-    // sidecar binaries this gate flips automatically.
-    private static FeatureGate ProbeVstHost(string platform)
+    /// <summary>
+    /// Per-request snapshot. When the host is desktop + ShareOverLan, the
+    /// captured "desktop" host string is overridden to "server" for non-loopback
+    /// requests so a LAN browser enables its WS audio decoder + mic uplink, while
+    /// the Photino webview (loopback) keeps "desktop" and the native miniaudio
+    /// path. Without this distinction Photino would double-play (miniaudio AND
+    /// the browser audio worklet) or LAN browsers would be silent.
+    /// </summary>
+    public CapabilitiesSnapshot Snapshot(HttpContext ctx)
     {
-        if (platform != "linux")
-        {
-            return new FeatureGate(
-                Available: false,
-                Reason: "VST host is only supported on Linux in this release.",
-                SidecarPath: null);
-        }
+        if (!_shareOverLan) return _snapshot;
 
-        var probe = SidecarLocator.Probe();
-        if (probe.Path == null)
-        {
-            return new FeatureGate(
-                Available: false,
-                Reason: probe.MissingReason,
-                SidecarPath: null);
-        }
+        var local = ctx.Connection.LocalIpAddress;
+        var isLoopback = local is not null && IPAddress.IsLoopback(local);
+        if (isLoopback) return _snapshot;
 
-        return new FeatureGate(Available: true, Reason: null, SidecarPath: probe.Path);
+        return _snapshot with { Host = "server" };
     }
 
     private static string DetectPlatform()
@@ -90,9 +82,4 @@ public sealed record CapabilitiesSnapshot(
     string Version,
     FeatureMatrix Features);
 
-public sealed record FeatureMatrix(FeatureGate VstHost);
-
-public sealed record FeatureGate(
-    bool Available,
-    string? Reason,
-    string? SidecarPath);
+public sealed record FeatureMatrix();

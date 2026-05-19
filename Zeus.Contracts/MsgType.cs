@@ -104,18 +104,9 @@ public enum MsgType : byte
     // flight for older clients (e.g. SMeterLive) — 0x19 is purely additive.
     RxMetersV2 = 0x19,
 
-    // VST plugin-host event. UTF-8 text payload carrying a small notification
-    // tag that the browser maps to a /api/plughost/state re-fetch (e.g.
-    // "snapshot", "slotEditorClosed:0", "slotStateChanged:2",
-    // "chainEnabledChanged:1", "parameterChanged:0:42:0.500000",
-    // "sidecarExited:1"). Plain string keeps the format flexible while
-    // Wave 6b figures out exactly what the UI wants to consume; the browser
-    // can split on ':' to extract slot index / value. Sent from
-    // VstHostHostedService via StreamingHub.BroadcastVstHostEvent.
-    // Originally assigned 0x19 on the VST-Experimental branch; renumbered to
-    // 0x1A on merge to release/0.6.0-alpha to resolve the collision with
-    // RxMetersV2 above.
-    VstHostEvent = 0x1A,
+    // 0x1A — reserved (previously VstHostEvent on the drifted plugin-host
+    // branch). Left as a gap rather than reassigned to avoid colliding with
+    // any zeus-web build that hasn't been refreshed yet.
 
     // Server → client (band plan changed). Broadcast when the active region
     // changes or the operator edits the plan. Payload: [type:1][regionIdUtf8…].
@@ -130,4 +121,25 @@ public enum MsgType : byte
     // Allows the frontend to track transmit state even when the source of
     // the edge is not the web UI (e.g. TCI client sends trx:0,true;).
     MoxState = 0x1C,
+
+    // Server → client (mic peak level). Broadcast at ~10 Hz by
+    // NativeMicCapture only in desktop host mode — the SPA's getUserMedia
+    // analyser is intentionally disabled there (Phase 2c) so the MicMeter
+    // would otherwise be flat. Server mode never emits this frame; remote
+    // browser operators continue to drive their MicMeter via getUserMedia.
+    // Payload: [type:1][peakDbfs:f32 LE][tsUnixMs:i64 LE] = 13 bytes total.
+    // See MicPeakFrame.cs. Originally 0x1C on the audio-native branch;
+    // renumbered to 0x1D on merge with develop to resolve the collision
+    // with MoxState above.
+    MicPeak = 0x1D,
+
+    // Server → client (audio plugin chain order). Broadcast whenever a
+    // user reorders the chain via the Audio Suite window's tile strip,
+    // OR when a plugin is installed / uninstalled (so other connected
+    // clients refresh their tile order without polling). Payload:
+    // [type:1][csvUtf8…] — comma-separated plugin IDs in chain order
+    // (head = first in chain, drives mic first). UTF-8 for forward
+    // compatibility with non-ASCII plugin IDs even though current IDs
+    // are reverse-DNS ASCII. See AudioChainOrderFrame.cs.
+    AudioChainOrder = 0x1E,
 }

@@ -49,6 +49,7 @@ import { SMeterPanel } from './panels/SMeterPanel';
 import { QrzPanel } from './panels/QrzPanel';
 import { AzimuthPanel } from './panels/AzimuthPanel';
 import { RotatorCompassPanel } from './panels/RotatorCompassPanel';
+import { RotatorDialPanel } from './panels/RotatorDialPanel';
 import { DspFlexPanel } from './panels/DspFlexPanel';
 import { CwPanel } from './panels/CwPanel';
 import { LogbookPanel } from './panels/LogbookPanel';
@@ -61,7 +62,6 @@ import { ModePanel } from './panels/ModePanel';
 import { StepPanel } from './panels/StepPanel';
 import { MeterGroupPanel } from '../components/meter-group/MeterGroupPanel';
 import { AnalogMeterPanel } from './panels/AnalogMeterPanel';
-import { Rf2kPanel } from './panels/Rf2kPanel';
 
 export type PanelCategory =
   | 'spectrum'
@@ -71,7 +71,10 @@ export type PanelCategory =
   | 'log'
   | 'tools'
   | 'amplifiers'
-  | 'controls';
+  | 'tuners'
+  | 'controls'
+  | 'switches'
+  | 'plugins';
 
 /** Human-friendly category labels for the Add Panel modal's left rail. The
  *  rail shows these in a fixed order; "All" is rendered separately as a
@@ -84,7 +87,10 @@ export const PANEL_CATEGORIES: ReadonlyArray<PanelCategory> = [
   'log',
   'tools',
   'amplifiers',
+  'tuners',
   'controls',
+  'switches',
+  'plugins',
 ];
 export const PANEL_CATEGORY_LABELS: Record<PanelCategory, string> = {
   spectrum: 'Spectrum',
@@ -94,8 +100,13 @@ export const PANEL_CATEGORY_LABELS: Record<PanelCategory, string> = {
   log: 'Log',
   tools: 'Tools',
   amplifiers: 'Amplifiers',
+  tuners: 'Tuners',
   controls: 'Controls',
+  switches: 'Switches',
+  plugins: 'Plugins',
 };
+
+const VALID_PANEL_CATEGORIES = new Set<string>(PANEL_CATEGORIES);
 
 /** Most panels render with no props — the workspace tile renders them as
  *  `<def.component />`. Multi-instance panels with per-instance config
@@ -190,6 +201,16 @@ export const PANELS: Record<string, PanelDef> = {
     tags: ['rotator', 'compass', 'bearing', 'heading', 'sp', 'lp', 'map'],
     component: RotatorCompassPanel,
   },
+  rotatordial: {
+    id: 'rotatordial',
+    name: 'Rotator Dial',
+    category: 'tools',
+    // No 'azimuth' tag — that search term scopes to the dedicated Azimuth
+    // Map panel. `bearing` + `heading` already cover the same semantic
+    // for the dial without overlapping that filter.
+    tags: ['rotator', 'compass', 'dial', 'bearing', 'heading'],
+    component: RotatorDialPanel,
+  },
   dsp: {
     id: 'dsp',
     name: 'DSP',
@@ -280,15 +301,38 @@ export const PANELS: Record<string, PanelDef> = {
     component: AnalogMeterPanel,
     headerless: true,
   },
-  rf2kAmp: {
-    id: 'rf2kAmp',
-    name: 'RF2K-S Amplifier',
-    category: 'amplifiers',
-    tags: ['rf2k', 'rf2k-s', 'rf-kit', 'amp', 'amplifier', 'pa', 'tune', 'standby', 'tci'],
-    component: Rf2kPanel,
-    // Draws its own workspace-tile-header so the Settings cog can sit
-    // inline next to the title (matches AnalogMeterPanel's pattern).
-    headerless: true,
-  },
 };
+
+// Plugin-contributed panels. Loaded at app startup by pluginRuntime; the
+// workspace and AddPanelModal go through these helpers instead of reading
+// PANELS directly so plugin panels show up in both surfaces.
+
+import { listRegisteredPanels } from '../plugins/runtime/pluginRuntime';
+
+function pluginPanelDef(p: import('../plugins/runtime/pluginRuntime').RegisteredPluginPanel): PanelDef {
+  const category = (VALID_PANEL_CATEGORIES.has(p.category)
+    ? p.category
+    : 'plugins') as PanelCategory;
+  return {
+    id: p.panelId,
+    name: p.title,
+    category,
+    tags: ['plugin', p.pluginId],
+    component: p.component as ComponentType<PanelComponentProps>,
+  };
+}
+
+export function getPanelDef(id: string): PanelDef | undefined {
+  const builtIn = PANELS[id];
+  if (builtIn) return builtIn;
+  const plugin = listRegisteredPanels().find((p) => p.panelId === id);
+  return plugin ? pluginPanelDef(plugin) : undefined;
+}
+
+export function getAllPanels(): PanelDef[] {
+  return [
+    ...Object.values(PANELS),
+    ...listRegisteredPanels().map(pluginPanelDef),
+  ];
+}
 

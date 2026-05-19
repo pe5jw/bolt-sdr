@@ -34,11 +34,78 @@ public static class ZeusEndpoints
             return Results.Ok(new { version });
         });
 
-        // Capabilities snapshot — host-mode + platform + feature gates.
-        // Frontend fetches once on app mount and hides UI for unavailable
-        // features (e.g. TX Audio Tools when vstHost.available=false).
+        // Capabilities snapshot — host-mode + platform metadata. Frontend
+        // fetches once on app mount; future feature gates will reattach as
+        // the new plugin system fills the FeatureMatrix. The HttpContext-
+        // aware Snapshot overload lets desktop + ShareOverLan report
+        // host="server" to LAN clients while loopback Photino keeps
+        // host="desktop" — see CapabilitiesService.Snapshot(HttpContext).
         app.MapGet("/api/capabilities",
-            (CapabilitiesService caps) => Results.Ok(caps.Snapshot()));
+            (HttpContext ctx, CapabilitiesService caps) => Results.Ok(caps.Snapshot(ctx)));
+
+        // Native RX audio (miniaudio) — desktop-mode mute control. The
+        // Mute/Unmute button in the Photino window POSTs here to silence
+        // the OS playback device. NativeAudioSink is only registered in
+        // desktop mode, so GetService returns null in server mode and the
+        // endpoint reports supported=false; the SPA's AudioToggle uses
+        // its in-browser AudioContext path there instead.
+        app.MapGet("/api/audio/native", (IServiceProvider sp) =>
+        {
+            var sink = sp.GetService<NativeAudioSink>();
+            return sink is null
+                ? Results.Ok(new { supported = false, muted = false })
+                : Results.Ok(new { supported = true, muted = sink.IsMuted });
+        });
+        app.MapPost("/api/audio/native/mute", (NativeMuteRequest body, IServiceProvider sp) =>
+        {
+            var sink = sp.GetService<NativeAudioSink>();
+            if (sink is null) return Results.NotFound(new { error = "native audio not active in this host mode" });
+            sink.SetMuted(body.Muted);
+            return Results.Ok(new { supported = true, muted = sink.IsMuted });
+        });
+
+        // Audio Suite audition toggle — when on, the audio plugin chain's
+        // output (the operator's mic through EQ / Comp / Exciter / Bass /
+        // Reverb / future plugins) is mixed into the same RX playback path
+        // so the operator can hear the chain's effect on their voice without
+        // keying the radio. Pairs with the live pre-MOX meter tap; both
+        // require the same NativeMicCapture → AudioPluginBridge.ProcessLivePreview
+        // path to be running. Browser mode reports supported=false (audition
+        // is desktop-only in v1).
+        app.MapGet("/api/audio-suite/audition", (IAuditionAudioSink audition) =>
+        {
+            bool supported = audition is not NoOpAuditionAudioSink;
+            return Results.Ok(new { supported, enabled = audition.IsEnabled });
+        });
+        app.MapPut("/api/audio-suite/audition", (AuditionSetRequest body, IAuditionAudioSink audition) =>
+        {
+            if (audition is NoOpAuditionAudioSink)
+                return Results.NotFound(new { error = "audition not available in this host mode" });
+            audition.SetEnabled(body.Enabled);
+            return Results.Ok(new { supported = true, enabled = audition.IsEnabled });
+        });
+
+        // Audio plugin chain order — operator's preferred sequence for
+        // the plugins in the Audio Suite window. GET returns the
+        // canonical ordered list of plugin IDs; PUT accepts a new
+        // ordering and validates it's a permutation of the current
+        // set (no IDs added, no IDs dropped — install / uninstall
+        // plugins to change membership). On PUT, the bridge re-slots
+        // the runtime chain via ChainOrderService.OrderChanged and
+        // broadcasts AudioChainOrderFrame (0x1E) so other connected
+        // clients update their tile strip without polling.
+        app.MapGet("/api/plugins/chain/order", (ChainOrderService chainOrder) =>
+        {
+            return Results.Ok(new { pluginIds = chainOrder.CurrentOrder });
+        });
+        app.MapPut("/api/plugins/chain/order", (ChainOrderSetRequest body, ChainOrderService chainOrder) =>
+        {
+            if (body?.PluginIds is null)
+                return Results.BadRequest(new { error = "pluginIds is required" });
+            if (chainOrder.TrySetOrder(body.PluginIds, out var err))
+                return Results.Ok(new { pluginIds = chainOrder.CurrentOrder });
+            return Results.BadRequest(new { error = err });
+        });
 
         app.MapGet("/api/state", (RadioService r) => r.Snapshot());
 
@@ -777,6 +844,19 @@ public static class ZeusEndpoints
             return Results.Ok(store.Get());
         });
 
+        // Operator UI theme ("dark" | "light") + per-CSS-variable colour
+        // overrides. PUT replaces both atomically — overrides is a full snapshot,
+        // not a partial patch, because the picker tracks all rows together.
+        // Persisted in zeus-prefs.db so the look-and-feel follows the operator
+        // across browsers / devices, same pattern as /api/nr-ui-prefs.
+        app.MapGet("/api/theme-settings", (ThemeSettingsStore store) => Results.Ok(store.Get()));
+
+        app.MapPut("/api/theme-settings", (ThemeSettingsSetRequest req, ThemeSettingsStore store) =>
+        {
+            store.Set(req.Theme, req.Overrides);
+            return Results.Ok(store.Get());
+        });
+
         // Radio selection — operator preference seeding, with discovery as the
         // tiebreaker. Preferred=="Auto" removes the override (stored as absence,
         // not a sentinel enum value). Effective = Connected when connected (which
@@ -1144,78 +1224,6 @@ public static class ZeusEndpoints
             return Results.Ok(result);
         });
 
-        // ----------------------------------------------------------------
-        //  RF2K-S amplifier (network device, REST + RFB click injection)
-        // ----------------------------------------------------------------
-        app.MapGet("/api/rf2k/status", (Rf2kService rf) => rf.GetStatus());
-
-        app.MapGet("/api/rf2k/config", (Rf2kService rf) => rf.GetConfig());
-
-        app.MapPost("/api/rf2k/config", async (Rf2kConfig req, Rf2kService rf, HttpContext ctx) =>
-        {
-            log.LogInformation("api.rf2k.config enabled={En} host={Host} port={Port} vncPort={VncPort}",
-                req.Enabled, req.Host, req.Port, req.VncPort);
-            var status = await rf.SetConfigAsync(req, ctx.RequestAborted);
-            return Results.Ok(status);
-        });
-
-        app.MapPost("/api/rf2k/operate", async (Rf2kSetOperateRequest req, Rf2kService rf, HttpContext ctx) =>
-        {
-            if (string.IsNullOrWhiteSpace(req.Mode))
-                return Results.BadRequest(new { error = "mode required (OPERATE or STANDBY)" });
-            var status = await rf.SetOperateModeAsync(req.Mode, ctx.RequestAborted);
-            return Results.Ok(status);
-        });
-
-        app.MapPost("/api/rf2k/interface", async (Rf2kSetInterfaceRequest req, Rf2kService rf, HttpContext ctx) =>
-        {
-            if (string.IsNullOrWhiteSpace(req.Interface))
-                return Results.BadRequest(new { error = "interface required (UNIV/CAT/UDP/TCI)" });
-            var status = await rf.SetOperationalInterfaceAsync(req.Interface, ctx.RequestAborted);
-            return Results.Ok(status);
-        });
-
-        app.MapPost("/api/rf2k/antenna", async (Rf2kSetAntennaRequest req, Rf2kService rf, HttpContext ctx) =>
-        {
-            if (string.IsNullOrWhiteSpace(req.Type))
-                return Results.BadRequest(new { error = "type required (INTERNAL or EXTERNAL)" });
-            var status = await rf.SetActiveAntennaAsync(req.Type, req.Number, ctx.RequestAborted);
-            return Results.Ok(status);
-        });
-
-        app.MapPost("/api/rf2k/reset", async (Rf2kService rf, HttpContext ctx) =>
-        {
-            var status = await rf.ResetErrorAsync(ctx.RequestAborted);
-            return Results.Ok(status);
-        });
-
-        app.MapPost("/api/rf2k/test", async (Rf2kTestRequest req, Rf2kService rf, HttpContext ctx) =>
-        {
-            if (string.IsNullOrWhiteSpace(req.Host) || req.Port is <= 0 or >= 65536)
-                return Results.BadRequest(new { error = "host and port required" });
-            var result = await rf.TestAsync(req.Host.Trim(), req.Port, ctx.RequestAborted);
-            return Results.Ok(result);
-        });
-
-        // VNC click injection — Tune/Bypass and arbitrary calibration click.
-        app.MapPost("/api/rf2k/tune", async (Rf2kService rf, HttpContext ctx) =>
-        {
-            var result = await rf.SendTuneClickAsync(ctx.RequestAborted);
-            return Results.Ok(result);
-        });
-
-        app.MapPost("/api/rf2k/bypass", async (Rf2kService rf, HttpContext ctx) =>
-        {
-            var result = await rf.SendBypassClickAsync(ctx.RequestAborted);
-            return Results.Ok(result);
-        });
-
-        app.MapPost("/api/rf2k/click", async (Rf2kClickRequest req, Rf2kService rf, HttpContext ctx) =>
-        {
-            var result = await rf.SendTestClickAsync(req.X, req.Y, ctx.RequestAborted);
-            return Results.Ok(result);
-        });
-
         app.MapGet("/api/tci/status", (TciManagementService tci) => tci.GetStatus());
 
         app.MapPost("/api/tci/config", (TciRuntimeConfig req, TciManagementService tci, HttpContext ctx) =>
@@ -1242,279 +1250,6 @@ public static class ZeusEndpoints
             }
             using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
             await hub.AttachClientAsync(ws, ctx.RequestAborted);
-        });
-
-        // ----------------------------------------------------------------
-        //  VST plugin host (Wave 6a — backend only; Wave 6b ships UI)
-        // ----------------------------------------------------------------
-        // All endpoints group under /api/plughost. Async ones use the
-        // request-aborted token so a navigating browser stops waiting.
-        // 8 slots, 0..7; bad slot → 400. Sidecar lifecycle is owned by
-        // VstHostHostedService — REST handlers never poke PluginHostManager
-        // directly so persistence and SignalR pushes stay coherent.
-        app.MapPost("/api/plughost/master", async (
-            VstHostMasterRequest req, VstHostHostedService svc, HttpContext ctx) =>
-        {
-            try
-            {
-                await svc.SetMasterEnabledAsync(req.Enabled, ctx.RequestAborted);
-                return Results.Ok(svc.GetState());
-            }
-            catch (Exception ex)
-            {
-                log.LogWarning(ex, "api.plughost.master set failed enabled={En}", req.Enabled);
-                return Results.Problem(detail: ex.Message, statusCode: 409);
-            }
-        });
-
-        app.MapGet("/api/plughost/state",
-            (VstHostHostedService svc) => Results.Ok(svc.GetState()));
-
-        app.MapGet("/api/plughost/catalog", async (
-            bool? rescan,
-            Zeus.PluginHost.Discovery.IPluginScanner scanner,
-            VstHostHostedService svc,
-            HttpContext ctx) =>
-        {
-            // Default-paths-only unless rescan=true (then include custom).
-            var roots = new List<string>(
-                Zeus.PluginHost.Discovery.DefaultPluginPaths.ForCurrentPlatform());
-            if (rescan == true)
-            {
-                foreach (var p in svc.CustomSearchPaths)
-                {
-                    if (Directory.Exists(p) && !roots.Contains(p)) roots.Add(p);
-                }
-            }
-            var manifests = await scanner.ScanAsync(roots, ctx.RequestAborted);
-            var dtos = manifests.Select(m => new
-            {
-                filePath = m.FilePath,
-                displayName = m.DisplayName,
-                format = m.Format.ToString(),
-                platform = m.Platform.ToString(),
-                bitness = m.Bitness.ToString(),
-                bundlePath = m.BundlePath,
-                warnings = m.ScanWarnings,
-            });
-            return Results.Ok(new { plugins = dtos });
-        });
-
-        app.MapGet("/api/plughost/searchPaths",
-            (VstHostHostedService svc) =>
-                Results.Ok(new { paths = svc.CustomSearchPaths }));
-
-        app.MapPost("/api/plughost/searchPaths", (
-            VstHostSearchPathRequest req, VstHostHostedService svc) =>
-        {
-            if (string.IsNullOrWhiteSpace(req.Path))
-                return Results.BadRequest(new { error = "path is required" });
-            if (!Directory.Exists(req.Path))
-                return Results.BadRequest(new { error = "directory does not exist" });
-            var added = svc.AddCustomSearchPath(req.Path);
-            return Results.Ok(new { added, paths = svc.CustomSearchPaths });
-        });
-
-        // DELETE doesn't allow inferred body params on minimal API; the path
-        // travels as a query string (?path=...) so the URL-encoded path is
-        // self-contained.
-        app.MapDelete("/api/plughost/searchPaths", (
-            string? path, VstHostHostedService svc) =>
-        {
-            if (string.IsNullOrWhiteSpace(path))
-                return Results.BadRequest(new { error = "path is required" });
-            var removed = svc.RemoveCustomSearchPath(path);
-            return Results.Ok(new { removed, paths = svc.CustomSearchPaths });
-        });
-
-        app.MapGet("/api/plughost/slots/{idx:int}", (
-            int idx, VstHostHostedService svc, Zeus.PluginHost.IPluginHost host) =>
-        {
-            if (idx < 0 || idx >= host.MaxChainSlots)
-                return Results.BadRequest(new { error = "slot index out of range" });
-            var slot = host.Slots[idx];
-            var path = svc.GetSlotPath(idx);
-            var paramDtos = slot.Parameters.Select(p => new
-            {
-                id = p.Id,
-                name = p.Name,
-                units = p.Units,
-                defaultValue = p.DefaultValue,
-                currentValue = p.CurrentValue,
-                stepCount = p.StepCount,
-                flags = (byte)p.Flags,
-            });
-            return Results.Ok(new
-            {
-                index = slot.Index,
-                plugin = slot.Plugin is null ? null : new
-                {
-                    name = slot.Plugin.Name,
-                    vendor = slot.Plugin.Vendor,
-                    version = slot.Plugin.Version,
-                    path = path,
-                },
-                bypass = slot.Bypass,
-                parameters = paramDtos,
-            });
-        });
-
-        app.MapPost("/api/plughost/slots/{idx:int}/load", async (
-            int idx, VstHostSlotLoadRequest req,
-            VstHostHostedService svc, Zeus.PluginHost.IPluginHost host,
-            HttpContext ctx) =>
-        {
-            if (idx < 0 || idx >= host.MaxChainSlots)
-                return Results.BadRequest(new { error = "slot index out of range" });
-            if (string.IsNullOrWhiteSpace(req.Path))
-                return Results.BadRequest(new { error = "path is required" });
-            // Phases 5a + 6 added Vestige (Linux VST2 .so) and CLAP (.clap)
-            // alongside VST3. The sidecar's PluginChain dispatches by file
-            // extension at LoadSlot time. Anything that's not one of those
-            // three formats falls through to a single descriptive error.
-            bool isVst3 = req.Path.EndsWith(".vst3", StringComparison.OrdinalIgnoreCase);
-            bool isVst2 = req.Path.EndsWith(".so",  StringComparison.OrdinalIgnoreCase)
-                       || req.Path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
-            bool isClap = req.Path.EndsWith(".clap", StringComparison.OrdinalIgnoreCase);
-            if (!isVst3 && !isVst2 && !isClap)
-                return Results.BadRequest(new
-                {
-                    error = "unsupported plugin format (expected .vst3 / .so / .dll / .clap)",
-                });
-            try
-            {
-                var outcome = await svc.LoadSlotAsync(idx, req.Path, ctx.RequestAborted);
-                if (!outcome.Ok)
-                {
-                    return Results.Problem(
-                        detail: outcome.Error ?? "load failed",
-                        statusCode: 409);
-                }
-                return Results.Ok(new
-                {
-                    index = idx,
-                    plugin = outcome.Info is null ? null : new
-                    {
-                        name = outcome.Info.Name,
-                        vendor = outcome.Info.Vendor,
-                        version = outcome.Info.Version,
-                        path = req.Path,
-                    },
-                });
-            }
-            catch (Exception ex)
-            {
-                log.LogWarning(ex, "api.plughost.slots.load slot={Slot}", idx);
-                return Results.Problem(detail: ex.Message, statusCode: 500);
-            }
-        });
-
-        app.MapPost("/api/plughost/slots/{idx:int}/unload", async (
-            int idx, VstHostHostedService svc, Zeus.PluginHost.IPluginHost host,
-            HttpContext ctx) =>
-        {
-            if (idx < 0 || idx >= host.MaxChainSlots)
-                return Results.BadRequest(new { error = "slot index out of range" });
-            try
-            {
-                await svc.UnloadSlotAsync(idx, ctx.RequestAborted);
-                return Results.Ok(new { index = idx });
-            }
-            catch (Exception ex)
-            {
-                log.LogWarning(ex, "api.plughost.slots.unload slot={Slot}", idx);
-                return Results.Problem(detail: ex.Message, statusCode: 500);
-            }
-        });
-
-        app.MapPost("/api/plughost/slots/{idx:int}/bypass", async (
-            int idx, VstHostBypassRequest req,
-            VstHostHostedService svc, Zeus.PluginHost.IPluginHost host,
-            HttpContext ctx) =>
-        {
-            if (idx < 0 || idx >= host.MaxChainSlots)
-                return Results.BadRequest(new { error = "slot index out of range" });
-            try
-            {
-                await svc.SetSlotBypassAsync(idx, req.Bypass, ctx.RequestAborted);
-                return Results.Ok(new { index = idx, bypass = req.Bypass });
-            }
-            catch (Exception ex)
-            {
-                log.LogWarning(ex, "api.plughost.slots.bypass slot={Slot}", idx);
-                return Results.Problem(detail: ex.Message, statusCode: 500);
-            }
-        });
-
-        app.MapGet("/api/plughost/slots/{idx:int}/parameters", async (
-            int idx, VstHostHostedService svc, Zeus.PluginHost.IPluginHost host,
-            HttpContext ctx) =>
-        {
-            if (idx < 0 || idx >= host.MaxChainSlots)
-                return Results.BadRequest(new { error = "slot index out of range" });
-            var list = await svc.ListSlotParametersAsync(idx, ctx.RequestAborted);
-            var dtos = list.Select(p => new
-            {
-                id = p.Id,
-                name = p.Name,
-                units = p.Units,
-                defaultValue = p.DefaultValue,
-                currentValue = p.CurrentValue,
-                stepCount = p.StepCount,
-                flags = (byte)p.Flags,
-            });
-            return Results.Ok(new { parameters = dtos });
-        });
-
-        app.MapPost("/api/plughost/slots/{idx:int}/parameters/{paramId:long}", async (
-            int idx, long paramId, VstHostParameterRequest req,
-            VstHostHostedService svc, Zeus.PluginHost.IPluginHost host,
-            HttpContext ctx) =>
-        {
-            if (idx < 0 || idx >= host.MaxChainSlots)
-                return Results.BadRequest(new { error = "slot index out of range" });
-            if (paramId < 0 || paramId > uint.MaxValue)
-                return Results.BadRequest(new { error = "paramId out of range" });
-            if (req.Value < 0.0 || req.Value > 1.0)
-                return Results.BadRequest(new { error = "value must be in [0,1]" });
-            try
-            {
-                await svc.SetSlotParameterAsync(idx, (uint)paramId, req.Value,
-                    ctx.RequestAborted);
-                return Results.Ok(new { index = idx, paramId, value = req.Value });
-            }
-            catch (Exception ex)
-            {
-                log.LogWarning(ex,
-                    "api.plughost.slots.parameter slot={Slot} param={Id}", idx, paramId);
-                return Results.Problem(detail: ex.Message, statusCode: 500);
-            }
-        });
-
-        app.MapPost("/api/plughost/slots/{idx:int}/editor/show", async (
-            int idx, VstHostHostedService svc, Zeus.PluginHost.IPluginHost host,
-            HttpContext ctx) =>
-        {
-            if (idx < 0 || idx >= host.MaxChainSlots)
-                return Results.BadRequest(new { error = "slot index out of range" });
-            var outcome = await svc.ShowSlotEditorAsync(idx, ctx.RequestAborted);
-            if (!outcome.Ok)
-            {
-                return Results.Problem(
-                    detail: outcome.Error ?? "editor not available",
-                    statusCode: 409);
-            }
-            return Results.Ok(new { index = idx, width = outcome.Width, height = outcome.Height });
-        });
-
-        app.MapPost("/api/plughost/slots/{idx:int}/editor/hide", async (
-            int idx, VstHostHostedService svc, Zeus.PluginHost.IPluginHost host,
-            HttpContext ctx) =>
-        {
-            if (idx < 0 || idx >= host.MaxChainSlots)
-                return Results.BadRequest(new { error = "slot index out of range" });
-            var closed = await svc.HideSlotEditorAsync(idx, ctx.RequestAborted);
-            return Results.Ok(new { index = idx, closed });
         });
 
         return app;
@@ -1583,3 +1318,7 @@ public static class ZeusEndpoints
         _ => throw new ArgumentOutOfRangeException(nameof(hz), hz, "validate before calling"),
     };
 }
+
+internal sealed record NativeMuteRequest(bool Muted);
+internal sealed record AuditionSetRequest(bool Enabled);
+internal sealed record ChainOrderSetRequest(List<string> PluginIds);

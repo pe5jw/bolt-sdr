@@ -238,6 +238,8 @@ public sealed class RadioService : IDisposable
             _amTxFilter = new(rsSnap.AmTxFilterLoAbs, rsSnap.AmTxFilterHiAbs);
             _fmTxFilter = new(rsSnap.FmTxFilterLoAbs, rsSnap.FmTxFilterHiAbs);
             _cwTxFilter = new(rsSnap.CwTxFilterLoAbs, rsSnap.CwTxFilterHiAbs);
+            _drivePct = Math.Clamp(rsSnap.DrivePct, 0, 100);
+            _tunePct = Math.Clamp(rsSnap.TunePct, 0, 100);
         }
 
         _state = new(
@@ -282,7 +284,14 @@ public sealed class RadioService : IDisposable
             TwoToneFreq1: ps?.TwoToneFreq1 ?? 700.0,
             TwoToneFreq2: ps?.TwoToneFreq2 ?? 1900.0,
             TwoToneMag: ps?.TwoToneMag ?? 0.49,
-            Cfc: persistedCfc);
+            Cfc: persistedCfc,
+            // Hydrate drive sliders from RadioStateStore so a fresh frontend
+            // connect lands on the operator's last-set values. The private
+            // fields above (_drivePct / _tunePct) were already hydrated in the
+            // rsSnap block; mirror them into the StateDto so SetDrive doesn't
+            // become the only path that puts these into the broadcast.
+            DrivePct: Volatile.Read(ref _drivePct),
+            TunePct: Volatile.Read(ref _tunePct));
 
         // Kick off the debounce flush timer. Fires every 1 s; only writes to
         // LiteDB when _stateDirty is set (i.e., at least one Mutate() has fired
@@ -1003,6 +1012,11 @@ public sealed class RadioService : IDisposable
     {
         int clamped = Math.Clamp(percent, 0, 100);
         Interlocked.Exchange(ref _drivePct, clamped);
+        // Mutate() broadcasts the new StateDto to subscribed clients and
+        // flips _stateDirty so the debounce flush persists to LiteDB. Without
+        // the broadcast a fresh client connect would not see the hydrated
+        // value until something else dirtied the state.
+        Mutate(s => s with { DrivePct = clamped });
         RecomputePaAndPush();
     }
 
@@ -1012,6 +1026,7 @@ public sealed class RadioService : IDisposable
     {
         int clamped = Math.Clamp(percent, 0, 100);
         Interlocked.Exchange(ref _tunePct, clamped);
+        Mutate(s => s with { TunePct = clamped });
         RecomputePaAndPush();
     }
 
@@ -1432,17 +1447,10 @@ public sealed class RadioService : IDisposable
         // on connect — keeps Synthetic + tests deterministic.
         (isProtocol2, board) switch
         {
-            // HL2: tracks deskhpsdr's "measure then slightly increase" rule
-            // (transmitter.c:1347-1371, comment + value 0.2400 vs measured
-            // 0.2386). Zeus uses 0.2500 instead of deskhpsdr's 0.2400 — same
-            // rule, marginally more headroom so the operator's "Observed"
-            // indicator sits inside the dead zone rather than right at the
-            // fault edge with typical voice peaks (~0.240 on EI6LF's HL2 +
-            // resonant antenna, 2026-05-16). mi0bot returns 0.233
-            // (clsHardwareSpecific.cs:312) which sits slightly *under* the
-            // measured peak; voice envelopes clamp into calcc bin 15 rather
-            // than filling it cleanly.
-            (false, HpsdrBoardKind.HermesLite2)              => 0.2500,
+            // HL2: mi0bot clsHardwareSpecific.cs:312 PSDefaultPeak = 0.233.
+            // Same value regardless of protocol — HL2 hardware peak does
+            // not change between P1 and P2.
+            (false, HpsdrBoardKind.HermesLite2)              => 0.233,
             (false, _)                                        => 0.4072,
             // 0x0A wire byte: Saturn FPGA (G2 / G2-1K) reports the high
             // peak per Thetis clsHardwareSpecific.cs:313; everything else
@@ -1455,9 +1463,7 @@ public sealed class RadioService : IDisposable
                 OrionMkIIVariant.G2_1K  => 0.6121,
                 _                        => 0.2899,
             },
-            // HL2 P2: same value as P1 above (HL2 hardware peak is the same
-            // regardless of protocol).
-            (true,  HpsdrBoardKind.HermesLite2)               => 0.2500,
+            (true,  HpsdrBoardKind.HermesLite2)               => 0.233,
             (true,  _)                                        => 0.2899,
         };
 
@@ -1582,6 +1588,8 @@ public sealed class RadioService : IDisposable
                 AmTxFilterLoAbs = amTx.LoAbs,   AmTxFilterHiAbs = amTx.HiAbs,
                 FmTxFilterLoAbs = fmTx.LoAbs,   FmTxFilterHiAbs = fmTx.HiAbs,
                 CwTxFilterLoAbs = cwTx.LoAbs,   CwTxFilterHiAbs = cwTx.HiAbs,
+                DrivePct = snap.DrivePct,
+                TunePct = snap.TunePct,
                 UpdatedUtc = DateTime.UtcNow,
             });
         }
