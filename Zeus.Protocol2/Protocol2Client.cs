@@ -92,9 +92,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // sets `receiver[i].ddc = i` (not `i + 2` as for Orion/Angelia/MkII).
     private const int HermesRxDdc = 0;
 
-    // 2^32 / 122_880_000 — converts Hz to a 32-bit phase-increment word
-    // when the general packet is in "send phase word" mode (bit 3 of
-    // CmdGeneral[37], which pihpsdr and Thetis both set).
+    // 2^32 / 122_880_000 — converts Hz to a 32-bit phase-increment word.
+    // The HPSDR Protocol-2 receiver mixers always operate on phase-word
+    // input: the upstream HDL wires the host-supplied 32-bit phase
+    // straight into the receiver cores (see `C122_phase_word` in
+    // `Hermes.v:1135` and `Hermes.v:1284`, identical pattern in
+    // `Orion.v`). The "bit 3 of CmdGeneral[37]" mode-select pihpsdr and
+    // Thetis both set has no decoder in `General_CC.v` (and no
+    // secondary decoder elsewhere in `Hermes.v` / `Orion.v` —
+    // verified). Kept for parity with pihpsdr; this constant is the
+    // unconditional Hz→phase scale. Issue #416.
     private const double HzToPhase = 34.952533333333333;
 
     private readonly ILogger<Protocol2Client> _log;
@@ -700,11 +707,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         p[26] = 16;
         p[27] = 0;
         p[28] = 32;
-        // Matches pihpsdr new_protocol_general for ORION2/SATURN hardware:
-        // [37] bit 3 = phase-word mode (radio reads phase increments at the
-        // DDC-frequency offsets, not raw Hz), [38] = hardware-timer enable,
-        // [58] = PA enable, [59] = Alex0|Alex1 enable (0x03 is required on
-        // MkII for the BPF board to honour the alex bits further down).
+        // Matches pihpsdr new_protocol_general for ORION2/SATURN hardware.
+        //
+        // [37] = 0x08: pihpsdr writes this on ORION2/SATURN. The upstream
+        // HDL `General_CC.v:136-140` (Hermes Protocol-2 v10.7 and
+        // Orion_MkII v2.2.10) only decodes `cmd_data[0]` at byte 37
+        // (Time_stamp/VITA_49/VNA — all driven from the same bit). Bit 3
+        // is NOT read by `General_CC.v`, and the radio is already in
+        // phase-word mode by default — `Hermes.v` / `Orion.v` wire the
+        // host-supplied 32-bit phase word straight into the receiver
+        // mixers (see `C122_phase_word` in Hermes.v line 1135 and 1284).
+        // Kept at 0x08 for parity with pihpsdr; no observable effect on
+        // this gateware revision. Issue #416.
+        //
+        // [38] = 0x01: hardware-timer enable (`HW_timer_enable`, decoded
+        // at `General_CC.v:141`).
         p[37] = 0x08;
         p[38] = 0x01;
         // [58] bit 0 = PA enable (piHPSDR `new_protocol.c:658-677`; Thetis
