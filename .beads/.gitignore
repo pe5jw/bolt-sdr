@@ -68,3 +68,9 @@ bd.db
 # They would override fork protection in .git/info/exclude.
 # Config files (metadata.json, config.yaml) are tracked by git by default
 # since no pattern above ignores them.
+
+# Zeus override: metadata.json carries a per-clone project_id + the local
+# dolt_database name, both of which differ between machines. Tracking it
+# causes spurious diffs on every clone. The team-wide config that DOES
+# need to be shared lives in config.yaml (sync.remote etc.).
+metadata.json

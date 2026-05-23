@@ -95,3 +95,81 @@ Full details, dependency list, and native WDSP build in `README.md` and `native/
 - **`zeus-web`** (frontend) — Vite + React, connects to the hub, renders panadapter/waterfall/VFO/meters.
 
 When in doubt about where code belongs, match the existing project's single responsibility rather than introducing a new one.
+
+
+<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->
+## Beads Issue Tracker
+
+This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+
+### Quick Reference
+
+```bash
+bd ready              # Find available work
+bd show <id>          # View issue details
+bd update <id> --claim  # Claim work
+bd close <id>         # Complete work
+```
+
+### Rules
+
+- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Run `bd prime` for detailed command reference and session close protocol
+- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+
+**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
+
+## Session Completion
+
+**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+
+**MANDATORY WORKFLOW:**
+
+1. **File issues for remaining work** - Create issues for anything that needs follow-up
+2. **Run quality gates** (if code changed) - Tests, linters, builds
+3. **Update issue status** - Close finished work, update in-progress items
+4. **PUSH TO REMOTE** - This is MANDATORY:
+   ```bash
+   git pull --rebase
+   git push
+   git status  # MUST show "up to date with origin"
+   ```
+5. **Clean up** - Clear stashes, prune remote branches
+6. **Verify** - All changes committed AND pushed
+7. **Hand off** - Provide context for next session
+
+**CRITICAL RULES:**
+- Work is NOT complete until `git push` succeeds
+- NEVER stop before pushing - that leaves work stranded locally
+- NEVER say "ready to push when you are" - YOU must push
+- If push fails, resolve and retry until it succeeds
+<!-- END BEADS INTEGRATION -->
+
+## Beads — Team Sync (Zeus-specific)
+
+The auto-generated block above mentions `refs/dolt/data` on the git remote as the default sync path. **Zeus does NOT use that.** Zeus syncs its bd Dolt database to a dedicated public DoltHub repo:
+
+> **DoltHub:** https://www.dolthub.com/repositories/brianbruff/openhpsdr-zeus
+
+### One-time teammate setup
+
+```bash
+dolt login                                                                   # browser flow → associate a key
+bd dolt remote add origin https://doltremoteapi.dolthub.com/brianbruff/openhpsdr-zeus
+bd dolt pull origin main                                                     # fetch the team's issues
+```
+
+### Day-to-day
+
+```bash
+bd dolt pull origin main      # before starting work
+# ... bd create / bd update / bd close ...
+bd dolt push origin main      # after edits, before signing off
+```
+
+### What's tracked in git vs. DoltHub
+
+- **`.beads/config.yaml`** (in git) — team-wide bd config including `sync.remote`. Edit here for team-wide defaults.
+- **`.beads/issues.jsonl`** / **`interactions.jsonl`** (in git) — passive exports for human grep and zero-dependency reading. **Do not edit by hand** — bd regenerates them. **Do not commit them inside a feature-branch PR** — the merge-conflict tax is real once more than one person uses bd. Snapshot commits to `develop` are fine.
+- **`.beads/metadata.json`** (gitignored) — per-clone `project_id` + local `dolt_database` name. Local state, never committed.
+- **`.beads/embeddeddolt/`** (gitignored) — the actual Dolt DB. Never committed; this is what `bd dolt push` ships.
