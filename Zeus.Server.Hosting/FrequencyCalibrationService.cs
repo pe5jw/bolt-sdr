@@ -135,7 +135,9 @@ public sealed class FrequencyCalibrationService
                 _radio.SetFilter(100, 2700);
                 _radio.SetZoom(CalZoomLevel);
                 long commandedLoHz = (long)(referenceFrequencyHz + IntentionalLoOffsetHz);
-                // Calibration drives the LO absolutely; CTUN must not interpose.
+                // Calibration drives the LO absolutely; bypass the frozen-NCO
+                // auto-recenter heuristic so the hardware lands at exactly the
+                // commanded freq.
                 _radio.SetVfo(commandedLoHz, fromExternal: true);
 
                 await Task.Delay(SettleMs, ct).ConfigureAwait(false);

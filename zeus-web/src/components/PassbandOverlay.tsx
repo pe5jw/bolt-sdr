@@ -52,16 +52,18 @@ import { useConnectionStore } from '../state/connection-store';
 // Positioned by percentage of the total span so it tracks resize and tune
 // without measuring DOM width.
 //
-// CTUN (issue #427): when CTUN is on, the panadapter centres on radioLoHz
-// (the frozen hardware NCO) while vfoHz roams independently. Anchoring the
-// passband to vfoHz — not centerHz — keeps the filter overlay glued to the
-// operator's tuned signal so clicking the spectrum visibly slides the
-// passband around the (stationary) waterfall. When CTUN is off vfoHz equals
-// centerHz so this collapses to legacy behaviour.
+// The panadapter centres on the hardware NCO (radioLoHz) while vfoHz roams
+// independently. Anchoring the passband to vfoHz — not centerHz — keeps the
+// filter overlay glued to the operator's tuned signal so clicking the
+// spectrum visibly slides the passband around the (stationary) waterfall.
 export function PassbandOverlay() {
   const centerHz = useDisplayStore((s) => s.centerHz);
   const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
   const width = useDisplayStore((s) => s.panDb?.length ?? 0);
+  // Pure-pan viewport offset shifts the rendered window relative to the
+  // hardware NCO; the passband must shift with it so it stays glued to the
+  // dial frequency on-screen.
+  const viewportOffsetHz = useDisplayStore((s) => s.viewportOffsetHz);
   const filterLowHz = useConnectionStore((s) => s.filterLowHz);
   const filterHighHz = useConnectionStore((s) => s.filterHighHz);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
@@ -69,7 +71,7 @@ export function PassbandOverlay() {
   if (!width || hzPerPixel <= 0) return null;
 
   const spanHz = width * hzPerPixel;
-  const center = Number(centerHz);
+  const center = Number(centerHz) + viewportOffsetHz;
   const startHz = center - spanHz / 2;
 
   const passLowHz = vfoHz + filterLowHz;

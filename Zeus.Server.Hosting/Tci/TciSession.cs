@@ -817,8 +817,10 @@ public sealed class TciSession : IDisposable
             // Spec §8.5: vfo:trx,vfo,0 is invalid — never set a VFO to 0 Hz.
             // Reject silently rather than driving the radio to an out-of-range freq.
             if (hz <= 0) return;
-            // TCI is a CAT-like external source — bypass CTUN auto-recenter.
-            // Mirrors Thetis CATChangesCenterFreq default. Issue #461.
+            // TCI is a CAT-like external source — bypass the frozen-NCO
+            // auto-recenter heuristic so the hardware tracks the commanded
+            // frequency absolutely. Mirrors Thetis CATChangesCenterFreq
+            // default. Issue #461.
             _radio.SetVfo(hz, fromExternal: true);
             // Don't echo back immediately — the StateChanged event will broadcast it
         }
