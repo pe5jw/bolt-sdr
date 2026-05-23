@@ -573,22 +573,85 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
-    public StateDto SetVfo(long hz)
+    public StateDto SetVfo(long hz) => SetVfo(hz, fromExternal: false);
+
+    /// <summary>
+    /// Set the VFO frequency. <paramref name="fromExternal"/> tags the source
+    /// as a CAT/TCI/calibration caller (vs. UI / panadapter click). External
+    /// callers bypass the CTUN auto-recenter heuristics and always retune the
+    /// hardware — matching Thetis's <c>CATChangesCenterFreq=true</c> default
+    /// (console.cs:32082, CATCommands.cs:2690). Without this, a 5–10 kHz FT8
+    /// → FT4 hop via TCI would stay inside the IF, leave CTUN's WDSP shift in
+    /// place, and the radio would TX on the wrong frequency.
+    /// </summary>
+    public StateDto SetVfo(long hz, bool fromExternal)
     {
         long clamped = Math.Clamp(hz, 0L, 60_000_000L);
         long previous;
+        long radioLo;
         RxMode currentMode;
         bool ctun;
-        lock (_sync) { previous = _state.VfoHz; currentMode = _state.Mode; ctun = _state.CtunEnabled; }
-        // CTUN ON: don't retune the hardware NCO. The radio stays at RadioLoHz
-        // and WDSP's RX bandpass is shifted by DspPipelineService so the
-        // operator's tuned signal still lands inside the passband. Issue #427.
-        // CTUN OFF: legacy behaviour — RadioLoHz tracks VfoHz so the radio is
-        // re-tuned to the clamped dial.
-        Mutate(s => ctun
-            ? s with { VfoHz = clamped }
-            : s with { VfoHz = clamped, RadioLoHz = clamped });
-        if (!ctun)
+        int sampleRate;
+        int zoomLevel;
+        int filterLow;
+        int filterHigh;
+        lock (_sync)
+        {
+            previous = _state.VfoHz;
+            currentMode = _state.Mode;
+            ctun = _state.CtunEnabled;
+            radioLo = _state.RadioLoHz;
+            sampleRate = _state.SampleRate;
+            zoomLevel = Math.Max(1, _state.ZoomLevel);
+            filterLow = _state.FilterLowHz;
+            filterHigh = _state.FilterHighHz;
+        }
+        // CTUN auto-recenter — mirrors Thetis txtVFOAFreq_LostFocus
+        // (console.cs:32189-32257) for UI-sourced changes. With CTUN on, two
+        // conditions force a hardware retune so the radio doesn't get "stuck":
+        //   (a) the resulting WDSP shift would push the filter edge outside
+        //       the visible panadapter span (Thetis dispMargin = 5% inset),
+        //   (b) the shift exceeds the IF capacity (Thetis uses
+        //       sample_rate * 0.92 / 2 — mirrored as sampleRate * 0.46).
+        // CAT / TCI / calibration callers (fromExternal=true) bypass both
+        // checks: those sources are expected to drive the radio absolutely
+        // (digital-mode workflows, memory recall, etc.) and CTUN should not
+        // hold the LO behind. Mirrors Thetis CATChangesCenterFreq=true default
+        // (console.cs:32082, CATCommands.cs:2690 ZZFA / 2741 ZZFB).
+        // Either way, when retune fires the CTUN state stays on; the NCO just
+        // snaps to the new dial and ctunShiftHz returns to 0 until the next
+        // panadapter-local movement. Issue #461.
+        bool retune;
+        if (ctun && !fromExternal)
+        {
+            long effectiveLoNew = CwOffset.EffectiveLoHz(currentMode, clamped);
+            long proposedShift = effectiveLoNew - radioLo;
+            long lMargin = Math.Max(0, -filterLow);
+            long hMargin = Math.Max(0, filterHigh);
+            double dispWidth = (double)sampleRate / zoomLevel;
+            double dispMarginHz = dispWidth * 0.05;
+            double lDisp = -dispWidth / 2.0 + dispMarginHz;
+            double hDisp = dispWidth / 2.0 - dispMarginHz;
+            bool outsideVisible = (proposedShift - lMargin) < lDisp
+                               || (proposedShift + hMargin) > hDisp;
+            long ifCapacity = (long)(sampleRate * 0.46);
+            bool outsideIf = Math.Abs(proposedShift) > ifCapacity;
+            retune = outsideVisible || outsideIf;
+        }
+        else
+        {
+            retune = true;
+        }
+        // CTUN-off path stores the raw dial in RadioLoHz (panadapter centre
+        // and P2 push both re-derive via EffectiveLoHz). CTUN-on auto-recenter
+        // path freezes the post-cw_pitch NCO so ctunShiftHz settles at 0.
+        long radioLoNew = ctun
+            ? CwOffset.EffectiveLoHz(currentMode, clamped)
+            : clamped;
+        Mutate(s => retune
+            ? s with { VfoHz = clamped, RadioLoHz = radioLoNew }
+            : s with { VfoHz = clamped });
+        if (retune)
         {
             // CW retunes the LO cw_pitch below/above the dial so the listening
             // freq lands on the +cw_pitch / -cw_pitch audio passband. In SSB /
