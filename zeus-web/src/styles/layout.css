@@ -2047,19 +2047,25 @@
 }
 .mobile-ptt-btn.tx .mobile-ptt-hint { color: rgba(255,255,255,0.85); }
 
-/* ===== Mobile responsive layout (≤640 px) =====
+/* ===== Mobile responsive layout (≤900 px) =====
    Shows only frequency (VFO), signal (S-meter), mic level, power level (drive),
    the panadapter/waterfall stack, and a big hold-to-talk PTT button where the
    logbook sits on desktop. Everything else — QRZ, azimuth map, DSP, CW keyer,
    logbook, TX stage meters, mode/bandwidth, front-end, AGC, zoom, status chips,
-   tweaks panel — is hidden via the .hide-mobile utility. */
+   tweaks panel — is hidden via the .hide-mobile utility.
+
+   Every rule is scoped to html:not([data-force-desktop="1"]) so that the
+   `?desktop=1` query-param override (set in main.tsx) preserves the full
+   desktop layout in a narrow window — used when a small touchscreen is
+   docked as a secondary control surface. */
 @media (max-width: 900px) {
-  .hide-mobile { display: none !important; }
-  .show-mobile { display: flex; }
+  html:not([data-force-desktop="1"]) .hide-mobile { display: none !important; }
+  html:not([data-force-desktop="1"]) .show-mobile { display: flex; }
 
-  html, body { overflow-x: hidden; }
+  html:not([data-force-desktop="1"]),
+  html:not([data-force-desktop="1"]) body { overflow-x: hidden; }
 
-  .app {
+  html:not([data-force-desktop="1"]) .app {
     grid-template-rows: 44px 52px auto 1fr 44px;
     width: 100%;
     padding: 4px;
@@ -2067,20 +2073,20 @@
     overflow-x: hidden;
   }
 
-  .topbar {
+  html:not([data-force-desktop="1"]) .topbar {
     height: 44px;
     padding: 0 8px;
     gap: 6px;
     min-width: 0;
   }
-  .brand { padding: 0 4px; gap: 6px; }
-  .brand-mark { width: 22px; height: 22px; }
-  .brand-name { font-size: 13px; }
+  html:not([data-force-desktop="1"]) .brand { padding: 0 4px; gap: 6px; }
+  html:not([data-force-desktop="1"]) .brand-mark { width: 22px; height: 22px; }
+  html:not([data-force-desktop="1"]) .brand-name { font-size: 13px; }
   /* Compact the connected "RADIO x.x.x.x:pppp" chip — the mono IP overflows
      a 390 px viewport when the Disconnect button sits next to it. */
-  .topbar .chip.accent .v { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
+  html:not([data-force-desktop="1"]) .topbar .chip.accent .v { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
 
-  .control-strip {
+  html:not([data-force-desktop="1"]) .control-strip {
     height: 52px;
     padding: 2px 6px;
     gap: 8px;
@@ -2089,17 +2095,17 @@
   }
   /* Override inline min-width on the visible ZOOM ctrl-group so it shrinks
      to fit narrow viewports. */
-  .control-strip .ctrl-group { min-width: 0 !important; }
-  .control-strip .btn-row { min-width: 0; flex: 1; }
-  .control-strip .knob-group { min-width: 0; flex: 1; }
+  html:not([data-force-desktop="1"]) .control-strip .ctrl-group { min-width: 0 !important; }
+  html:not([data-force-desktop="1"]) .control-strip .btn-row { min-width: 0; flex: 1; }
+  html:not([data-force-desktop="1"]) .control-strip .knob-group { min-width: 0; flex: 1; }
 
-  .workspace {
+  html:not([data-force-desktop="1"]) .workspace {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1.4fr) minmax(0, 0.85fr) auto;
     gap: 4px;
   }
-  .workspace .hero { grid-column: 1; grid-row: 1; }
-  .workspace .side-stack {
+  html:not([data-force-desktop="1"]) .workspace .hero { grid-column: 1; grid-row: 1; }
+  html:not([data-force-desktop="1"]) .workspace .side-stack {
     grid-column: 1;
     grid-row: 2;
     flex-direction: column;
@@ -2107,44 +2113,45 @@
     overflow-x: hidden;
     gap: 4px;
   }
-  .workspace .side-stack .side-slot {
+  html:not([data-force-desktop="1"]) .workspace .side-stack .side-slot {
     flex: 0 0 auto;
     min-width: 0;
   }
-  .workspace .side-stack .side-slot.grow {
+  html:not([data-force-desktop="1"]) .workspace .side-stack .side-slot.grow {
     flex: 0 0 auto;
     min-height: 0;
   }
-  .workspace .bottom-row {
+  html:not([data-force-desktop="1"]) .workspace .bottom-row {
     grid-column: 1;
     grid-row: 3;
     grid-template-columns: 1fr;
     min-height: 72px;
   }
 
-  .freq-digits { font-size: 26px; margin: 2px 0; }
-  .freq-panel { padding: 6px; gap: 4px; }
-  .smeter { padding: 6px 8px; gap: 4px; }
-  .smeter-scale { height: 40px; padding: 4px; }
+  html:not([data-force-desktop="1"]) .freq-digits { font-size: 26px; margin: 2px 0; }
+  html:not([data-force-desktop="1"]) .freq-panel { padding: 6px; gap: 4px; }
+  html:not([data-force-desktop="1"]) .smeter { padding: 6px 8px; gap: 4px; }
+  html:not([data-force-desktop="1"]) .smeter-scale { height: 40px; padding: 4px; }
 
-  .transport {
+  html:not([data-force-desktop="1"]) .transport {
     height: 44px;
     padding: 0 6px;
     gap: 4px;
     min-width: 0;
     overflow-x: hidden;
   }
-  .transport .knob-group { min-width: 0; flex: 1; }
+  html:not([data-force-desktop="1"]) .transport .knob-group { min-width: 0; flex: 1; }
 
-  .tweaks-fab,
-  .tweaks-panel { display: none !important; }
+  html:not([data-force-desktop="1"]) .tweaks-fab,
+  html:not([data-force-desktop="1"]) .tweaks-panel { display: none !important; }
 }
 
 /* Touch-target floor for coarse pointers (phones, tablets). Keyed off pointer
    type rather than width so a narrow desktop window doesn't inherit the
-   bigger tap zones. Apple HIG: 44 px minimum for primary targets. */
+   bigger tap zones. Apple HIG: 44 px minimum for primary targets.
+   Scoped the same way so ?desktop=1 keeps the desktop click targets. */
 @media (pointer: coarse) and (max-width: 900px) {
-  .btn     { min-height: 36px; }
-  .btn.lg  { min-height: 44px; }
-  .btn-row { gap: 6px; }
+  html:not([data-force-desktop="1"]) .btn     { min-height: 36px; }
+  html:not([data-force-desktop="1"]) .btn.lg  { min-height: 44px; }
+  html:not([data-force-desktop="1"]) .btn-row { gap: 6px; }
 }
