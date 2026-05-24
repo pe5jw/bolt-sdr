@@ -159,6 +159,15 @@ public static class ZeusHost
         builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();
         builder.Services.AddSingleton<Zeus.Protocol1.ITxIqSource>(sp =>
             sp.GetRequiredService<Zeus.Protocol1.TxIqRing>());
+        // RxCodecAudioRing is shared: RadioCodecAudioSink writes WDSP RX
+        // audio into it; Protocol1Client (constructed inside RadioService)
+        // drains it into the EP2 outbound L/R bytes so operators on
+        // Hermes / ANAN-class / OrionMkII boards hear audio on the radio's
+        // front-panel headphone jack. Empty ring = silent wire bytes,
+        // matching pre-#426 HL2-only behaviour. Issue #426.
+        builder.Services.AddSingleton<Zeus.Protocol1.RxCodecAudioRing>();
+        builder.Services.AddSingleton<Zeus.Protocol1.IRxCodecAudioSource>(sp =>
+            sp.GetRequiredService<Zeus.Protocol1.RxCodecAudioRing>());
         builder.Services.AddSingleton<RadioService>();
         builder.Services.AddSingleton<StreamingHub>();
         // RX audio publish seam (Phase 1). DspPipelineService.PublishAudio
@@ -223,6 +232,12 @@ public static class ZeusHost
             // mix client-side.
             builder.Services.AddSingleton<IAuditionAudioSink, NoOpAuditionAudioSink>();
         }
+        // Radio on-board codec sink — joins the IRxAudioSink fan-out so RX
+        // audio is duplicated to the radio's EP2 outbound L/R bytes whenever
+        // the connected board has an on-board codec (Hermes / ANAN-class /
+        // OrionMkII family / G2E). HL2 / synthetic / pre-connect short-
+        // circuit inside the sink. Issue #426.
+        builder.Services.AddSingleton<IRxAudioSink, RadioCodecAudioSink>();
         // WDSPwisdom bootstrap: run FFTW plan caching on a worker at app start so the
         // first /api/connect isn't blocked for ~2 min while WDSP plans FFTs 64..262144.
         // Clients are told to keep Connect disabled until phase=Ready.

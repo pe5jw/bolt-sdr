@@ -132,10 +132,21 @@ public sealed class Protocol1Client : IProtocol1Client
     // the tone so legacy callers (tests, tools/zeus-dump) keep working.
     private readonly ITxIqSource _txIqSource;
 
-    public Protocol1Client(ILogger<Protocol1Client>? logger = null, ITxIqSource? iqSource = null)
+    // RX-codec audio source: WDSP demodulated audio routed back to the
+    // radio's on-board codec so operators can plug headphones into the
+    // radio's front-panel jack and hear receive audio (issue #426).
+    // Null on HL2 / discovery-only callers; the EP2 L/R audio bytes stay
+    // zero and the radio ignores them, matching pre-#426 behaviour.
+    private readonly IRxCodecAudioSource? _rxCodecAudioSource;
+
+    public Protocol1Client(
+        ILogger<Protocol1Client>? logger = null,
+        ITxIqSource? iqSource = null,
+        IRxCodecAudioSource? rxCodecAudioSource = null)
     {
         _log = logger ?? NullLogger<Protocol1Client>.Instance;
         _txIqSource = iqSource ?? new TestToneGenerator();
+        _rxCodecAudioSource = rxCodecAudioSource;
         _channel = Channel.CreateBounded<IqFrame>(new BoundedChannelOptions(DefaultFrameChannelCapacity)
         {
             FullMode = BoundedChannelFullMode.DropOldest,
@@ -998,7 +1009,7 @@ public sealed class Protocol1Client : IProtocol1Client
                 bool psArmed = state.PsEnabled && state.Board == HpsdrBoardKind.HermesLite2;
                 var (first, second) = PhaseRegisters(phase, state.Mox, psArmed);
                 phase = (phase + 1) & (psArmed ? 0xF : 0x3);
-                ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource);
+                ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource, _rxCodecAudioSource);
                 rateWindowPkts++;
                 var nowUtc = DateTime.UtcNow;
                 var elapsed = nowUtc - rateWindowStart;

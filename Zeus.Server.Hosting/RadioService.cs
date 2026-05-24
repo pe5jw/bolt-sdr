@@ -179,7 +179,16 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null)
+    // Shared RX-codec audio source — WDSP RX output routed back to the
+    // radio's on-board codec so operators on Hermes / ANAN-class / OrionMkII
+    // boards can plug headphones into the radio's front-panel jack and hear
+    // demodulated audio. Issue #426. RadioCodecAudioSink writes float samples
+    // into this ring; Protocol1Client drains it into EP2 L/R bytes.
+    // Null on the synthetic / discovery-only path; the radio sees zero
+    // audio bytes (matching pre-#426 HL2-only behaviour).
+    private readonly Zeus.Protocol1.IRxCodecAudioSource? _rxCodecAudioSource;
+
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, Zeus.Protocol1.IRxCodecAudioSource? rxCodecAudioSource = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
@@ -193,6 +202,7 @@ public sealed class RadioService : IDisposable
         if (_preferredRadioStore is not null)
             _preferredRadioStore.Changed += RecomputePaAndPush;
         _txIqSource = txIqSource;
+        _rxCodecAudioSource = rxCodecAudioSource;
 
         // Load persisted DSP settings from the store, or use defaults if not found
         var persistedNr = _dspSettingsStore.Get() ?? new NrConfig();
@@ -441,7 +451,8 @@ public sealed class RadioService : IDisposable
 
             client = new Protocol1Client(
                 _loggerFactory.CreateLogger<Protocol1Client>(),
-                _txIqSource);
+                _txIqSource,
+                _rxCodecAudioSource);
             client.AdcOverloadObserved += OnAdcOverload;
             _activeClient = client;
             _state = _state with
@@ -561,6 +572,11 @@ public sealed class RadioService : IDisposable
             client.AdcOverloadObserved -= OnAdcOverload;
             Disconnected?.Invoke();
             await TearDownClientAsync(client, ct).ConfigureAwait(false);
+            // Drop any queued RX-codec audio so the next connect starts
+            // clean — otherwise on a quick disconnect/reconnect the operator
+            // hears a fraction of a second of stale audio in the radio's
+            // headphone jack. Issue #426.
+            (_rxCodecAudioSource as Zeus.Protocol1.RxCodecAudioRing)?.Clear();
             _log.LogInformation("radio.disconnected");
         }
 
