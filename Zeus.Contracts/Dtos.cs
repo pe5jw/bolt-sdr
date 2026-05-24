@@ -664,6 +664,19 @@ public sealed record PanWfSplitDto(double PanPercent);
 
 public sealed record PanWfSplitSetRequest(double PanPercent);
 
+// Per-operator display-side meter calibration knobs (GitHub #426).
+//
+//   * SMeterOffsetDb — signed dB offset added to the displayed RX dBm
+//     value. Trim for real-world antenna / coax / preamp combinations
+//     that shift the WDSP-internal reading. Clamped ±20 dB on the
+//     server. Display-only — does not touch WDSP or the radio.
+//
+// Persisted server-side in zeus-prefs.db (single-row pattern). Default
+// is 0.0 dB.
+public sealed record MeterDisplaySettingsDto(double SMeterOffsetDb);
+
+public sealed record SMeterOffsetSetRequest(double OffsetDb);
+
 // ---- PureSignal request records ----
 // PsControlSetRequest = master arm (Enabled) + mode (Auto vs Single).
 // PsAdvancedSetRequest = nullable so partial updates from the settings

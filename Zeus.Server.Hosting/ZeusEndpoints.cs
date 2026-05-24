@@ -912,6 +912,20 @@ public static class ZeusEndpoints
             return Results.Ok(saved);
         });
 
+        // Display-side meter calibration knobs (GitHub #426). Currently
+        // surfaces the S-meter dB offset trim; signed value clamped ±20 dB
+        // on the server. Display-only — the underlying WDSP / radio
+        // physics are untouched. Persisted in zeus-prefs.db.
+        app.MapGet("/api/meters/display-settings",
+            (MeterDisplaySettingsStore store) => Results.Ok(store.Get()));
+
+        app.MapPut("/api/meters/smeter-offset-db",
+            (SMeterOffsetSetRequest req, MeterDisplaySettingsStore store) =>
+            {
+                var saved = store.SetSMeterOffsetDb(req.OffsetDb);
+                return Results.Ok(saved);
+            });
+
         // Inline NR settings accordion disclosure state (NR1 / NR2 / NR4).
         // PUT writes all three flags atomically. Persisted in zeus-prefs.db
         // so the chevron-open preference follows the operator across
