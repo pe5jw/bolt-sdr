@@ -179,8 +179,16 @@ internal sealed class TxTuneDriver : BackgroundService
                 // FIFO stays topped; the P2 sender's FIFO model throttles the small
                 // surplus. TxTuneDriver only drives TUN / TwoTone (short bursts),
                 // never voice — voice is pumped by the hardware-clocked mic path.
+                // Produce at the EXACT DAC block rate. The old 3% surplus
+                // (×0.97) was a jitter margin for when this pump ran on a
+                // preempted ThreadPool worker — the sender then had to throttle
+                // the surplus, and that throttle stutters the delivery, pumping
+                // the carriers. Now the pump runs on a dedicated RT thread and
+                // hits its deadline deterministically, so exact rate keeps the
+                // radio FIFO level without a surplus to throttle (#559). The
+                // PrimeBlocks burst still tops the FIFO at key-down.
                 long periodTicks = (long)(System.Diagnostics.Stopwatch.Frequency
-                    * micBlock * 0.97 / MicRateHz);
+                    * micBlock / (double)MicRateHz);
 
                 if (!pacing)
                 {
