@@ -1811,6 +1811,22 @@ public sealed class WdspDspEngine : IDspEngine
         _log.LogInformation("wdsp.setPsHwPeak peak={Peak:F4}", hwPeak);
     }
 
+    public void SetPsHold(bool hold)
+    {
+        if (_disposed != 0) return;
+        lock (_psLock)
+        {
+            int? txa;
+            lock (_txaLock) txa = _txaChannelId;
+            if (txa is not int id) return;
+            // hold → SetPSRunCal(0): stop calcc re-fitting (state machine parks),
+            // iqc keeps applying the current correction (no turn-off ramp).
+            // resume → SetPSRunCal(1).
+            NativeMethods.SetPSRunCal(id, hold ? 0 : 1);
+        }
+        _log.LogInformation("wdsp.setPsHold hold={Hold} (runcal={Run})", hold, hold ? 0 : 1);
+    }
+
     public void SetPsControl(bool autoCal, bool singleCal)
     {
         if (_disposed != 0) return;
