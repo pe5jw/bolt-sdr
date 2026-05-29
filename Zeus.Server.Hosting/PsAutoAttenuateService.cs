@@ -450,9 +450,16 @@ public sealed class PsAutoAttenuateService : BackgroundService
             _lastWedgeCal = -1;
         }
 
-        // Converge-then-hold: lock the correction once it settles so it stops
-        // re-fitting/flickering and "catches" (P2 automode only).
-        TickPsHold(s, engine, stallPsm);
+        // NOTE (#559): converge-then-hold (TickPsHold) is intentionally NOT
+        // called. Locking the correction froze it at the convergence drive
+        // level, so driving harder (overdrive) left the frozen curve mismatched
+        // → uncorrected IMD. Thetis stays clean under overdrive by running
+        // CONTINUOUS automode and re-adapting; the flicker that originally
+        // motivated the lock was the jittery TX feed, now fixed by the RT
+        // pump/sender/rx-loop. So we run continuous automode (Thetis parity) and
+        // let it track drive changes. TickPsHold kept for reference/possible
+        // operator-selectable "single-cal hold" later.
+        // TickPsHold(s, engine, stallPsm);
 
         // Auto-cal hw_peak from observed envelope. Independent of HL2/P2 path
         // and runs every keyed tick — same gates as the rest of the loop

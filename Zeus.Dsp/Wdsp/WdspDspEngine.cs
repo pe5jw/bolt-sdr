@@ -285,6 +285,7 @@ public sealed class WdspDspEngine : IDspEngine
     // calcc state machine is visible in the server log without flooding.
     // Drop alongside the wdsp.psSeed log once PS is confirmed stable.
     private int _psInfoLogCounter;
+    private int _txOverdriveLogCounter;
 
     // TX Monitor — private RXA channel that demodulates the post-CFIR / post-
     // RSMPOUT TX IQ (the wire signal about to hit the radio) back to mono
@@ -2444,10 +2445,28 @@ public sealed class WdspDspEngine : IDspEngine
             _log.LogWarning("wdsp.fexchange2 tx err={Err} (suppressed after 8 occurrences)", err);
         }
 
+        float txOutPeak = 0f;
         for (int i = 0; i < outSize; i++)
         {
             iqInterleaved[2 * i] = iout[i];
             iqInterleaved[2 * i + 1] = qout[i];
+            float e = iout[i] * iout[i] + qout[i] * qout[i];
+            if (e > txOutPeak) txOutPeak = e;
+        }
+        // Overdrive probe (#559): is the ALC limiting and is the wire IQ railing?
+        // outPeak≈1.0 = post-iqc IQ clipping the Int24 wire (splatter). alcGain
+        // (meter 14, dB) should go NEGATIVE under overdrive = ALC reducing gain
+        // (limiting); ~0 dB while the mic clips = ALC NOT limiting (the bug).
+        // ~1 Hz while keyed.
+        if (++_txOverdriveLogCounter % 50 == 0)
+        {
+            double alcGainDb = NativeMethods.GetTXAMeter(txa, 14);
+            double alcPkDb = NativeMethods.GetTXAMeter(txa, 12);
+            double micPkDb = NativeMethods.GetTXAMeter(txa, 0);
+            _log.LogInformation(
+                "wdsp.txOverdrive micPk={Mic:F1}dB alcGain={Alc:F1}dB alcPk={AlcPk:F1}dB outPeak={Out:F3}{Clip}",
+                micPkDb, alcGainDb, alcPkDb, Math.Sqrt(txOutPeak),
+                txOutPeak >= 0.998 * 0.998 ? " RAIL!" : "");
         }
 
         // TX Monitor — feed the post-CFIR / post-RSMPOUT IQ (the wire signal
