@@ -1195,16 +1195,20 @@ public sealed class WdspDspEngine : IDspEngine
             NativeMethods.SetTXACompressorRun(id, 0);
             NativeMethods.SetTXACFCOMPRun(id, 0);
             NativeMethods.SetTXAPHROTRun(id, 0);
-            // CESSB (Controlled Envelope SSB) — unconditionally ON. Mirrors
-            // Thetis's WDSP entry point (dsp.cs:240 SetTXAosctrlRun) but
-            // without a user toggle: KISS, always on. WDSP's create_osctrl
-            // (TXA.c) ships sensible defaults (bandpass overshoot control on
-            // the SSB envelope) and no further setters are required —
-            // Thetis itself only ever calls SetTXAosctrlRun. Leaving CESSB
-            // off costs ~1–1.5 dB of average power on voice SSB; there is
-            // no operator scenario in which off is preferable, so no prefs
-            // key, no REST endpoint, no UI control. See bd zeus-5cg.
-            NativeMethods.SetTXAosctrlRun(id, 1);
+            // CESSB / osctrl — OFF, matching Thetis, pihpsdr, and DeskHPSDR,
+            // which ALL keep it off unless the speech compressor is engaged
+            // (Thetis CESSB_On=false in every profile; pihpsdr/desk gate it on
+            // COMP). The prior "unconditionally ON" here misread Thetis. osctrl
+            // is a non-linear lookahead peak divisor meant to precede the comp/
+            // clipper it was tuned with; run standalone in front of the ALC it
+            // makes the peak-envelope statistics amplitude-dependent and non-
+            // stationary on VOICE (a no-op on a constant two-tone envelope), so
+            // PS sees a moving target at the peaks → uncorrected voice-peak
+            // splatter with PS engaged, while the two-tone stays clean. With it
+            // off, the ALC is the sole envelope limiter before xiqc (the
+            // reference topology) and every peak PS sees sits at the calibrated
+            // ceiling. #559 — root-caused against Thetis/pi/desk.
+            NativeMethods.SetTXAosctrlRun(id, 0);
             NativeMethods.SetTXAEQRun(id, 0);
             NativeMethods.SetTXAAMSQRun(id, 0);
             NativeMethods.SetTXAALCSt(id, 1);
