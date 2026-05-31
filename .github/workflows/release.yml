@@ -474,12 +474,13 @@ jobs:
             # works on any host arch. The committed libwdsp.so arm64 is used
             # directly (no fresh native build job for arm64 yet; a dedicated
             # ubuntu-24.04-arm runner can replace this when glibc requirements
-            # for arm64 targets are confirmed). AppImage requires a native arm64
-            # runner for squashfs / appimagetool — tarball only for now.
+            # for arm64 targets are confirmed). AppImages are cross-built via
+            # ARCH=aarch64 — appimagetool downloads the aarch64 runtime.
             runner: ubuntu-22.04
             rid: linux-arm64
             artifact: linux-arm64-tarball
-            build_appimage: 'false'
+            appimage_artifact: linux-arm64-appimage
+            build_appimage: 'true'
             uses_committed_native: 'true'
           - os: macos-arm64
             runner: macos-latest  # Apple Silicon
@@ -643,7 +644,8 @@ jobs:
           # Both AppImages — the desktop one (--desktop default) and the
           # server one (--server, Photino status window). The glob picks
           # up both since they share the OpenhpsdrZeus prefix.
-          path: installers/output/OpenhpsdrZeus*-${{ steps.version.outputs.version }}-linux-x86_64.AppImage
+          # Covers both x86_64 (linux-x64) and aarch64 (linux-arm64).
+          path: installers/output/OpenhpsdrZeus*-${{ steps.version.outputs.version }}-linux-*.AppImage
           if-no-files-found: error
 
       # ---------- macOS code-signing + notarization ------------------------
@@ -1022,6 +1024,7 @@ jobs:
             release-artifacts/linux-tarball/*
             release-artifacts/linux-appimage/*
             release-artifacts/linux-arm64-tarball/*
+            release-artifacts/linux-arm64-appimage/*
             release-artifacts/macos-arm64-dmg/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1167,4 +1170,5 @@ jobs:
             release-artifacts/linux-tarball/* \
             release-artifacts/linux-appimage/* \
             release-artifacts/linux-arm64-tarball/* \
+            release-artifacts/linux-arm64-appimage/* \
             release-artifacts/macos-arm64-dmg/*

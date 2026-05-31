@@ -55,14 +55,22 @@ jobs:
           chmod +x installers/create-linux-package.sh
           installers/create-linux-package.sh 0.0.0-test linux-arm64
 
-      - name: Verify tarball
+      - name: Build AppImages (cross-built aarch64 via ARCH=aarch64)
+        run: |
+          chmod +x installers/create-linux-desktop-appimage.sh
+          installers/create-linux-desktop-appimage.sh 0.0.0-test linux-arm64
+
+      - name: Verify artifacts
         run: |
           ls -lh installers/output/
           tar -tzf installers/output/openhpsdr-zeus-0.0.0-test-linux-arm64.tar.gz | head -20
+          file installers/output/OpenhpsdrZeus*aarch64*.AppImage
 
-      - name: Upload tarball artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: zeus-linux-arm64-test
-          path: installers/output/openhpsdr-zeus-0.0.0-test-linux-arm64.tar.gz
+          path: |
+            installers/output/openhpsdr-zeus-0.0.0-test-linux-arm64.tar.gz
+            installers/output/OpenhpsdrZeus*-0.0.0-test-linux-aarch64.AppImage
           if-no-files-found: error
