@@ -260,6 +260,10 @@ public sealed class PsAutoAttenuateService : BackgroundService
     private void ClearStallFlag()
     {
         _stallStartTickMs = 0;
+        // Clear wedge-watchdog tracking on every idle/disarm/unkey exit so the
+        // freeze clock starts fresh on the next key-up — a frozen info5 from a
+        // prior over must not count toward a wedge against the new transmission.
+        _lastWedgeCal = -1;
         if (_stallWarned)
         {
             _stallWarned = false;
@@ -425,29 +429,35 @@ public sealed class PsAutoAttenuateService : BackgroundService
         // correction away, holding IMD ~10 dB worse than a stable curve (#559).
         // Also skip when we've deliberately locked the correction (_psHeld →
         // SetPSRunCal(0)): calcc is parked on purpose, info5 frozen by design.
+        // Run the info5 freeze CLOCK on every armed+keyed tick, INDEPENDENT of
+        // CalState. Previously the clock lived inside the `calState in 4..7`
+        // gate with an `else { _lastWedgeCal = -1; }`, so a wedged calcc that
+        // flickered between LCALC(6) and a transient WAIT state reset the clock
+        // on every re-entry to the compute states — the freeze never accumulated
+        // StallThreshold and recovery dragged out (~37 s observed instead of ~5).
         var calState = stallPsm.CalState;
-        if (s.PsAuto && !s.PsSingle && !_psHeld && stallPsm.CalibrationAttempts > 0
-            && calState >= 4 && calState <= 7)
+        long nowW = Environment.TickCount64;
+        if (stallPsm.CalibrationAttempts != _lastWedgeCal)
         {
-            long now = Environment.TickCount64;
-            if (stallPsm.CalibrationAttempts != _lastWedgeCal)
-            {
-                _lastWedgeCal = stallPsm.CalibrationAttempts;
-                _lastWedgeCalChangeMs = now;
-            }
-            else if (now - _lastWedgeCalChangeMs >= (long)StallThreshold.TotalMilliseconds
-                     && now - _lastWedgeResetMs >= (long)StallThreshold.TotalMilliseconds)
-            {
-                _lastWedgeResetMs = now;
-                _log.LogWarning(
-                    "psAutoAttn.wedge info5 frozen at {Cal} state={State} for {ElapsedMs}ms — calcc stalled (e.g. PS toggled mid-TX); resetting calcc.",
-                    stallPsm.CalibrationAttempts, stallPsm.CalState, now - _lastWedgeCalChangeMs);
-                engine.ResetPs();
-            }
+            _lastWedgeCal = stallPsm.CalibrationAttempts;
+            _lastWedgeCalChangeMs = nowW;
         }
-        else
+        // FIRE only in the active compute states (LCOLLECT=4..LDELAY=7). Per
+        // #559, resetting while calcc is parked in a WAIT state (0..3) is futile
+        // (it just re-enters LWAIT) and destructive (tears down the live
+        // correction) — so the clock runs always, but the reset stays gated to
+        // compute states, in auto mode, on a non-zero frozen info5, rate-limited.
+        else if (s.PsAuto && !s.PsSingle && !_psHeld
+                 && stallPsm.CalibrationAttempts > 0
+                 && calState >= 4 && calState <= 7
+                 && nowW - _lastWedgeCalChangeMs >= (long)StallThreshold.TotalMilliseconds
+                 && nowW - _lastWedgeResetMs >= (long)StallThreshold.TotalMilliseconds)
         {
-            _lastWedgeCal = -1;
+            _lastWedgeResetMs = nowW;
+            _log.LogWarning(
+                "psAutoAttn.wedge info5 frozen at {Cal} state={State} for {ElapsedMs}ms — calcc stalled (e.g. PS toggled mid-TX); resetting calcc.",
+                stallPsm.CalibrationAttempts, stallPsm.CalState, nowW - _lastWedgeCalChangeMs);
+            engine.ResetPs();
         }
 
         // NOTE (#559): converge-then-hold (TickPsHold) is intentionally NOT
