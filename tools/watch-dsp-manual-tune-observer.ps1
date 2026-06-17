@@ -23,6 +23,8 @@ param(
 
     [string]$ReportPath = "",
 
+    [string]$BundleDir = "",
+
     [string]$WatchScriptPath = "",
 
     [string]$Label = "manual-tune-observer",
@@ -199,6 +201,43 @@ function Write-JsonFile {
     $Value | ConvertTo-Json -Depth 64 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
+function ConvertTo-BundleRelativeEvidencePath {
+    param([string]$Path, [string]$BundlePath)
+    if ([string]::IsNullOrWhiteSpace($Path) -or [string]::IsNullOrWhiteSpace($BundlePath)) {
+        return $Path
+    }
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $fullBundlePath = [System.IO.Path]::GetFullPath($BundlePath)
+    $separatorChars = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $bundleRoot = $fullBundlePath.TrimEnd($separatorChars)
+    $bundleRootWithSeparator = $bundleRoot + [System.IO.Path]::DirectorySeparatorChar
+
+    if ([string]::Equals($fullPath, $bundleRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        return "."
+    }
+
+    if (-not $fullPath.StartsWith($bundleRootWithSeparator, [StringComparison]::OrdinalIgnoreCase)) {
+        return $Path
+    }
+
+    return $fullPath.Substring($bundleRootWithSeparator.Length).Replace('\', '/')
+}
+
+function Test-PortableEvidencePath {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $false
+    }
+
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return $false
+    }
+
+    return (-not $Path.StartsWith("../", [StringComparison]::Ordinal)) -and
+        (-not $Path.StartsWith("..\", [StringComparison]::Ordinal))
+}
+
 function Invoke-WatchCapture {
     param(
         [Parameter(Mandatory = $true)][string]$ScriptPath,
@@ -279,6 +318,10 @@ $base = Normalize-BaseUrl $BaseUrl
 if ($SkipCertificateCheck) {
     Enable-CertificateBypass
 }
+$bundlePath = ""
+if (-not [string]::IsNullOrWhiteSpace($BundleDir)) {
+    $bundlePath = [System.IO.Path]::GetFullPath($BundleDir)
+}
 if ([string]::IsNullOrWhiteSpace($WatchScriptPath)) {
     $WatchScriptPath = Join-Path $repoRoot "tools\watch-dsp-live-diagnostics.ps1"
 }
@@ -301,6 +344,8 @@ if ($PlanOnly) {
         scenarioId = $ScenarioId
         comparisonId = $ComparisonId
         watchScriptPath = $resolvedWatchScript
+        bundleDir = $bundlePath
+        bundleRelativePaths = (-not [string]::IsNullOrWhiteSpace($bundlePath))
         safety = [ordered]@{
             rxOnly = $true
             readOnly = $true
@@ -319,7 +364,12 @@ if ($PlanOnly) {
                 "Traces captured while the operator continues tuning are scouting evidence, not final acceptance proof."
             )
         }
-        example = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -PollCount 60 -StablePolls 3 -MaxCaptures 4"
+        example = if ([string]::IsNullOrWhiteSpace($bundlePath)) {
+            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -PollCount 60 -StablePolls 3 -MaxCaptures 4"
+        }
+        else {
+            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -BundleDir `"$bundlePath`" -OutputRoot `"$bundlePath\artifacts\manual-tune-observer`" -ReportPath `"$bundlePath\artifacts\manual-tune-observer-report.json`" -PollCount 60 -StablePolls 3 -MaxCaptures 4"
+        }
     } | ConvertTo-Json -Depth 16
     exit 0
 }
@@ -327,14 +377,24 @@ if ($PlanOnly) {
 $startedUtc = [DateTimeOffset]::UtcNow
 $safeLabel = ConvertTo-SafeName $Label
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
-    $OutputRoot = Join-Path $repoRoot "captures\dsp-manual-tune-observer"
+    $OutputRoot = if ([string]::IsNullOrWhiteSpace($bundlePath)) {
+        Join-Path $repoRoot "captures\dsp-manual-tune-observer"
+    }
+    else {
+        Join-Path $bundlePath "artifacts\manual-tune-observer"
+    }
 }
 $OutputRoot = [System.IO.Path]::GetFullPath($OutputRoot)
 $captureRoot = Join-Path $OutputRoot ("{0}-{1}" -f $startedUtc.ToString("yyyyMMddTHHmmssfffZ"), $safeLabel)
 New-Item -ItemType Directory -Force -Path $captureRoot | Out-Null
 
 if ([string]::IsNullOrWhiteSpace($ReportPath)) {
-    $ReportPath = Join-Path $captureRoot "manual-tune-observer-report.json"
+    $ReportPath = if ([string]::IsNullOrWhiteSpace($bundlePath)) {
+        Join-Path $captureRoot "manual-tune-observer-report.json"
+    }
+    else {
+        Join-Path $bundlePath "artifacts\manual-tune-observer-report.json"
+    }
 }
 $ReportPath = [System.IO.Path]::GetFullPath($ReportPath)
 
@@ -415,6 +475,8 @@ try {
                 $watchReport = $watch.report
                 $weak = Get-JsonValue $watchReport "nr5WeakSignalWatch"
                 $agc = Get-JsonValue $watchReport "agcStabilityWatch"
+                $serializedSummaryPath = ConvertTo-BundleRelativeEvidencePath -Path $summaryPath -BundlePath $bundlePath
+                $serializedJsonlPath = ConvertTo-BundleRelativeEvidencePath -Path $jsonlPath -BundlePath $bundlePath
                 $captures.Add([pscustomobject][ordered]@{
                     ok = Test-Truthy $watch.ok
                     exitCode = Get-IntValue (Get-JsonValue $watch "exitCode")
@@ -424,8 +486,8 @@ try {
                     mode = [string](Get-JsonValue $state "mode")
                     signalProfile = $profile
                     coherentMaxSnrDb = $coherentSnr
-                    reportPath = $summaryPath
-                    jsonlPath = $jsonlPath
+                    reportPath = $serializedSummaryPath
+                    jsonlPath = $serializedJsonlPath
                     readyForBenchmarkTrace = Test-Truthy (Get-JsonValue $watchReport "readyForBenchmarkTrace")
                     trendStatus = [string](Get-JsonValue $watchReport "trendStatus")
                     weakInputSampleCount = Get-IntValue (Get-JsonValue $weak "weakInputSampleCount")
@@ -509,6 +571,15 @@ if ($pumpingRiskCount -gt 0) {
     $recommendations.Add("One or more manual-tune captures flagged AGC pumping risk; reject those windows for NR5 tuning promotion.") | Out-Null
 }
 
+$serializedOutputRoot = ConvertTo-BundleRelativeEvidencePath -Path $captureRoot -BundlePath $bundlePath
+$bundleRelativePaths = (-not [string]::IsNullOrWhiteSpace($bundlePath)) -and (Test-PortableEvidencePath $serializedOutputRoot)
+foreach ($capture in $captureArray) {
+    if (-not (Test-PortableEvidencePath ([string]$capture.reportPath)) -or -not (Test-PortableEvidencePath ([string]$capture.jsonlPath))) {
+        $bundleRelativePaths = $false
+        break
+    }
+}
+
 $report = [ordered]@{
     schemaVersion = 1
     tool = "watch-dsp-manual-tune-observer"
@@ -519,7 +590,9 @@ $report = [ordered]@{
     ok = ([string]::IsNullOrWhiteSpace($scanError))
     scanError = $scanError
     baseUrl = $base
-    outputRoot = $captureRoot
+    bundleDir = $bundlePath
+    bundleRelativePaths = $bundleRelativePaths
+    outputRoot = $serializedOutputRoot
     label = $Label
     scenarioId = $ScenarioId
     comparisonId = $ComparisonId
