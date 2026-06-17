@@ -99,7 +99,7 @@ export function FreqAxis({ receiver = 'A', stitched = false }: FreqAxisProps = {
   const markerRef = useRef<HTMLDivElement | null>(null);
   const rulerRef = useRef<HTMLDivElement | null>(null);
 
-  useRulerPanGesture(rulerRef, receiver === 'A' && !!width && hzPerPixel > 0);
+  useRulerPanGesture(rulerRef, receiver, !!width && hzPerPixel > 0);
 
   useEffect(() => {
     const vc = viewCenter.viewCenterFor(receiver);

@@ -17,7 +17,7 @@ describe('SMeter peak hold', () => {
     expect(next.holdUntilMs).toBe(100 + SMETER_PEAK_HOLD_MS);
   });
 
-  it('holds the peak for about one second after the live level drops', () => {
+  it('holds the peak for about two seconds after the live level drops', () => {
     let state = initialSMeterPeakHoldState(1, 0);
 
     state = stepSMeterPeakHold(state, 0, 100);

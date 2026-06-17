@@ -13,6 +13,7 @@ import {
   registerFrameConsumer,
   sanitizeDisplayBins,
   selectDisplaySlice,
+  subscribeFrameConsumerPresence,
   useDisplayStore,
 } from './display-store';
 import type { DecodedFrame } from '../realtime/frame';
@@ -77,6 +78,24 @@ describe('frame consumer registry', () => {
     expect(hasActiveFrameConsumers()).toBe(true);
     b();
     expect(hasActiveFrameConsumers()).toBe(false);
+  });
+
+  it('notifies listeners only when consumer presence changes', () => {
+    const events: Array<{ active: boolean; count: number }> = [];
+    const unsubscribe = subscribeFrameConsumerPresence((active, count) => {
+      events.push({ active, count });
+    });
+
+    const a = registerFrameConsumer();
+    const b = registerFrameConsumer();
+    a();
+    b();
+    unsubscribe();
+
+    expect(events).toEqual([
+      { active: true, count: 1 },
+      { active: false, count: 0 },
+    ]);
   });
 });
 

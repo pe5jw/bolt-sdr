@@ -43,7 +43,8 @@
 // License for details.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { MSG_TYPE_MIC_PCM, sendMicPcm } from './ws-client';
+import { _resetFrameConsumerCount, registerFrameConsumer } from '../state/display-store';
+import { MSG_TYPE_DISPLAY_STREAM_REQUEST, MSG_TYPE_MIC_PCM, sendMicPcm } from './ws-client';
 
 // sendMicPcm reads a module-scoped `activeWs` that's only set by startRealtime.
 // For tests we stub the WebSocket constructor so we can capture what was sent.
@@ -79,6 +80,7 @@ describe('sendMicPcm', () => {
   });
 
   afterEach(() => {
+    _resetFrameConsumerCount();
     globalThis.WebSocket = origWs;
     vi.restoreAllMocks();
   });
@@ -96,6 +98,7 @@ describe('sendMicPcm', () => {
       const ws = MockWebSocket.instances[0];
       expect(ws).toBeDefined();
       if (ws?.onopen) ws.onopen({} as unknown);
+      ws!.sent.length = 0;
 
       const samples = new Float32Array(960);
       // Distinguishable pattern so we can verify LE ordering in the wire buffer.
@@ -123,6 +126,7 @@ describe('sendMicPcm', () => {
     try {
       const ws = MockWebSocket.instances[0];
       if (ws?.onopen) ws.onopen({} as unknown);
+      ws!.sent.length = 0;
 
       const samples = new Float32Array(960);
       samples[0] = Number.NaN;
@@ -156,8 +160,59 @@ describe('sendMicPcm', () => {
     try {
       const ws = MockWebSocket.instances[0];
       if (ws?.onopen) ws.onopen({} as unknown);
+      ws!.sent.length = 0;
       sendMicPcm(new Float32Array(128));
       expect(ws?.sent.length).toBe(0);
+    } finally {
+      stop();
+    }
+  });
+
+  it('requests the display stream when a frame consumer is already mounted', async () => {
+    const { startRealtime } = await import('./ws-client');
+    const release = registerFrameConsumer();
+    const stop = startRealtime('/ws');
+    try {
+      const ws = MockWebSocket.instances[0];
+      expect(ws).toBeDefined();
+      if (ws?.onopen) ws.onopen({} as unknown);
+
+      expect(ws?.sent.length).toBe(1);
+      const sentBuf = ws!.sent[0];
+      if (!(sentBuf instanceof ArrayBuffer)) throw new Error('expected ArrayBuffer');
+      const view = new DataView(sentBuf);
+      expect(view.getUint8(0)).toBe(MSG_TYPE_DISPLAY_STREAM_REQUEST);
+      expect(view.getUint8(1)).toBe(1);
+    } finally {
+      stop();
+      release();
+    }
+  });
+
+  it('updates the display stream request as frame consumers mount and unmount', async () => {
+    const { startRealtime } = await import('./ws-client');
+    const stop = startRealtime('/ws');
+    try {
+      const ws = MockWebSocket.instances[0];
+      expect(ws).toBeDefined();
+      if (ws?.onopen) ws.onopen({} as unknown);
+      ws!.sent.length = 0;
+
+      const release = registerFrameConsumer();
+      expect(ws?.sent.length).toBe(1);
+      let sentBuf = ws!.sent[0];
+      if (!(sentBuf instanceof ArrayBuffer)) throw new Error('expected ArrayBuffer');
+      let view = new DataView(sentBuf);
+      expect(view.getUint8(0)).toBe(MSG_TYPE_DISPLAY_STREAM_REQUEST);
+      expect(view.getUint8(1)).toBe(1);
+
+      release();
+      expect(ws?.sent.length).toBe(2);
+      sentBuf = ws!.sent[1];
+      if (!(sentBuf instanceof ArrayBuffer)) throw new Error('expected ArrayBuffer');
+      view = new DataView(sentBuf);
+      expect(view.getUint8(0)).toBe(MSG_TYPE_DISPLAY_STREAM_REQUEST);
+      expect(view.getUint8(1)).toBe(0);
     } finally {
       stop();
     }

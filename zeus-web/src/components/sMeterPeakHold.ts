@@ -4,7 +4,7 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 
-export const SMETER_PEAK_HOLD_MS = 1000;
+export const SMETER_PEAK_HOLD_MS = 2000;
 export const SMETER_PEAK_DECAY_MS = 400;
 export const SMETER_PEAK_EPSILON = 0.0005;
 

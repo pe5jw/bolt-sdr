@@ -96,8 +96,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // to the PureSignal / diversity feedback path. User-visible receivers
     // start at DDC2. pihpsdr's `new_protocol_receive_specific` and
     // `new_protocol_high_priority` both do `ddc = 2 + i` for these boards;
-    // we follow the same convention. Radio then sends DDC2 IQ from port
-    // 1035 + 2 = 1037.
+    // we follow the same convention. Firmware differs on whether the RX IQ
+    // UDP source port is indexed by logical receiver stream or DDC slot; the
+    // demux helper below accepts both forms for RX2.
     private const int G2RxDdc = 2;
 
     // Hermes-class radios (Brick2 is the live consumer) use a single ADC
@@ -518,6 +519,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// only active while PS is armed, so it does not collide with RX2's DDC3.
     /// </summary>
     public static int Rx2Ddc(HpsdrBoardKind board) => RxBaseDdc(board) + 1;
+
+    internal static int ReceiverIndexForRxStream(
+        int streamIndex,
+        HpsdrBoardKind board,
+        bool rx2Enabled)
+    {
+        if (!rx2Enabled) return 0;
+        if (streamIndex == 1) return 1;
+        return streamIndex == Rx2Ddc(board) ? 1 : 0;
+    }
 
     /// <summary>
     /// Enable or disable the second receiver's DDC. Toggling re-sends the RX
@@ -1793,6 +1804,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         var sock = _sock!;
         sock.ReceiveTimeout = 500;
 
+        // Wire-truth diagnostic (RX2 bring-up): count IQ packets per source
+        // UDP port (1035..1041 → index 0..6) and emit a 1 Hz summary. When RX2
+        // is enabled this shows definitively which DDC ports the radio is
+        // actually streaming, settling the "DDC-slot vs logical-stream-index"
+        // ambiguity without guessing. Single-threaded loop, so plain locals.
+        var portPkts = new long[7];
+        long lastPortLogMs = Environment.TickCount64;
+
         try
         {
             while (!ct.IsCancellationRequested)
@@ -1822,6 +1841,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 }
 
                 var srcPort = ((IPEndPoint)from).Port;
+                if (srcPort >= 1035 && srcPort <= 1041)
+                {
+                    portPkts[srcPort - 1035]++;
+                    long nowMs = Environment.TickCount64;
+                    if (nowMs - lastPortLogMs >= 1000)
+                    {
+                        _log.LogInformation(
+                            "p2.rx.ports rx2={Rx2} rx2ddc={Rx2Ddc} p1035={P0} p1036={P1} p1037={P2} p1038={P3} p1039={P4} p1040={P5} p1041={P6}",
+                            Volatile.Read(ref _rx2Enabled) != 0, Rx2Ddc(_boardKind),
+                            portPkts[0], portPkts[1], portPkts[2], portPkts[3],
+                            portPkts[4], portPkts[5], portPkts[6]);
+                        Array.Clear(portPkts);
+                        lastPortLogMs = nowMs;
+                    }
+                }
                 if (srcPort >= 1035 && srcPort <= 1041 && n == BufLen)
                 {
                     int ddcIndex = srcPort - 1035;
@@ -1889,10 +1923,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             samples[i * 2 + 1] = qRaw * scale;
         }
 
-        // Map the wire DDC index to a logical receiver so the DSP can route
-        // RX2 to its own channel without per-board DDC knowledge: the RX2 DDC
-        // (when enabled) is receiver 1, everything else is the primary RX (0).
-        int receiverIndex = (Volatile.Read(ref _rx2Enabled) != 0 && ddcIndex == Rx2Ddc(_boardKind)) ? 1 : 0;
+        // Map the incoming RX IQ stream to a logical receiver so the DSP can
+        // route RX2 to its own channel without per-board DDC knowledge. Some
+        // firmware uses source port 1035 + logical stream index (RX2 == 1);
+        // other builds expose the DDC slot number (Orion/G2 RX2 == DDC3).
+        int receiverIndex = ReceiverIndexForRxStream(
+            ddcIndex,
+            _boardKind,
+            Volatile.Read(ref _rx2Enabled) != 0);
 
         var frame = new IqFrame(
             InterleavedSamples: new ReadOnlyMemory<double>(samples, 0, samplesPerPacket * 2),

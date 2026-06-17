@@ -31,6 +31,29 @@ public class Rx2DdcTests
     }
 
     [Fact]
+    public void ReceiverIndexForRxStream_Rx2Disabled_LeavesAllStreamsOnRx1()
+    {
+        Assert.Equal(0, Protocol2Client.ReceiverIndexForRxStream(1, HpsdrBoardKind.OrionMkII, rx2Enabled: false));
+        Assert.Equal(0, Protocol2Client.ReceiverIndexForRxStream(3, HpsdrBoardKind.OrionMkII, rx2Enabled: false));
+    }
+
+    [Fact]
+    public void ReceiverIndexForRxStream_Orion_AcceptsLogicalSecondStreamAndDdcSlot()
+    {
+        Assert.Equal(0, Protocol2Client.ReceiverIndexForRxStream(0, HpsdrBoardKind.OrionMkII, rx2Enabled: true));
+        Assert.Equal(0, Protocol2Client.ReceiverIndexForRxStream(2, HpsdrBoardKind.OrionMkII, rx2Enabled: true));
+        Assert.Equal(1, Protocol2Client.ReceiverIndexForRxStream(1, HpsdrBoardKind.OrionMkII, rx2Enabled: true));
+        Assert.Equal(1, Protocol2Client.ReceiverIndexForRxStream(3, HpsdrBoardKind.OrionMkII, rx2Enabled: true));
+    }
+
+    [Fact]
+    public void ReceiverIndexForRxStream_Hermes_Rx2IsSecondStream()
+    {
+        Assert.Equal(0, Protocol2Client.ReceiverIndexForRxStream(0, HpsdrBoardKind.Hermes, rx2Enabled: true));
+        Assert.Equal(1, Protocol2Client.ReceiverIndexForRxStream(1, HpsdrBoardKind.Hermes, rx2Enabled: true));
+    }
+
+    [Fact]
     public void Rx2AdcSource_DualAdcBoards_UseAdc1()
     {
         Assert.Equal((byte)0x01, Protocol2Client.Rx2AdcSource(2, HpsdrBoardKind.OrionMkII));

@@ -873,6 +873,8 @@ static void spnr_calc_gain(SPNR a) {
 
 static void spnr_apply_output_agc(SPNR a, double* out, int n) {
   double e = 0.0;
+  double prior_weak_signal_memory = a->agc_weak_signal_memory;
+  double prior_recent_speech_hold = a->agc_recent_speech_hold;
 
   for (int i = 0; i < n; i++) {
     double v = out[2 * i + 0];
@@ -976,9 +978,74 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
         0.115 + 0.285 * adjacent_suppressed_relief);
     }
   }
+  double weak_fragment_continuity_relief = weak_input_drive
+    * max(
+      spnr_clip((prior_weak_signal_memory - 0.018) / 0.165, 0.0, 1.0),
+      0.62 * spnr_clip((prior_recent_speech_hold - 0.035) / 0.240, 0.0, 1.0))
+    * max(
+      spnr_clip((a->diag_mask_smoothing - 0.315) / 0.135, 0.0, 1.0),
+      spnr_clip((a->diag_signal_probability - 0.105) / 0.095, 0.0, 1.0))
+    * spnr_clip((gate_confidence - 0.245) / 0.105, 0.0, 1.0);
+  weak_fragment_continuity_relief *= 1.0 - 0.76 * spnr_clip(
+    (low_evidence_noise_drive - 0.68) / 0.24,
+    0.0, 1.0);
+  if (weak_fragment_continuity_relief > 0.0) {
+    low_evidence_noise_drive *= 1.0 - 0.34 * weak_fragment_continuity_relief;
+    weak_recovery_drive = max(
+      weak_recovery_drive,
+      0.095 + 0.335 * weak_fragment_continuity_relief);
+    gate_inst = max(
+      gate_inst,
+      0.145 + 0.285 * weak_fragment_continuity_relief);
+  }
+  double weak_tail_continuity_relief = weak_input_drive
+    * max(
+      spnr_clip((prior_weak_signal_memory - 0.070) / 0.400, 0.0, 1.0),
+      0.78 * spnr_clip((prior_recent_speech_hold - 0.045) / 0.300, 0.0, 1.0))
+    * max(
+      spnr_clip((a->diag_mask_smoothing - 0.270) / 0.175, 0.0, 1.0),
+      max(
+        0.70 * spnr_clip((a->diag_signal_probability - 0.060) / 0.145, 0.0, 1.0),
+        0.58 * spnr_clip((gate_confidence - 0.190) / 0.150, 0.0, 1.0)))
+    * spnr_clip((gate_confidence - 0.175) / 0.165, 0.0, 1.0);
+  double weak_tail_memory_bridge = weak_input_drive
+    * max(
+      spnr_clip((prior_weak_signal_memory - 0.030) / 0.340, 0.0, 1.0),
+      0.72 * spnr_clip((prior_recent_speech_hold - 0.025) / 0.300, 0.0, 1.0))
+    * max(
+      spnr_clip((a->diag_mask_smoothing - 0.245) / 0.200, 0.0, 1.0),
+      max(
+        0.78 * spnr_clip((a->diag_signal_probability - 0.090) / 0.135, 0.0, 1.0),
+        0.52 * spnr_clip((gate_confidence - 0.225) / 0.150, 0.0, 1.0)))
+    * spnr_clip((gate_confidence - 0.220) / 0.150, 0.0, 1.0);
+  weak_tail_memory_bridge *= 1.0 - 0.70 * spnr_clip(
+    (low_evidence_noise_drive - 0.82) / 0.18,
+    0.0, 1.0);
+  weak_tail_continuity_relief = max(
+    weak_tail_continuity_relief,
+    min(weak_tail_memory_bridge, 0.72));
+  weak_tail_continuity_relief *= 1.0 - 0.66 * spnr_clip(
+    (low_evidence_noise_drive - 0.78) / 0.22,
+    0.0, 1.0);
+  if (weak_tail_continuity_relief > 0.0) {
+    low_evidence_noise_drive *= 1.0 - 0.32 * weak_tail_continuity_relief;
+    weak_recovery_drive = max(
+      weak_recovery_drive,
+      0.075 + 0.310 * weak_tail_continuity_relief);
+    gate_inst = max(
+      gate_inst,
+      0.145 + 0.285 * weak_tail_continuity_relief);
+  }
   if (low_evidence_noise_drive > 0.0) {
     double low_evidence_hold = 1.0 - 0.70 * low_evidence_noise_drive;
-    gate_inst *= 1.0 - 0.45 * low_evidence_noise_drive;
+    low_evidence_hold = max(
+      low_evidence_hold,
+      1.0 - (0.70
+        - 0.18 * weak_fragment_continuity_relief
+        - 0.28 * weak_tail_continuity_relief) * low_evidence_noise_drive);
+    gate_inst *= 1.0 - (0.45
+      - 0.10 * weak_fragment_continuity_relief
+      - 0.16 * weak_tail_continuity_relief) * low_evidence_noise_drive;
     weak_recovery_drive *= low_evidence_hold;
   }
   double learned_weak_speech_inst = weak_input_drive
@@ -992,14 +1059,31 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
   learned_weak_speech_inst *= 1.0 - 0.86 * spnr_clip(
     (low_evidence_noise_drive - 0.18) / 0.42,
     0.0, 1.0);
+  if (weak_tail_continuity_relief > 0.0) {
+    learned_weak_speech_inst = max(
+      learned_weak_speech_inst,
+      0.040 + 0.210 * weak_tail_continuity_relief);
+  }
   double learned_weak_alpha = learned_weak_speech_inst > a->agc_weak_signal_memory
     ? spnr_time_alpha((double)n, a->rate, 0.055)
-    : spnr_time_alpha((double)n, a->rate, 0.780 + 0.640 * low_evidence_noise_drive);
+    : spnr_time_alpha((double)n, a->rate,
+      0.780 + 0.640 * low_evidence_noise_drive
+        + 0.420 * weak_fragment_continuity_relief
+        + 0.520 * weak_tail_continuity_relief);
   a->agc_weak_signal_memory = learned_weak_alpha * a->agc_weak_signal_memory
     + (1.0 - learned_weak_alpha) * learned_weak_speech_inst;
-  if (low_evidence_noise_drive > 0.48) {
-    a->agc_weak_signal_memory *= 1.0 - 0.62 * spnr_clip(
-      (low_evidence_noise_drive - 0.48) / 0.34,
+  double weak_memory_noise_cut = spnr_clip(
+    (low_evidence_noise_drive
+        - (0.48 + 0.13 * weak_fragment_continuity_relief
+          + 0.16 * weak_tail_continuity_relief))
+      / (0.34 + 0.10 * weak_fragment_continuity_relief
+        + 0.12 * weak_tail_continuity_relief),
+    0.0, 1.0);
+  if (weak_memory_noise_cut > 0.0) {
+    a->agc_weak_signal_memory *= 1.0 - (0.62
+        - 0.20 * weak_fragment_continuity_relief
+        - 0.18 * weak_tail_continuity_relief) * spnr_clip(
+      weak_memory_noise_cut,
       0.0, 1.0);
   }
   if (a->agc_weak_signal_memory > 0.006) {
@@ -1037,7 +1121,9 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
   double desired = 1.0;
   double gate_drive = spnr_clip((a->agc_gate - 0.08) / 0.44, 0.0, 1.0);
   double level_inst = pow(max(gate_drive, 0.85 * weak_recovery_drive), 0.70);
-  level_inst *= 1.0 - 0.58 * low_evidence_noise_drive;
+  level_inst *= 1.0 - (0.58
+    - 0.12 * weak_fragment_continuity_relief
+    - 0.20 * weak_tail_continuity_relief) * low_evidence_noise_drive;
   double level_release_tau = low_evidence_noise_drive > 0.0
     ? 0.420 + 1.200 * (1.0 - low_evidence_noise_drive)
     : 3.200;
@@ -1098,12 +1184,25 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
   a->agc_recovery_hold = recovery_alpha * a->agc_recovery_hold
     + (1.0 - recovery_alpha) * recovery_inst;
   if (low_evidence_noise_drive > 0.0) {
-    a->agc_recovery_hold *= 1.0 - 0.40 * low_evidence_noise_drive;
+    a->agc_recovery_hold *= 1.0 - 0.40 * low_evidence_noise_drive
+      * (1.0
+        - 0.42 * weak_fragment_continuity_relief
+        - 0.32 * weak_tail_continuity_relief);
   }
   double makeup_drive = max(
     weak_recovery_drive * spnr_clip((level_drive - 0.18) / 0.62, 0.0, 1.0),
     a->agc_recovery_hold * (0.72 + 0.28 * level_drive));
-  makeup_drive *= 1.0 - 0.70 * low_evidence_noise_drive;
+  makeup_drive = max(
+    makeup_drive,
+    0.16 * weak_fragment_continuity_relief
+      * spnr_clip((a->target_rms * 0.34 - out_rms) / (a->target_rms * 0.30), 0.0, 1.0));
+  makeup_drive = max(
+    makeup_drive,
+    0.165 * weak_tail_continuity_relief
+      * spnr_clip((a->target_rms * 0.30 - out_rms) / (a->target_rms * 0.26), 0.0, 1.0));
+  makeup_drive *= 1.0 - (0.70
+    - 0.16 * weak_fragment_continuity_relief
+    - 0.24 * weak_tail_continuity_relief) * low_evidence_noise_drive;
   a->diag_recovery_drive = spnr_clip(max(weak_recovery_drive, a->agc_recovery_hold), 0.0, 1.0);
 
   double recent_speech_inst = weak_input_drive
@@ -1117,15 +1216,22 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
   recent_speech_inst *= 1.0 - 0.78 * spnr_clip(
     (low_evidence_noise_drive - 0.28) / 0.48,
     0.0, 1.0);
+  if (weak_tail_continuity_relief > 0.0) {
+    recent_speech_inst = max(
+      recent_speech_inst,
+      0.018 + 0.145 * weak_tail_continuity_relief);
+  }
   double recent_speech_alpha = recent_speech_inst > a->agc_recent_speech_hold
     ? spnr_time_alpha((double)n, a->rate, 0.060)
     : spnr_time_alpha((double)n, a->rate,
-      0.620 + 0.540 * (1.0 - low_evidence_noise_drive));
+      0.620 + 0.540 * (1.0 - low_evidence_noise_drive)
+        + 0.500 * weak_tail_continuity_relief);
   a->agc_recent_speech_hold = recent_speech_alpha * a->agc_recent_speech_hold
     + (1.0 - recent_speech_alpha) * recent_speech_inst;
-  if (low_evidence_noise_drive > 0.68) {
+  if (low_evidence_noise_drive > 0.68 + 0.10 * weak_tail_continuity_relief) {
     a->agc_recent_speech_hold *= 1.0 - 0.62 * spnr_clip(
-      (low_evidence_noise_drive - 0.68) / 0.26,
+      (low_evidence_noise_drive - 0.68 - 0.10 * weak_tail_continuity_relief)
+        / (0.26 + 0.10 * weak_tail_continuity_relief),
       0.0, 1.0);
   }
 
@@ -1139,7 +1245,11 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
   double makeup_release_drive = max(
     1.0 - weak_input_drive,
     spnr_clip((out_rms - a->target_rms * 0.34) / (a->target_rms * 0.44), 0.0, 1.0));
-  makeup_release_drive = max(makeup_release_drive, low_evidence_noise_drive);
+  makeup_release_drive = max(
+    makeup_release_drive,
+    low_evidence_noise_drive * (1.0
+      - 0.24 * weak_fragment_continuity_relief
+      - 0.46 * weak_tail_continuity_relief));
   makeup_release_drive = max(
     makeup_release_drive,
     spnr_clip((a->diag_input_rms - a->target_rms * 0.78) / (a->target_rms * 0.42), 0.0, 1.0));
@@ -1302,7 +1412,16 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
   if (a->agc_run && low_evidence_noise_drive > 0.10 && out_rms > 1.0e-9) {
     double low_evidence_ceiling_rms = a->target_rms *
       (0.00035 + 0.0030 * (1.0 - low_evidence_noise_drive));
+    if (weak_tail_continuity_relief > 0.0) {
+      double tail_ceiling_rms = a->target_rms
+        * (0.0060 + 0.0950 * weak_tail_continuity_relief);
+      tail_ceiling_rms = min(tail_ceiling_rms, a->target_rms * 0.082);
+      low_evidence_ceiling_rms = max(low_evidence_ceiling_rms, tail_ceiling_rms);
+    }
     double low_evidence_mix = spnr_clip((low_evidence_noise_drive - 0.04) / 0.10, 0.0, 1.0);
+    low_evidence_mix *= 1.0
+      - 0.18 * weak_fragment_continuity_relief
+      - 0.56 * weak_tail_continuity_relief;
     if (out_rms > low_evidence_ceiling_rms && low_evidence_mix > 0.0) {
       double trim = low_evidence_ceiling_rms / out_rms;
       double low_evidence_gain = 1.0 + low_evidence_mix * (trim - 1.0);

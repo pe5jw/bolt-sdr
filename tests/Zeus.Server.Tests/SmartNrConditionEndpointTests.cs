@@ -246,6 +246,7 @@ public sealed class SmartNrConditionEndpointTests
             .Select(item => item.GetProperty("id").GetString())
             .ToArray();
         Assert.Contains("rnnoise", candidates);
+        Assert.Contains("rmnoise", candidates);
         Assert.Contains("deepfilternet", candidates);
         Assert.Contains("speexdsp", candidates);
         Assert.Contains("webrtc-apm", candidates);
@@ -429,9 +430,9 @@ public sealed class SmartNrConditionEndpointTests
         using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
         var candidates = body.RootElement.EnumerateArray().ToArray();
 
-        Assert.Equal(4, candidates.Length);
+        Assert.Equal(5, candidates.Length);
         var ids = candidates.Select(item => item.GetProperty("id").GetString()).ToArray();
-        Assert.Equal(new[] { "rnnoise", "deepfilternet", "speexdsp", "webrtc-apm" }, ids);
+        Assert.Equal(new[] { "rnnoise", "rmnoise", "deepfilternet", "speexdsp", "webrtc-apm" }, ids);
         Assert.All(candidates, item =>
         {
             Assert.Equal("off", item.GetProperty("defaultState").GetString());
@@ -469,6 +470,38 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Contains(
             webrtc.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
             control => control == "webrtc-agc-disabled");
+
+        var rnnoise = Assert.Single(candidates, item => item.GetProperty("id").GetString() == "rnnoise");
+        Assert.Contains("NR5-AI Assist", rnnoise.GetProperty("integrationPoint").GetString());
+        Assert.Contains(
+            rnnoise.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
+            control => control == "official-xiph-runtime-only");
+        Assert.Contains(
+            rnnoise.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
+            control => control == "le9endary-training-reference-only");
+        Assert.Contains(
+            rnnoise.GetProperty("requiredBenchmarks").EnumerateArray().Select(benchmark => benchmark.GetString()),
+            benchmark => benchmark == "weak-ssb-volume-parity");
+        Assert.Contains("le9endary/RNNoise has no repo license", rnnoise.GetProperty("license").GetString());
+        Assert.Contains(
+            rnnoise.GetProperty("referenceUrls").EnumerateArray().Select(url => url.GetString()),
+            url => url == "https://github.com/le9endary/RNNoise");
+
+        var rmnoise = Assert.Single(candidates, item => item.GetProperty("id").GetString() == "rmnoise");
+        Assert.Contains("NR5-AI Assist", rmnoise.GetProperty("integrationPoint").GetString());
+        Assert.Contains(
+            rmnoise.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
+            control => control == "recording-consent-gate");
+        Assert.Contains(
+            rmnoise.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
+            control => control == "service-availability-fallback");
+        Assert.Contains(
+            rmnoise.GetProperty("requiredBenchmarks").EnumerateArray().Select(benchmark => benchmark.GetString()),
+            benchmark => benchmark == "service-unavailable-bypass");
+        Assert.Contains("service terms", rmnoise.GetProperty("license").GetString());
+        Assert.Contains(
+            rmnoise.GetProperty("referenceUrls").EnumerateArray().Select(url => url.GetString()),
+            url => url == "https://ournetplace.com/rm-noise/");
     }
 
     [Fact]

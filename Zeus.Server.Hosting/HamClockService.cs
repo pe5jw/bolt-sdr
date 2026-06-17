@@ -102,11 +102,10 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
     private Process? _proc;
     private bool _busy; // an install or start is in flight
 
-    // Resolved Node runtime. _nodeDir = a directory to prepend to PATH so
-    // node/npm resolve to a private copy we downloaded; null = use whatever
-    // 'node' is on the system PATH. Set by EnsureNodeAsync. _nodeInfo is the
-    // cached "(available, version)" for Snapshot so status polls don't spawn
-    // `node --version` on every request.
+    // Resolved Node runtime. _nodeDir = the private Node directory we downloaded;
+    // null = use whatever 'node' is on the system PATH. Set by EnsureNodeAsync.
+    // _nodeInfo is the cached "(available, version)" for Snapshot so status
+    // polls don't spawn `node --version` on every request.
     private string? _nodeDir;
     private bool _nodeBundled;
     private readonly object _nodeGate = new();
@@ -662,6 +661,11 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
     /// </summary>
     private ProcessStartInfo MakePsi(string tool, string args, string cwd)
     {
+        return CreateToolProcessStartInfo(tool, args, cwd, _nodeDir);
+    }
+
+    internal static ProcessStartInfo CreateToolProcessStartInfo(string tool, string args, string cwd, string? nodeDir)
+    {
         var psi = new ProcessStartInfo
         {
             WorkingDirectory = cwd,
@@ -670,25 +674,52 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        var bundledTool = nodeDir is null ? null : ResolveBundledToolPath(tool, nodeDir);
         if (OperatingSystem.IsWindows() && (tool is "npm" or "npx"))
         {
             psi.FileName = "cmd.exe";
-            psi.Arguments = $"/c {tool} {args}";
+            var command = bundledTool ?? tool;
+            psi.Arguments = args.Length == 0
+                ? $"/d /s /c \"\"{command}\"\""
+                : $"/d /s /c \"\"{command}\" {args}\"";
         }
         else
         {
-            psi.FileName = tool;
+            psi.FileName = bundledTool ?? tool;
             psi.Arguments = args;
         }
         // When using a private Node, prepend its bin dir to the child's PATH so
         // `node`, `npm`, and `npm.cmd` resolve to it (npm lives beside node in
         // the portable archive, not on the system PATH).
-        if (_nodeDir is not null)
-        {
-            var existing = psi.Environment.TryGetValue("PATH", out var p) ? p : Environment.GetEnvironmentVariable("PATH");
-            psi.Environment["PATH"] = _nodeDir + Path.PathSeparator + (existing ?? string.Empty);
-        }
+        if (nodeDir is not null)
+            PrependPath(psi, nodeDir);
         return psi;
+    }
+
+    private static string? ResolveBundledToolPath(string tool, string nodeDir)
+    {
+        var fileName = OperatingSystem.IsWindows()
+            ? tool switch
+            {
+                "node" => "node.exe",
+                "npm" => "npm.cmd",
+                "npx" => "npx.cmd",
+                _ => tool,
+            }
+            : tool;
+        var candidate = Path.Combine(nodeDir, fileName);
+        return File.Exists(candidate) ? candidate : null;
+    }
+
+    private static void PrependPath(ProcessStartInfo psi, string directory)
+    {
+        var pathKey = psi.Environment.Keys
+            .FirstOrDefault(k => string.Equals(k, "PATH", StringComparison.OrdinalIgnoreCase))
+            ?? "PATH";
+        var existing = psi.Environment.TryGetValue(pathKey, out var path)
+            ? path
+            : Environment.GetEnvironmentVariable("PATH");
+        psi.Environment[pathKey] = directory + Path.PathSeparator + (existing ?? string.Empty);
     }
 
     /// <summary>Run a tool to completion, streaming its output into the log. Returns the exit code (or -1 on spawn failure).</summary>

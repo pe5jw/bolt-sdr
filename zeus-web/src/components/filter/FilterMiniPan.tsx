@@ -57,6 +57,7 @@ import type { RxMode } from '../../api/client';
 const DEFAULT_SPAN_HZ = 12_000;       // initial visible window around VFO
 const MIN_SPAN_HZ = 3_000;            // Ctrl+wheel zoom-in floor
 const MAX_SPAN_HZ = 48_000;           // Ctrl+wheel zoom-out ceiling
+const FILTER_VIEW_MARGIN_HZ = 800;    // keep tight zoom from clipping SSB passbands off-screen
 const TICK_STEP_HZ = 2_000;           // base axis-label spacing (scaled by span)
 const DB_FLOOR = -130;
 const DB_CEIL = -30;
@@ -173,6 +174,46 @@ function tickStepForSpan(spanHz: number): number {
   if (spanHz <= 14_000) return TICK_STEP_HZ;
   if (spanHz <= 28_000) return 5_000;
   return 10_000;
+}
+
+export function frameBinRangeForHz(
+  startHz: number,
+  endHz: number,
+  frameStartHz: number,
+  binsPerHz: number,
+  binsLength: number,
+): [number, number] | null {
+  if (binsLength <= 0 || binsPerHz <= 0 || endHz <= startHz) return null;
+  const start = Math.max(0, Math.min(binsLength, Math.floor((startHz - frameStartHz) * binsPerHz)));
+  const end = Math.max(0, Math.min(binsLength, Math.ceil((endHz - frameStartHz) * binsPerHz)));
+  return end > start ? [start, end] : null;
+}
+
+export function sampleSpectrumAtHz(
+  bins: Float32Array,
+  absHz: number,
+  frameStartHz: number,
+  binsPerHz: number,
+): number | null {
+  if (bins.length === 0 || binsPerHz <= 0) return null;
+  const fb = (absHz - frameStartHz) * binsPerHz;
+  if (fb < 0 || fb > bins.length - 1) return null;
+  const i0 = Math.max(0, Math.min(bins.length - 1, Math.floor(fb)));
+  const i1 = Math.min(bins.length - 1, i0 + 1);
+  const frac = fb - i0;
+  return (bins[i0] ?? DB_FLOOR) * (1 - frac) + (bins[i1] ?? DB_FLOOR) * frac;
+}
+
+function passbandCenterOffsetHz(lowHz: number, highHz: number): number {
+  return (lowHz + highHz) / 2;
+}
+
+function minSpanForFilter(lowHz: number, highHz: number): number {
+  return Math.max(MIN_SPAN_HZ, Math.abs(highHz - lowHz) + FILTER_VIEW_MARGIN_HZ);
+}
+
+function filterWindowLoOffsetHz(lowHz: number, highHz: number, spanHz: number): number {
+  return passbandCenterOffsetHz(lowHz, highHz) - spanHz / 2;
 }
 
 // Resolve a CSS colour token (hex or rgb()/rgba()) to [r,g,b] so we can build
@@ -359,6 +400,7 @@ export function FilterMiniPan() {
   const [, setSpanTick] = useState(0);
   const redrawRef = useRef<(() => void) | null>(null);
   const hoverEdgeRef = useRef<DragMode | null>(null);
+  const eqHoverRef = useRef<number | null>(null);
 
   // Live filter edges + mode for the editable width pill. These re-render the
   // component (cheap) but the per-frame canvas path stays imperative.
@@ -376,6 +418,7 @@ export function FilterMiniPan() {
     activeSlot: string;
     startLoHz: number;
     startHiHz: number;
+    windowLoOffsetHz: number;
     startX: number;
     pendingLo: number;
     pendingHi: number;
@@ -402,6 +445,9 @@ export function FilterMiniPan() {
 
     let rafHandle = 0;
     let lastSeq: number | null = null;
+    let heldPanDb: Float32Array | null = null;
+    let heldCenterHz = 0;
+    let heldHzPerPixel = 0;
     let traceY: Float32Array | null = null; // reused per-column trace Y buffer
     let traceSm: Float32Array | null = null; // reused smoothed-trace buffer
     let peakHoldY: Float32Array | null = null; // per-column peak-hold envelope (Y)
@@ -412,6 +458,7 @@ export function FilterMiniPan() {
     let eqMeterLastAt = 0;
     let autoLoDb = NaN; // EMA of the visible-window floor (dynamic vertical scale)
     let autoHiDb = NaN; // EMA of the visible-window peak
+    let autoRangeKey = ''; // reset vertical scale when the mini-pan frequency window changes
     let avgLin: Float32Array | null = null; // time-averaged linear power per bin
     let avgDb: Float32Array | null = null; // averaged spectrum in dB (for the edge walk)
     let avgKey = ''; // geometry key; reset the average when it changes
@@ -426,7 +473,11 @@ export function FilterMiniPan() {
       if (lastSeq !== null && d.lastSeq === lastSeq) return;
       lastSeq = d.lastSeq;
 
+      const minSpanHz = minSpanForFilter(c.filterLowHz, c.filterHighHz);
+      if (spanHzRef.current < minSpanHz) spanHzRef.current = minSpanHz;
       const spanHz = spanHzRef.current;
+      const winLoOffHz = filterWindowLoOffsetHz(c.filterLowHz, c.filterHighHz, spanHz);
+      const winHiOffHz = winLoOffHz + spanHz;
       const dpr = window.devicePixelRatio || 1;
       const cssW = canvas.clientWidth;
       const cssH = canvas.clientHeight;
@@ -435,6 +486,7 @@ export function FilterMiniPan() {
       const h = Math.floor(cssH * dpr);
       if (canvas.width !== w) canvas.width = w;
       if (canvas.height !== h) canvas.height = h;
+      const offsetToX = (offHz: number) => ((offHz - winLoOffHz) / spanHz) * w;
 
       ctx.clearRect(0, 0, w, h);
 
@@ -458,6 +510,7 @@ export function FilterMiniPan() {
       // Accent drives the active-filter passband (focus/state token, CLAUDE.md).
       const [ar, ag, ab] = parseRgb(cs.getPropertyValue('--accent') || '#4a9eff');
       const accent = (a: number) => `rgba(${ar}, ${ag}, ${ab}, ${a})`;
+      const eqBlue = (a: number) => `rgba(34, 204, 255, ${Math.max(0, Math.min(1, a))})`;
 
       // Snap/pop state. This panel registers an estimator consumer, so the floor
       // is maintained whenever the panel is open (not only when global Pop/Snap
@@ -503,10 +556,9 @@ export function FilterMiniPan() {
         ctx.lineTo(w, y);
         ctx.stroke();
       }
-      const halfGridTicks = Math.ceil(spanHz / tickStep / 2);
-      for (let i = -halfGridTicks; i <= halfGridTicks; i++) {
-        const offHz = i * tickStep;
-        const x = ((offHz + spanHz / 2) / spanHz) * w;
+      const firstGridTick = Math.ceil(winLoOffHz / tickStep) * tickStep;
+      for (let offHz = firstGridTick; offHz <= winHiOffHz + tickStep * 0.001; offHz += tickStep) {
+        const x = offsetToX(offHz);
         if (x < 0 || x > w) continue;
         ctx.strokeStyle = offHz === 0 ? ink1(0.16) : ink3(0.20);
         ctx.beginPath();
@@ -517,8 +569,15 @@ export function FilterMiniPan() {
       ctx.restore();
 
       const vfo = Number(c.vfoHz);
-      const panDb = d.panDb;
-      const binsPerHz = d.hzPerPixel > 0 ? 1 / d.hzPerPixel : 0;
+      if (d.panDb && d.hzPerPixel > 0) {
+        heldPanDb = d.panDb;
+        heldCenterHz = Number(d.centerHz);
+        heldHzPerPixel = d.hzPerPixel;
+      }
+      const panDb = d.panDb && d.hzPerPixel > 0 ? d.panDb : heldPanDb;
+      const frameCenterHz = d.panDb && d.hzPerPixel > 0 ? Number(d.centerHz) : heldCenterHz;
+      const frameHzPerPixel = d.panDb && d.hzPerPixel > 0 ? d.hzPerPixel : heldHzPerPixel;
+      const binsPerHz = frameHzPerPixel > 0 ? 1 / frameHzPerPixel : 0;
       const popOn = enh.popEnabled && floor !== null && panDb !== null && floor.length === panDb.length;
 
       // Time-averaged power spectrum (EMA in the LINEAR-power domain — the
@@ -527,7 +586,7 @@ export function FilterMiniPan() {
       // the signal's true transmitted bandwidth. The live trace stays
       // instantaneous; only the bandwidth read is averaged.
       if (panDb) {
-        const akey = `${d.centerHz}:${d.hzPerPixel}:${panDb.length}`;
+        const akey = `${frameCenterHz}:${frameHzPerPixel}:${panDb.length}`;
         if (avgLin === null || avgLin.length !== panDb.length) {
           avgLin = new Float32Array(panDb.length);
           avgDb = new Float32Array(panDb.length);
@@ -546,18 +605,31 @@ export function FilterMiniPan() {
       }
 
       // Window geometry shared by the trace, floor contour and markers.
-      const loHz = vfo - spanHz / 2;
+      const loHz = vfo + winLoOffHz;
       let binStart = 0;
       let binEnd = 0;
       let fullStartHz = 0;
       if (panDb && binsPerHz > 0) {
-        const displayCenter = Number(d.centerHz);
-        const fullSpanHz = panDb.length * d.hzPerPixel;
-        fullStartHz = displayCenter - fullSpanHz / 2;
+        const fullSpanHz = panDb.length * frameHzPerPixel;
+        fullStartHz = frameCenterHz - fullSpanHz / 2;
         binStart = Math.max(0, Math.floor((loHz - fullStartHz) * binsPerHz));
         binEnd = Math.min(panDb.length, Math.ceil((loHz + spanHz - fullStartHz) * binsPerHz));
       }
-      const bins = binEnd - binStart;
+      const bins = Math.max(0, binEnd - binStart);
+      const nextAutoRangeKey = `${Math.round(loHz)}:${Math.round(spanHz)}:${panDb?.length ?? 0}:${frameHzPerPixel}`;
+      if (nextAutoRangeKey !== autoRangeKey) {
+        autoRangeKey = nextAutoRangeKey;
+        autoLoDb = NaN;
+        autoHiDb = NaN;
+        peakHoldKey = '';
+      }
+      const frameBinRange = (startHz: number, endHz: number): [number, number] | null => {
+        if (!panDb) return null;
+        return frameBinRangeForHz(startHz, endHz, fullStartHz, binsPerHz, panDb.length);
+      };
+      const sampleArrayAtHz = (arr: Float32Array, absHz: number): number | null => {
+        return sampleSpectrumAtHz(arr, absHz, fullStartHz, binsPerHz);
+      };
 
       // Dynamic vertical auto-range (non-Pop): scan the visible window, track an
       // EMA-smoothed floor→peak, and map THAT to the plot height. The noise
@@ -595,8 +667,8 @@ export function FilterMiniPan() {
 
       const drawEqMeter = () => {
         if (!panDb || bins <= 0 || binsPerHz <= 0) return;
-        const rawMeterLeft = ((c.filterLowHz + spanHz / 2) / spanHz) * w;
-        const rawMeterRight = ((c.filterHighHz + spanHz / 2) / spanHz) * w;
+        const rawMeterLeft = offsetToX(c.filterLowHz);
+        const rawMeterRight = offsetToX(c.filterHighHz);
         const meterLeft = Math.max(0, Math.min(w, rawMeterLeft));
         const meterRight = Math.max(0, Math.min(w, rawMeterRight));
         const meterW = meterRight - meterLeft;
@@ -614,7 +686,7 @@ export function FilterMiniPan() {
           eqMeterKey = '';
           eqMeterLastAt = 0;
         }
-        const meterKey = `${d.centerHz}:${d.hzPerPixel}:${panDb.length}:${vfo}:${spanHz}:${w}:${c.filterLowHz}:${c.filterHighHz}:${meterBands}`;
+        const meterKey = `${frameCenterHz}:${frameHzPerPixel}:${panDb.length}:${vfo}:${spanHz}:${w}:${c.filterLowHz}:${c.filterHighHz}:${meterBands}`;
         const avg = eqMeterAvg;
         const peakOffAvg = eqMeterPeakOffAvg;
         if (meterKey !== eqMeterKey) {
@@ -635,16 +707,21 @@ export function FilterMiniPan() {
         ctx.fillStyle = 'rgba(4, 6, 10, 0.48)';
         ctx.fillRect(meterLeft, meterTop, meterW, usableH);
 
+        const hoveredBand = eqHoverRef.current !== null && eqHoverRef.current < meterBands
+          ? eqHoverRef.current
+          : null;
         for (let band = 0; band < meterBands; band++) {
+          const hovered = hoveredBand === band;
           const x0 = Math.floor(meterLeft + (band / meterBands) * meterW);
           const x1 = Math.max(x0 + 1, Math.floor(meterLeft + ((band + 1) / meterBands) * meterW));
           const bandLoHz = vfo + c.filterLowHz + (band / meterBands) * (c.filterHighHz - c.filterLowHz);
           const bandHiHz = vfo + c.filterLowHz + ((band + 1) / meterBands) * (c.filterHighHz - c.filterLowHz);
-          const b0 = Math.max(binStart, Math.min(binEnd - 1, Math.floor((bandLoHz - fullStartHz) * binsPerHz)));
-          const b1 = Math.max(b0 + 1, Math.min(binEnd, Math.ceil((bandHiHz - fullStartHz) * binsPerHz)));
+          const range = frameBinRange(bandLoHz, bandHiHz);
           let live = 0;
-          let peakBin = b0;
-          if (haveFloor) {
+          let peakOffHz = (bandLoHz + bandHiHz) / 2 - vfo;
+          if (range && haveFloor) {
+            const [b0, b1] = range;
+            let peakBin = b0;
             let peakSnr = 0;
             for (let i = b0; i < b1; i++) {
               const snr = (panDb[i] ?? DB_FLOOR) - (floor![i] ?? DB_FLOOR);
@@ -654,7 +731,10 @@ export function FilterMiniPan() {
               }
             }
             live = Math.max(0, Math.min(1, peakSnr / POP_RANGE_DB));
-          } else {
+            peakOffHz = fullStartHz + peakBin * frameHzPerPixel - vfo;
+          } else if (range) {
+            const [b0, b1] = range;
+            let peakBin = b0;
             let peakDb = -Infinity;
             for (let i = b0; i < b1; i++) {
               const v = panDb[i] ?? DB_FLOOR;
@@ -664,31 +744,54 @@ export function FilterMiniPan() {
               }
             }
             live = peakDb === -Infinity ? 0 : Math.max(0, Math.min(1, (peakDb - loDb) / dbSpan));
+            peakOffHz = fullStartHz + peakBin * frameHzPerPixel - vfo;
           }
           live = live ** 0.82;
           avg[band] = avg[band]! + avgAlpha * (live - avg[band]!);
-          const peakOffHz = fullStartHz + peakBin * d.hzPerPixel - vfo;
           peakOffAvg[band] = peakOffAvg[band]! + avgAlpha * (peakOffHz - peakOffAvg[band]!);
           const level = avg[band]!;
-          const barH = Math.max(1, Math.round(level * usableH));
+          const blockLift = hovered ? Math.round(10 * dpr) : 0;
+          const blockTop = hovered ? Math.max(plotTop + Math.round(4 * dpr), meterTop - blockLift) : meterTop;
+          const blockH = Math.max(1, meterBottom - blockTop);
+          const barH = Math.max(1, Math.round(Math.min(1, level * (hovered ? 1.34 : 1)) * blockH));
           const gap = Math.max(1, Math.round(1 * dpr));
           const bx = x0 + gap;
           const bw = Math.max(1, x1 - x0 - gap * 2);
-          const paint = accent;
-          ctx.fillStyle = paint(0.18 + 0.62 * level);
+          const paint = eqBlue;
+          if (hovered) {
+            ctx.save();
+            ctx.shadowColor = paint(0.76);
+            ctx.shadowBlur = Math.round(13 * dpr);
+            ctx.fillStyle = 'rgba(5, 10, 16, 0.92)';
+            ctx.strokeStyle = paint(0.95);
+            ctx.lineWidth = Math.max(1, 1 * dpr);
+            ctx.beginPath();
+            ctx.roundRect(
+              bx - Math.round(2 * dpr),
+              blockTop,
+              bw + Math.round(4 * dpr),
+              meterBottom - blockTop + Math.round(1 * dpr),
+              Math.round(2 * dpr),
+            );
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+          }
+          ctx.fillStyle = paint((hovered ? 0.52 : 0.26) + 0.58 * level);
           ctx.fillRect(bx, meterBottom - barH, bw, barH);
           if (level > 0.14) {
-            ctx.fillStyle = paint(0.38 + 0.50 * level);
-            ctx.fillRect(bx, meterBottom - barH, bw, Math.max(1, Math.round(1 * dpr)));
+            ctx.fillStyle = paint((hovered ? 0.82 : 0.50) + 0.32 * level);
+            ctx.fillRect(bx, meterBottom - barH, bw, Math.max(1, Math.round((hovered ? 2 : 1) * dpr)));
           }
           const label = formatEqPeakOffset(peakOffAvg[band]!);
-          ctx.font = `650 ${Math.max(6, Math.round(7 * dpr))}px "SFMono-Regular", ui-monospace, monospace`;
+          const labelFontPx = Math.max(6, Math.round((hovered ? 9.5 : 7) * dpr));
+          ctx.font = `${hovered ? 760 : 650} ${labelFontPx}px "SFMono-Regular", ui-monospace, monospace`;
           ctx.textBaseline = 'middle';
           ctx.textAlign = 'center';
-          const textY = meterTop + usableH * 0.46;
-          ctx.fillStyle = 'rgba(3, 5, 9, 0.58)';
-          ctx.fillRect(bx, meterTop + Math.round(1 * dpr), bw, Math.max(8, Math.round(9 * dpr)));
-          ctx.fillStyle = ink0(0.74 + 0.18 * level);
+          const textY = blockTop + blockH * (hovered ? 0.42 : 0.46);
+          ctx.fillStyle = hovered ? 'rgba(3, 5, 9, 0.76)' : 'rgba(3, 5, 9, 0.58)';
+          ctx.fillRect(bx, blockTop + Math.round(1 * dpr), bw, Math.max(8, Math.round((hovered ? 12.5 : 9) * dpr)));
+          ctx.fillStyle = hovered ? ink0(0.96) : ink0(0.74 + 0.18 * level);
           ctx.fillText(label, x0 + (x1 - x0) / 2, textY);
         }
       };
@@ -702,10 +805,21 @@ export function FilterMiniPan() {
           ctx.globalAlpha = 0.35;
           ctx.lineWidth = 1 * dpr;
           ctx.beginPath();
+          let floorStarted = false;
           for (let x = 0; x < w; x++) {
-            const b0 = binStart + Math.floor((x * bins) / w);
-            const y = dbToY(floor[Math.min(floor.length - 1, b0)] ?? DB_FLOOR);
-            if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            const absHz = loHz + ((x + 0.5) / w) * spanHz;
+            const floorDb = sampleArrayAtHz(floor, absHz);
+            if (floorDb === null) {
+              floorStarted = false;
+              continue;
+            }
+            const y = dbToY(floorDb);
+            if (!floorStarted) {
+              ctx.moveTo(x, y);
+              floorStarted = true;
+            } else {
+              ctx.lineTo(x, y);
+            }
           }
           ctx.stroke();
           ctx.globalAlpha = 1;
@@ -719,39 +833,45 @@ export function FilterMiniPan() {
         if (traceY === null || traceY.length !== w) traceY = new Float32Array(w);
         if (traceSm === null || traceSm.length !== w) traceSm = new Float32Array(w);
         const ty = traceY;
-        const lastBin = binEnd - 1;
         for (let x = 0; x < w; x++) {
-          const b0 = binStart + Math.floor((x * bins) / w);
-          const b1 = binStart + Math.floor(((x + 1) * bins) / w);
+          const colLoHz = loHz + (x / w) * spanHz;
+          const colHiHz = loHz + ((x + 1) / w) * spanHz;
+          const absHz = loHz + ((x + 0.5) / w) * spanHz;
+          const range = frameBinRange(colLoHz, colHiHz);
           // Column max preserves narrow carriers; a centre-sample interpolation
           // keeps the curve smooth (granular) when zoomed in past one bin/pixel.
-          const fb = binStart + ((x + 0.5) / w) * bins;
-          const i0 = Math.max(binStart, Math.min(lastBin, Math.floor(fb)));
-          const i1 = Math.min(lastBin, i0 + 1);
-          const frac = fb - i0;
+          const interpDb = sampleArrayAtHz(panDb, absHz);
           let y: number;
           if (popOn) {
             let mxSnr = -Infinity;
-            for (let i = b0; i < b1; i++) {
-              const snr = (panDb[i] ?? DB_FLOOR) - (floor![i] ?? DB_FLOOR);
-              if (snr > mxSnr) mxSnr = snr;
+            if (range) {
+              const [b0, b1] = range;
+              for (let i = b0; i < b1; i++) {
+                const snr = (panDb[i] ?? DB_FLOOR) - (floor![i] ?? DB_FLOOR);
+                if (snr > mxSnr) mxSnr = snr;
+              }
             }
-            const s0 = (panDb[i0] ?? DB_FLOOR) - (floor![i0] ?? DB_FLOOR);
-            const s1 = (panDb[i1] ?? DB_FLOOR) - (floor![i1] ?? DB_FLOOR);
-            const interp = s0 * (1 - frac) + s1 * frac;
-            const snr = mxSnr === -Infinity ? interp : (bins >= w ? 0.6 * mxSnr + 0.4 * interp : interp);
+            const interpFloor = floor ? sampleArrayAtHz(floor, absHz) : null;
+            const interpSnr = interpDb !== null && interpFloor !== null ? interpDb - interpFloor : 0;
+            const snr = mxSnr === -Infinity
+              ? interpSnr
+              : (range && range[1] - range[0] > 1 ? 0.6 * mxSnr + 0.4 * interpSnr : interpSnr);
             y = snrToY(Math.max(0, snr));
           } else {
             let peak = -Infinity;
-            for (let i = b0; i < b1; i++) {
-              const v = panDb[i] ?? DB_FLOOR;
-              if (v > peak) peak = v;
+            if (range) {
+              const [b0, b1] = range;
+              for (let i = b0; i < b1; i++) {
+                const v = panDb[i] ?? DB_FLOOR;
+                if (v > peak) peak = v;
+              }
             }
-            const interp = (panDb[i0] ?? DB_FLOOR) * (1 - frac) + (panDb[i1] ?? DB_FLOOR) * frac;
             // Zoomed out (many bins/pixel) keep peaks; zoomed in, follow the
             // smooth interpolation so the trace reads as a continuous curve.
-            const v = peak === -Infinity ? interp : (bins >= w ? 0.6 * peak + 0.4 * interp : interp);
-            y = dbToY(v);
+            const v = peak === -Infinity
+              ? interpDb
+              : (range && range[1] - range[0] > 1 ? 0.6 * peak + 0.4 * (interpDb ?? peak) : (interpDb ?? peak));
+            y = v === null ? plotBottom : dbToY(v);
           }
           ty[x] = y;
         }
@@ -785,7 +905,7 @@ export function FilterMiniPan() {
         // the frequency window changes (held peaks would otherwise smear).
         if (peakHoldY === null || peakHoldY.length !== w) peakHoldY = new Float32Array(w);
         const ph = peakHoldY;
-        const phKey = `${c.vfoHz}:${spanHz}:${w}`;
+        const phKey = `${c.vfoHz}:${spanHz}:${winLoOffHz}:${w}`;
         const decay = PEAKHOLD_DECAY_PX * dpr;
         if (phKey !== peakHoldKey) {
           peakHoldKey = phKey;
@@ -834,18 +954,21 @@ export function FilterMiniPan() {
       }
 
       // VFO center line — subtle, in the plot area only.
-      ctx.strokeStyle = COL_VFO_CENTER;
-      ctx.lineWidth = 1 * dpr;
-      ctx.beginPath();
-      ctx.moveTo(w / 2, plotTop);
-      ctx.lineTo(w / 2, plotTop + plotH);
-      ctx.stroke();
+      const vfoX = offsetToX(0);
+      if (vfoX >= 0 && vfoX <= w) {
+        ctx.strokeStyle = COL_VFO_CENTER;
+        ctx.lineWidth = 1 * dpr;
+        ctx.beginPath();
+        ctx.moveTo(Math.round(vfoX) + 0.5, plotTop);
+        ctx.lineTo(Math.round(vfoX) + 0.5, plotTop + plotH);
+        ctx.stroke();
+      }
 
       // Passband — accent-tinted filled rectangle between two glowing cut
       // walls, with a bright flat top and grab handles. (Departs from the older
       // neutral-silver "not a cyan box" treatment — red-light, see CLAUDE.md.)
-      const passLeftPx = ((c.filterLowHz + spanHz / 2) / spanHz) * w;
-      const passRightPx = ((c.filterHighHz + spanHz / 2) / spanHz) * w;
+      const passLeftPx = offsetToX(c.filterLowHz);
+      const passRightPx = offsetToX(c.filterHighHz);
       const onScreen = passRightPx > 0 && passLeftPx < w;
 
       // Signal-edge markers — for each detected carrier in the window, measure
@@ -856,10 +979,10 @@ export function FilterMiniPan() {
       // Widths are tracked/held over time so the labels read as instruments,
       // not instantaneous detector noise.
       if (floor !== null && panDb && binsPerHz > 0) {
-        const dCenter = Number(d.centerHz);
+        const dCenter = frameCenterHz;
         const baseY = plotBottom;
         const half = panDb.length / 2;
-        const nextBracketKey = `${d.centerHz}:${d.hzPerPixel}:${panDb.length}:${spanHz}`;
+        const nextBracketKey = `${frameCenterHz}:${frameHzPerPixel}:${panDb.length}:${spanHz}:${winLoOffHz}`;
         if (nextBracketKey !== bracketKey) {
           bracketKey = nextBracketKey;
           bracketTracks = [];
@@ -869,7 +992,7 @@ export function FilterMiniPan() {
         // Measure on the time-averaged spectrum once it exists (stable width);
         // fall back to the live frame for the very first frames.
         const measSpec = avgDb && avgDb.length === panDb.length ? avgDb : panDb;
-        const peaks = detectPeaks(panDb, dCenter, d.hzPerPixel)
+        const peaks = detectPeaks(panDb, dCenter, frameHzPerPixel)
           .filter((p) => p.snrDb >= BRACKET_MIN_SNR_DB)
           .slice(0, BRACKET_MAX); // detectPeaks returns strongest-first
         const drawnBands: Array<{ loPx: number; hiPx: number }> = [];
@@ -880,16 +1003,16 @@ export function FilterMiniPan() {
           // Energy extent on the AVERAGED spectrum (the confidence-aware, gap-
           // tolerant walk snap uses), then refine to the ITU 99%-power occupied
           // bandwidth — the signal's true transmitted width, not noisy skirts.
-          const ext = signalExtentHz(measSpec, dCenter, d.hzPerPixel, p.hz, EDGE_ANCHOR_HZ);
+          const ext = signalExtentHz(measSpec, dCenter, frameHzPerPixel, p.hz, EDGE_ANCHOR_HZ);
           if (!ext) continue;
           let loEdgeHz = ext.loHz;
           let hiEdgeHz = ext.hiHz;
           if (avgLin && avgLin.length === panDb.length) {
-            const eLo = Math.max(0, Math.round((ext.loHz - dCenter) / d.hzPerPixel + half));
-            const eHi = Math.min(panDb.length - 1, Math.round((ext.hiHz - dCenter) / d.hzPerPixel + half));
+            const eLo = Math.max(0, Math.round((ext.loHz - dCenter) / frameHzPerPixel + half));
+            const eHi = Math.min(panDb.length - 1, Math.round((ext.hiHz - dCenter) / frameHzPerPixel + half));
             const [obLo, obHi] = occupiedBandBins(avgLin, floor, eLo, eHi, OBW_FRACTION);
-            loEdgeHz = dCenter + (obLo - half) * d.hzPerPixel;
-            hiEdgeHz = dCenter + (obHi - half) * d.hzPerPixel;
+            loEdgeHz = dCenter + (obLo - half) * frameHzPerPixel;
+            hiEdgeHz = dCenter + (obHi - half) * frameHzPerPixel;
           }
           const track = smoothedBracketMeasurement(bracketTracks, now, ext.crestHz, loEdgeHz, hiEdgeHz, p.snrDb);
           loEdgeHz = track.loHz;
@@ -1032,6 +1155,42 @@ export function FilterMiniPan() {
           glow.addColorStop(1, accent(0));
           ctx.fillStyle = glow;
           ctx.fillRect(fillL, pbTop, fillR - fillL, pbBottom - pbTop);
+          ctx.restore();
+        }
+
+        // Focused in-band trace. The spectrum is drawn before the blue filter
+        // glass, so repaint the accepted slice on top; otherwise weak/narrow
+        // signals can look absent when the filter is zoomed in tightly.
+        if (traceSm && fillR > fillL + Math.round(2 * dpr)) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(fillL, pbTop, Math.max(1, fillR - fillL), pbBottom - pbTop);
+          ctx.clip();
+          const traceGrad = ctx.createLinearGradient(0, pbTop, 0, pbBottom);
+          traceGrad.addColorStop(0, signal(0.28));
+          traceGrad.addColorStop(1, signal(0.06));
+          ctx.fillStyle = traceGrad;
+          for (let x = Math.max(0, Math.floor(fillL)); x <= Math.min(w - 1, Math.ceil(fillR)); x++) {
+            const top = traceSm[x] ?? pbBottom;
+            if (top < pbBottom) ctx.fillRect(x, top, 1, pbBottom - top);
+          }
+          ctx.shadowColor = signal(0.72);
+          ctx.shadowBlur = Math.round(4 * dpr);
+          ctx.strokeStyle = signal(1);
+          ctx.lineWidth = Math.max(1.4, 1.4 * dpr);
+          ctx.beginPath();
+          let started = false;
+          for (let x = Math.max(0, Math.floor(fillL)); x <= Math.min(w - 1, Math.ceil(fillR)); x++) {
+            const y = traceSm[x];
+            if (y === undefined) continue;
+            if (!started) {
+              ctx.moveTo(x, y);
+              started = true;
+            } else {
+              ctx.lineTo(x, y);
+            }
+          }
+          if (started) ctx.stroke();
           ctx.restore();
         }
 
@@ -1196,20 +1355,19 @@ export function FilterMiniPan() {
 
       drawEqMeter();
 
-      // X-axis tick labels. One label every tickStep (scaled by span), centered
-      // on the VFO. VFO sits at the middle tick.
+      // X-axis tick labels. One label every tickStep (scaled by span) across
+      // the passband-centered mini window; the VFO tick is brighter when visible.
       ctx.fillStyle = colTickLabel;
       ctx.font = `${Math.round(9.5 * dpr)}px "SFMono-Regular", ui-monospace, monospace`;
       ctx.textBaseline = 'middle';
       const labelY = plotTop + plotH + Math.round(axisH / 2);
-      const nTicks = Math.floor(spanHz / tickStep) + 1; // inclusive both ends
       const tickOffsets: number[] = [];
-      // Center-out so VFO tick is guaranteed; symmetric ticks either side.
-      const halfTicks = Math.floor(nTicks / 2);
-      for (let i = -halfTicks; i <= halfTicks; i++) tickOffsets.push(i * tickStep);
+      for (let offHz = firstGridTick; offHz <= winHiOffHz + tickStep * 0.001; offHz += tickStep) {
+        tickOffsets.push(Object.is(offHz, -0) ? 0 : offHz);
+      }
       tickOffsets.forEach((offHz) => {
         const absHz = vfo + offHz;
-        const xPx = ((offHz + spanHz / 2) / spanHz) * w;
+        const xPx = offsetToX(offHz);
         if (xPx < 0 || xPx > w) return;
         const text = formatTickMhz(absHz);
         const m = ctx.measureText(text);
@@ -1271,10 +1429,12 @@ export function FilterMiniPan() {
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const dir = e.deltaY > 0 ? 1 : -1;
+      const c = useConnectionStore.getState();
 
       if (e.ctrlKey || e.metaKey) {
         const factor = dir > 0 ? 1.18 : 1 / 1.18;
-        const next = Math.round(Math.max(MIN_SPAN_HZ, Math.min(MAX_SPAN_HZ, spanHzRef.current * factor)));
+        const minSpanHz = minSpanForFilter(c.filterLowHz, c.filterHighHz);
+        const next = Math.round(Math.max(minSpanHz, Math.min(MAX_SPAN_HZ, spanHzRef.current * factor)));
         if (next !== spanHzRef.current) {
           spanHzRef.current = next;
           setSpanTick((t) => t + 1);
@@ -1283,7 +1443,6 @@ export function FilterMiniPan() {
         return;
       }
 
-      const c = useConnectionStore.getState();
       const step = nudgeStepHz(c.mode) * (e.shiftKey ? 10 : 1) * dir;
       const edge = hoverEdgeRef.current;
       let lo = c.filterLowHz;
@@ -1354,7 +1513,7 @@ export function FilterMiniPan() {
     if (!d.panDb || d.hzPerPixel <= 0 || getNoiseFloor() === null) return false;
     const c = useConnectionStore.getState();
     const vfo = Number(c.vfoHz);
-    const winLoHz = vfo - spanHz / 2;
+    const winLoHz = vfo + filterWindowLoOffsetHz(c.filterLowHz, c.filterHighHz, spanHz);
     const dCenter = Number(d.centerHz);
     const peaks = detectPeaks(d.panDb, dCenter, d.hzPerPixel).filter((p) => p.snrDb >= BRACKET_MIN_SNR_DB);
     let best: DetectedPeak | null = null;
@@ -1386,10 +1545,14 @@ export function FilterMiniPan() {
     const rect = canvas.getBoundingClientRect();
     if (rect.width <= 0) return;
 
-    const spanHz = spanHzRef.current;
     const c = useConnectionStore.getState();
-    const passLeftPx = ((c.filterLowHz + spanHz / 2) / spanHz) * rect.width;
-    const passRightPx = ((c.filterHighHz + spanHz / 2) / spanHz) * rect.width;
+    const minSpanHz = minSpanForFilter(c.filterLowHz, c.filterHighHz);
+    if (spanHzRef.current < minSpanHz) spanHzRef.current = minSpanHz;
+    const spanHz = spanHzRef.current;
+    const windowLoOffsetHz = filterWindowLoOffsetHz(c.filterLowHz, c.filterHighHz, spanHz);
+    const offsetToCssX = (offHz: number) => ((offHz - windowLoOffsetHz) / spanHz) * rect.width;
+    const passLeftPx = offsetToCssX(c.filterLowHz);
+    const passRightPx = offsetToCssX(c.filterHighHz);
     const relX = e.clientX - rect.left;
 
     let mode: DragMode;
@@ -1426,6 +1589,7 @@ export function FilterMiniPan() {
       activeSlot,
       startLoHz: c.filterLowHz,
       startHiHz: c.filterHighHz,
+      windowLoOffsetHz,
       startX: e.clientX,
       pendingLo: c.filterLowHz,
       pendingHi: c.filterHighHz,
@@ -1454,12 +1618,12 @@ export function FilterMiniPan() {
     let hiHz = d.startHiHz;
     if (d.mode === 'lo') {
       const relX = e.clientX - d.rect.left;
-      loHz = Math.round(relX * hzPerPx - d.spanHz / 2);
+      loHz = Math.round(relX * hzPerPx + d.windowLoOffsetHz);
       if (snap) loHz = Math.round(magnetEdge(vfo + loHz, d.peaks) - vfo);
       if (loHz > d.startHiHz - 50) loHz = d.startHiHz - 50;
     } else if (d.mode === 'hi') {
       const relX = e.clientX - d.rect.left;
-      hiHz = Math.round(relX * hzPerPx - d.spanHz / 2);
+      hiHz = Math.round(relX * hzPerPx + d.windowLoOffsetHz);
       if (snap) hiHz = Math.round(magnetEdge(vfo + hiHz, d.peaks) - vfo);
       if (hiHz < d.startLoHz + 50) hiHz = d.startLoHz + 50;
     } else {
@@ -1499,17 +1663,48 @@ export function FilterMiniPan() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const spanHz = spanHzRef.current;
+    if (rect.width <= 0 || rect.height <= 0) return;
     const c = useConnectionStore.getState();
-    const passLeftPx = ((c.filterLowHz + spanHz / 2) / spanHz) * rect.width;
-    const passRightPx = ((c.filterHighHz + spanHz / 2) / spanHz) * rect.width;
+    const minSpanHz = minSpanForFilter(c.filterLowHz, c.filterHighHz);
+    if (spanHzRef.current < minSpanHz) spanHzRef.current = minSpanHz;
+    const spanHz = spanHzRef.current;
+    const windowLoOffsetHz = filterWindowLoOffsetHz(c.filterLowHz, c.filterHighHz, spanHz);
+    const offsetToCssX = (offHz: number) => ((offHz - windowLoOffsetHz) / spanHz) * rect.width;
+    const passLeftPx = offsetToCssX(c.filterLowHz);
+    const passRightPx = offsetToCssX(c.filterHighHz);
     const relX = e.clientX - rect.left;
+    const relY = e.clientY - rect.top;
+    const prevEdge = hoverEdgeRef.current;
+    const prevEq = eqHoverRef.current;
+    const meterLeft = Math.max(0, Math.min(rect.width, passLeftPx));
+    const meterRight = Math.max(0, Math.min(rect.width, passRightPx));
+    const meterW = meterRight - meterLeft;
+    const plotTop = 22;
+    const plotBottom = rect.height - 14;
+    const meterBottom = plotBottom - 2;
+    const meterTop = Math.max(plotTop + 8, meterBottom - 19);
+    let nextEq: number | null = null;
+    if (
+      c.filterHighHz > c.filterLowHz &&
+      meterW >= 18 &&
+      relX >= meterLeft &&
+      relX <= meterRight &&
+      relY >= meterTop - 12 &&
+      relY <= meterBottom + 2
+    ) {
+      const meterBands = Math.max(1, Math.min(EQ_METER_BANDS, Math.floor(meterW / 42)));
+      nextEq = Math.max(0, Math.min(meterBands - 1, Math.floor(((relX - meterLeft) / meterW) * meterBands)));
+    }
+    eqHoverRef.current = nextEq;
     if (Math.abs(relX - passLeftPx) <= EDGE_HIT_PX) {
       hoverEdgeRef.current = 'lo';
       canvas.style.cursor = 'ew-resize';
     } else if (Math.abs(relX - passRightPx) <= EDGE_HIT_PX) {
       hoverEdgeRef.current = 'hi';
       canvas.style.cursor = 'ew-resize';
+    } else if (nextEq !== null) {
+      hoverEdgeRef.current = null;
+      canvas.style.cursor = 'default';
     } else if (relX > passLeftPx && relX < passRightPx) {
       hoverEdgeRef.current = 'inside';
       canvas.style.cursor = 'move';
@@ -1517,14 +1712,27 @@ export function FilterMiniPan() {
       hoverEdgeRef.current = null;
       canvas.style.cursor = 'default';
     }
+    if (hoverEdgeRef.current !== prevEdge || eqHoverRef.current !== prevEq) {
+      redrawRef.current?.();
+    }
+  };
+
+  const onPointerLeave = () => {
+    const canvas = canvasRef.current;
+    const hadHover = hoverEdgeRef.current !== null || eqHoverRef.current !== null;
+    hoverEdgeRef.current = null;
+    eqHoverRef.current = null;
+    if (canvas) canvas.style.cursor = 'default';
+    if (hadHover) redrawRef.current?.();
   };
 
   // ── Editable width pill ─────────────────────────────────────────────────
   const widthHz = Math.abs(filterHighHz - filterLowHz);
   // Centre the pill horizontally over the passband (clamped to stay on-panel).
   const pbCenterHz = (filterLowHz + filterHighHz) / 2;
-  const span = spanHzRef.current;
-  const pillLeftPct = Math.max(10, Math.min(90, ((pbCenterHz + span / 2) / span) * 100));
+  const span = Math.max(spanHzRef.current, minSpanForFilter(filterLowHz, filterHighHz));
+  const pillWindowLoHz = filterWindowLoOffsetHz(filterLowHz, filterHighHz, span);
+  const pillLeftPct = Math.max(10, Math.min(90, ((pbCenterHz - pillWindowLoHz) / span) * 100));
 
   const beginEditWidth = () => {
     setWidthDraft(String(Math.round(widthHz)));
@@ -1569,6 +1777,7 @@ export function FilterMiniPan() {
         }}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onPointerLeave={onPointerLeave}
       />
       {editingWidth ? (
         <input

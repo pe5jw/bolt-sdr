@@ -119,6 +119,28 @@ export function freqHzToBand(hz: number): string | null {
   return null;
 }
 
+/** Canonicalise operator-entered band filters so "20", "20m", and "20 m"
+ *  compare against the same derived band key. Unknown keys stay restrictive. */
+export function normalizeSpotBandKey(key: string): string {
+  const compact = key
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '')
+    .replace(/METERS?$/, 'M')
+    .replace(/METRES?$/, 'M');
+  if (compact.length === 0) return '';
+
+  const direct = SPOT_BANDS.find((b) => b.key.toUpperCase() === compact);
+  if (direct) return direct.key.toUpperCase();
+
+  if (/^\d+$/.test(compact)) {
+    const numeric = SPOT_BANDS.find((b) => b.key.match(/^\d+/)?.[0] === compact);
+    if (numeric) return numeric.key.toUpperCase();
+  }
+
+  return compact;
+}
+
 const QRT_RE = /\b(qrt|qsy|going\s*qrt|closing|shutting\s*down|pack(?:ed|ing)?\s*up|done\s*for)\b/i;
 
 /** True if the spot's comment marks the activator as QRT / closing down. */
@@ -153,12 +175,15 @@ export function spotMatchesFilters(
   if (source !== 'ALL' && spot.source !== source) return false;
   const q = query.trim().toUpperCase();
   if (q.length === 0) return true;
+  const band = freqHzToBand(spot.freqHz);
+  const bandQuery = normalizeSpotBandKey(q);
   return (
     spot.activator.toUpperCase().includes(q) ||
     spot.reference.toUpperCase().includes(q) ||
     (spot.name ?? '').toUpperCase().includes(q) ||
     (spot.location ?? '').toUpperCase().includes(q) ||
-    spot.mode.toUpperCase().includes(q)
+    spot.mode.toUpperCase().includes(q) ||
+    (band !== null && bandQuery === band.toUpperCase())
   );
 }
 
@@ -174,7 +199,7 @@ export function applySpotSettingsFilters(
 ): ActivationSpotDto[] {
   // Compare case-insensitively so a hand-crafted POST ('20M' vs '20m') still
   // matches the canonical lowercase band keys / uppercase mode-group keys.
-  const bands = settings.bands.map((b) => b.toUpperCase());
+  const bands = settings.bands.map(normalizeSpotBandKey).filter((b) => b.length > 0);
   const modes = settings.modes.map((m) => m.toUpperCase());
   const maxAgeSecs = settings.maxAgeMinutes > 0 ? settings.maxAgeMinutes * 60 : 0;
   const hideWorked = settings.hideWorked && workedCalls !== undefined && workedCalls.size > 0;

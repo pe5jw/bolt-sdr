@@ -252,6 +252,15 @@ export function subscribeFrames(cb: (s: DisplayState) => void): () => void {
 // Deliberately a module-level counter (not in the store) so toggling consumer
 // presence doesn't itself fan out as a store update through React.
 let frameConsumerCount = 0;
+type FrameConsumerPresenceListener = (active: boolean, count: number) => void;
+const frameConsumerPresenceListeners = new Set<FrameConsumerPresenceListener>();
+
+function notifyFrameConsumerPresenceIfChanged(previousCount: number): void {
+  const wasActive = previousCount > 0;
+  const active = frameConsumerCount > 0;
+  if (wasActive === active) return;
+  for (const listener of frameConsumerPresenceListeners) listener(active, frameConsumerCount);
+}
 
 /**
  * Mark this caller as a live consumer of decoded display frames. Returns a
@@ -259,12 +268,16 @@ let frameConsumerCount = 0;
  * returned function is invoked more than once.
  */
 export function registerFrameConsumer(): () => void {
+  const previousCount = frameConsumerCount;
   frameConsumerCount++;
+  notifyFrameConsumerPresenceIfChanged(previousCount);
   let released = false;
   return () => {
     if (released) return;
     released = true;
+    const beforeRelease = frameConsumerCount;
     frameConsumerCount = Math.max(0, frameConsumerCount - 1);
+    notifyFrameConsumerPresenceIfChanged(beforeRelease);
   };
 }
 
@@ -273,7 +286,16 @@ export function hasActiveFrameConsumers(): boolean {
   return frameConsumerCount > 0;
 }
 
+export function subscribeFrameConsumerPresence(
+  listener: FrameConsumerPresenceListener,
+): () => void {
+  frameConsumerPresenceListeners.add(listener);
+  return () => frameConsumerPresenceListeners.delete(listener);
+}
+
 /** Test-only escape hatch; not part of the public API. */
 export function _resetFrameConsumerCount(): void {
+  const previousCount = frameConsumerCount;
   frameConsumerCount = 0;
+  notifyFrameConsumerPresenceIfChanged(previousCount);
 }

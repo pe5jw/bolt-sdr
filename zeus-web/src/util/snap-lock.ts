@@ -77,6 +77,10 @@ export type SnapLockCfg = {
   deadbandHz: number;
   maxStepHz: number;
   releaseMissFrames: number;
+  /** Operator tuning-step grid. Every committed dial is snapped to a multiple of
+   *  this, so the self-correcting lock can never walk the VFO onto an off-step
+   *  frequency. A non-positive value degrades to whole-Hz. */
+  stepHz: number;
 };
 
 export type SnapLockStepResult = {
@@ -89,11 +93,17 @@ export type SnapLockStepResult = {
   release: boolean;
 };
 
+// Fallback tuning-step grid when no live operator step is supplied (direct/test
+// callers). Matches the toolbar default; onFrame always overrides with the live
+// TuningStepWidget value.
+const SNAP_LOCK_DEFAULT_STEP_HZ = 500;
+
 const DEFAULT_CFG: SnapLockCfg = {
   maxDriftHz: SNAP_LOCK_MAX_DRIFT_HZ,
   deadbandHz: SNAP_LOCK_DEADBAND_HZ,
   maxStepHz: SNAP_LOCK_MAX_STEP_HZ,
   releaseMissFrames: SNAP_LOCK_RELEASE_MISS_FRAMES,
+  stepHz: SNAP_LOCK_DEFAULT_STEP_HZ,
 };
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -121,16 +131,30 @@ export function snapLockStep(
   }
 
   // Clamp the tracked anchor and target to ±maxDrift of the snap point so the
-  // window can never creep onto a neighbour even over many frames.
+  // window can never creep onto a neighbour even over many frames. The dial
+  // target is additionally snapped to the operator's tuning-step grid: the lock
+  // commits the SAME step frequencies a manual tune would, never the raw
+  // sub-step signal edge — so it can't walk the VFO off-step as it tracks.
   const bodyHz = clamp(measure.bodyHz, state.originBodyHz - cfg.maxDriftHz, state.originBodyHz + cfg.maxDriftHz);
-  const target = clamp(measure.dialHz, state.originDialHz - cfg.maxDriftHz, state.originDialHz + cfg.maxDriftHz);
+  const target = clamp(
+    roundToStep(measure.dialHz, cfg.stepHz),
+    state.originDialHz - cfg.maxDriftHz,
+    state.originDialHz + cfg.maxDriftHz,
+  );
   const err = target - state.dialHz;
   if (Math.abs(err) < cfg.deadbandHz) {
     // Aligned enough — track the body silently, leave the dial put.
     return { dialHz: state.dialHz, bodyHz, missFrames: 0, commitHz: null, release: false };
   }
-  const step = clamp(err, -cfg.maxStepHz, cfg.maxStepHz);
-  const dialHz = state.dialHz + step;
+  // Creep toward the target in WHOLE tuning steps so the committed dial always
+  // lands on a step frequency. The per-correction reach is maxStepHz rounded to
+  // whole steps (at least one), so the dial still creeps rather than lurching
+  // across a gap, and re-snapping the result to the grid guards against any
+  // off-step origin (e.g. the operator changed the step mid-lock).
+  const step = cfg.stepHz > 0 ? cfg.stepHz : 1;
+  const maxCells = Math.max(1, Math.round(cfg.maxStepHz / step));
+  const cells = clamp(Math.round(err / step), -maxCells, maxCells);
+  const dialHz = roundToStep(state.dialHz + cells * step, cfg.stepHz);
   return { dialHz, bodyHz, missFrames: 0, commitHz: dialHz, release: false };
 }
 
@@ -246,13 +270,13 @@ function onFrame(s: DisplayState): void {
       anchorLevelDb === undefined
         ? measure.levelDb
         : anchorLevelDb + SNAP_LOCK_LEVEL_EMA * (measure.levelDb - anchorLevelDb);
-    // Quantize the re-measured tuning edge onto the operator's step grid — the
-    // SAME grid the snap commit landed on (resolvePanTuneTarget). Without this
-    // the tracker would chase the raw sub-step edge and slowly walk the dial off
-    // the committed grid value. Body stays raw (it's the centroid we follow).
-    measure.dialHz = roundToStep(measure.dialHz, useToolbarFavoritesStore.getState().stepHz);
   }
-  const res = snapLockStep({ dialHz, bodyHz, originDialHz, originBodyHz, missFrames }, measure);
+  // Snap commits onto the operator's live tuning-step grid (the SAME grid the
+  // click commit landed on, resolvePanTuneTarget) so the lock never walks the
+  // dial off-step as the re-measured edge breathes. Body stays raw (it's the
+  // centroid we follow).
+  const cfg: SnapLockCfg = { ...DEFAULT_CFG, stepHz: useToolbarFavoritesStore.getState().stepHz };
+  const res = snapLockStep({ dialHz, bodyHz, originDialHz, originBodyHz, missFrames }, measure, cfg);
   missFrames = res.missFrames;
   bodyHz = res.bodyHz;
   if (res.release) {

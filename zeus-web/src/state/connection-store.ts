@@ -43,7 +43,7 @@
 // License for details.
 
 import { create } from 'zustand';
-import { msSinceOptimisticTune } from './view-center';
+import { msSinceOptimisticTuneFor } from './view-center';
 import {
   AGC_CONFIG_DEFAULT,
   NR_CONFIG_DEFAULT,
@@ -116,6 +116,7 @@ export type ConnectionState = {
   // Hardware NCO / panadapter centre. The frequency-axis ruler drag moves this
   // without touching vfoHz so the operator can pan to off-screen spectrum.
   radioLoHz: number;
+  cwPitchHz: number;
   nr: NrConfigDto;
   zoomLevel: ZoomLevel;
   inflight: boolean;
@@ -128,7 +129,7 @@ export type ConnectionState = {
   // wisdomPhase === 'building'. Empty otherwise.
   wisdomStatus: string;
   /** Apply a server StateDto. `opts.trustVfo` (default true) marks the
-   *  caller as an explicit command echo whose vfoHz must always apply
+   *  caller as an explicit command echo whose VFO values must always apply
    *  (drag release, keyboard flush, zoom/mode/band responses — clamps and
    *  server-side corrections included). The 1 Hz App.tsx poll passes
    *  trustVfo:false: a poll response generated just before the operator's
@@ -185,6 +186,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   preampOn: false,
   ctunEnabled: false,
   radioLoHz: 14_200_000,
+  cwPitchHz: 600,
   nr: { ...NR_CONFIG_DEFAULT },
   zoomLevel: 1,
   inflight: false,
@@ -194,44 +196,51 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   wisdomPhase: 'ready',
   wisdomStatus: '',
   applyState: (s, opts) =>
-    set((prev) => ({
-      status: s.status,
-      endpoint: s.endpoint,
-      vfoHz:
-        (opts?.trustVfo ?? true) || msSinceOptimisticTune() >= 1500
-          ? s.vfoHz
-          : prev.vfoHz,
-      vfoBHz: s.vfoBHz,
-      rx2Enabled: s.rx2Enabled,
-      rx2AudioMode: s.rx2AudioMode,
-      rx2AfGainDb: s.rx2AfGainDb,
-      txVfo: s.txVfo,
-      rxFocus: s.rx2Enabled ? prev.rxFocus : 'A',
-      mode: s.mode,
-      filterLowHz: s.filterLowHz,
-      filterHighHz: s.filterHighHz,
-      filterPresetName: s.filterPresetName,
-      filterAdvancedPaneOpen: s.filterAdvancedPaneOpen,
-      txFilterLowHz: s.txFilterLowHz,
-      txFilterHighHz: s.txFilterHighHz,
-      sampleRate: s.sampleRate,
-      agcTopDb: s.agcTopDb,
-      agc: s.agc,
-      squelch: s.squelch,
-      txLeveling: s.txLeveling,
-      autoAgcEnabled: s.autoAgcEnabled,
-      agcOffsetDb: s.agcOffsetDb,
-      rxAfGainDb: s.rxAfGainDb,
-      attenDb: s.attenDb,
-      autoAttEnabled: s.autoAttEnabled,
-      attOffsetDb: s.attOffsetDb,
-      adcOverloadWarning: s.adcOverloadWarning,
-      preampOn: s.preampOn,
-      ctunEnabled: s.ctunEnabled,
-      radioLoHz: s.radioLoHz,
-      nr: s.nr,
-      zoomLevel: s.zoomLevel,
-    })),
+    set((prev) => {
+      const trustVfo = opts?.trustVfo ?? true;
+      return {
+        status: s.status,
+        endpoint: s.endpoint,
+        vfoHz:
+          trustVfo || msSinceOptimisticTuneFor('A') >= 1500
+            ? s.vfoHz
+            : prev.vfoHz,
+        vfoBHz:
+          trustVfo || msSinceOptimisticTuneFor('B') >= 1500
+            ? s.vfoBHz
+            : prev.vfoBHz,
+        rx2Enabled: s.rx2Enabled,
+        rx2AudioMode: s.rx2AudioMode,
+        rx2AfGainDb: s.rx2AfGainDb,
+        txVfo: s.txVfo,
+        rxFocus: s.rx2Enabled ? prev.rxFocus : 'A',
+        mode: s.mode,
+        filterLowHz: s.filterLowHz,
+        filterHighHz: s.filterHighHz,
+        filterPresetName: s.filterPresetName,
+        filterAdvancedPaneOpen: s.filterAdvancedPaneOpen,
+        txFilterLowHz: s.txFilterLowHz,
+        txFilterHighHz: s.txFilterHighHz,
+        sampleRate: s.sampleRate,
+        agcTopDb: s.agcTopDb,
+        agc: s.agc,
+        squelch: s.squelch,
+        txLeveling: s.txLeveling,
+        autoAgcEnabled: s.autoAgcEnabled,
+        agcOffsetDb: s.agcOffsetDb,
+        rxAfGainDb: s.rxAfGainDb,
+        attenDb: s.attenDb,
+        autoAttEnabled: s.autoAttEnabled,
+        attOffsetDb: s.attOffsetDb,
+        adcOverloadWarning: s.adcOverloadWarning,
+        preampOn: s.preampOn,
+        ctunEnabled: s.ctunEnabled,
+        radioLoHz: s.radioLoHz,
+        cwPitchHz: s.cwPitchHz,
+        nr: s.nr,
+        zoomLevel: s.zoomLevel,
+      };
+    }),
   setInflight: (inflight) => set({ inflight }),
   setBoardId: (boardId) => set({ boardId }),
   setConnectedProtocol: (connectedProtocol) => set({ connectedProtocol }),

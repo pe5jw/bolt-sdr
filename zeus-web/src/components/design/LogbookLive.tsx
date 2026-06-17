@@ -42,7 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useLoggerStore } from '../../state/logger-store';
 
 // QSO timestamps are stored / exported / uploaded to QRZ in UTC throughout
@@ -85,6 +85,14 @@ export function LogbookLive() {
   const clearPublishResult = useLoggerStore((s) => s.clearPublishResult);
   const selectedIds = useLoggerStore((s) => s.selectedIds);
   const toggleSelected = useLoggerStore((s) => s.toggleSelected);
+  const setSelectedIds = useLoggerStore((s) => s.setSelectedIds);
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  const selectedVisibleCount = entries.reduce(
+    (count, entry) => count + (selectedIds.has(entry.id) ? 1 : 0),
+    0,
+  );
+  const allVisibleSelected = entries.length > 0 && selectedVisibleCount === entries.length;
+  const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
 
   useEffect(() => {
     // Self-clear publish feedback (shown in the Logbook header) after a few seconds.
@@ -95,6 +103,12 @@ export function LogbookLive() {
       return () => clearTimeout(timer);
     }
   }, [lastPublishResult, publishError, clearPublishResult]);
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = someVisibleSelected;
+    }
+  }, [someVisibleSelected]);
 
   if (loading && entries.length === 0) {
     return (
@@ -119,7 +133,18 @@ export function LogbookLive() {
   return (
     <div className="logbook">
       <div className="log-head mono">
-        <span style={{ width: '2rem' }}>✓</span>
+        <span className="log-select-cell">
+          <input
+            ref={selectAllRef}
+            type="checkbox"
+            checked={allVisibleSelected}
+            onChange={() => {
+              setSelectedIds(allVisibleSelected ? [] : entries.map((entry) => entry.id));
+            }}
+            aria-label={allVisibleSelected ? 'Clear selected log entries' : 'Select all log entries'}
+            title={allVisibleSelected ? 'Clear selected log entries' : 'Select all log entries'}
+          />
+        </span>
         <span title="QSO date in UTC">Date·UTC</span>
         <span title="QSO time in UTC">Time·UTC</span>
         <span>Call</span>

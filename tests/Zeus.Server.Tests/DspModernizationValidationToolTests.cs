@@ -218,7 +218,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal("speexdsp", reportRoot.GetProperty("firstSafeBakeoffCandidateId").GetString());
 
             var orderIds = ReadStringArray(reportRoot, "externalBakeoffEvaluationOrderCandidateIds");
-            Assert.Equal(new[] { "speexdsp", "rnnoise", "webrtc-apm", "deepfilternet" }, orderIds);
+            Assert.Equal(new[] { "speexdsp", "rnnoise", "webrtc-apm", "deepfilternet", "rmnoise" }, orderIds);
 
             var orderRecords = reportRoot.GetProperty("externalBakeoffEvaluationOrder").EnumerateArray().ToArray();
             Assert.Equal(orderIds.Length, orderRecords.Length);

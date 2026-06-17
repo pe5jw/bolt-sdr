@@ -561,7 +561,7 @@ public sealed class DspLiveDiagnosticsServiceTests
     {
         var candidates = DspExternalEngineCandidateCatalog.All();
 
-        Assert.Equal(new[] { "rnnoise", "deepfilternet", "speexdsp", "webrtc-apm" }, candidates.Select(c => c.Id).ToArray());
+        Assert.Equal(new[] { "rnnoise", "rmnoise", "deepfilternet", "speexdsp", "webrtc-apm" }, candidates.Select(c => c.Id).ToArray());
         Assert.All(candidates, c =>
         {
             Assert.Equal(1, c.SchemaVersion);
@@ -597,6 +597,31 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("baseline", speex.IntegrationPoint);
         Assert.Contains("no pumping", string.Join(" ", speex.RequiredEvidence));
         Assert.Contains("speex-agc-disabled", speex.RequiredControls);
+
+        var rnnoise = Assert.Single(candidates, c => c.Id == "rnnoise");
+        Assert.Contains("NR5-AI Assist", rnnoise.IntegrationPoint);
+        Assert.Contains("nr5-ai-assist-mode", rnnoise.RequiredControls);
+        Assert.Contains("official-xiph-runtime-only", rnnoise.RequiredControls);
+        Assert.Contains("le9endary-training-reference-only", rnnoise.RequiredControls);
+        Assert.Contains("weak-ssb-volume-parity", rnnoise.RequiredBenchmarks);
+        Assert.Contains("Xiph", rnnoise.License);
+        Assert.Contains("le9endary/RNNoise has no repo license", rnnoise.License);
+        Assert.Contains("https://github.com/le9endary/RNNoise", rnnoise.ReferenceUrls);
+        Assert.Contains(
+            rnnoise.Blockers,
+            blocker => blocker.Contains("do not vendor", StringComparison.OrdinalIgnoreCase));
+
+        var rmnoise = Assert.Single(candidates, c => c.Id == "rmnoise");
+        Assert.Contains("NR5-AI Assist", rmnoise.IntegrationPoint);
+        Assert.Contains("recording-consent-gate", rmnoise.RequiredControls);
+        Assert.Contains("service-availability-fallback", rmnoise.RequiredControls);
+        Assert.Contains("no-live-cloud-stream-by-default", rmnoise.RequiredControls);
+        Assert.Contains("service-unavailable-bypass", rmnoise.RequiredBenchmarks);
+        Assert.Contains("service terms", rmnoise.License);
+        Assert.Contains("https://ournetplace.com/rm-noise/", rmnoise.ReferenceUrls);
+        Assert.Contains(
+            rmnoise.Blockers,
+            blocker => blocker.Contains("consent/privacy", StringComparison.OrdinalIgnoreCase));
     }
 
     private static void PublishScene(

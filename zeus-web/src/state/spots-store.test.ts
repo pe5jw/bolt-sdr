@@ -10,9 +10,11 @@ import {
   spotModeToRxMode,
   spotModeGroup,
   freqHzToBand,
+  normalizeSpotBandKey,
   spotIsQrt,
   isWatchedCall,
   spotIsWorked,
+  spotMatchesFilters,
   applySpotSettingsFilters,
 } from './spots-store';
 import { SPOTS_SETTINGS_DEFAULTS, type ActivationSpotDto, type SpotsSettings } from '../api/client';
@@ -92,6 +94,32 @@ describe('freqHzToBand', () => {
   });
 });
 
+describe('normalizeSpotBandKey', () => {
+  it('normalizes numeric and suffixed band shorthand', () => {
+    expect(normalizeSpotBandKey('20')).toBe('20M');
+    expect(normalizeSpotBandKey('20m')).toBe('20M');
+    expect(normalizeSpotBandKey('20 m')).toBe('20M');
+    expect(normalizeSpotBandKey('20 meters')).toBe('20M');
+    expect(normalizeSpotBandKey('70')).toBe('70CM');
+  });
+
+  it('keeps unknown keys restrictive', () => {
+    expect(normalizeSpotBandKey('unknown')).toBe('UNKNOWN');
+  });
+});
+
+describe('spotMatchesFilters', () => {
+  it('matches derived band labels from the text filter', () => {
+    const twenty = spot({ freqHz: 14_074_000, reference: 'US-0001' });
+    const forty = spot({ freqHz: 7_120_000, reference: 'US-0002' });
+
+    expect(spotMatchesFilters(twenty, 'ALL', '20')).toBe(true);
+    expect(spotMatchesFilters(twenty, 'ALL', '20m')).toBe(true);
+    expect(spotMatchesFilters(twenty, 'ALL', '20 m')).toBe(true);
+    expect(spotMatchesFilters(forty, 'ALL', '20')).toBe(false);
+  });
+});
+
 describe('spotIsQrt', () => {
   it('detects QRT / closing comments', () => {
     expect(spotIsQrt(spot({ comments: 'Going QRT, thanks all' }))).toBe(true);
@@ -116,6 +144,13 @@ describe('applySpotSettingsFilters', () => {
   it('filters by band allow-list', () => {
     const list = [spot({ freqHz: 14_074_000 }), spot({ freqHz: 7_120_000 })];
     const out = applySpotSettingsFilters(list, settings({ bands: ['20M'] }), now);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.freqHz).toBe(14_074_000);
+  });
+
+  it('accepts numeric band shorthand in the band allow-list', () => {
+    const list = [spot({ freqHz: 14_074_000 }), spot({ freqHz: 7_120_000 })];
+    const out = applySpotSettingsFilters(list, settings({ bands: ['20'] }), now);
     expect(out).toHaveLength(1);
     expect(out[0]!.freqHz).toBe(14_074_000);
   });

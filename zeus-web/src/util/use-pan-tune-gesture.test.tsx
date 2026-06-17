@@ -10,6 +10,7 @@ import { act, render } from '../components/meters/__tests__/harness';
 const setVfoMock = vi.hoisted(() => vi.fn());
 const setVfoBMock = vi.hoisted(() => vi.fn());
 const setZoomMock = vi.hoisted(() => vi.fn());
+const setRadioLoMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/client')>();
@@ -18,11 +19,13 @@ vi.mock('../api/client', async (importOriginal) => {
     setVfo: setVfoMock,
     setVfoB: setVfoBMock,
     setZoom: setZoomMock,
+    setRadioLo: setRadioLoMock,
   };
 });
 
 import { useConnectionStore } from '../state/connection-store';
 import { createEmptyDisplaySlice, useDisplayStore } from '../state/display-store';
+import * as viewCenter from '../state/view-center';
 import { maybeUpdateEstimator, resetEstimator, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import {
@@ -31,11 +34,15 @@ import {
   usePanTuneGesture,
   type PanTuneGestureOptions,
 } from './use-pan-tune-gesture';
+import type { RadioStateDto } from '../api/client';
 
 const SNAP_WIDTH = 256;
 const SNAP_HZ_PER_PX = 37;
 const SNAP_CENTER = 14_200_000;
 const SNAP_NOISE_DB = -110;
+let rafNowMs = 0;
+let nextRafHandle = 1;
+let rafCallbacks = new Map<number, FrameRequestCallback>();
 
 function binHz(bin: number): number {
   return SNAP_CENTER + (bin - SNAP_WIDTH / 2) * SNAP_HZ_PER_PX;
@@ -104,22 +111,74 @@ function pointer(
   target.dispatchEvent(ev);
 }
 
+function wheel(
+  target: HTMLCanvasElement,
+  init: {
+    deltaY?: number;
+    deltaX?: number;
+    deltaMode?: number;
+    shiftKey?: boolean;
+    altKey?: boolean;
+  },
+): void {
+  const ev = new Event('wheel', { bubbles: true, cancelable: true });
+  Object.defineProperties(ev, {
+    deltaY: { value: init.deltaY ?? 0 },
+    deltaX: { value: init.deltaX ?? 0 },
+    deltaMode: { value: init.deltaMode ?? 0 },
+    shiftKey: { value: init.shiftKey ?? false },
+    altKey: { value: init.altKey ?? false },
+  });
+  target.dispatchEvent(ev);
+}
+
 async function flush(): Promise<void> {
+  drainRafs();
   await Promise.resolve();
+  drainRafs();
   await Promise.resolve();
+  drainRafs();
+}
+
+function drainRafs(maxFrames = 1000): void {
+  let frames = 0;
+  while (rafCallbacks.size > 0 && frames < maxFrames) {
+    const callbacks = Array.from(rafCallbacks.values());
+    rafCallbacks.clear();
+    rafNowMs += 16.7;
+    for (const cb of callbacks) cb(rafNowMs);
+    frames++;
+  }
+}
+
+function currentRadioState(overrides: Partial<RadioStateDto> = {}): RadioStateDto {
+  return {
+    ...useConnectionStore.getState(),
+    ...overrides,
+  } as RadioStateDto;
 }
 
 describe('usePanTuneGesture mobile touch mode', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    viewCenter._resetForTest();
+    rafNowMs = 0;
+    nextRafHandle = 1;
+    rafCallbacks = new Map<number, FrameRequestCallback>();
     vi.stubGlobal(
       'requestAnimationFrame',
       vi.fn((cb: FrameRequestCallback) => {
-        cb(0);
-        return 1;
+        const handle = nextRafHandle++;
+        rafCallbacks.set(handle, cb);
+        return handle;
       }),
     );
-    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    vi.stubGlobal(
+      'cancelAnimationFrame',
+      vi.fn((handle: number) => {
+        rafCallbacks.delete(handle);
+      }),
+    );
     Object.defineProperty(HTMLCanvasElement.prototype, 'setPointerCapture', {
       configurable: true,
       value: vi.fn(),
@@ -165,9 +224,11 @@ describe('usePanTuneGesture mobile touch mode', () => {
     setZoomMock.mockImplementation(async () => ({ ...useConnectionStore.getState() }));
     setVfoMock.mockImplementation(async () => ({ ...useConnectionStore.getState() }));
     setVfoBMock.mockImplementation(async () => ({ ...useConnectionStore.getState() }));
+    setRadioLoMock.mockImplementation(async () => ({ ...useConnectionStore.getState() }));
   });
 
   afterEach(() => {
+    viewCenter._resetForTest();
     resetEstimator();
     _resetPanSnapStickyForTest();
     useSignalEnhanceStore.setState({
@@ -341,6 +402,167 @@ describe('usePanTuneGesture mobile touch mode', () => {
     expect(setVfoMock).toHaveBeenCalledWith(7_205_000, undefined);
     expect(setVfoBMock).not.toHaveBeenCalled();
 
+    unmount();
+  });
+
+  it('recenters CTUN zoom-in on the tuned RX1 frequency without leaving CTUN', async () => {
+    const startLoHz = 14_200_000;
+    const tunedHz = 14_205_000;
+    useConnectionStore.setState({
+      mode: 'USB',
+      ctunEnabled: true,
+      vfoHz: tunedHz,
+      radioLoHz: startLoHz,
+      zoomLevel: 4,
+    });
+    useDisplayStore.setState({
+      width: 200,
+      centerHz: BigInt(startLoHz),
+      hzPerPixel: 100,
+      panDb: new Float32Array(200),
+      panValid: true,
+    });
+
+    const { container, unmount } = render(createElement(GestureProbe, { touchMode: 'normal' }));
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+    await act(async () => {
+      wheel(canvas, { deltaY: 40, shiftKey: true });
+      await flush();
+    });
+
+    expect(setRadioLoMock).toHaveBeenCalledWith(tunedHz, expect.any(AbortSignal));
+    expect(setZoomMock).toHaveBeenCalledWith(5, expect.any(AbortSignal));
+    expect(useConnectionStore.getState().vfoHz).toBe(tunedHz);
+    expect(useConnectionStore.getState().radioLoHz).toBe(tunedHz);
+    expect(useConnectionStore.getState().ctunEnabled).toBe(true);
+    expect(viewCenter.viewCenterFor('A').getTargetCenterHz()).toBe(tunedHz);
+
+    unmount();
+  });
+
+  it('uses the CW effective LO when recentering CTUN zoom-in', async () => {
+    useConnectionStore.setState({
+      mode: 'CWU',
+      cwPitchHz: 700,
+      ctunEnabled: true,
+      vfoHz: 14_205_000,
+      radioLoHz: 14_200_000,
+      zoomLevel: 4,
+    });
+    useDisplayStore.setState({
+      width: 200,
+      centerHz: 14_200_000n,
+      hzPerPixel: 100,
+      panDb: new Float32Array(200),
+      panValid: true,
+    });
+
+    const { container, unmount } = render(createElement(GestureProbe, { touchMode: 'normal' }));
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+    await act(async () => {
+      wheel(canvas, { deltaY: 40, shiftKey: true });
+      await flush();
+    });
+
+    expect(setRadioLoMock).toHaveBeenCalledWith(14_204_300, expect.any(AbortSignal));
+    expect(useConnectionStore.getState().radioLoHz).toBe(14_204_300);
+
+    unmount();
+  });
+
+  it('drags the RX2 surface by posting VFO B instead of VFO A', async () => {
+    useConnectionStore.setState({
+      ctunEnabled: false,
+      vfoHz: 14_200_000,
+      vfoBHz: 7_200_000,
+    });
+    useDisplayStore.setState({
+      width: 200,
+      centerHz: 14_200_000n,
+      hzPerPixel: 100,
+      panDb: new Float32Array(200),
+      panValid: true,
+      rx2: {
+        ...createEmptyDisplaySlice(),
+        width: 200,
+        centerHz: 7_200_000n,
+        hzPerPixel: 100,
+        lastSeq: 2,
+      },
+    });
+
+    const { container, unmount } = render(
+      createElement(GestureProbe, {
+        touchMode: 'normal',
+        receiver: 'B',
+        tuneReceiver: 'B',
+      }),
+    );
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+    await act(async () => {
+      pointer(canvas, 'pointerdown', { pointerId: 1, clientX: 100, pointerType: 'mouse' });
+      pointer(canvas, 'pointermove', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+      pointer(canvas, 'pointerup', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+      await flush();
+    });
+
+    expect(setVfoMock).not.toHaveBeenCalled();
+    expect(setVfoBMock).toHaveBeenLastCalledWith(7_195_000, undefined);
+    expect(useConnectionStore.getState().vfoBHz).toBe(7_195_000);
+
+    unmount();
+  });
+
+  it('keeps optimistic VFO B during stale untrusted state polls', async () => {
+    useConnectionStore.setState({
+      ctunEnabled: false,
+      vfoHz: 14_200_000,
+      vfoBHz: 7_200_000,
+    });
+    useDisplayStore.setState({
+      width: 200,
+      centerHz: 14_200_000n,
+      hzPerPixel: 100,
+      panDb: new Float32Array(200),
+      panValid: true,
+      rx2: {
+        ...createEmptyDisplaySlice(),
+        width: 200,
+        centerHz: 7_200_000n,
+        hzPerPixel: 100,
+        lastSeq: 2,
+      },
+    });
+
+    const { container, unmount } = render(
+      createElement(GestureProbe, {
+        touchMode: 'normal',
+        receiver: 'B',
+        tuneReceiver: 'B',
+      }),
+    );
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+    await act(async () => {
+      pointer(canvas, 'pointerdown', { pointerId: 1, clientX: 100, pointerType: 'mouse' });
+      pointer(canvas, 'pointermove', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+      await flush();
+    });
+
+    useConnectionStore.getState().applyState(
+      currentRadioState({
+        vfoHz: 14_200_000,
+        vfoBHz: 7_200_000,
+      }),
+      { trustVfo: false },
+    );
+
+    expect(useConnectionStore.getState().vfoBHz).toBe(7_195_000);
+
+    pointer(canvas, 'pointerup', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
     unmount();
   });
 });

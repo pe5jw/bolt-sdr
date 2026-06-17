@@ -43,7 +43,7 @@
 // License for details.
 
 import { createContext, useContext, useEffect, type RefObject } from 'react';
-import { setVfo, setVfoB, setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
+import { setRadioLo, setVfo, setVfoB, setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { computeSnapToLineHz, getSnapHistorySpectrum, useSignalEnhanceStore } from '../dsp/signal-estimator';
@@ -108,6 +108,13 @@ export function quantizeToStepHz(hz: number, stepHz: number): number {
 function clampHz(hz: number): number {
   if (!Number.isFinite(hz)) return 0;
   return Math.min(MAX_HZ, Math.max(0, hz));
+}
+
+function effectiveLoHz(mode: string, vfoHz: number, cwPitchHz: number): number {
+  const pitch = Number.isFinite(cwPitchHz) ? cwPitchHz : 600;
+  if (mode === 'CWU') return vfoHz - pitch;
+  if (mode === 'CWL') return vfoHz + pitch;
+  return vfoHz;
 }
 
 function clampZoom(z: number): ZoomLevel {
@@ -231,6 +238,7 @@ type VfoNudgeController = {
 
 export function createVfoNudgeController(receiver: SpectrumReceiver = 'A'): VfoNudgeController {
   const receiverIsB = receiver === 'B';
+  const vc = viewCenter.viewCenterFor(receiver);
   let pendingHz: number | null = null;
   let pendingAbort: AbortController | null = null;
   let pendingRaf = 0;
@@ -252,7 +260,7 @@ export function createVfoNudgeController(receiver: SpectrumReceiver = 'A'): VfoN
     const hz = pendingHz;
     pendingHz = null;
     if (hz == null) return;
-    viewCenter.markOptimisticTune();
+    vc.markOptimisticTune();
     writeVfo(hz);
     pendingAbort?.abort();
     const ctrl = new AbortController();
@@ -268,9 +276,9 @@ export function createVfoNudgeController(receiver: SpectrumReceiver = 'A'): VfoN
     const cur = commandedHz();
     const next = clampHz(cur + deltaHz);
     if (tunesOffCenter()) {
-      viewCenter.markOptimisticTune();
+      vc.markOptimisticTune();
     } else {
-      viewCenter.nudgeTargetHz(next - cur);
+      vc.nudgeTargetHz(next - cur);
     }
     writeVfo(next);
     pendingHz = next;
@@ -382,6 +390,7 @@ export function usePanTuneGesture(
     // notch on a mouse wheel should be one tune/zoom step, not three.
     let wheelAccum = 0;
     let zoomInflight: AbortController | null = null;
+    let zoomCenterInflight: AbortController | null = null;
 
     // The commanded-frequency chain: pendingHz when a POST is queued, else
     // the optimistic store value. All view-center nudges are DELTAS against
@@ -481,18 +490,65 @@ export function usePanTuneGesture(
 
     const nudgeZoom = (delta: number) => {
       if (delta === 0) return;
-      const cur = useConnectionStore.getState().zoomLevel;
+      const state = useConnectionStore.getState();
+      const cur = state.zoomLevel;
       const next = clampZoom(cur + delta);
       if (next === cur) return;
+      const centeredLoHz = next > cur ? centerCtunZoomIn() : null;
       useConnectionStore.getState().setZoomLevel(next);
       zoomInflight?.abort();
       const ctrl = new AbortController();
       zoomInflight = ctrl;
       setZoom(next, ctrl.signal)
         .then((s) => {
-          if (!ctrl.signal.aborted) useConnectionStore.getState().applyState(s);
+          if (!ctrl.signal.aborted) {
+            useConnectionStore.getState().applyState(s);
+            if (centeredLoHz != null && useConnectionStore.getState().ctunEnabled) {
+              applyLocalCtunZoomCenter(centeredLoHz);
+            }
+          }
         })
         .catch(() => {});
+    };
+
+    const currentViewCenterHz = () => {
+      const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
+      return vc.isInitialized() ? vc.getTargetCenterHz() : Number(s.centerHz);
+    };
+
+    const applyLocalCtunZoomCenter = (loHz: number) => {
+      const nextLoHz = clampHz(loHz);
+      const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
+      if (vc.isInitialized()) {
+        vc.nudgeTargetHz(nextLoHz - vc.getTargetCenterHz());
+      } else {
+        vc.snapTo(nextLoHz, s.hzPerPixel > 0 ? s.hzPerPixel : undefined);
+        vc.markOptimisticTune();
+      }
+      useConnectionStore.setState({ radioLoHz: nextLoHz });
+    };
+
+    const centerCtunZoomIn = (): number | null => {
+      const s = useConnectionStore.getState();
+      if (!s.ctunEnabled || receiver !== 'A' || tuneReceiver !== 'A') return null;
+      const targetLoHz = clampHz(effectiveLoHz(s.mode, s.vfoHz, s.cwPitchHz));
+      const loMoves = Math.abs(targetLoHz - s.radioLoHz) > 0.5;
+      const viewMoves = Math.abs(targetLoHz - currentViewCenterHz()) > 0.5;
+      if (!loMoves && !viewMoves) return null;
+
+      applyLocalCtunZoomCenter(targetLoHz);
+      if (loMoves) {
+        zoomCenterInflight?.abort();
+        const ctrl = new AbortController();
+        zoomCenterInflight = ctrl;
+        setRadioLo(targetLoHz, ctrl.signal)
+          .then((state) => {
+            if (ctrl.signal.aborted) return;
+            applyLocalCtunZoomCenter(state.radioLoHz);
+          })
+          .catch(() => {});
+      }
+      return targetLoHz;
     };
 
     const onPointerDown = (e: PointerEvent) => {
@@ -796,6 +852,7 @@ export function usePanTuneGesture(
       cancelPinchRaf();
       pendingAbort?.abort();
       zoomInflight?.abort();
+      zoomCenterInflight?.abort();
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('pointerup', onPointerUp);

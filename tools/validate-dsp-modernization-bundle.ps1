@@ -13035,6 +13035,7 @@ else {
                 $reportOkRaw = Get-JsonValue $artifactJson "ok"
                 $reportOk = if ($null -eq $reportOkRaw) { $false } else { Test-Truthy $reportOkRaw }
                 $scanError = [string](Get-JsonValue $artifactJson "scanError")
+                $reportScanFault = (-not $reportOk -or -not [string]::IsNullOrWhiteSpace($scanError))
                 $baseUrl = [string](Get-JsonValue $artifactJson "baseUrl")
                 $bundleRelativePaths = Test-Truthy (Get-JsonValue $artifactJson "bundleRelativePaths")
                 $scenarioId = [string](Get-JsonValue $artifactJson "scenarioId")
@@ -13268,8 +13269,8 @@ else {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-paths-not-bundle-relative" "Artifact '$artifactId' must be generated with bundleRelativePaths=true; rerun watch-dsp-manual-tune-observer.ps1 with -BundleDir."
                     $artifactValidationOk = $false
                 }
-                if (-not $reportOk -or -not [string]::IsNullOrWhiteSpace($scanError)) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-scan-error" "Artifact '$artifactId' reports scanError='$scanError'. Recapture or inspect partial evidence before promotion."
+                if ($reportScanFault -and $captureCount -le 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-scan-error" "Artifact '$artifactId' reports scanError='$scanError' before any captures were written. Recapture or inspect partial evidence before promotion."
                     $artifactValidationOk = $false
                 }
                 if (-not $safetyRxOnly) {
@@ -13620,6 +13621,15 @@ else {
                             Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-near-strong-candidate-report-path-untracked" "Artifact '$artifactId' best near-strong candidate reportPath='$bestNearStrongPromotionCandidateReportPath' does not match any validated captures[].reportPath entry."
                             $artifactValidationOk = $false
                         }
+                    }
+                }
+                if ($reportScanFault -and $captureCount -gt 0) {
+                    if ($manualReferencedCaptureReadyCount -gt 0 -and $manualReferencedCaptureProblemCount -eq 0 -and $readyCaptureCount -gt 0) {
+                        Add-ArtifactIssue $errors $warnings -Required:$false "manual-tune-observer-partial-scan-error" "Artifact '$artifactId' reports scanError='$scanError' after $manualReferencedCaptureReadyCount verified ready capture(s); preserving the verified capture evidence while keeping the scan fault visible."
+                    }
+                    else {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-scan-error" "Artifact '$artifactId' reports scanError='$scanError' and does not have verified ready capture evidence."
+                        $artifactValidationOk = $false
                     }
                 }
 

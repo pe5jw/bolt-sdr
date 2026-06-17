@@ -77,7 +77,9 @@ function stageCrestDb(peak: number | null, avg: number | null): number | null {
   return peak !== null && avg !== null && avg <= peak ? peak - avg : null;
 }
 
-export function preferredRxSignalDbm(s: RxChainSnapshot): {
+export function preferredRxSignalDbm(
+  s: Pick<RxChainSnapshot, 'signalPk' | 'signalAv' | 'fallbackDbm'>,
+): {
   dbm: number | null;
   source: RxSignalSource;
 } {

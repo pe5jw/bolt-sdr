@@ -751,21 +751,16 @@
 
 @media (max-width: 1280px) {
   .topbar {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-rows: 30px minmax(0, 1fr);
+    display: flex;
     align-items: center;
-    gap: 0 8px;
-    height: 90px;
-    padding: 4px 10px 5px;
+    gap: 6px;
+    height: 60px;
+    padding: 0 8px;
   }
 
   .topbar .brand {
-    grid-column: 1;
-    grid-row: 1;
-    flex-basis: auto;
-    width: 100%;
-    padding: 0 2px;
+    flex: 0 0 205px;
+    padding: 0 4px;
   }
 
   .topbar .brand-mark {
@@ -777,26 +772,22 @@
     max-width: 180px;
   }
 
-  .topbar .topbar-divider,
-  .topbar .topbar-spacer {
+  .topbar .topbar-divider {
     display: none;
   }
 
-  .topbar .topbar-connect {
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: end;
+  .topbar .topbar-spacer {
+    flex: 0 0 0 !important;
+    display: none;
   }
 
   .topbar .topbar-controls-shell {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    width: 100%;
     height: 100%;
-    flex: none;
+    flex: 1 1 auto;
+    min-width: 0;
     gap: 4px;
-    padding: 2px 0 6px;
-    border-top: 1px solid rgba(255,255,255,0.07);
+    padding: 0;
+    border-top: 0;
   }
 
   .topbar .topbar-controls {
@@ -805,9 +796,8 @@
     flex: 1 1 auto;
     padding: 0;
     border-top: 0;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(255,255,255,0.34) transparent;
-    scrollbar-gutter: stable;
+    scrollbar-width: none;
+    scrollbar-gutter: auto;
   }
 
   .topbar .topbar-scroll-btn {
@@ -825,36 +815,27 @@
   }
 
   .topbar .topbar-controls::-webkit-scrollbar {
-    height: 6px;
-  }
-
-  .topbar .topbar-controls::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .topbar .topbar-controls::-webkit-scrollbar-thumb {
-    background: rgba(255,255,255,0.26);
-    border-radius: 999px;
+    height: 0;
   }
 
   .topbar .ctrl-group {
-    padding: 3px 0;
+    padding: 5px 0;
   }
 
   .topbar .strip-divider {
-    height: 32px;
+    height: 36px;
     margin: 0 1px;
   }
 }
 
 @media (max-width: 720px) {
   .topbar {
-    grid-template-rows: 30px minmax(0, 1fr);
     padding-left: 8px;
     padding-right: 8px;
   }
 
   .topbar .brand {
+    flex-basis: 150px;
     gap: 6px;
   }
 
@@ -2700,6 +2681,14 @@
   background: linear-gradient(90deg, var(--panel-top), color-mix(in srgb, var(--panel-top) 60%, var(--panel-bot)));
   border-bottom: 1px solid rgba(0,0,0,0.4);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+}
+.log-select-cell {
+  display: flex;
+  align-items: center;
+}
+.log-select-cell input {
+  margin: 0;
+  cursor: pointer;
 }
 .log-rows { flex: 1; overflow-y: auto; min-height: 0; }
 .log-row {

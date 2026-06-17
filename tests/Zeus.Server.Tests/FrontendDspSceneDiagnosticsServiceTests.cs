@@ -212,6 +212,58 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
     }
 
     [Fact]
+    public void TryGetFreshNr5LevelerTopPeak_UsesSignedFilterPassbandForUsb()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        service.Update(SceneTopPeaksRequest(
+            new FrontendDspScenePeakDto(
+                FrequencyHz: 14_276_441,
+                OffsetHz: -559,
+                SnrDb: 23.1,
+                Dbfs: -81.5,
+                Confidence: 0.914,
+                Coherent: true),
+            new FrontendDspScenePeakDto(
+                FrequencyHz: 14_278_200,
+                OffsetHz: 1_200,
+                SnrDb: 13.0,
+                Dbfs: -92.0,
+                Confidence: 0.72,
+                Coherent: true)));
+
+        var peak = service.TryGetFreshNr5LevelerTopPeak(filterLowHz: 100, filterHighHz: 3_100);
+
+        Assert.NotNull(peak);
+        Assert.Equal(1_200, peak.OffsetHz);
+    }
+
+    [Fact]
+    public void TryGetFreshNr5LevelerTopPeak_TreatsWrongSidebandPeakAsOutOfPassband()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        service.Update(SceneTopPeaksRequest(
+            new FrontendDspScenePeakDto(
+                FrequencyHz: 14_276_441,
+                OffsetHz: -559,
+                SnrDb: 23.1,
+                Dbfs: -81.5,
+                Confidence: 0.914,
+                Coherent: true),
+            new FrontendDspScenePeakDto(
+                FrequencyHz: 14_249_628,
+                OffsetHz: -27_372,
+                SnrDb: 9.9,
+                Dbfs: -88.6,
+                Confidence: 0.734,
+                Coherent: true)));
+
+        var peak = service.TryGetFreshNr5LevelerTopPeak(filterLowHz: 100, filterHighHz: 3_100);
+
+        Assert.NotNull(peak);
+        Assert.Equal(-559, peak.OffsetHz);
+    }
+
+    [Fact]
     public void TryGetFreshNr5LevelerTopPeak_UsesDominantOffPassbandPeakWhenPassbandIsEmpty()
     {
         var service = new FrontendDspSceneDiagnosticsService();

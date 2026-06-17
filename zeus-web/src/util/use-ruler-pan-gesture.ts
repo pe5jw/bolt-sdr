@@ -11,10 +11,12 @@
 // repository for the full text, or https://www.gnu.org/licenses/.
 
 import { useEffect, type RefObject } from 'react';
-import { setRadioLo } from '../api/client';
+import { setRadioLo, setVfoB } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
-import { useDisplayStore } from '../state/display-store';
+import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import * as viewCenter from '../state/view-center';
+
+type SpectrumReceiver = 'A' | 'B';
 
 const MAX_HZ = 60_000_000;
 const CLICK_SLOP_PX = 3;
@@ -37,26 +39,31 @@ export function rulerDragTargetHz(
   return clampHz(startCenterHz - ((currentX - startX) / widthPx) * spanHz);
 }
 
-function readViewport(): { centerHz: number; spanHz: number } | null {
-  const s = useDisplayStore.getState();
-  const width = s.width || s.panDb?.length || 0;
-  if (!width || s.hzPerPixel <= 0) return null;
-  return {
-    centerHz: viewCenter.isInitialized()
-      ? viewCenter.getTargetCenterHz()
-      : Number(s.centerHz),
-    spanHz: width * s.hzPerPixel,
-  };
-}
-
 export function useRulerPanGesture(
   ref: RefObject<HTMLElement | null>,
+  receiver: SpectrumReceiver = 'A',
   active = true,
 ) {
   useEffect(() => {
     if (!active) return;
     const el = ref.current;
     if (!el) return;
+
+    // Receiver-aware seams. RX1's panadapter is centred on the hardware radio
+    // LO, so dragging the ruler repositions that LO (setRadioLo / radioLoHz).
+    // RX2's DDC follows VFO B with no separate "radio LO", so the B ruler
+    // retunes VFO B (setVfoB / vfoBHz) — mirroring the B body-drag in
+    // use-pan-tune-gesture. Each receiver glides its OWN view-centre instance.
+    const receiverIsB = receiver === 'B';
+    const vc = viewCenter.viewCenterFor(receiver);
+    const fallbackCenterHz = () =>
+      receiverIsB
+        ? useConnectionStore.getState().vfoBHz
+        : Number(selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz);
+    const writeCenter = (hz: number) =>
+      useConnectionStore.setState(receiverIsB ? { vfoBHz: hz } : { radioLoHz: hz });
+    const postCenter = (hz: number, signal?: AbortSignal) =>
+      receiverIsB ? setVfoB(hz, signal) : setRadioLo(hz, signal);
 
     type Drag = {
       pointerId: number;
@@ -71,17 +78,25 @@ export function useRulerPanGesture(
     let pendingRaf = 0;
     let pendingAbort: AbortController | null = null;
 
+    const readViewport = (): { centerHz: number; spanHz: number } | null => {
+      const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
+      const width = s.width || s.panDb?.length || 0;
+      if (!width || s.hzPerPixel <= 0) return null;
+      return {
+        centerHz: vc.isInitialized() ? vc.getTargetCenterHz() : fallbackCenterHz(),
+        spanHz: width * s.hzPerPixel,
+      };
+    };
+
     const commandedLoHz = () =>
-      pendingLoHz ?? (viewCenter.isInitialized()
-        ? viewCenter.getTargetCenterHz()
-        : Number(useDisplayStore.getState().centerHz));
+      pendingLoHz ?? (vc.isInitialized() ? vc.getTargetCenterHz() : fallbackCenterHz());
 
     const reconcileAppliedLo = (appliedLoHz: number) => {
       const next = clampHz(appliedLoHz);
-      useConnectionStore.setState({ radioLoHz: next });
+      writeCenter(next);
       if (pendingLoHz !== null) return;
       const delta = next - commandedLoHz();
-      if (delta !== 0) viewCenter.nudgeTargetHz(delta);
+      if (delta !== 0) vc.nudgeTargetHz(delta);
     };
 
     const flushPending = () => {
@@ -90,16 +105,16 @@ export function useRulerPanGesture(
       pendingLoHz = null;
       if (loHz == null) return;
 
-      viewCenter.markOptimisticTune();
-      useConnectionStore.setState({ radioLoHz: loHz });
+      vc.markOptimisticTune();
+      writeCenter(loHz);
       pendingAbort?.abort();
       const ctrl = new AbortController();
       pendingAbort = ctrl;
-      setRadioLo(loHz, ctrl.signal)
+      postCenter(loHz, ctrl.signal)
         .then((state) => {
           if (ctrl.signal.aborted) return;
           useConnectionStore.getState().applyState(state, { trustVfo: false });
-          reconcileAppliedLo(state.radioLoHz);
+          reconcileAppliedLo(receiverIsB ? state.vfoBHz : state.radioLoHz);
         })
         .catch(() => {});
     };
@@ -111,8 +126,8 @@ export function useRulerPanGesture(
     const queueLo = (nextLoHz: number) => {
       const loHz = clampHz(nextLoHz);
       if (loHz === pendingLoHz) return;
-      viewCenter.nudgeTargetHz(loHz - commandedLoHz());
-      useConnectionStore.setState({ radioLoHz: loHz });
+      vc.nudgeTargetHz(loHz - commandedLoHz());
+      writeCenter(loHz);
       pendingLoHz = loHz;
       scheduleFlush();
     };
@@ -172,5 +187,5 @@ export function useRulerPanGesture(
       el.removeEventListener('pointerup', onPointerUp);
       el.removeEventListener('pointercancel', onPointerUp);
     };
-  }, [ref, active]);
+  }, [ref, receiver, active]);
 }

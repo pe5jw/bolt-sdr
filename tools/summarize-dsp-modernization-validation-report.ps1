@@ -1988,6 +1988,11 @@ function Add-AcceptanceActionForGate {
                 $manualObserverAgcPumpingRiskCaptureCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverAgcPumpingRiskCaptureCount")
                 $manualBestReportPath = [string](Get-JsonValue $Validation "manualTuneObserverBestReportPath")
                 $manualBestJsonlPath = [string](Get-JsonValue $Validation "manualTuneObserverBestJsonlPath")
+                $manualObserverProcessUsable =
+                    $manualObserverOk -or
+                    ($manualObserverValid -and
+                        $manualObserverReferencedCaptureReadyCount -gt 0 -and
+                        $manualObserverReferencedCaptureProblemCount -eq 0)
                 $manualNearStrongCandidateCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverNearStrongPromotionCandidateCaptureCount")
                 $manualNearStrongReportPath = [string](Get-JsonValue $Validation "manualTuneObserverBestNearStrongPromotionCandidateReportPath")
                 $manualNearStrongVfoHz = Get-JsonValue $Validation "manualTuneObserverBestNearStrongPromotionCandidateVfoHz"
@@ -2142,8 +2147,8 @@ function Add-AcceptanceActionForGate {
                         $manualObserverPresent -and
                         $manualObserverSchemaVersion -ge 1 -and
                         $manualObserverTool -eq "watch-dsp-manual-tune-observer" -and
-                        $manualObserverOk -and
-                        [string]::IsNullOrWhiteSpace($manualObserverScanError) -and
+                        $manualObserverProcessUsable -and
+                        ([string]::IsNullOrWhiteSpace($manualObserverScanError) -or $manualObserverValid) -and
                         $manualObserverBundleRelativePaths
                     $manualObserverObservedTargetNoCapture =
                         (-not $manualObserverValid) -and

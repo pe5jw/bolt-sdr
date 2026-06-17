@@ -488,6 +488,8 @@ function MobileTxProfileSelect() {
   );
   const [phase, setPhase] = useState<MobileTxProfilePhase>('loading');
   const [message, setMessage] = useState(formatTxStationProfileSummary(STUDIO_SSB_PROFILE));
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const pendingProfileRef = useRef<TxStationProfileId | null>(null);
   const activationSeqRef = useRef(0);
   const connected = status === 'Connected';
@@ -527,6 +529,32 @@ function MobileTxProfileSelect() {
       ctrl.abort();
     };
   }, [loadAudioProfiles]);
+
+  useEffect(() => {
+    if (busy) setProfileMenuOpen(false);
+  }, [busy]);
+
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+
+    const onPointerDown = (event: PointerEvent) => {
+      const root = profileMenuRef.current;
+      const target = event.target;
+      if (root && target instanceof Node && !root.contains(target)) {
+        setProfileMenuOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setProfileMenuOpen(false);
+    };
+
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [profileMenuOpen]);
 
   const activateProfile = useCallback(
     async (profile: TxStationProfile, persistPolicy: boolean) => {
@@ -598,6 +626,15 @@ function MobileTxProfileSelect() {
     ],
   );
 
+  const selectProfile = useCallback(
+    (profileId: string) => {
+      setProfileMenuOpen(false);
+      const profile = getTxStationProfile(profileId, profiles);
+      void activateProfile(profile, true);
+    },
+    [activateProfile, profiles],
+  );
+
   useEffect(() => {
     if (!connected) return;
     const pendingProfileId = pendingProfileRef.current;
@@ -608,25 +645,46 @@ function MobileTxProfileSelect() {
 
   return (
     <div className="m-tx-profile" aria-label="TX audio profile selector">
-      <label className="m-control">
+      <div className="m-control m-profile-picker" ref={profileMenuRef}>
         <span className="m-control-lbl">TX Profile</span>
-        <select
-          className="m-select"
+        <button
+          type="button"
+          className="m-profile-trigger"
           aria-label="TX audio profile"
-          value={selectedProfile.id}
+          aria-haspopup="listbox"
+          aria-expanded={profileMenuOpen}
           disabled={busy}
-          onChange={(e) => {
-            const profile = getTxStationProfile(e.target.value, profiles);
-            void activateProfile(profile, true);
-          }}
+          onClick={() => setProfileMenuOpen((open) => !open)}
         >
-          {profiles.map((profile) => (
-            <option key={profile.id} value={profile.id}>
-              {profile.label}
-            </option>
-          ))}
-        </select>
-      </label>
+          <span>{selectedProfile.label}</span>
+          <span className="m-profile-caret" aria-hidden>
+            {profileMenuOpen ? '^' : 'v'}
+          </span>
+        </button>
+        {profileMenuOpen && (
+          <div
+            className="m-profile-menu"
+            role="listbox"
+            aria-label="TX audio profile options"
+          >
+            {profiles.map((profile) => {
+              const active = profile.id === selectedProfile.id;
+              return (
+                <button
+                  key={profile.id}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  className={`m-profile-option${active ? ' is-active' : ''}`}
+                  onClick={() => selectProfile(profile.id)}
+                >
+                  {profile.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
       <div
         className={`m-tx-profile-status${phase === 'error' ? ' is-error' : ''}`}
         title={displayedMessage}

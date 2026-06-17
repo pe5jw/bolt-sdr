@@ -5,6 +5,29 @@ namespace Zeus.Server.Tests;
 public sealed class HamClockServiceTests
 {
     [Fact]
+    public void CreateToolProcessStartInfo_UsesBundledNodePathWhenAvailable()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "zeus-hamclock-node-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var nodePath = Path.Combine(root, OperatingSystem.IsWindows() ? "node.exe" : "node");
+            File.WriteAllText(nodePath, string.Empty);
+
+            var psi = HamClockService.CreateToolProcessStartInfo("node", "--version", Path.GetTempPath(), root);
+
+            Assert.Equal(nodePath, psi.FileName);
+            Assert.Equal("--version", psi.Arguments);
+            var path = psi.Environment.First(kv => string.Equals(kv.Key, "PATH", StringComparison.OrdinalIgnoreCase)).Value;
+            Assert.StartsWith(root + Path.PathSeparator, path);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ReadEnvPortFromContent_UsesFirstUncommentedPort()
     {
         const string env = """

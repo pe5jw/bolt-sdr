@@ -50,7 +50,11 @@ import { isNativeAudio } from '../audio/host-mode';
 import { useMicUplinkDiagnosticsStore } from '../audio/mic-uplink-diagnostics-store';
 import { useMicPeakStore } from '../audio/mic-peak-store';
 import { useConnectionStore, type WisdomPhase } from '../state/connection-store';
-import { hasActiveFrameConsumers, useDisplayStore } from '../state/display-store';
+import {
+  hasActiveFrameConsumers,
+  subscribeFrameConsumerPresence,
+  useDisplayStore,
+} from '../state/display-store';
 import { AlertKind, useTxStore } from '../state/tx-store';
 import { useBandPlanStore } from '../state/bandPlan';
 import { useRxMetersStore } from '../state/rx-meters-store';
@@ -222,6 +226,7 @@ getAudioBus().subscribe((frame) => getAudioClient().push(frame));
 // withholds 0x02 until a decoder requests it (refcounted server-side), so
 // this is what feeds the browser CW decoder there. No-op when disconnected.
 const MSG_TYPE_AUDIO_STREAM_REQUEST = 0x21;
+export const MSG_TYPE_DISPLAY_STREAM_REQUEST = 0x22;
 export function sendAudioStreamRequest(enable: boolean): void {
   const ws = activeWs;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -233,6 +238,20 @@ export function sendAudioStreamRequest(enable: boolean): void {
     ws.send(buf);
   } catch (err) {
     warnOnce('ws-audio-stream-request', 'audio stream request send failed', err);
+  }
+}
+
+export function sendDisplayStreamRequest(enable: boolean): void {
+  const ws = activeWs;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const buf = new ArrayBuffer(2);
+  const view = new DataView(buf);
+  view.setUint8(0, MSG_TYPE_DISPLAY_STREAM_REQUEST);
+  view.setUint8(1, enable ? 1 : 0);
+  try {
+    ws.send(buf);
+  } catch (err) {
+    warnOnce('ws-display-stream-request', 'display stream request send failed', err);
   }
 }
 
@@ -320,6 +339,11 @@ export function startRealtime(path = '/ws'): () => void {
   let stopped = false;
 
   const { pushFrame, setConnected } = useDisplayStore.getState();
+  const syncDisplayStreamRequest = (active = hasActiveFrameConsumers()) => {
+    sendDisplayStreamRequest(active);
+  };
+  const unsubscribeFrameConsumerPresence =
+    subscribeFrameConsumerPresence(syncDisplayStreamRequest);
 
   const connect = () => {
     if (stopped) return;
@@ -338,6 +362,7 @@ export function startRealtime(path = '/ws'): () => void {
       setConnected(true);
       useMicUplinkDiagnosticsStore.getState().setTransportReady(true);
       notifyMicTransportReady();
+      syncDisplayStreamRequest();
     };
     ws.onclose = () => {
       setConnected(false);
@@ -693,6 +718,8 @@ export function startRealtime(path = '/ws'): () => void {
   return () => {
     stopped = true;
     if (timer != null) clearTimeout(timer);
+    unsubscribeFrameConsumerPresence();
+    sendDisplayStreamRequest(false);
     if (ws) {
       ws.onopen = null;
       ws.onclose = null;

@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import type { SnapLockMeasure } from '../dsp/signal-estimator';
 import { snapLockStep, type SnapLockCfg, type SnapLockState } from './snap-lock';
 
-const CFG: SnapLockCfg = { maxDriftHz: 500, deadbandHz: 40, maxStepHz: 80, releaseMissFrames: 25 };
+const CFG: SnapLockCfg = { maxDriftHz: 500, deadbandHz: 40, maxStepHz: 80, releaseMissFrames: 25, stepHz: 100 };
 
 function lockedAt(hz: number): SnapLockState {
   return { dialHz: hz, bodyHz: hz, originDialHz: hz, originBodyHz: hz, missFrames: 0 };
@@ -27,25 +27,37 @@ function meas(dialHz: number, bodyHz: number): SnapLockMeasure {
 describe('snapLockStep — self-correcting decision core', () => {
   it('does nothing inside the deadband (no chatter)', () => {
     const r = snapLockStep(lockedAt(1000), meas(1020, 1020), CFG);
-    expect(r.commitHz).toBeNull(); // 20 Hz < 40 Hz deadband
+    // target rounds to the 100 Hz grid (1000) → zero error → hold.
+    expect(r.commitHz).toBeNull();
     expect(r.dialHz).toBe(1000);
     expect(r.release).toBe(false);
     expect(r.bodyHz).toBe(1020); // body still tracked silently
   });
 
-  it('corrects past the deadband but clamps the per-frame step', () => {
+  it('corrects past the deadband but creeps in whole tuning steps', () => {
     const r = snapLockStep(lockedAt(1000), meas(1300, 1300), CFG);
-    // err 300 → clamped to +80; the dial creeps, never lurches.
-    expect(r.dialHz).toBe(1080);
-    expect(r.commitHz).toBe(1080);
+    // target 1300 (on grid), err 300 → one 100 Hz step toward it (maxStepHz 80
+    // rounds to one cell); the dial creeps and stays on the step grid.
+    expect(r.dialHz).toBe(1100);
+    expect(r.commitHz).toBe(1100);
   });
 
   it('clamps the target to ±maxDrift of the snap point (can never reach a far neighbour)', () => {
     // A measurement 1 kHz away (e.g. a momentary mis-measure toward a neighbour)
     // is clamped to origin+500 before the step is even taken.
     const r = snapLockStep(lockedAt(1000), meas(2000, 2000), CFG);
-    expect(r.dialHz).toBe(1080); // still only +80 this frame, toward the 1500 cap
+    expect(r.dialHz).toBe(1100); // one step this frame, toward the 1500 cap
     expect(r.bodyHz).toBe(1500); // body anchor clamped to origin+maxDrift
+  });
+
+  it('only ever commits step-grid frequencies (the off-step regression)', () => {
+    // Raw sub-step edges must never reach the dial: every commit is a multiple
+    // of the operator's tuning step, no matter where the measured edge sits.
+    for (const edge of [1037, 1162, 1283, 1499, 1500]) {
+      const r = snapLockStep(lockedAt(1000), meas(edge, edge), CFG);
+      if (r.commitHz !== null) expect(r.commitHz % CFG.stepHz).toBe(0);
+      expect(r.dialHz % CFG.stepHz).toBe(0);
+    }
   });
 
   it('counts a miss when the signal is gone, holding the dial', () => {

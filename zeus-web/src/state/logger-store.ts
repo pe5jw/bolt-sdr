@@ -63,6 +63,7 @@ type LoggerState = {
   publishSelectedToQrz: (logEntryIds: string[]) => Promise<void>;
   clearPublishResult: () => void;
   toggleSelected: (id: string) => void;
+  setSelectedIds: (ids: Iterable<string>) => void;
   clearSelected: () => void;
 };
 
@@ -133,6 +134,8 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
     else next.add(id);
     set({ selectedIds: next });
   },
+
+  setSelectedIds: (ids: Iterable<string>) => set({ selectedIds: new Set(ids) }),
 
   clearSelected: () => set({ selectedIds: new Set<string>() }),
 }));

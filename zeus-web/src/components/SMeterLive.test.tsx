@@ -6,7 +6,6 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createElement, type ComponentType } from 'react';
 
 import { render } from './meters/__tests__/harness';
-import { useConnectionStore } from '../state/connection-store';
 import { useRxMetersStore } from '../state/rx-meters-store';
 import { useTxStore } from '../state/tx-store';
 import { SMeterLive } from './SMeterLive';
@@ -34,10 +33,6 @@ beforeAll(() => {
 });
 
 function resetStores() {
-  useConnectionStore.setState({
-    autoAgcEnabled: false,
-    autoAttEnabled: true,
-  });
   useTxStore.setState({
     moxOn: false,
     tunOn: false,
@@ -60,7 +55,7 @@ function resetStores() {
 describe('SMeterLive', () => {
   beforeEach(resetStores);
 
-  it('renders calibrated RxMetersV2 signal and receiver-chain health in RX', () => {
+  it('renders calibrated RxMetersV2 signal in RX without receiver-chain chips', () => {
     useTxStore.setState({ rxDbm: -130 });
     useRxMetersStore.setState({
       signalPk: -73,
@@ -75,9 +70,9 @@ describe('SMeterLive', () => {
     const { container, unmount } = render(createElement(SMeterLiveComponent));
 
     expect(container.textContent).toContain('-73');
-    expect(container.textContent).toContain('RX chain optimized');
-    expect(container.textContent).toContain('ADC HD18 dB');
-    expect(container.textContent).toContain('AGC+4 dB');
+    expect(container.textContent).not.toContain('RX chain optimized');
+    expect(container.textContent).not.toContain('ADC HD');
+    expect(container.textContent).not.toContain('AGC+4 dB');
 
     unmount();
   });
@@ -88,43 +83,43 @@ describe('SMeterLive', () => {
     const { container, unmount } = render(createElement(SMeterLiveComponent));
 
     expect(container.textContent).toContain('-91');
-    expect(container.textContent).toContain('RX signal only');
+    expect(container.textContent).not.toContain('RX signal only');
 
     unmount();
   });
 
-  it('keeps RX health chips hidden in mobile chip-suppressed mode', () => {
-    useRxMetersStore.setState({ signalPk: -73, adcPk: -18, agcGain: 4 });
+  it('keeps TX chips hidden in mobile chip-suppressed mode', () => {
+    useTxStore.setState({
+      moxOn: true,
+      fwdWatts: 25,
+      swr: 2.34,
+      micDbfs: -22,
+    });
 
     const { container, unmount } = render(
       createElement(SMeterLiveComponent, { hideChips: true }),
     );
 
-    expect(container.textContent).not.toContain('RX chain optimized');
-    expect(container.textContent).not.toContain('ADC HD');
+    expect(container.textContent).toContain('25.0');
+    expect(container.textContent).not.toContain('SWR');
+    expect(container.textContent).not.toContain('MIC');
 
     unmount();
   });
 
-  it('shows auto-optimizing AGC health while auto AGC is correcting stress', () => {
-    useConnectionStore.setState({
-      autoAgcEnabled: true,
-      autoAttEnabled: true,
-    });
-    useTxStore.setState({ rxDbm: -130 });
-    useRxMetersStore.setState({
-      signalPk: -58,
-      signalAv: -63,
-      adcPk: -5,
-      adcAv: -18,
-      agcGain: -32,
-      agcEnvPk: -60,
-      agcEnvAv: -66,
+  it('renders TX SWR and MIC chips while transmitting', () => {
+    useTxStore.setState({
+      moxOn: true,
+      fwdWatts: 25,
+      swr: 2.34,
+      micDbfs: -22,
     });
 
     const { container, unmount } = render(createElement(SMeterLiveComponent));
 
-    expect(container.textContent).toContain('AGC auto-optimizing');
+    expect(container.textContent).toContain('25.0');
+    expect(container.textContent).toContain('SWR2.34');
+    expect(container.textContent).toContain('MIC-22 dBfs');
 
     unmount();
   });

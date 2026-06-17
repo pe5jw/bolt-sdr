@@ -64,6 +64,12 @@ public sealed class StreamingHub
     // audio stream. Used by GatedWebSocketAudioSink in desktop mode.
     private const byte MsgTypeAudioStreamRequest = 0x21;
 
+    // Client asks to (start|stop) the high-rate display stream for this
+    // session. Control-plane telemetry still flows to every client; display
+    // frames are only generated and fanned out while at least one visible
+    // spectrum surface is mounted somewhere.
+    private const byte MsgTypeDisplayStreamRequest = 0x22;
+
     // Largest client→server payload we'll reassemble. A mic PCM frame is
     // 1 + 960*4 = 3841 bytes; 16 KB leaves comfortable headroom if the
     // contract ever adds a control frame. Receives larger than this are
@@ -132,11 +138,21 @@ public sealed class StreamingHub
     // disconnect/reload can't leak a pinned stream.
     private int _audioStreamRequests;
 
+    // Aggregate count of connected clients that need the high-rate display
+    // stream (panadapter / waterfall / mini-pan). DspPipelineService reads
+    // this once per tick to skip WDSP analyzer reads and frame serialisation
+    // for control-only clients.
+    private int _displayStreamRequests;
+
     /// <summary>
     /// True when at least one connected client has requested the RX audio
     /// stream. Cheap (one volatile read) — safe to call on the DSP tick.
     /// </summary>
     internal bool AudioStreamRequested => Volatile.Read(ref _audioStreamRequests) > 0;
+
+    internal bool DisplayStreamRequested => Volatile.Read(ref _displayStreamRequests) > 0;
+
+    internal int DisplaySubscriberCount => Volatile.Read(ref _displayStreamRequests);
 
     public StreamingHub(ILogger<StreamingHub> log)
     {
@@ -283,6 +299,7 @@ public sealed class StreamingHub
             // Release any RX-audio-stream request this client held so a
             // disconnect/reload can't pin the desktop on-demand stream on.
             session.SetWantsAudio(false);
+            session.SetWantsDisplay(false);
             _clients.TryRemove(id, out _);
             _log.LogInformation("ws.client.disconnected id={Id} total={Count}", id, _clients.Count);
         }
@@ -372,7 +389,7 @@ public sealed class StreamingHub
 
     public void Broadcast(in DisplayFrame frame)
     {
-        if (_clients.IsEmpty) return;
+        if (!DisplayStreamRequested) return;
 
         int total = frame.TotalByteLength;
         var payload = new byte[total];
@@ -380,6 +397,7 @@ public sealed class StreamingHub
         frame.Serialize(writer);
         foreach (var client in _clients.Values)
         {
+            if (!client.WantsDisplay) continue;
             if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsDisplay);
         }
     }
@@ -703,6 +721,20 @@ public sealed class StreamingHub
             Interlocked.Add(ref _hub._audioStreamRequests, want ? 1 : -1);
         }
 
+        // Whether this client currently has any mounted display-frame consumer
+        // (panadapter / waterfall / mini-pan). Broadcast reads this from the
+        // DSP thread, so store it as an int and use Volatile/Interlocked.
+        private int _wantsDisplay;
+        public bool WantsDisplay => Volatile.Read(ref _wantsDisplay) != 0;
+
+        public void SetWantsDisplay(bool want)
+        {
+            int next = want ? 1 : 0;
+            int prev = Interlocked.Exchange(ref _wantsDisplay, next);
+            if (prev == next) return;
+            Interlocked.Add(ref _hub._displayStreamRequests, want ? 1 : -1);
+        }
+
         // Intercept the client→server control frame here (we have the session
         // context); everything else goes to the hub's shared dispatcher.
         private void Dispatch(ReadOnlyMemory<byte> frame)
@@ -710,6 +742,11 @@ public sealed class StreamingHub
             if (frame.Length >= 1 && frame.Span[0] == MsgTypeAudioStreamRequest)
             {
                 SetWantsAudio(frame.Length > 1 && frame.Span[1] != 0);
+                return;
+            }
+            if (frame.Length >= 1 && frame.Span[0] == MsgTypeDisplayStreamRequest)
+            {
+                SetWantsDisplay(frame.Length > 1 && frame.Span[1] != 0);
                 return;
             }
             _hub.DispatchInbound(frame);

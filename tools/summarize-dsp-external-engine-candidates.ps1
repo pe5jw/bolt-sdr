@@ -333,9 +333,12 @@ function New-CandidateSummary {
     if ($id -eq "speexdsp" -and -not (Test-TextHas $evidenceText @("pumping"))) {
         $issues.Add("speex-no-pumping-gate-missing") | Out-Null
     }
-    if (($id -eq "rnnoise" -or $id -eq "deepfilternet") -and
+    if (($id -eq "rnnoise" -or $id -eq "rmnoise" -or $id -eq "deepfilternet") -and
         -not ($evidenceText -like "*weak*" -and ($evidenceText -like "*CW*" -or $evidenceText -like "*carrier*" -or $evidenceText -like "*bypass*"))) {
         $issues.Add("neural-weak-signal-bypass-gate-missing") | Out-Null
+    }
+    if ($id -eq "rmnoise" -and -not (Test-TextHas $evidenceText @("consent", "privacy", "service", "fallback"))) {
+        $issues.Add("rmnoise-consent-privacy-service-fallback-gate-missing") | Out-Null
     }
 
     $runtimeTier = Get-RiskTier $runtimeRisk
@@ -406,6 +409,25 @@ function Get-BakeoffScenariosForCandidate {
                     scenarioId = "noise-only-gating"
                     purpose = "Verify the speech denoiser does not create false-open noise artifacts."
                     acceptanceGates = @("Noise-only output stays bounded.", "No VAD chatter or burbling.", "Fallback remains bit-clean when disabled.")
+                }
+            )
+        }
+        "rmnoise" {
+            return @(
+                [ordered]@{
+                    scenarioId = "ssb-like-speech-post-demod"
+                    purpose = "Measure offline RM Noise speech-denoise benefit after WDSP demodulation."
+                    acceptanceGates = @("Improves speech artifact score without weak-signal loss.", "No added clipping or audio RMS pumping.", "Offline fixture provenance is reproducible.")
+                },
+                [ordered]@{
+                    scenarioId = "weak-cw-carrier-bypass"
+                    purpose = "Prove weak CW/carrier and non-speech HF content bypass the service candidate safely."
+                    acceptanceGates = @("Weak-carrier SNR/SINAD does not regress.", "Bypass/fallback is deterministic.", "No service-trained speech artifacts are introduced on CW.")
+                },
+                [ordered]@{
+                    scenarioId = "service-unavailable-bypass"
+                    purpose = "Verify network/service failure keeps current NR5 audio intact."
+                    acceptanceGates = @("Service unavailable falls back immediately.", "No live cloud stream is required for RX.", "Operator consent and privacy gates are documented.")
                 }
             )
         }
@@ -772,7 +794,7 @@ if (-not [string]::IsNullOrWhiteSpace($SnapshotPath) -and (Test-Path -LiteralPat
     }
 }
 
-$requiredCandidateIds = @("rnnoise", "deepfilternet", "speexdsp", "webrtc-apm")
+$requiredCandidateIds = @("rnnoise", "rmnoise", "deepfilternet", "speexdsp", "webrtc-apm")
 $candidateSummaries = New-Object System.Collections.Generic.List[object]
 $seen = @{}
 foreach ($candidate in $candidateEntries) {

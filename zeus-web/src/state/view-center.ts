@@ -304,6 +304,12 @@ export const isWithinRefillHold = rx1.isWithinRefillHold;
  *  connection-store poll guard to suppress vfoHz rubber-banding from the
  *  1 Hz /api/state poll. */
 export const msSinceOptimisticTune = rx1.msSinceOptimisticTune;
+/** Per-receiver optimistic tune age for poll guards. RX1/VFO A and RX2/VFO B
+ *  must suppress stale state independently while the operator is dragging one
+ *  side of the stitched display. */
+export function msSinceOptimisticTuneFor(receiver: 'A' | 'B'): number {
+  return viewCenterFor(receiver).msSinceOptimisticTune();
+}
 /** Subscribe to RX1 view-center motion. Fires once per tween tick (display
  *  rate while gliding; silent when parked). Returns the unsubscribe fn. */
 export const subscribe = rx1.subscribe;

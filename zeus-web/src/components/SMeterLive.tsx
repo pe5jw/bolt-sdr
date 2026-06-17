@@ -43,8 +43,7 @@
 // License for details.
 
 import { SMeter } from './SMeter';
-import { analyzeRxChain } from '../dsp/rx-chain-health';
-import { useConnectionStore } from '../state/connection-store';
+import { preferredRxSignalDbm } from '../dsp/rx-chain-health';
 import { useRxMetersStore } from '../state/rx-meters-store';
 import { useTxStore } from '../state/tx-store';
 
@@ -57,10 +56,10 @@ import { useTxStore } from '../state/tx-store';
 // SWR and mic dBfs are surfaced alongside the meter only while MOX is on —
 // they're TX-only telemetry and would be misleading under RX.
 //
-// `hideChips` lets a host (mobile shell) suppress the in-body chip row and
+// `hideChips` lets a host (mobile shell) suppress the in-body TX chip row and
 // surface the same telemetry in its own chrome (e.g. the S-Meter section
-// header). Without that escape, the chips appear/disappear with TX state and
-// shift everything below the meter down on key — see MobileApp.tsx.
+// header). Without that escape, SWR/MIC chips would appear below the meter and
+// shift everything below it down on key — see MobileApp.tsx.
 
 export function SMeterLive({ hideChips = false }: { hideChips?: boolean } = {}) {
   const moxOn = useTxStore((s) => s.moxOn);
@@ -71,41 +70,15 @@ export function SMeterLive({ hideChips = false }: { hideChips?: boolean } = {}) 
   const fallbackRxDbm = useTxStore((s) => s.rxDbm);
   const signalPk = useRxMetersStore((s) => s.signalPk);
   const signalAv = useRxMetersStore((s) => s.signalAv);
-  const adcPk = useRxMetersStore((s) => s.adcPk);
-  const adcAv = useRxMetersStore((s) => s.adcAv);
-  const agcGain = useRxMetersStore((s) => s.agcGain);
-  const agcEnvPk = useRxMetersStore((s) => s.agcEnvPk);
-  const agcEnvAv = useRxMetersStore((s) => s.agcEnvAv);
-  const autoAgcEnabled = useConnectionStore((s) => s.autoAgcEnabled);
-  const autoAttEnabled = useConnectionStore((s) => s.autoAttEnabled);
   const transmitting = moxOn || tunOn;
 
   const swrColor = swr >= 3 ? 'var(--tx)' : swr >= 2 ? 'var(--power)' : 'var(--fg-0)';
-  const rx = analyzeRxChain(
-    {
-      signalPk,
-      signalAv,
-      adcPk,
-      adcAv,
-      agcGain,
-      agcEnvPk,
-      agcEnvAv,
-      fallbackDbm: fallbackRxDbm,
-    },
-    { autoAgcEnabled, autoAttEnabled },
-  );
-  const rxDbm = rx.signalDbm ?? fallbackRxDbm;
-  const rxColor =
-    rx.state === 'overload'
-      ? 'var(--tx)'
-      : rx.state === 'underfilled' || rx.state === 'agc-stressed'
-        ? 'var(--power)'
-        : rx.state === 'waiting'
-          ? 'var(--fg-3)'
-          : 'var(--fg-0)';
-  const adcText =
-    rx.adcHeadroomDb === null ? '--' : `${rx.adcHeadroomDb.toFixed(0)} dB`;
-  const agcText = `${rx.agcGain >= 0 ? '+' : ''}${rx.agcGain.toFixed(0)} dB`;
+  const rxSignal = preferredRxSignalDbm({
+    signalPk,
+    signalAv,
+    fallbackDbm: fallbackRxDbm,
+  });
+  const rxDbm = rxSignal.dbm ?? fallbackRxDbm;
 
   return (
     <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -127,24 +100,6 @@ export function SMeterLive({ hideChips = false }: { hideChips?: boolean } = {}) 
           <span className="chip mono">
             <span className="k">MIC</span>
             <span className="v">{micDbfs.toFixed(0)} dBfs</span>
-          </span>
-        </div>
-      )}
-      {!transmitting && !hideChips && (
-        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-          <span className="chip mono" title={rx.detail}>
-            <span className="k">RX</span>
-            <span className="v" style={{ color: rxColor }}>
-              {rx.label}
-            </span>
-          </span>
-          <span className="chip mono" title="ADC peak headroom from RxMetersV2">
-            <span className="k">ADC HD</span>
-            <span className="v">{adcText}</span>
-          </span>
-          <span className="chip mono" title="WDSP AGC gain, positive means boost">
-            <span className="k">AGC</span>
-            <span className="v">{agcText}</span>
           </span>
         </div>
       )}

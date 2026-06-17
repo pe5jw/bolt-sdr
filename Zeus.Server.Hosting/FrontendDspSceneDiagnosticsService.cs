@@ -225,7 +225,10 @@ public sealed class FrontendDspSceneDiagnosticsService
         }
     }
 
-    public FrontendDspSceneTopPeakDto? TryGetFreshNr5LevelerTopPeak(int passbandMaxAbsOffsetHz = 3_000)
+    public FrontendDspSceneTopPeakDto? TryGetFreshNr5LevelerTopPeak(
+        int? filterLowHz = null,
+        int? filterHighHz = null,
+        int passbandMaxAbsOffsetHz = 3_000)
     {
         lock (_sync)
         {
@@ -240,11 +243,20 @@ public sealed class FrontendDspSceneDiagnosticsService
             int nearestPassbandAbsOffset = int.MaxValue;
             FrontendDspScenePeakDto? strongestOutOfPassband = null;
             double strongestOutOfPassbandScore = 0.0;
+            bool filterPassbandKnown =
+                filterLowHz.HasValue &&
+                filterHighHz.HasValue &&
+                filterLowHz.Value != filterHighHz.Value;
+            int low = filterPassbandKnown ? Math.Min(filterLowHz!.Value, filterHighHz!.Value) : 0;
+            int high = filterPassbandKnown ? Math.Max(filterLowHz!.Value, filterHighHz!.Value) : 0;
 
             foreach (var peak in _latest.TopPeaks)
             {
                 int absOffset = Math.Abs(peak.OffsetHz);
-                if (absOffset <= passbandMaxAbsOffsetHz)
+                bool inPassband = filterPassbandKnown
+                    ? peak.OffsetHz >= low && peak.OffsetHz <= high
+                    : absOffset <= passbandMaxAbsOffsetHz;
+                if (inPassband)
                 {
                     if (absOffset < nearestPassbandAbsOffset)
                     {
@@ -261,7 +273,12 @@ public sealed class FrontendDspSceneDiagnosticsService
                 double confidence = peak.Confidence ?? 0.0;
                 double snrProof = ClampUnit((peak.SnrDb - 10.0) / 18.0);
                 double confidenceProof = ClampUnit((confidence - 0.68) / 0.24);
-                double offsetProof = 0.45 + 0.55 * ClampUnit((absOffset - passbandMaxAbsOffsetHz) / 18_000.0);
+                int passbandDistance = filterPassbandKnown
+                    ? peak.OffsetHz < low
+                        ? low - peak.OffsetHz
+                        : peak.OffsetHz - high
+                    : Math.Max(0, absOffset - passbandMaxAbsOffsetHz);
+                double offsetProof = 0.45 + 0.55 * ClampUnit(passbandDistance / 18_000.0);
                 double score = snrProof * confidenceProof * offsetProof;
                 if (score > strongestOutOfPassbandScore)
                 {
