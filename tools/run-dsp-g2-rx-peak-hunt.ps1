@@ -17,6 +17,8 @@ param(
 
     [string[]]$CandidateMHz = @(),
 
+    [int]$OperatorTrendMaxCandidates = 4,
+
     [switch]$AutoPhoneCluster,
 
     [string]$AutoPhoneClusterSearchRoot = "",
@@ -685,6 +687,146 @@ function Get-OperatorFrequencyCandidates {
     return $candidates.ToArray()
 }
 
+function Get-OperatorTrendNeighborCandidates {
+    param(
+        [object[]]$OperatorCandidates,
+        $OriginalVfo = $null,
+        [long]$BandLowHz,
+        [long]$BandHighHz,
+        [int]$MaxCandidates
+    )
+
+    if ($MaxCandidates -lt 1) {
+        return @()
+    }
+
+    $anchorMap = @{}
+    foreach ($candidate in @($OperatorCandidates)) {
+        $frequencyHz = Get-NullableLongValue (Get-JsonValue $candidate "frequencyHz")
+        if ($null -eq $frequencyHz -or $frequencyHz -lt $BandLowHz -or $frequencyHz -gt $BandHighHz) {
+            continue
+        }
+
+        $roundedHz = [long]([Math]::Round([double]$frequencyHz / 1000.0) * 1000.0)
+        $key = [string]$roundedHz
+        if (-not $anchorMap.ContainsKey($key)) {
+            $anchorMap[$key] = [pscustomobject][ordered]@{
+                frequencyHz = $roundedHz
+                rank = Get-IntValue (Get-JsonValue $candidate "rank")
+            }
+        }
+    }
+
+    if ($anchorMap.Count -le 0) {
+        return @()
+    }
+
+    $neighborOffsetsHz = @(-10000, -7000, -5000, -3000, 3000, 5000, 7000, 10000)
+    $neighborMap = @{}
+    foreach ($anchor in @($anchorMap.Values | Sort-Object @{ Expression = { [int]$_.rank }; Ascending = $true }, @{ Expression = { [long]$_.frequencyHz }; Ascending = $true })) {
+        foreach ($offsetHz in $neighborOffsetsHz) {
+            $candidateHz = [long]([Math]::Round(([double]([long]$anchor.frequencyHz + [long]$offsetHz)) / 1000.0) * 1000.0)
+            if ($candidateHz -lt $BandLowHz -or $candidateHz -gt $BandHighHz) {
+                continue
+            }
+
+            $key = [string]$candidateHz
+            if ($anchorMap.ContainsKey($key)) {
+                continue
+            }
+
+            $offsetScore = [Math]::Max(0.0, 40.0 - ([Math]::Abs([double]$offsetHz) / 1000.0))
+            if ($offsetScore -le 0.0) {
+                continue
+            }
+
+            if (-not $neighborMap.ContainsKey($key)) {
+                $neighborMap[$key] = [pscustomobject][ordered]@{
+                    frequencyHz = $candidateHz
+                    sourceFrequencyHz = [long]$anchor.frequencyHz
+                    neighborOffsetHz = [long]$offsetHz
+                    supportCount = 1
+                    score = [Math]::Round($offsetScore, 3)
+                    bestOffsetScore = [double]$offsetScore
+                    anchorFrequencyHz = @([long]$anchor.frequencyHz)
+                }
+                continue
+            }
+
+            $entry = $neighborMap[$key]
+            $entry.supportCount = [int]$entry.supportCount + 1
+            $entry.score = [Math]::Round(([double]$entry.score + ([double]$offsetScore * 0.35)), 3)
+            $entry.anchorFrequencyHz = @(@($entry.anchorFrequencyHz) + [long]$anchor.frequencyHz | Select-Object -Unique)
+            if ([double]$entry.bestOffsetScore -lt [double]$offsetScore) {
+                $entry.sourceFrequencyHz = [long]$anchor.frequencyHz
+                $entry.neighborOffsetHz = [long]$offsetHz
+                $entry.bestOffsetScore = [double]$offsetScore
+            }
+        }
+    }
+
+    if ($neighborMap.Count -le 0) {
+        return @()
+    }
+
+    $sortedNeighbors = @($neighborMap.Values | Sort-Object @{ Expression = { [int]$_.supportCount }; Descending = $true }, @{ Expression = { [double]$_.score }; Descending = $true }, @{ Expression = { [long]$_.frequencyHz }; Ascending = $true })
+    $rank = 0
+    $selectedNeighborMap = @{}
+    $selectedNeighborSourceCounts = @{}
+    $candidates = New-Object System.Collections.Generic.List[object]
+    foreach ($perSourceLimit in @(1, 2, 9999)) {
+        if ($candidates.Count -ge $MaxCandidates) {
+            break
+        }
+
+        foreach ($neighbor in $sortedNeighbors) {
+            if ($candidates.Count -ge $MaxCandidates) {
+                break
+            }
+
+            $neighborKey = [string]([long]$neighbor.frequencyHz)
+            if ($selectedNeighborMap.ContainsKey($neighborKey)) {
+                continue
+            }
+
+            $sourceKey = [string]([long]$neighbor.sourceFrequencyHz)
+            $sourceCount = 0
+            if ($selectedNeighborSourceCounts.ContainsKey($sourceKey)) {
+                $sourceCount = [int]$selectedNeighborSourceCounts[$sourceKey]
+            }
+            if ($sourceCount -ge $perSourceLimit) {
+                continue
+            }
+
+            $offset = $null
+            if ($null -ne $OriginalVfo) {
+                $offset = [long]$neighbor.frequencyHz - [long]$OriginalVfo
+            }
+
+            $rank++
+            $selectedNeighborMap[$neighborKey] = $true
+            $selectedNeighborSourceCounts[$sourceKey] = $sourceCount + 1
+            $candidates.Add([pscustomobject][ordered]@{
+                rank = $rank
+                source = "operator-trend-neighbor"
+                frequencyHz = [long]$neighbor.frequencyHz
+                offsetHz = $offset
+                snrDb = $null
+                dbfs = $null
+                confidence = $null
+                coherent = $null
+                evidenceScore = [double]$neighbor.score
+                evidenceOperatorAnchorFrequencyHz = [long]$neighbor.sourceFrequencyHz
+                evidenceOperatorAnchorFrequencyHzList = @($neighbor.anchorFrequencyHz | Sort-Object)
+                evidenceOperatorAnchorCount = [int]$neighbor.supportCount
+                evidenceNeighborOffsetHz = [long]$neighbor.neighborOffsetHz
+            }) | Out-Null
+        }
+    }
+
+    return @($candidates.ToArray())
+}
+
 function Get-AutoPhoneClusterCandidates {
     param(
         [string]$SearchRoot,
@@ -1077,6 +1219,9 @@ if ($AutoPhoneClusterLookbackHours -lt 1) {
 if ($AutoPhoneClusterMinSpeechSamples -lt 0) {
     $AutoPhoneClusterMinSpeechSamples = 0
 }
+if ($OperatorTrendMaxCandidates -lt 0) {
+    $OperatorTrendMaxCandidates = 0
+}
 
 if ($PassCount -lt 1) {
     $PassCount = 1
@@ -1086,6 +1231,13 @@ if ($PassDelaySec -lt 0) {
 }
 $operatorCandidatesForPlan = @(Get-OperatorFrequencyCandidates -FrequencyHz $CandidateFrequencyHz -FrequencyMHz $CandidateMHz)
 $operatorCandidateFrequencyHzForPlan = @($operatorCandidatesForPlan | ForEach-Object { [long]$_.frequencyHz })
+$operatorTrendCandidatesForPlan = @(Get-OperatorTrendNeighborCandidates `
+        -OperatorCandidates $operatorCandidatesForPlan `
+        -OriginalVfo $null `
+        -BandLowHz $AutoPhoneClusterBandLowHz `
+        -BandHighHz $AutoPhoneClusterBandHighHz `
+        -MaxCandidates $OperatorTrendMaxCandidates)
+$operatorTrendCandidateFrequencyHzForPlan = @($operatorTrendCandidatesForPlan | ForEach-Object { [long]$_.frequencyHz })
 
 if ([string]::IsNullOrWhiteSpace($WatchScriptPath)) {
     $WatchScriptPath = Join-Path $repoRoot "tools\watch-dsp-live-diagnostics.ps1"
@@ -1109,6 +1261,10 @@ if ($PlanOnly) {
         passCount = $PassCount
         passDelaySec = $PassDelaySec
         candidateFrequencyHz = @($operatorCandidateFrequencyHzForPlan)
+        operatorTrendMaxCandidates = $OperatorTrendMaxCandidates
+        operatorTrendCandidateFrequencyHz = @($operatorTrendCandidateFrequencyHzForPlan)
+        operatorTrendCandidateCount = $operatorTrendCandidatesForPlan.Count
+        operatorTrendCandidates = @($operatorTrendCandidatesForPlan)
         autoPhoneCluster = [bool]$AutoPhoneCluster
         autoPhoneClusterSearchRoot = $AutoPhoneClusterSearchRoot
         autoPhoneClusterMaxCandidates = $AutoPhoneClusterMaxCandidates
@@ -1140,7 +1296,7 @@ if ($PlanOnly) {
         }
         example = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-g2-rx-peak-hunt.ps1 -BaseUrl auto -SamplesPerWindow 24 -IntervalMs 250 -MaxPeaks 6"
         retuneExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-g2-rx-peak-hunt.ps1 -BaseUrl auto -AllowRetune -StopOnReady -SamplesPerWindow 24 -IntervalMs 250 -MaxPeaks 6"
-        operatorFrequencyExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-g2-rx-peak-hunt.ps1 -BaseUrl auto -AllowRetune -StopOnReady -CandidateMHz 14.260,14.243,14.287,14.152,14.227,14.240,14.270,14.277,14.300 -PassCount 2 -PassDelaySec 5"
+        operatorFrequencyExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-g2-rx-peak-hunt.ps1 -BaseUrl auto -AllowRetune -StopOnReady -CandidateMHz 14.260,14.243,14.287,14.152,14.227,14.240,14.270,14.277,14.300 -OperatorTrendMaxCandidates 8 -PassCount 2 -PassDelaySec 5"
         autoPhoneClusterExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-g2-rx-peak-hunt.ps1 -BaseUrl auto -AllowRetune -StopOnReady -AutoPhoneCluster -MaxPeaks 8"
         desktopExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-g2-rx-peak-hunt.ps1 -BaseUrl https://localhost:6443 -SkipCertificateCheck -AllowRetune -StopOnReady"
     } | ConvertTo-Json -Depth 16
@@ -1212,6 +1368,10 @@ catch {
         completedPassCount = 0
         scanPassCount = 0
         candidateFrequencyHz = @($operatorCandidateFrequencyHzForPlan)
+        operatorTrendMaxCandidates = $OperatorTrendMaxCandidates
+        operatorTrendCandidateFrequencyHz = @($operatorTrendCandidateFrequencyHzForPlan)
+        operatorTrendCandidateCount = $operatorTrendCandidatesForPlan.Count
+        operatorTrendCandidates = @($operatorTrendCandidatesForPlan)
         autoPhoneCluster = [bool]$AutoPhoneCluster
         autoPhoneClusterSearchRoot = $AutoPhoneClusterSearchRoot
         autoPhoneClusterMaxCandidates = $AutoPhoneClusterMaxCandidates
@@ -1312,6 +1472,13 @@ catch {
 
 $operatorCandidates = @(Get-OperatorFrequencyCandidates -FrequencyHz $CandidateFrequencyHz -FrequencyMHz $CandidateMHz -OriginalVfo $originalVfo)
 $operatorCandidateFrequencyHz = @($operatorCandidates | ForEach-Object { [long]$_.frequencyHz })
+$operatorTrendCandidates = @(Get-OperatorTrendNeighborCandidates `
+        -OperatorCandidates $operatorCandidates `
+        -OriginalVfo $originalVfo `
+        -BandLowHz $AutoPhoneClusterBandLowHz `
+        -BandHighHz $AutoPhoneClusterBandHighHz `
+        -MaxCandidates $OperatorTrendMaxCandidates)
+$operatorTrendCandidateFrequencyHz = @($operatorTrendCandidates | ForEach-Object { [long]$_.frequencyHz })
 $autoPhoneClusterCandidates = @()
 if ($AutoPhoneCluster) {
     $autoPhoneClusterCandidates = @(Get-AutoPhoneClusterCandidates `
@@ -1407,6 +1574,9 @@ try {
             foreach ($candidate in $autoPhoneClusterCandidates) {
                 Add-CandidateIfDistinct -Candidates $candidates -Candidate $candidate -MergeHz $PeakMergeHz | Out-Null
             }
+            foreach ($candidate in $operatorTrendCandidates) {
+                Add-CandidateIfDistinct -Candidates $candidates -Candidate $candidate -MergeHz $PeakMergeHz | Out-Null
+            }
             foreach ($candidate in $passPeakCandidates) {
                 Add-CandidateIfDistinct -Candidates $candidates -Candidate $candidate -MergeHz $PeakMergeHz | Out-Null
             }
@@ -1437,6 +1607,7 @@ try {
             }
             operatorCandidateCount = $operatorCandidates.Count
             operatorCaptureEligible = [bool]$AllowRetune
+            operatorTrendCandidateCount = $operatorTrendCandidates.Count
             autoPhoneCluster = [bool]$AutoPhoneCluster
             autoPhoneClusterCandidateCount = $autoPhoneClusterCandidates.Count
             peakCandidateCount = $passPeakCandidatesForReport.Count
@@ -1813,6 +1984,9 @@ $reportObject = [ordered]@{
     completedPassCount = $completedPassCount
     scanPassCount = $scanPassArray.Count
     candidateFrequencyHz = @($operatorCandidateFrequencyHz)
+    operatorTrendMaxCandidates = $OperatorTrendMaxCandidates
+    operatorTrendCandidateFrequencyHz = @($operatorTrendCandidateFrequencyHz)
+    operatorTrendCandidateCount = $operatorTrendCandidates.Count
     autoPhoneCluster = [bool]$AutoPhoneCluster
     autoPhoneClusterSearchRoot = $AutoPhoneClusterSearchRoot
     autoPhoneClusterMaxCandidates = $AutoPhoneClusterMaxCandidates
@@ -1870,6 +2044,7 @@ $reportObject = [ordered]@{
         topPeakCount = @(Get-JsonArray $latestScene "topPeaks").Count
     }
     operatorCandidates = @($operatorCandidates)
+    operatorTrendCandidates = @($operatorTrendCandidates)
     autoPhoneClusterCandidates = @($autoPhoneClusterCandidates)
     peakCandidates = @($peakCandidateArray)
     plannedRunCount = $plannedRunCount
@@ -1906,6 +2081,7 @@ if ($JsonOnly) {
 }
 else {
     Write-Host "G2 RX peak hunt report: $ReportPath"
+    Write-Host "Operator candidates: $($operatorCandidates.Count); operator-trend neighbors: $($operatorTrendCandidates.Count); auto phone candidates: $($autoPhoneClusterCandidates.Count)"
     Write-Host "Original VFO: $originalVfo Hz; restored VFO: $restoredVfo Hz"
     Write-Host "Original radio LO: $originalRadioLo Hz; restored radio LO: $restoredRadioLo Hz"
     Write-Host "Runs: $($reportObject.actualRunCount), mixed weak+strong ready: $($reportObject.mixedWeakStrongReady), weak samples: $weakTotal, strong samples: $strongTotal, near-strong samples: $nearStrongTotal"

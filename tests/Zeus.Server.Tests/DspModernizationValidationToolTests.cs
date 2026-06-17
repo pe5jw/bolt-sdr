@@ -6105,6 +6105,55 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task G2RxPeakHuntPlanOnlyBuildsOperatorTrendNeighborCandidates()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell G2 peak-hunt plan smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var plan = await RunPowerShellAsync(
+            powerShell,
+            repoRoot,
+            Path.Combine(repoRoot, "tools", "run-dsp-g2-rx-peak-hunt.ps1"),
+            "-BaseUrl", "http://127.0.0.1:1",
+            "-PlanOnly",
+            "-CandidateMHz", "14.240,14.270,14.277,14.300",
+            "-OperatorTrendMaxCandidates", "12",
+            "-MaxPeaks", "0");
+
+        Assert.Equal(0, plan.ExitCode);
+
+        using var planDoc = JsonDocument.Parse(plan.StandardOutput);
+        var root = planDoc.RootElement;
+        Assert.Equal(12, root.GetProperty("operatorTrendMaxCandidates").GetInt32());
+        Assert.Equal(12, root.GetProperty("operatorTrendCandidateCount").GetInt32());
+
+        var trendFrequencies = root.GetProperty("operatorTrendCandidateFrequencyHz")
+            .EnumerateArray()
+            .Select(value => value.GetInt64())
+            .ToArray();
+
+        Assert.Contains(14243000L, trendFrequencies);
+        Assert.Contains(14267000L, trendFrequencies);
+        Assert.Contains(14272000L, trendFrequencies);
+        Assert.Contains(14280000L, trendFrequencies);
+        Assert.DoesNotContain(14240000L, trendFrequencies);
+        Assert.DoesNotContain(14270000L, trendFrequencies);
+        Assert.DoesNotContain(14277000L, trendFrequencies);
+        Assert.DoesNotContain(14300000L, trendFrequencies);
+
+        var trendCandidates = root.GetProperty("operatorTrendCandidates").EnumerateArray().ToArray();
+        Assert.All(trendCandidates, candidate =>
+        {
+            Assert.Equal("operator-trend-neighbor", candidate.GetProperty("source").GetString());
+            Assert.True(candidate.GetProperty("evidenceOperatorAnchorCount").GetInt32() >= 1);
+            Assert.NotEqual(0, candidate.GetProperty("evidenceNeighborOffsetHz").GetInt64());
+        });
+    }
+
+    [SkippableFact]
     public async Task G2RxPeakHuntReportValidatesAndSummarizesRxOnlyEvidence()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell G2 peak-hunt validator smoke runs on Windows.");
