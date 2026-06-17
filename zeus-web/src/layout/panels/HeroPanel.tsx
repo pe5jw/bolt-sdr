@@ -303,7 +303,7 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
                 className={`hero-vfo-switch__key ${rxFocus === receiver ? 'is-active' : ''}`}
                 onClick={() => setRxFocus(receiver)}
                 aria-pressed={rxFocus === receiver}
-                title={`Move VFO ${receiver} from spectrum clicks`}
+                title={`Focus VFO ${receiver} (keyboard tuning, meters). Spectrum clicks tune whichever half you click.`}
               >
                 <span>{receiver}</span>
                 {txVfo === receiver && (
@@ -458,7 +458,7 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
                     receiver="A"
                     stitched
                     foreground={rxFocus === 'A'}
-                    tuneReceiver={rxFocus}
+                    tuneReceiver="A"
                   />
                 </div>
                 <div style={{ minWidth: 0, minHeight: 0 }}>
@@ -466,7 +466,7 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
                     receiver="B"
                     stitched
                     foreground={rxFocus === 'B'}
-                    tuneReceiver={rxFocus}
+                    tuneReceiver="B"
                   />
                 </div>
               </div>
@@ -491,7 +491,7 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
                     transparent={bgActive}
                     stitched
                     foreground={rxFocus === 'A'}
-                    tuneReceiver={rxFocus}
+                    tuneReceiver="A"
                   />
                 </div>
                 <div style={{ minWidth: 0, minHeight: 0 }}>
@@ -500,7 +500,7 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
                     transparent={bgActive}
                     stitched
                     foreground={rxFocus === 'B'}
-                    tuneReceiver={rxFocus}
+                    tuneReceiver="B"
                   />
                 </div>
               </div>

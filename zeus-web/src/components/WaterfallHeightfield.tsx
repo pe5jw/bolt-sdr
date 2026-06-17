@@ -173,6 +173,26 @@ export function WaterfallHeightfield({
 
     const ro = new ResizeObserver(resize);
 
+    // Visibility gating (parity with Panadapter / WebGL Waterfall): skip the GPU
+    // paint while the surface is scrolled off-screen or the tab is backgrounded.
+    // Frames still push into history below, so the waterfall stays continuous
+    // when it returns — only the *draw* is skipped. In RX2 two heightfields are
+    // mounted, so this halves idle GPU cost whenever the panel isn't visible.
+    let inViewport = true;
+    let pageVisible = !document.hidden;
+    const isActive = () => inViewport && pageVisible;
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) inViewport = e.isIntersecting;
+        if (isActive()) requestRedraw();
+      },
+      { threshold: 0 },
+    );
+    const onVisibilityChange = () => {
+      pageVisible = !document.hidden;
+      if (isActive()) requestRedraw();
+    };
+
     const draw = () => {
       if (!renderer || lost) return;
       // Read settings LIVE every draw so the sliders take effect immediately.
@@ -217,7 +237,10 @@ export function WaterfallHeightfield({
     // Coalesce every repaint trigger (new frame, glide tick, slider) onto one
     // draw per animation frame — cheaper on low-resource GPUs than redundant
     // draws, and the shared bus dedupes by callback identity.
-    const requestRedraw = () => requestDrawBusFrame(draw);
+    const requestRedraw = () => {
+      if (!isActive()) return;
+      requestDrawBusFrame(draw);
+    };
 
     let unsub: (() => void) | null = null;
     let unsubSettings: (() => void) | null = null;
@@ -263,6 +286,8 @@ export function WaterfallHeightfield({
       setStatus('ready');
       resize();
       ro.observe(container);
+      io.observe(container);
+      document.addEventListener('visibilitychange', onVisibilityChange);
 
       // Seed from the last-held frame so a paused-RX mount is not blank.
       const slice0 = selectDisplaySlice(useDisplayStore.getState(), receiver);
@@ -342,6 +367,8 @@ export function WaterfallHeightfield({
       unsubEnhance?.();
       cancelDrawBusFrame(draw);
       ro.disconnect();
+      io.disconnect();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       releaseFrameConsumer();
       releaseEstimatorConsumer();
       renderer?.dispose();
@@ -405,7 +432,8 @@ export function WaterfallHeightfield({
         <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
       )}
       {/* Hover filter crosshair on BOTH halves — each tracks its own RX
-          geometry; the click still commits to the focused VFO (rxFocus). */}
+          geometry, and a click commits to THAT half's VFO (tuneReceiver follows
+          the surface, so RX2 behaves like one continuous click-to-tune waterfall). */}
       {status === 'ready' && (
         <FilterCursorOverlay containerRef={containerRef} receiver={receiver} />
       )}

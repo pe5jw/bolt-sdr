@@ -74,8 +74,8 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
       const rectH = container.clientHeight;
 
       // Read THIS half's spectrum geometry/snap (RX2: the B half tracks VFO B).
-      // The click commits to the focused VFO (rxFocus) at this frequency — the
-      // preview only needs the frequency under the cursor, which is this half's.
+      // The click commits to THIS half's VFO at this frequency (tuneReceiver
+      // follows the surface) — the preview reads the frequency under the cursor.
       const slice = selectDisplaySlice(useDisplayStore.getState(), receiver);
       const conn = useConnectionStore.getState();
       const hzPerPixel = slice.hzPerPixel;

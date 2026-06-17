@@ -433,12 +433,13 @@ export function Panadapter({
         {receiver === 'B' ? 'RX2 · VFO B' : 'RX1 · VFO A'} · {(vfoHz / 1e6).toFixed(6)}
         {stitched && foreground ? ' · FOCUS' : ''}
       </div>
-      {(!stitched || foreground) && (
-        <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
-      )}
+      {/* Passband + hover crosshair render on BOTH halves (RX2), each tracking
+          its own receiver's geometry, so a click lands wherever the operator
+          points — not only on the focused half. Mirrors the WebGPU heightfield. */}
+      <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
+      <FilterCursorOverlay containerRef={containerRef} receiver={receiver} />
       {receiver === 'A' && (!stitched || foreground) && (
         <>
-          <FilterCursorOverlay containerRef={containerRef} />
           <SpotOverlay />
           <PeakMarkerOverlay />
           <NotchOverlay interactive resizable containerRef={containerRef} />

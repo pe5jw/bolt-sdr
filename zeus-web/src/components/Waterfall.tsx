@@ -675,12 +675,13 @@ export function Waterfall({
           style={{ left: '50%', pointerEvents: 'none' }}
         />
       )}
-      {(!stitched || foreground) && (
-        <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
-      )}
+      {/* Passband + hover crosshair on BOTH halves (RX2), each tracking its own
+          receiver's geometry, so a click lands wherever the operator points.
+          Parity with the WebGPU heightfield and the panadapter. */}
+      <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
+      <FilterCursorOverlay containerRef={containerRef} receiver={receiver} />
       {receiver === 'A' && (!stitched || foreground) && (
         <>
-          <FilterCursorOverlay containerRef={containerRef} />
           {/* No delete x here — the single control lives on the panadapter (top). */}
           <NotchOverlay resizable containerRef={containerRef} />
         </>
