@@ -6171,6 +6171,16 @@ $manualTuneObserverEvidence = [ordered]@{
     frontendFilterPassbandPollCount = 0
     frontendFilterOffPassbandPollCount = 0
     frontendOffsetMismatchPollCount = 0
+    frontendTuningHintPollCount = 0
+    frontendBestTuningHint = $null
+    frontendSuggestedDialShiftHz = $null
+    frontendSuggestedVfoHz = $null
+    frontendSuggestedVfoMhz = $null
+    frontendSuggestedPeakOffsetHz = $null
+    frontendSuggestedPeakFrequencyHz = $null
+    frontendSuggestedFilterCenterOffsetHz = $null
+    frontendSuggestedFilterDistanceHz = $null
+    frontendSuggestedTuneReason = ""
     captureQualifiedPollCount = 0
     readyCaptureCount = 0
     mixedWeakStrongReady = $false
@@ -13004,6 +13014,18 @@ else {
                 $frontendFilterPassbandPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "frontendFilterPassbandPollCount"))
                 $frontendFilterOffPassbandPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "frontendFilterOffPassbandPollCount"))
                 $frontendOffsetMismatchPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "frontendOffsetMismatchPollCount"))
+                $frontendTuningHintPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "frontendTuningHintPollCount"))
+                $frontendBestTuningHint = Get-JsonValue $artifactJson "frontendBestTuningHint"
+                $frontendSuggestedDialShiftHz = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "suggestedDialShiftHz")
+                $frontendSuggestedVfoHzValue = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoHz")
+                $frontendSuggestedVfoHz = if ($null -eq $frontendSuggestedVfoHzValue) { $null } else { [long]$frontendSuggestedVfoHzValue }
+                $frontendSuggestedVfoMhz = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoMhz")
+                $frontendSuggestedPeakOffsetHz = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "peakOffsetHz")
+                $frontendSuggestedPeakFrequencyHzValue = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "peakFrequencyHz")
+                $frontendSuggestedPeakFrequencyHz = if ($null -eq $frontendSuggestedPeakFrequencyHzValue) { $null } else { [long]$frontendSuggestedPeakFrequencyHzValue }
+                $frontendSuggestedFilterCenterOffsetHz = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "filterCenterOffsetHz")
+                $frontendSuggestedFilterDistanceHz = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "filterDistanceHz")
+                $frontendSuggestedTuneReason = [string](Get-JsonValue $frontendBestTuningHint "reason")
                 $captureQualifiedPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "captureQualifiedPollCount"))
                 $readyCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "readyCaptureCount"))
                 $mixedWeakStrongReady = Test-Truthy (Get-JsonValue $artifactJson "mixedWeakStrongReady")
@@ -13078,6 +13100,16 @@ else {
                 $manualTuneObserverEvidence["frontendFilterPassbandPollCount"] = $frontendFilterPassbandPollCount
                 $manualTuneObserverEvidence["frontendFilterOffPassbandPollCount"] = $frontendFilterOffPassbandPollCount
                 $manualTuneObserverEvidence["frontendOffsetMismatchPollCount"] = $frontendOffsetMismatchPollCount
+                $manualTuneObserverEvidence["frontendTuningHintPollCount"] = $frontendTuningHintPollCount
+                $manualTuneObserverEvidence["frontendBestTuningHint"] = $frontendBestTuningHint
+                $manualTuneObserverEvidence["frontendSuggestedDialShiftHz"] = $frontendSuggestedDialShiftHz
+                $manualTuneObserverEvidence["frontendSuggestedVfoHz"] = $frontendSuggestedVfoHz
+                $manualTuneObserverEvidence["frontendSuggestedVfoMhz"] = $frontendSuggestedVfoMhz
+                $manualTuneObserverEvidence["frontendSuggestedPeakOffsetHz"] = $frontendSuggestedPeakOffsetHz
+                $manualTuneObserverEvidence["frontendSuggestedPeakFrequencyHz"] = $frontendSuggestedPeakFrequencyHz
+                $manualTuneObserverEvidence["frontendSuggestedFilterCenterOffsetHz"] = $frontendSuggestedFilterCenterOffsetHz
+                $manualTuneObserverEvidence["frontendSuggestedFilterDistanceHz"] = $frontendSuggestedFilterDistanceHz
+                $manualTuneObserverEvidence["frontendSuggestedTuneReason"] = $frontendSuggestedTuneReason
                 $manualTuneObserverEvidence["captureQualifiedPollCount"] = $captureQualifiedPollCount
                 $manualTuneObserverEvidence["readyCaptureCount"] = $readyCaptureCount
                 $manualTuneObserverEvidence["mixedWeakStrongReady"] = $mixedWeakStrongReady
@@ -13216,10 +13248,14 @@ else {
                 }
 
                 $computedStaleScenePollCount = 0
+                $computedFrontendTuningHintPollCount = 0
                 foreach ($poll in $polls) {
                     $sceneFreshValue = Get-JsonValue $poll "sceneFresh"
                     if ($null -ne $sceneFreshValue -and -not (Test-Truthy $sceneFreshValue)) {
                         $computedStaleScenePollCount++
+                    }
+                    if ($null -ne (Get-JsonValue $poll "frontendTuningHint")) {
+                        $computedFrontendTuningHintPollCount++
                     }
                 }
 
@@ -13237,6 +13273,14 @@ else {
                 }
                 if ($staleScenePollCount -ne $computedStaleScenePollCount) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-stale-scene-poll-count-mismatch" "Artifact '$artifactId' staleScenePollCount=$staleScenePollCount but polls imply $computedStaleScenePollCount stale-scene poll(s)."
+                    $artifactValidationOk = $false
+                }
+                if ($frontendTuningHintPollCount -ne $computedFrontendTuningHintPollCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-tuning-hint-count-mismatch" "Artifact '$artifactId' frontendTuningHintPollCount=$frontendTuningHintPollCount but polls imply $computedFrontendTuningHintPollCount tuning-hint poll(s)."
+                    $artifactValidationOk = $false
+                }
+                if ($frontendTuningHintPollCount -gt 0 -and $null -eq $frontendBestTuningHint) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-tuning-hint-best-missing" "Artifact '$artifactId' reports $frontendTuningHintPollCount tuning-hint poll(s) but frontendBestTuningHint is missing."
                     $artifactValidationOk = $false
                 }
 
@@ -15238,6 +15282,16 @@ $report = [ordered]@{
     manualTuneObserverFrontendFilterPassbandPollCount = $manualTuneObserverEvidence.frontendFilterPassbandPollCount
     manualTuneObserverFrontendFilterOffPassbandPollCount = $manualTuneObserverEvidence.frontendFilterOffPassbandPollCount
     manualTuneObserverFrontendOffsetMismatchPollCount = $manualTuneObserverEvidence.frontendOffsetMismatchPollCount
+    manualTuneObserverFrontendTuningHintPollCount = $manualTuneObserverEvidence.frontendTuningHintPollCount
+    manualTuneObserverFrontendBestTuningHint = $manualTuneObserverEvidence.frontendBestTuningHint
+    manualTuneObserverFrontendSuggestedDialShiftHz = $manualTuneObserverEvidence.frontendSuggestedDialShiftHz
+    manualTuneObserverFrontendSuggestedVfoHz = $manualTuneObserverEvidence.frontendSuggestedVfoHz
+    manualTuneObserverFrontendSuggestedVfoMhz = $manualTuneObserverEvidence.frontendSuggestedVfoMhz
+    manualTuneObserverFrontendSuggestedPeakOffsetHz = $manualTuneObserverEvidence.frontendSuggestedPeakOffsetHz
+    manualTuneObserverFrontendSuggestedPeakFrequencyHz = $manualTuneObserverEvidence.frontendSuggestedPeakFrequencyHz
+    manualTuneObserverFrontendSuggestedFilterCenterOffsetHz = $manualTuneObserverEvidence.frontendSuggestedFilterCenterOffsetHz
+    manualTuneObserverFrontendSuggestedFilterDistanceHz = $manualTuneObserverEvidence.frontendSuggestedFilterDistanceHz
+    manualTuneObserverFrontendSuggestedTuneReason = $manualTuneObserverEvidence.frontendSuggestedTuneReason
     manualTuneObserverCaptureQualifiedPollCount = $manualTuneObserverEvidence.captureQualifiedPollCount
     manualTuneObserverReadyCaptureCount = $manualTuneObserverEvidence.readyCaptureCount
     manualTuneObserverMixedWeakStrongReady = $manualTuneObserverEvidence.mixedWeakStrongReady
