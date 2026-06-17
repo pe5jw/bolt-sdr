@@ -196,6 +196,7 @@ export function PassbandOverlay({
   // so during a glide it eases with the spectrum instead of teleporting at
   // 30 Hz frame arrival.
   useEffect(() => {
+    const vc = viewCenter.viewCenterFor(receiver);
     const update = () => {
       const rect = rectRef.current;
       if (!rect) return;
@@ -203,11 +204,7 @@ export function PassbandOverlay({
       if (!s.width || s.hzPerPixel <= 0) return;
       const spanHz = s.width * s.hzPerPixel;
       const conn = useConnectionStore.getState();
-      const view = receiver === 'B'
-        ? Number(s.centerHz)
-        : viewCenter.isInitialized()
-        ? viewCenter.getViewCenterHz()
-        : Number(s.centerHz);
+      const view = vc.isInitialized() ? vc.getViewCenterHz() : Number(s.centerHz);
       // The passband hangs off the VIEW center — which is, by definition,
       // always rendered at the screen center (the orange zero line). So
       // during a tuning glide the filter stays PINNED to the line while the
@@ -219,11 +216,8 @@ export function PassbandOverlay({
       // marker uses. Outside CTUN the dial sits on the view center so this is
       // ~0 and the filter stays pinned to the zero line during a glide; under
       // CTUN the dial roams off-centre and the passband tracks it.
-      const dialOffsetHz = receiver === 'B'
-        ? conn.vfoBHz - view
-        : viewCenter.isInitialized()
-        ? conn.vfoHz - viewCenter.getTargetCenterHz()
-        : 0;
+      const vfoHz = receiver === 'B' ? conn.vfoBHz : conn.vfoHz;
+      const dialOffsetHz = vc.isInitialized() ? vfoHz - vc.getTargetCenterHz() : 0;
       const passCenter = view + dialOffsetHz;
       const startHz = view - spanHz / 2;
       const leftPct = ((passCenter + conn.filterLowHz - startHz) / spanHz) * 100;
@@ -237,7 +231,7 @@ export function PassbandOverlay({
       }
     };
     const schedule = () => requestDrawBusFrame(update);
-    const unsubVc = viewCenter.subscribe(schedule);
+    const unsubVc = vc.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
       if (
         s.filterLowHz !== prev.filterLowHz ||

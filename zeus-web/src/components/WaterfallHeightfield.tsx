@@ -147,19 +147,14 @@ export function WaterfallHeightfield({
     // heightfield is the active waterfall (parity with the WebGL surface).
     const releaseEstimatorConsumer = registerEstimatorConsumer();
 
-    // Animated view centre — RX1 follows the view-center pan glide; RX2 reads
-    // its own slice/VFO (matches Waterfall.tsx visualCenterHz).
-    const visualCenterHz = () => {
-      if (receiver === 'B') {
-        const slice = selectDisplaySlice(useDisplayStore.getState(), receiver);
-        return slice.width && slice.hzPerPixel > 0
-          ? Number(slice.centerHz)
-          : useConnectionStore.getState().vfoBHz;
-      }
-      return viewCenter.isInitialized()
-        ? viewCenter.getViewCenterHz()
-        : Number(useDisplayStore.getState().centerHz);
-    };
+    // Per-receiver animated view-center — RX1 and RX2/VFO B each follow their own
+    // pan glide (driven by the matching Panadapter), so both stitched halves slide
+    // identically. Falls back to the latest frame center until the tween inits.
+    const vc = viewCenter.viewCenterFor(receiver);
+    const visualCenterHz = () =>
+      vc.isInitialized()
+        ? vc.getViewCenterHz()
+        : Number(selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz);
 
     const resize = () => {
       const { width, height } = container.getBoundingClientRect();
@@ -209,15 +204,13 @@ export function WaterfallHeightfield({
       // Temporal de-speckle only in Pop (where floor subtraction creates speckle);
       // off for raw RX/TX. Driven by the waterfall-smoothness knob.
       renderer.setCleanup(dom === 'pop' ? Math.max(0, Math.min(1, enhance.waterfallSmoothness / 100)) : 0);
-      // View span: RX1 follows the global zoom glide; RX2 uses its OWN slice
-      // hz/pixel (the global zoom tracks RX1, so feeding it to the B half scaled
-      // RX2 against RX1's span — wrong when the two bands differ).
-      const viewHzPerPixel =
-        receiver === 'B'
-          ? selectDisplaySlice(useDisplayStore.getState(), 'B').hzPerPixel || null
-          : viewZoom.isInitialized()
-          ? viewZoom.getDisplayedHzPerPixel()
-          : null;
+      // View span: zoom is a single global setting (DspPipelineService applies the
+      // same SetZoom to RX1 and RX2, and both frames carry the same hzPerPixel),
+      // so BOTH halves follow the one shared zoom glide — RX2 scales as smoothly
+      // as RX1 instead of stepping off its own slice.
+      const viewHzPerPixel = viewZoom.isInitialized()
+        ? viewZoom.getDisplayedHzPerPixel()
+        : null;
       const t0 = performance.now();
       renderer.draw(dbMin, dbMax, visualCenterHz(), viewHzPerPixel);
       const dt = performance.now() - t0;
@@ -327,7 +320,7 @@ export function WaterfallHeightfield({
       // Pan/zoom glide → repaint while the view eases (the per-row sampling
       // transform animates the offset/scale, so zoom and retune slide instead of
       // stepping). Silent when the tweens are parked.
-      unsubViewCenter = viewCenter.subscribe(requestRedraw);
+      unsubViewCenter = vc.subscribe(requestRedraw);
       unsubViewZoom = viewZoom.subscribe(requestRedraw);
 
       // MOX/TUN and Pop flip the value domain (dB↔0..1, RX↔TX window). Clear the
@@ -379,6 +372,7 @@ export function WaterfallHeightfield({
   // outside CTUN the dial sits at the view centre (50%); under CTUN it slides to
   // (vfo − targetCenter). Positioned imperatively off the draw bus.
   useEffect(() => {
+    const vc = viewCenter.viewCenterFor(receiver);
     const update = () => {
       const cur = cursorRef.current;
       if (!cur) return;
@@ -390,15 +384,13 @@ export function WaterfallHeightfield({
       const spanHz = s.width * s.hzPerPixel;
       const c = useConnectionStore.getState();
       const vfoHz = receiver === 'B' ? c.vfoBHz : c.vfoHz;
-      const dialOffsetHz = receiver === 'B'
-        ? vfoHz - Number(s.centerHz)
-        : viewCenter.isInitialized()
-        ? vfoHz - viewCenter.getTargetCenterHz()
-        : 0;
+      // Dial offset from THIS receiver's animated target center, so the cursor
+      // tracks the glide identically on both stitched halves.
+      const dialOffsetHz = vc.isInitialized() ? vfoHz - vc.getTargetCenterHz() : 0;
       cur.style.left = `${((spanHz / 2 + dialOffsetHz) / spanHz) * 100}%`;
     };
     const schedule = () => requestDrawBusFrame(update);
-    const unsubVc = viewCenter.subscribe(schedule);
+    const unsubVc = vc.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
       if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz) schedule();
     });
@@ -423,7 +415,9 @@ export function WaterfallHeightfield({
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
       {status === 'ready' && (!stitched || receiver === 'A') && <WfDbScale />}
-      {status === 'ready' && !stitched && (
+      {/* Dial-position cursor on BOTH halves (RX2) — each tracks its own VFO so
+          the stitched pair behaves like one waterfall with two live dials. */}
+      {status === 'ready' && (
         <div ref={cursorRef} className="tuning-cursor" style={{ left: '50%', pointerEvents: 'none' }} />
       )}
       {/* Each half shows its OWN receiver's filter passband, regardless of focus,

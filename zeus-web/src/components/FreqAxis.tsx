@@ -102,17 +102,14 @@ export function FreqAxis({ receiver = 'A', stitched = false }: FreqAxisProps = {
   useRulerPanGesture(rulerRef, receiver === 'A' && !!width && hzPerPixel > 0);
 
   useEffect(() => {
+    const vc = viewCenter.viewCenterFor(receiver);
     const update = () => {
       const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
       if (!s.width || s.hzPerPixel <= 0) return;
       const spanHz = s.width * s.hzPerPixel;
       const conn = useConnectionStore.getState();
       const layoutCenter = Number(s.centerHz);
-      const view = receiver === 'B'
-        ? layoutCenter
-        : viewCenter.isInitialized()
-        ? viewCenter.getViewCenterHz()
-        : layoutCenter;
+      const view = vc.isInitialized() ? vc.getViewCenterHz() : layoutCenter;
       // Ticks were laid out around layoutCenter; sliding the strip by the
       // layout→view fraction of its own width keeps every label at its true
       // frequency. translateX(%) is relative to the element's own width,
@@ -131,17 +128,14 @@ export function FreqAxis({ receiver = 'A', stitched = false }: FreqAxisProps = {
         // move in lockstep at input time) instead of leading off it and
         // easing back (operator feedback, 2026-06-12).
         const vfoHz = receiver === 'B' ? conn.vfoBHz : conn.vfoHz;
-        const dialOffsetHz =
-          receiver === 'B'
-            ? vfoHz - view
-            : viewCenter.isInitialized()
-            ? vfoHz - viewCenter.getTargetCenterHz()
-            : vfoHz - layoutCenter;
+        const dialOffsetHz = vc.isInitialized()
+          ? vfoHz - vc.getTargetCenterHz()
+          : vfoHz - layoutCenter;
         marker.style.left = `${((spanHz / 2 + dialOffsetHz) / spanHz) * 100}%`;
       }
     };
     const schedule = () => requestDrawBusFrame(update);
-    const unsubVc = viewCenter.subscribe(schedule);
+    const unsubVc = vc.subscribe(schedule);
     const unsubVfo = useConnectionStore.subscribe((s, prev) => {
       if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz) schedule();
     });

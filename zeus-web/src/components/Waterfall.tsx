@@ -229,17 +229,13 @@ export function Waterfall({
     let inViewport = true;
     let pageVisible = !document.hidden;
     const isActive = () => inViewport && pageVisible;
-    const visualCenterHz = () => {
-      if (receiver === 'B') {
-        const slice = selectDisplaySlice(useDisplayStore.getState(), receiver);
-        return slice.width && slice.hzPerPixel > 0
-          ? Number(slice.centerHz)
-          : useConnectionStore.getState().vfoBHz;
-      }
-      return viewCenter.isInitialized()
-        ? viewCenter.getViewCenterHz()
-        : Number(useDisplayStore.getState().centerHz);
-    };
+    // Per-receiver animated view-center: RX1 and RX2/VFO B each glide their own
+    // pan (driven by the matching Panadapter), so both stitched halves move alike.
+    const vc = viewCenter.viewCenterFor(receiver);
+    const visualCenterHz = () =>
+      vc.isInitialized()
+        ? vc.getViewCenterHz()
+        : Number(selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz);
 
     const redraw = () => {
       if (contextLost || !renderer) return;
@@ -429,7 +425,7 @@ export function Waterfall({
 
     // View-center motion → redraw at display rate while gliding (the
     // fractional sampling offset in draw() moves the visible window).
-    const unsubViewCenter = viewCenter.subscribe(requestRedraw);
+    const unsubViewCenter = vc.subscribe(requestRedraw);
     // Zoom motion → redraw while the display span eases to a new server span
     // (the draw-time scale in draw() animates the zoom). Silent when parked.
     const unsubViewZoom = viewZoom.subscribe(requestRedraw);
@@ -561,6 +557,7 @@ export function Waterfall({
   // uses — so both surfaces agree on where the dial is. Positioned imperatively
   // off the draw-bus to avoid a React commit per input/display frame.
   useEffect(() => {
+    const vc = viewCenter.viewCenterFor(receiver);
     const update = () => {
       const cur = cursorRef.current;
       if (!cur) return;
@@ -572,15 +569,13 @@ export function Waterfall({
       const spanHz = s.width * s.hzPerPixel;
       const c = useConnectionStore.getState();
       const vfoHz = receiver === 'B' ? c.vfoBHz : c.vfoHz;
-      const dialOffsetHz = receiver === 'B'
-        ? vfoHz - Number(s.centerHz)
-        : viewCenter.isInitialized()
-        ? vfoHz - viewCenter.getTargetCenterHz()
-        : 0;
+      // Dial offset from THIS receiver's animated target center, so the cursor
+      // tracks the glide identically on both stitched halves.
+      const dialOffsetHz = vc.isInitialized() ? vfoHz - vc.getTargetCenterHz() : 0;
       cur.style.left = `${((spanHz / 2 + dialOffsetHz) / spanHz) * 100}%`;
     };
     const schedule = () => requestDrawBusFrame(update);
-    const unsubVc = viewCenter.subscribe(schedule);
+    const unsubVc = vc.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
       if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz) schedule();
     });
@@ -668,13 +663,12 @@ export function Waterfall({
         </div>
       )}
       {(!stitched || receiver === 'A') && <WfDbScale />}
-      {!stitched && (
-        <div
-          ref={cursorRef}
-          className="tuning-cursor"
-          style={{ left: '50%', pointerEvents: 'none' }}
-        />
-      )}
+      {/* Dial-position cursor on BOTH halves (RX2) — each tracks its own VFO. */}
+      <div
+        ref={cursorRef}
+        className="tuning-cursor"
+        style={{ left: '50%', pointerEvents: 'none' }}
+      />
       {/* Passband + hover crosshair on BOTH halves (RX2), each tracking its own
           receiver's geometry, so a click lands wherever the operator points.
           Parity with the WebGPU heightfield and the panadapter. */}

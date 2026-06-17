@@ -161,17 +161,13 @@ export function Panadapter({
     let inViewport = true;
     let pageVisible = !document.hidden;
     const isActive = () => inViewport && pageVisible;
-    const visualCenterHz = () => {
-      if (receiver === 'B') {
-        const slice = selectDisplaySlice(useDisplayStore.getState(), receiver);
-        return slice.width && slice.hzPerPixel > 0
-          ? Number(slice.centerHz)
-          : useConnectionStore.getState().vfoBHz;
-      }
-      return viewCenter.isInitialized()
-        ? viewCenter.getViewCenterHz()
-        : Number(useDisplayStore.getState().centerHz);
-    };
+    // Per-receiver animated view-center: RX1 and RX2/VFO B each glide their own
+    // pan motion, so both stitched halves move smoothly and identically.
+    const vc = viewCenter.viewCenterFor(receiver);
+    const visualCenterHz = () =>
+      vc.isInitialized()
+        ? vc.getViewCenterHz()
+        : Number(selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz);
 
     const redraw = () => {
       if (!anchorPan) return;
@@ -290,7 +286,7 @@ export function Panadapter({
         // Hard reset (first frame / width change / no-overlap jump): the old
         // anchor is meaningless. Snap the view — no glide — and adopt
         // immediately; the refill hold doesn't apply across a reset.
-        if (receiver === 'A') viewCenter.snapTo(frameCenter, slice.hzPerPixel);
+        vc.snapTo(frameCenter, slice.hzPerPixel);
         if (slice.panValid && slice.panDb) {
           lastRawPan = slice.panDb;
           anchorPan = buildAnchor(slice.panDb);
@@ -302,7 +298,7 @@ export function Panadapter({
         // recent operator gesture this recognises external tunes (CAT/TCI,
         // band buttons, typed entry, mode changes) and glides there — which
         // also arms the refill hold via the target-change stamp.
-        if (receiver === 'A') viewCenter.reconcileFrame(frameCenter, slice.hzPerPixel);
+        vc.reconcileFrame(frameCenter, slice.hzPerPixel);
         // Adoption is unconditional (issue #597 Phase 2): the backend now
         // stamps CenterHz with the LO the pixels were actually computed at
         // (delay-compensated LO-history lookup), so mid-retune frames are
@@ -344,7 +340,7 @@ export function Panadapter({
 
     // View-center motion → redraw at display rate while gliding. The
     // subscription is silent when the tween loop is parked (zero idle cost).
-    const unsubViewCenter = viewCenter.subscribe(requestRedraw);
+    const unsubViewCenter = vc.subscribe(requestRedraw);
     // Zoom motion → redraw while the display span eases (draw-time scale).
     const unsubViewZoom = viewZoom.subscribe(requestRedraw);
     const unsubConn = useConnectionStore.subscribe((state, prev) => {

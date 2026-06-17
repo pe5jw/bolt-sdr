@@ -100,127 +100,181 @@ type Clock = () => number;
 type Raf = (cb: (t: number) => void) => number;
 type CancelRaf = (h: number) => void;
 
+// Shared clock/raf across every controller instance — the test harness swaps
+// these once via _setClockForTest and drives all receivers deterministically.
 let now: Clock = () => performance.now();
 let raf: Raf = (cb) => requestAnimationFrame(cb);
 let cancelRaf: CancelRaf = (h) => cancelAnimationFrame(h);
 
-let initialized = false;
-let targetHz = 0;
-let viewHz = 0;
-let hzPerPixel = 0;
-let lastOptimisticTuneAtMs = -Infinity;
-let lastTargetChangeAtMs = -Infinity;
-let rafHandle = 0;
-let lastTickMs = 0;
-const listeners = new Set<Listener>();
+/** Per-receiver animated view-center. RX1 (VFO A) and RX2 (VFO B) each own an
+ *  independent instance so the two stitched halves glide their own pan motion
+ *  (issue #597 was RX1-only; RX2 parity adds the second instance). */
+export type ViewCenterController = {
+  nudgeTargetHz(deltaHz: number): void;
+  markOptimisticTune(): void;
+  snapTo(centerHz: number, nextHzPerPixel?: number): void;
+  reconcileFrame(centerHz: number, nextHzPerPixel: number): boolean;
+  getViewCenterHz(): number;
+  isInitialized(): boolean;
+  getTargetCenterHz(): number;
+  isWithinRefillHold(holdMs: number): boolean;
+  msSinceOptimisticTune(): number;
+  subscribe(cb: Listener): () => void;
+};
 
-function epsHz(): number {
-  return hzPerPixel > 0 ? hzPerPixel * SNAP_EPS_PX : 1;
-}
+type ViewCenterInternal = ViewCenterController & {
+  _resetForTest(): void;
+  _isLoopRunningForTest(): boolean;
+};
 
-function notify(): void {
-  for (const cb of listeners) {
-    try {
-      cb();
-    } catch (err) {
-      // One bad listener must not stall the tween loop.
-      // eslint-disable-next-line no-console
-      console.error('view-center listener threw', err);
+function createViewCenter(): ViewCenterInternal {
+  let initialized = false;
+  let targetHz = 0;
+  let viewHz = 0;
+  let hzPerPixel = 0;
+  let lastOptimisticTuneAtMs = -Infinity;
+  let lastTargetChangeAtMs = -Infinity;
+  let rafHandle = 0;
+  let lastTickMs = 0;
+  const listeners = new Set<Listener>();
+
+  function epsHz(): number {
+    return hzPerPixel > 0 ? hzPerPixel * SNAP_EPS_PX : 1;
+  }
+
+  function notify(): void {
+    for (const cb of listeners) {
+      try {
+        cb();
+      } catch (err) {
+        // One bad listener must not stall the tween loop.
+        console.error('view-center listener threw', err);
+      }
     }
   }
-}
 
-function tick(tMs: number): void {
-  rafHandle = 0;
-  const dt = Math.min(MAX_DT_MS, Math.max(0, tMs - lastTickMs));
-  lastTickMs = tMs;
-  const gap = targetHz - viewHz;
-  if (!VIEW_CENTER_TWEEN_ENABLED || TAU_MS <= 0 || Math.abs(gap) < epsHz()) {
-    viewHz = targetHz; // converged (or kill switch) — park the loop.
+  function tick(tMs: number): void {
+    rafHandle = 0;
+    const dt = Math.min(MAX_DT_MS, Math.max(0, tMs - lastTickMs));
+    lastTickMs = tMs;
+    const gap = targetHz - viewHz;
+    if (!VIEW_CENTER_TWEEN_ENABLED || TAU_MS <= 0 || Math.abs(gap) < epsHz()) {
+      viewHz = targetHz; // converged (or kill switch) — park the loop.
+      notify();
+      return;
+    }
+    viewHz += gap * (1 - Math.exp(-dt / TAU_MS));
     notify();
-    return;
+    rafHandle = raf(tick);
   }
-  viewHz += gap * (1 - Math.exp(-dt / TAU_MS));
-  notify();
-  rafHandle = raf(tick);
+
+  function ensureRunning(): void {
+    if (rafHandle !== 0) return;
+    lastTickMs = now();
+    rafHandle = raf(tick);
+  }
+
+  function markOptimisticTune(): void {
+    lastOptimisticTuneAtMs = now();
+  }
+
+  function nudgeTargetHz(deltaHz: number): void {
+    if (!Number.isFinite(deltaHz) || deltaHz === 0) {
+      if (deltaHz === 0) markOptimisticTune();
+      return;
+    }
+    targetHz += deltaHz;
+    const t = now();
+    lastOptimisticTuneAtMs = t;
+    lastTargetChangeAtMs = t;
+    ensureRunning();
+  }
+
+  function snapTo(centerHz: number, nextHzPerPixel?: number): void {
+    targetHz = centerHz;
+    viewHz = centerHz;
+    if (nextHzPerPixel !== undefined && nextHzPerPixel > 0) hzPerPixel = nextHzPerPixel;
+    initialized = true;
+    lastTargetChangeAtMs = -Infinity;
+    notify();
+  }
+
+  function reconcileFrame(centerHz: number, nextHzPerPixel: number): boolean {
+    if (nextHzPerPixel > 0) hzPerPixel = nextHzPerPixel;
+    if (!initialized) {
+      snapTo(centerHz);
+      return false;
+    }
+    const gapHz = Math.abs(centerHz - targetHz);
+    if (gapHz <= Math.max(epsHz(), 1)) return false;
+    const sinceOptimistic = now() - lastOptimisticTuneAtMs;
+    if (sinceOptimistic < OPTIMISTIC_WINDOW_MS) {
+      // Operator is tuning; frames lag the command. Ignore the mismatch.
+      return false;
+    }
+    // External tune: glide to where the radio actually went.
+    targetHz = centerHz;
+    lastTargetChangeAtMs = now();
+    ensureRunning();
+    return true;
+  }
+
+  return {
+    nudgeTargetHz,
+    markOptimisticTune,
+    snapTo,
+    reconcileFrame,
+    getViewCenterHz: () => viewHz,
+    isInitialized: () => initialized,
+    getTargetCenterHz: () => targetHz,
+    isWithinRefillHold: (holdMs: number) => now() - lastTargetChangeAtMs < holdMs,
+    msSinceOptimisticTune: () => now() - lastOptimisticTuneAtMs,
+    subscribe: (cb: Listener) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    _resetForTest: () => {
+      if (rafHandle !== 0) cancelRaf(rafHandle);
+      rafHandle = 0;
+      initialized = false;
+      targetHz = 0;
+      viewHz = 0;
+      hzPerPixel = 0;
+      lastOptimisticTuneAtMs = -Infinity;
+      lastTargetChangeAtMs = -Infinity;
+      lastTickMs = 0;
+      listeners.clear();
+    },
+    _isLoopRunningForTest: () => rafHandle !== 0,
+  };
 }
 
-function ensureRunning(): void {
-  if (rafHandle !== 0) return;
-  lastTickMs = now();
-  rafHandle = raf(tick);
+const rx1 = createViewCenter();
+const rx2 = createViewCenter();
+
+/** The view-center instance for a receiver. RX1/VFO A and RX2/VFO B glide
+ *  independently. */
+export function viewCenterFor(receiver: 'A' | 'B'): ViewCenterController {
+  return receiver === 'B' ? rx2 : rx1;
 }
 
+// Back-compat module-level API — operates on the RX1 instance, so every
+// existing RX1-only call site (connection-store poll guard, keyboard, snap-lock,
+// FreqAxis/PassbandOverlay default, the gl renderers' draw params) keeps working
+// unchanged. RX2 consumers reach the B instance via viewCenterFor('B').
 /** Advance the commanded display center by a delta (Hz). Delta-form only —
- *  see the module comment for why absolute dial values must never land here.
- *  Also stamps the optimistic-tune clock used by reconcileFrame and the
- *  App.tsx poll guard. */
-export function nudgeTargetHz(deltaHz: number): void {
-  if (!Number.isFinite(deltaHz) || deltaHz === 0) {
-    if (deltaHz === 0) markOptimisticTune();
-    return;
-  }
-  targetHz += deltaHz;
-  const t = now();
-  lastOptimisticTuneAtMs = t;
-  lastTargetChangeAtMs = t;
-  ensureRunning();
-}
-
-/** Stamp the optimistic-tune clock without moving the target (e.g. a POST
- *  flush of an already-applied pending value). */
-export function markOptimisticTune(): void {
-  lastOptimisticTuneAtMs = now();
-}
-
-/** Hard-set view == target == centerHz with no glide. The 'reset' path:
- *  first frame, width change, or no-overlap jump. Clears the refill hold. */
-export function snapTo(centerHz: number, nextHzPerPixel?: number): void {
-  targetHz = centerHz;
-  viewHz = centerHz;
-  if (nextHzPerPixel !== undefined && nextHzPerPixel > 0) hzPerPixel = nextHzPerPixel;
-  initialized = true;
-  lastTargetChangeAtMs = -Infinity;
-  notify();
-}
-
-/**
- * Feed a server frame's center back in. Returns true when this frame was
- * recognised as an EXTERNAL tune (no recent operator gesture) — the caller
- * uses that to arm the refill hold for paths no gesture hook can see
- * (CAT/TCI, band buttons, typed entry, mode changes, arrow keys missed by
- * a stale build, …).
- */
-export function reconcileFrame(centerHz: number, nextHzPerPixel: number): boolean {
-  if (nextHzPerPixel > 0) hzPerPixel = nextHzPerPixel;
-  if (!initialized) {
-    snapTo(centerHz);
-    return false;
-  }
-  const gapHz = Math.abs(centerHz - targetHz);
-  if (gapHz <= Math.max(epsHz(), 1)) return false;
-  const sinceOptimistic = now() - lastOptimisticTuneAtMs;
-  if (sinceOptimistic < OPTIMISTIC_WINDOW_MS) {
-    // Operator is tuning; frames lag the command. Ignore the mismatch.
-    return false;
-  }
-  // External tune: glide to where the radio actually went.
-  targetHz = centerHz;
-  lastTargetChangeAtMs = now();
-  ensureRunning();
-  return true;
-}
-
+ *  see the module comment for why absolute dial values must never land here. */
+export const nudgeTargetHz = rx1.nudgeTargetHz;
+/** Stamp the optimistic-tune clock without moving the target. */
+export const markOptimisticTune = rx1.markOptimisticTune;
+/** Hard-set view == target == centerHz with no glide (the 'reset' path). */
+export const snapTo = rx1.snapTo;
+/** Feed a server frame's center back in; returns true on an external tune. */
+export const reconcileFrame = rx1.reconcileFrame;
 /** The animated center the surfaces should render against, in Hz. */
-export function getViewCenterHz(): number {
-  return viewHz;
-}
-
-/** False until the first frame/snap establishes a center. Surfaces render
- *  with zero offset until then. */
-export function isInitialized(): boolean {
-  return initialized;
-}
+export const getViewCenterHz = rx1.getViewCenterHz;
+/** False until the first frame/snap establishes a center. */
+export const isInitialized = rx1.isInitialized;
 
 // WDSP analyzer FFT size (WdspDspEngine.AnalyzerFftSize). The refill hold
 // must outlast the FFT fill window — the span of old-frequency IQ still
@@ -240,31 +294,19 @@ export function refillHoldMsForSampleRate(sampleRateHz: number): number {
 }
 
 /** The commanded center (where the view is heading), in Hz. */
-export function getTargetCenterHz(): number {
-  return targetHz;
-}
-
+export const getTargetCenterHz = rx1.getTargetCenterHz;
 /** True while inside the post-retune refill hold: fresh server frames are
  *  still (partly) computed from pre-retune IQ and must not be adopted as
  *  trace content. holdMs is derived by the caller from the sample rate
  *  (FFT fill time) — see Panadapter.tsx. */
-export function isWithinRefillHold(holdMs: number): boolean {
-  return now() - lastTargetChangeAtMs < holdMs;
-}
-
+export const isWithinRefillHold = rx1.isWithinRefillHold;
 /** Milliseconds since the last operator-initiated tune. Used by the
  *  connection-store poll guard to suppress vfoHz rubber-banding from the
  *  1 Hz /api/state poll. */
-export function msSinceOptimisticTune(): number {
-  return now() - lastOptimisticTuneAtMs;
-}
-
-/** Subscribe to view-center motion. Fires once per tween tick (display
+export const msSinceOptimisticTune = rx1.msSinceOptimisticTune;
+/** Subscribe to RX1 view-center motion. Fires once per tween tick (display
  *  rate while gliding; silent when parked). Returns the unsubscribe fn. */
-export function subscribe(cb: Listener): () => void {
-  listeners.add(cb);
-  return () => listeners.delete(cb);
-}
+export const subscribe = rx1.subscribe;
 
 // ---------------------------------------------------------------------------
 // Test hooks — not part of the public surface.
@@ -276,18 +318,10 @@ export function _setClockForTest(clock: Clock, rafImpl: Raf, cancelImpl: CancelR
 }
 
 export function _resetForTest(): void {
-  if (rafHandle !== 0) cancelRaf(rafHandle);
-  rafHandle = 0;
-  initialized = false;
-  targetHz = 0;
-  viewHz = 0;
-  hzPerPixel = 0;
-  lastOptimisticTuneAtMs = -Infinity;
-  lastTargetChangeAtMs = -Infinity;
-  lastTickMs = 0;
-  listeners.clear();
+  rx1._resetForTest();
+  rx2._resetForTest();
 }
 
 export function _isLoopRunningForTest(): boolean {
-  return rafHandle !== 0;
+  return rx1._isLoopRunningForTest();
 }

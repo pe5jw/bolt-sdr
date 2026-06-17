@@ -345,15 +345,15 @@ export function usePanTuneGesture(
     };
     const postVfo = (hz: number, signal?: AbortSignal) =>
       receiverIsB ? setVfoB(hz, signal) : setVfo(hz, signal);
-    // RX1 (VFO A) drives the shared view-centre tween. RX2 (VFO B) does NOT —
-    // the backend recentres the RX2 window on VfoB every frame (DspPipelineService
-    // stamps the RX2 frame CenterHz = VfoB and applies a matching CTUN shift to
-    // the RX2 DDC), so B's view follows the incoming frame centres rather than a
-    // local glide. We therefore leave the RX1 tween untouched for B.
-    const drivesViewCenter = !receiverIsB;
+    // Each receiver glides its OWN view-centre tween (RX1 and RX2/VFO B are
+    // independent instances), so dragging either stitched half pans smoothly and
+    // optimistically — the gesture leads the frames, which then reconcile.
+    const vc = viewCenter.viewCenterFor(tuneReceiver);
     // "CTUN sweep" — absolute cursor→dial mapping over a FROZEN window — applies
-    // ONLY to RX1 with CTUN enabled. RX2 is never frozen (it always recentres on
-    // VfoB), so it pans with a relative drag exactly like RX1 with CTUN off.
+    // ONLY to RX1 with CTUN enabled. RX2 is never frozen (the backend recentres
+    // the RX2 window on VfoB every frame — DspPipelineService stamps the RX2
+    // CenterHz = VfoB and applies a matching CTUN shift to the RX2 DDC), so it
+    // pans with a relative drag exactly like RX1 with CTUN off.
     const ctunSweep = () => !receiverIsB && useConnectionStore.getState().ctunEnabled;
 
     const commandedHz = () => pendingHz ?? readVfo();
@@ -363,7 +363,7 @@ export function usePanTuneGesture(
       const hz = pendingHz;
       pendingHz = null;
       if (hz == null) return;
-      viewCenter.markOptimisticTune();
+      vc.markOptimisticTune();
       writeVfo(hz);
       pendingAbort?.abort();
       const ctrl = new AbortController();
@@ -384,15 +384,13 @@ export function usePanTuneGesture(
       // the dial marker (vfo − targetCenter) roams off the zero line. We stamp
       // the optimistic-tune clock (poll-guard) but deliberately skip the
       // view-center nudge that would recentre the display.
-      if (drivesViewCenter) {
-        if (useConnectionStore.getState().ctunEnabled) {
-          viewCenter.markOptimisticTune();
-        } else {
-          // Delta against the commanded chain — NOT an absolute write into the
-          // view-center (frame centers are dial ∓ cw-pitch in CW; absolutes
-          // would oscillate the display by ±pitch on every CW commit).
-          viewCenter.nudgeTargetHz(snapped - commandedHz());
-        }
+      if (ctunSweep()) {
+        vc.markOptimisticTune();
+      } else {
+        // Delta against the commanded chain — NOT an absolute write into the
+        // view-center (frame centers are dial ∓ cw-pitch in CW; absolutes
+        // would oscillate the display by ±pitch on every CW commit).
+        vc.nudgeTargetHz(snapped - commandedHz());
       }
       writeVfo(snapped);
       pendingAbort?.abort();
@@ -418,12 +416,10 @@ export function usePanTuneGesture(
       // edge; the optimistic store write happens in the SAME synchronous block
       // as the target nudge so the dial marker's (vfo − target) offset is never
       // transiently stale (it is pinned to the center line during glides).
-      if (drivesViewCenter) {
-        if (useConnectionStore.getState().ctunEnabled) {
-          viewCenter.markOptimisticTune();
-        } else {
-          viewCenter.nudgeTargetHz(next - cur);
-        }
+      if (ctunSweep()) {
+        vc.markOptimisticTune();
+      } else {
+        vc.nudgeTargetHz(next - cur);
       }
       writeVfo(next);
       pendingHz = next;
@@ -577,22 +573,21 @@ export function usePanTuneGesture(
         const frac = (e.clientX - rect.left) / rect.width;
         const cursorHz = snapHz(drag.startHz + (frac - 0.5) * drag.spanHz);
         if (cursorHz !== pendingHz) {
-          viewCenter.markOptimisticTune();
+          vc.markOptimisticTune();
           writeVfo(cursorHz);
           pendingHz = cursorHz;
           scheduleFlush();
         }
         return;
       }
-      // Relative drag-to-pan. RX1 (CTUN off) glides the shared view-center by the
-      // COMMANDED delta, initialised from the live commanded value, never from the
-      // lagging frame center (adversary #12: prevents a one-time backward jump
-      // when a drag starts mid-wheel-glide). RX2/VFO B has no local tween — it just
-      // retunes VfoB and the backend-recentred frames pan the view (drivesViewCenter
-      // is false for B, so the RX1 tween is left untouched).
+      // Relative drag-to-pan. Glides this receiver's view-center by the COMMANDED
+      // delta, initialised from the live commanded value, never from the lagging
+      // frame center (adversary #12: prevents a one-time backward jump when a drag
+      // starts mid-wheel-glide). RX2/VFO B drives its OWN tween instance, so its
+      // half pans just as smoothly as RX1 without touching the RX1 tween.
       const newHz = snapHz(drag.startHz - (dx / rect.width) * drag.spanHz);
       if (newHz !== pendingHz) {
-        if (drivesViewCenter) viewCenter.nudgeTargetHz(newHz - commandedHz());
+        vc.nudgeTargetHz(newHz - commandedHz());
         // Atomic with the nudge — keeps the marker's (vfo − target) offset
         // consistent within the frame (see nudgeVfo).
         writeVfo(newHz);
