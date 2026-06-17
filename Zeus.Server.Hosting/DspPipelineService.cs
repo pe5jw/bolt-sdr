@@ -3421,6 +3421,12 @@ public class DspPipelineService : BackgroundService,
         // RadioService.SetRadioLo). See docs/prd/panfall_behavior.md.
         var p2 = _p2Client;
         p2?.SetVfoAHz(s.RadioLoHz);
+        // RX2 (true second receiver): enable/disable its DDC and tune its NCO to
+        // VFO B's effective LO so it demodulates its own band, independent of
+        // RX1. SetRx2Enabled is idempotent (only re-sends on a real change);
+        // SetVfoBHz no-ops on the wire while RX2 is disabled.
+        p2?.SetRx2Enabled(s.Rx2Enabled);
+        p2?.SetVfoBHz(CwOffset.EffectiveLoHz(s.Mode, s.VfoBHz));
 
         // Issue #597 Phase 0: arm the RX display fast-attack when the LO
         // moves. First callback after construction only records the LO
@@ -3937,7 +3943,7 @@ public class DspPipelineService : BackgroundService,
         _log.LogInformation("dsp.pipeline rx2 closed channel={Channel}", rx2Channel);
     }
 
-    private static void ApplyStateToRx2Channel(IDspEngine engine, int channelId, StateDto s)
+    private void ApplyStateToRx2Channel(IDspEngine engine, int channelId, StateDto s)
     {
         var nr = s.Nr ?? new NrConfig();
         var agc = s.Agc ?? new AgcConfig(AgcMode.Med);
@@ -3945,7 +3951,13 @@ public class DspPipelineService : BackgroundService,
         engine.SetMode(channelId, s.Mode);
         engine.SetFilter(channelId, s.FilterLowHz, s.FilterHighHz);
         engine.SetVfoHz(channelId, s.VfoBHz);
-        int shiftHz = (int)(CwOffset.EffectiveLoHz(s.Mode, s.VfoBHz) - s.RadioLoHz);
+        // P2 true-DDC: RX2 has its own hardware DDC tuned to VFO B's effective
+        // LO (pushed via Protocol2Client.SetVfoBHz), so the IQ is already
+        // centred there — no software CTUN shift. P1 / synthetic RX2 is a
+        // sub-receiver of RX1's window, so it still shifts by (VfoB - RadioLo).
+        int shiftHz = _p2Client is not null
+            ? 0
+            : (int)(CwOffset.EffectiveLoHz(s.Mode, s.VfoBHz) - s.RadioLoHz);
         engine.SetCtunShift(channelId, shiftHz);
         engine.SetAgcTop(channelId, s.AgcTopDb + s.AgcOffsetDb);
         engine.SetRxAfGainDb(channelId, s.Rx2AfGainDb);
@@ -4485,13 +4497,21 @@ public class DspPipelineService : BackgroundService,
     {
         DrainDspCommands();
         var engine = Volatile.Read(ref _engine);
-        int channel = Volatile.Read(ref _channelId);
         if (engine is not null)
         {
+            if (frame.ReceiverIndex == 1)
+            {
+                // RX2's own DDC stream (true second receiver). Feed ONLY the RX2
+                // channel — RX2 used to be fed RX1's DDC, which made both
+                // waterfalls identical. Display/TX cadence is paced by the RX1
+                // frames below, so this path takes no tick.
+                int rx2Channel = Volatile.Read(ref _rx2ChannelId);
+                if (rx2Channel >= 0)
+                    engine.FeedIq(rx2Channel, frame.InterleavedSamples.Span);
+                return;
+            }
+            int channel = Volatile.Read(ref _channelId);
             engine.FeedIq(channel, frame.InterleavedSamples.Span);
-            int rx2Channel = Volatile.Read(ref _rx2ChannelId);
-            if (rx2Channel >= 0)
-                engine.FeedIq(rx2Channel, frame.InterleavedSamples.Span);
             RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
         }
         MaybeTickInline();

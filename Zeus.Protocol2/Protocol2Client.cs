@@ -130,6 +130,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private Task? _keepaliveTask;
     private int _sampleRateKhz = 48;
     private uint _rxFreqHz = 14_200_000;
+    // Second receiver (RX2) on its own DDC. When enabled, a second DDC
+    // (RxBaseDdc + 1) is streamed and tuned to _rx2FreqHz independently of RX1,
+    // so RX2 can sit on a different band. Read on the RX thread (HandleDdcPacket
+    // tags frames by receiver) and on the command threads, so kept as volatile-
+    // accessed ints/uints. _rx2Enabled: 0 = off, 1 = on.
+    private int _rx2Enabled;
+    private uint _rx2FreqHz = 7_100_000;
     // Frequency-correction factor (issue #325) — dimensionless multiplier
     // near 1.0 applied to the incoming dial Hz before _rxFreqHz is updated,
     // matching piHPSDR / Thetis. Stored as int64 bits for atomic
@@ -501,6 +508,47 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _log.LogInformation("p2.tune hz={Hz} running={Running} hpSeq={Seq}",
             _rxFreqHz, running, _seqCmdHp);
         if (running) SendCmdHighPriority(run: true);
+    }
+
+    /// <summary>
+    /// The wire DDC index used for the second receiver (RX2): the DDC right
+    /// after the primary RX DDC. On Orion-family boards RX1 is DDC2, so RX2 is
+    /// DDC3; on Hermes-class RX1 is DDC0, so RX2 is DDC1. The PureSignal
+    /// feedback pair (DDC0/DDC1 on Orion-family) is reserved separately and is
+    /// only active while PS is armed, so it does not collide with RX2's DDC3.
+    /// </summary>
+    public static int Rx2Ddc(HpsdrBoardKind board) => RxBaseDdc(board) + 1;
+
+    /// <summary>
+    /// Enable or disable the second receiver's DDC. Toggling re-sends the RX
+    /// command (DDC enable mask) and the high-priority packet (NCO phase words).
+    /// Idempotent — a no-op when the state is unchanged so steady RX traffic
+    /// doesn't reconfigure the DDCs every state push.
+    /// </summary>
+    public void SetRx2Enabled(bool on)
+    {
+        int next = on ? 1 : 0;
+        if (Interlocked.Exchange(ref _rx2Enabled, next) == next) return;
+        if (_rxTask is not null)
+        {
+            SendCmdRx();
+            SendCmdHighPriority(run: true);
+        }
+    }
+
+    /// <summary>
+    /// Tune the second receiver's DDC NCO (RX2). Mirrors <see cref="SetVfoAHz"/>:
+    /// applies the host-side frequency-correction factor, then re-pushes the
+    /// high-priority packet so the RX2 DDC retunes. Caller passes the effective
+    /// LO (dial ∓ CW pitch), matching how RX1 is fed RadioLoHz.
+    /// </summary>
+    public void SetVfoBHz(long hz)
+    {
+        double factor = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _freqCorrectionBits));
+        long corrected = (long)Math.Round(hz * factor, MidpointRounding.AwayFromZero);
+        _rx2FreqHz = (uint)Math.Clamp(corrected, 0L, uint.MaxValue);
+        if (_rxTask is not null && Volatile.Read(ref _rx2Enabled) != 0)
+            SendCmdHighPriority(run: true);
     }
 
     /// <summary>
@@ -1213,7 +1261,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         bool psEnabled,
         HpsdrBoardKind boardKind = HpsdrBoardKind.OrionMkII,
         bool adcDitherEnabled = false,
-        bool adcRandomEnabled = false)
+        bool adcRandomEnabled = false,
+        bool rx2Enabled = false)
     {
         var p = new byte[BufLen];
         WriteBeU32(p, 0, seq);
@@ -1248,11 +1297,30 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             }
         }
 
+        // Second receiver (RX2): enable its own DDC (RxBaseDdc + 1) so it
+        // streams an independent IQ flow we can tune to a different band. Skip
+        // if it would collide with the primary RX DDC. The PS feedback pair
+        // (DDC0/1 on Orion-family) is only armed during PureSignal, so RX2 on
+        // DDC3 doesn't conflict with it.
+        int rx2Ddc = Rx2Ddc(boardKind);
+        bool rx2Active = rx2Enabled && rx2Ddc != rxDdc;
+        if (rx2Active) ddcEnable |= (byte)(1 << rx2Ddc);
+
         p[7] = ddcEnable;
         int off = 17 + rxDdc * 6;
         p[off + 0] = 0x00;
         WriteBeU16(p, off + 1, sampleRateKhz);
         p[off + 5] = 24;
+
+        if (rx2Active)
+        {
+            // RX2 DDC config block: ADC0 source, same sample rate, 24-bit —
+            // identical shape to the primary RX block (P2 has no per-DDC rate).
+            int off2 = 17 + rx2Ddc * 6;
+            p[off2 + 0] = 0x00;
+            WriteBeU16(p, off2 + 1, sampleRateKhz);
+            p[off2 + 5] = 24;
+        }
         return p;
     }
 
@@ -1273,7 +1341,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             _psFeedbackEnabled,
             _boardKind,
             _adcDitherEnabled,
-            _adcRandomEnabled);
+            _adcRandomEnabled,
+            Volatile.Read(ref _rx2Enabled) != 0);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1025));
     }
 
@@ -1380,6 +1449,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         int rxDdc = RxBaseDdc(_boardKind);
         WriteBeU32(p, 9 + rxDdc * 4, rxPhase);
         WriteBeU32(p, 329, rxPhase);
+
+        // Second receiver (RX2): tune its own DDC's NCO to _rx2FreqHz so it
+        // demodulates an independent band. Each DDC's phase word lives at
+        // bytes 9 + ddc*4 (DDC3 -> 21..24 on Orion-family). Only written when
+        // RX2 is enabled; otherwise the slot stays zero like the other unused
+        // DDCs on the non-PS path.
+        if (Volatile.Read(ref _rx2Enabled) != 0)
+        {
+            int rx2Ddc = Rx2Ddc(_boardKind);
+            uint rx2Phase = (uint)(_rx2FreqHz * HzToPhase);
+            WriteBeU32(p, 9 + rx2Ddc * 4, rx2Phase);
+        }
 
         // PureSignal — when armed, DDC0 + DDC1 phase words also need to
         // track the TX frequency during xmit so the feedback DDC samples
@@ -1781,12 +1862,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             samples[i * 2 + 1] = qRaw * scale;
         }
 
+        // Map the wire DDC index to a logical receiver so the DSP can route
+        // RX2 to its own channel without per-board DDC knowledge: the RX2 DDC
+        // (when enabled) is receiver 1, everything else is the primary RX (0).
+        int receiverIndex = (Volatile.Read(ref _rx2Enabled) != 0 && ddcIndex == Rx2Ddc(_boardKind)) ? 1 : 0;
+
         var frame = new IqFrame(
             InterleavedSamples: new ReadOnlyMemory<double>(samples, 0, samplesPerPacket * 2),
             SampleCount: samplesPerPacket,
             SampleRateHz: _sampleRateKhz * 1000,
             Sequence: seq,
-            TimestampNs: _stopwatch.ElapsedTicks * 1_000_000_000L / Stopwatch.Frequency);
+            TimestampNs: _stopwatch.ElapsedTicks * 1_000_000_000L / Stopwatch.Frequency,
+            ReceiverIndex: receiverIndex);
 
         Interlocked.Increment(ref _totalFrames);
         // iter5: prefer the synchronous sink when attached — bypasses the

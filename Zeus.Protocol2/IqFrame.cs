@@ -56,4 +56,10 @@ public readonly record struct IqFrame(
     int SampleCount,
     int SampleRateHz,
     uint Sequence,
-    long TimestampNs);
+    long TimestampNs,
+    // Logical receiver this frame belongs to: 0 = primary RX (RX1), 1 = the
+    // second receiver (RX2) when a true independent DDC is enabled. The client
+    // maps the wire DDC index to this so consumers route to the right DSP
+    // channel without knowing per-board DDC numbering. Defaults to 0, so every
+    // existing single-receiver path is unchanged.
+    int ReceiverIndex = 0);
