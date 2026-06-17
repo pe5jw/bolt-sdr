@@ -9,6 +9,7 @@ import { publishFrontendDspSceneDiagnostics } from '../api/client';
 import { analyzeRxChain } from '../dsp/rx-chain-health';
 import {
   estimateAdjacentNoiseProfile,
+  estimateSceneTopPeaks,
   getNoiseFloor,
   getSignalConfidence,
   useSignalEnhanceStore,
@@ -67,12 +68,22 @@ export function DspSceneDiagnosticsPublisher() {
         filterLowHz: conn.filterLowHz,
         filterHighHz: conn.filterHighHz,
       });
+      const topPeaks = estimateSceneTopPeaks({
+        spectrum: display.panValid ? display.panDb : null,
+        floor: getNoiseFloor(),
+        confidence: getSignalConfidence(),
+        centerHz: display.centerHz,
+        hzPerPixel: display.hzPerPixel,
+        dialHz: conn.vfoHz,
+        limit: 8,
+      });
       const payload = buildFrontendDspSceneDiagnosticsPayload(
         conn.mode,
         useSignalEnhanceStore.getState().sceneStatus,
         useSmartNrStore.getState().status,
         liveRxChainForDiagnostics(),
         adjacentNoise,
+        topPeaks,
       );
       if (!payload) return;
       const key = JSON.stringify(payload);

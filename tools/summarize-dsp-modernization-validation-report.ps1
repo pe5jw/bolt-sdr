@@ -615,6 +615,24 @@ function Get-EvidenceGateRecords {
                 -Detail "target=$(Get-JsonValue $Validation "hardwareTarget"); captureTarget=$(Get-JsonValue $Validation "captureHardwareTarget"); diagnosticsPresent=$(Get-JsonValue $Validation "hardwareDiagnosticsPresent")" `
                 -Remediation "Capture connected G2 hardware diagnostics and keep benchmark-plan/capture-manifest targets aligned.")) | Out-Null
 
+    $crossRadioStatus = [string](Get-JsonValue $Validation "crossRadioValidationEvidenceStatus")
+    if ([string]::IsNullOrWhiteSpace($crossRadioStatus)) {
+        $crossRadioStatus = "not-captured"
+    }
+    $crossRadioReady = Test-Truthy (Get-JsonValue $Validation "crossRadioValidationReady")
+    $crossRadioTargets = (@(Get-JsonArray $Validation "crossRadioValidationNonG2TargetIds") | ForEach-Object { [string]$_ }) -join ", "
+    $crossRadioScenarios = (@(Get-JsonArray $Validation "crossRadioValidationScenarioIds") | ForEach-Object { [string]$_ }) -join ", "
+    $crossRadioComparisons = (@(Get-JsonArray $Validation "crossRadioValidationComparisonIds") | ForEach-Object { [string]$_ }) -join ", "
+    $crossRadioSourceDetail = "sourceReports=$(Get-JsonValue $Validation "crossRadioValidationSourceReportCount"); nonG2Sources=$(Get-JsonValue $Validation "crossRadioValidationNonG2SourceReportCount"); readyNonG2Sources=$(Get-JsonValue $Validation "crossRadioValidationReadyNonG2SourceReportCount"); sourceBacked=$(Get-JsonValue $Validation "crossRadioValidationSourceBackedEvidenceReady")"
+    $gates.Add((New-EvidenceGateRecord `
+                -GateId "cross-radio-validation" `
+                -Name "Cross-radio validation evidence" `
+                -Ready:$crossRadioReady `
+                -Status $crossRadioStatus `
+                -RequiredForAcceptance:$false `
+                -Detail "present=$(Get-JsonValue $Validation "crossRadioValidationPresent"); nonG2Targets=$(Get-JsonValue $Validation "crossRadioValidationNonG2TargetCount") [$crossRadioTargets]; scenarios=$(Get-JsonValue $Validation "crossRadioValidationScenarioCount") [$crossRadioScenarios]; comparisons=$(Get-JsonValue $Validation "crossRadioValidationComparisonCount") [$crossRadioComparisons]; $crossRadioSourceDetail; defaultApprovalClaimed=$(Get-JsonValue $Validation "crossRadioValidationDefaultBehaviorChangeApproved")" `
+                -Remediation "Attach a source-backed cross-radio report from at least one non-G2 radio with clean metric, Zeus live-trace, and Thetis live-trace comparisons before default DSP graduation review.")) | Out-Null
+
     $nativeSymbolReady = Test-Truthy (Get-JsonValue $Validation "nativeSymbolAuditReady")
     $nativeSymbolStatus = if ($nativeSymbolReady) { "ready" } else { "not-ready" }
     $gates.Add((New-EvidenceGateRecord `
@@ -634,6 +652,33 @@ function Get-EvidenceGateRecords {
                 -Status $nativeRuntimeStatus `
                 -Detail "present=$(Get-JsonValue $Validation "nativeRuntimeArtifactAuditPresent"); artifacts=$(Get-JsonValue $Validation "nativeRuntimeArtifactAuditArtifactCount"); pendingRids=$(Get-JsonValue $Validation "nativeRuntimeArtifactAuditPendingRidCount"); winX64Sha=$(Get-JsonValue $Validation "nativeRuntimeArtifactAuditWinX64NativeSha256")" `
                 -Remediation "Run audit-wdsp-runtime-artifacts.ps1 and package the required win-x64 WDSP runtime artifact.")) | Out-Null
+
+    $nativeStageTimingReady = Test-Truthy (Get-JsonValue $Validation "nativeStageTimingReportReady")
+    $nativeStageTimingStatus = [string](Get-JsonValue $Validation "nativeStageTimingReportStatus")
+    if ([string]::IsNullOrWhiteSpace($nativeStageTimingStatus)) {
+        $nativeStageTimingStatus = "not-captured"
+    }
+    $gates.Add((New-EvidenceGateRecord `
+                -GateId "native-stage-timing-report" `
+                -Name "WDSP native stage timing/allocation report" `
+                -Ready:$nativeStageTimingReady `
+                -Status $nativeStageTimingStatus `
+                -Detail "present=$(Get-JsonValue $Validation "nativeStageTimingReportPresent"); runs=$(Get-JsonValue $Validation "nativeStageTimingRunCount"); stages=$(Get-JsonValue $Validation "nativeStageTimingStageRecordCount"); missingStageRuns=$(Get-JsonValue $Validation "nativeStageTimingMissingStageTimingRunCount"); missingAllocationRuns=$(Get-JsonValue $Validation "nativeStageTimingMissingAllocationProbeRunCount"); budgetFailures=$(Get-JsonValue $Validation "nativeStageTimingBudgetFailureCount"); metricsHash=$(Get-JsonValue $Validation "nativeStageTimingMetricsHashStatus"); runtimeHash=$(Get-JsonValue $Validation "nativeStageTimingWdspRuntimeHashStatus"); nativeCStatus=$(Get-JsonValue $Validation "nativeStageTimingNativeCStageInstrumentationStatus"); allocationProbe=$(Get-JsonValue $Validation "nativeStageTimingNativeAllocationProbeStatus")" `
+                -Remediation "Run summarize-dsp-native-stage-timing.ps1 after WDSP-backed fixture evidence so stage timing, managed allocation deltas, source metrics hash, runtime hash, and native C instrumentation limitations are explicit.")) | Out-Null
+
+    $sourceDriftReady = Test-Truthy (Get-JsonValue $Validation "wdspSourceDriftReportReady")
+    $sourceDriftStatus = [string](Get-JsonValue $Validation "wdspSourceDriftReportStatus")
+    if ([string]::IsNullOrWhiteSpace($sourceDriftStatus)) {
+        $sourceDriftStatus = "not-captured"
+    }
+    $gates.Add((New-EvidenceGateRecord `
+                -GateId "wdsp-source-drift-report" `
+                -Name "WDSP source drift classification" `
+                -Ready:$sourceDriftReady `
+                -Status $sourceDriftStatus `
+                -RequiredForAcceptance:$false `
+                -Detail "present=$(Get-JsonValue $Validation "wdspSourceDriftReportPresent"); files=$(Get-JsonValue $Validation "wdspSourceDriftFileCount"); deltas=$(Get-JsonValue $Validation "wdspSourceDriftDeltaCount"); likelyDefects=$(Get-JsonValue $Validation "wdspSourceDriftLikelyDefectCount"); normalizedLineEndings=$(Get-JsonValue $Validation "wdspSourceDriftReportNormalizedLineEndings")" `
+                -Remediation "Run compare-wdsp-source-drift.ps1 against the local Thetis WDSP source and resolve or classify likely-defect source drift before native WDSP modernization.")) | Out-Null
 
     $benchmarkPlanStatus = [string](Get-JsonValue $Validation "benchmarkPlanStatus")
     $benchmarkPlanReady = [string]::Equals($benchmarkPlanStatus, "ready", [StringComparison]::OrdinalIgnoreCase)
@@ -663,6 +708,22 @@ function Get-EvidenceGateRecords {
                 -Detail "metrics=$(Get-JsonValue $Validation "metricCatalogMetricCount"); required=$(Get-JsonValue $Validation "metricCatalogRequiredMetricCount"); missingRequired=$(Get-JsonValue $Validation "metricCatalogMissingRequiredMetricCount"); contractReady=$(Get-JsonValue $Validation "metricCatalogAcceptanceContractReady"); missingThreshold=$(Get-JsonValue $Validation "metricCatalogMissingThresholdCount"); missingComparator=$(Get-JsonValue $Validation "metricCatalogMissingComparatorCount"); invalidComparator=$(Get-JsonValue $Validation "metricCatalogInvalidComparatorCount"); missingUnit=$(Get-JsonValue $Validation "metricCatalogMissingUnitCount"); missingSafety=$(Get-JsonValue $Validation "metricCatalogMissingSafetyClassCount"); missingScope=$(Get-JsonValue $Validation "metricCatalogMissingAcceptanceScopeCount"); problemMetricIds=$metricCatalogProblemIds" `
                 -Remediation "Capture or update benchmark-metric-catalog.json so required metrics declare direction, threshold, comparator, unit, safety class, and acceptance scope.")) | Out-Null
 
+    $pureSignalSafeBypassReady = Test-Truthy (Get-JsonValue $Validation "pureSignalSafeBypassReportReady")
+    $pureSignalSafeBypassPresent = Test-Truthy (Get-JsonValue $Validation "pureSignalSafeBypassReportPresent")
+    $pureSignalSafeBypassStatus = [string](Get-JsonValue $Validation "pureSignalSafeBypassReportStatus")
+    if ([string]::IsNullOrWhiteSpace($pureSignalSafeBypassStatus)) {
+        $pureSignalSafeBypassStatus = if ($pureSignalSafeBypassPresent) { "not-ready" } else { "not-captured" }
+    }
+    $pureSignalMissingModes = (@(Get-JsonArray $Validation "pureSignalSafeBypassMissingModes") | ForEach-Object { [string]$_ }) -join ", "
+    $gates.Add((New-EvidenceGateRecord `
+                -GateId "puresignal-safe-bypass" `
+                -Name "PureSignal safe-bypass TX bench" `
+                -Ready:$pureSignalSafeBypassReady `
+                -Status $pureSignalSafeBypassStatus `
+                -RequiredForAcceptance:$false `
+                -Detail "present=$pureSignalSafeBypassPresent; scenario=$(Get-JsonValue $Validation "pureSignalSafeBypassScenarioId"); hardware=$(Get-JsonValue $Validation "pureSignalSafeBypassHardwareTarget"); disabledReady=$(Get-JsonValue $Validation "pureSignalSafeBypassDisabledPathReady"); enabledReady=$(Get-JsonValue $Validation "pureSignalSafeBypassEnabledPathReady"); capturedModes=$(Get-JsonValue $Validation "pureSignalSafeBypassCapturedModeCount"); missingModes=$(Get-JsonValue $Validation "pureSignalSafeBypassMissingModeCount") [$pureSignalMissingModes]; feedbackMin=$(Get-JsonValue $Validation "pureSignalSafeBypassFeedbackStabilityMin"); feedbackThreshold=$(Get-JsonValue $Validation "pureSignalSafeBypassFeedbackStabilityThreshold"); txMonitorCouplingMax=$(Get-JsonValue $Validation "pureSignalSafeBypassTxMonitorCouplingMax"); txMonitorCouplingThreshold=$(Get-JsonValue $Validation "pureSignalSafeBypassTxMonitorCouplingThreshold"); clipping=$(Get-JsonValue $Validation "pureSignalSafeBypassClippingCountTotal"); gateFailures=$(Get-JsonValue $Validation "pureSignalSafeBypassGateFailureCount"); defaultStatePreserved=$(Get-JsonValue $Validation "pureSignalSafeBypassDefaultStatePreserved"); defaultChangeApproved=$(Get-JsonValue $Validation "pureSignalSafeBypassDefaultBehaviorChangeApproved")" `
+                -Remediation "Capture G2 PureSignal disabled and enabled TX bench traces, then run summarize-dsp-puresignal-bench.ps1 so puresignal-safe-bypass-report proves default/bypass state, feedback stability, TX monitor isolation, and no clipping.")) | Out-Null
+
     $externalCandidateStatus = [string](Get-JsonValue $Validation "externalEngineCandidateStatus")
     $externalCandidateReady = [string]::Equals($externalCandidateStatus, "opt-in-gated", [StringComparison]::OrdinalIgnoreCase)
     $externalCandidateMissingIds = Join-ExternalCandidateIds @(Get-JsonArray $Validation "externalEngineCandidateMissingIds")
@@ -686,14 +747,47 @@ function Get-EvidenceGateRecords {
     $externalBakeoffBlockedIds = Join-ExternalCandidateIds @(Get-JsonArray $Validation "externalEngineBakeoffBlockedCandidateIds")
     $externalBakeoffTopIssue = Get-ExternalIssueTopText @(Get-JsonArray $Validation "externalEngineBakeoffCandidateIssueCounts")
     $externalBakeoffScopeTriggers = (@(Get-JsonArray $Validation "externalEngineBakeoffScopeTriggers") | ForEach-Object { [string]$_ }) -join ", "
+    $externalBakeoffFirstSafeCandidateId = [string](Get-JsonValue $Validation "externalEngineBakeoffFirstSafeCandidateId")
+    $externalBakeoffEvaluationOrderIds = Join-ExternalCandidateIds @(Get-JsonArray $Validation "externalEngineBakeoffEvaluationOrderCandidateIds")
+    $externalBakeoffFirstSafeScenarioIds = (@(Get-JsonArray $Validation "externalEngineBakeoffFirstSafeScenarioIds") | ForEach-Object { [string]$_ }) -join ", "
     $gates.Add((New-EvidenceGateRecord `
                 -GateId "external-engine-bakeoff" `
                 -Name "External DSP/ML bakeoff report" `
                 -Ready:($externalBakeoffReady -or (-not $externalBakeoffRequired -and -not $externalBakeoffPresent)) `
                 -Status $externalBakeoffStatus `
                 -RequiredForAcceptance:$externalBakeoffRequired `
-                -Detail "requiredByScope=$externalBakeoffRequired; scopeTriggers=$externalBakeoffScopeTriggers; present=$externalBakeoffPresent; safe=$(Get-JsonValue $Validation "externalEngineBakeoffSafeForBakeoffCount"); missingIds=$externalBakeoffMissingIds; unsafeIds=$externalBakeoffUnsafeIds; blocked=$(Get-JsonValue $Validation "externalEngineBakeoffBlockedCandidateCount"); blockedIds=$externalBakeoffBlockedIds; topIssue=$externalBakeoffTopIssue" `
+                -Detail "requiredByScope=$externalBakeoffRequired; scopeTriggers=$externalBakeoffScopeTriggers; present=$externalBakeoffPresent; safe=$(Get-JsonValue $Validation "externalEngineBakeoffSafeForBakeoffCount"); firstSafe=$externalBakeoffFirstSafeCandidateId; firstSafeScenarios=$externalBakeoffFirstSafeScenarioIds; evaluationOrder=$externalBakeoffEvaluationOrderIds; missingIds=$externalBakeoffMissingIds; unsafeIds=$externalBakeoffUnsafeIds; blocked=$(Get-JsonValue $Validation "externalEngineBakeoffBlockedCandidateCount"); blockedIds=$externalBakeoffBlockedIds; topIssue=$externalBakeoffTopIssue" `
                 -Remediation "Generate external-engine-bakeoff-report only for scoped opt-in comparisons, then resolve unsafe/missing candidate evidence.")) | Out-Null
+
+    $externalCyclePresent = Test-Truthy (Get-JsonValue $Validation "externalEngineBakeoffCycleSummaryPresent")
+    $externalCycleValid = Test-Truthy (Get-JsonValue $Validation "externalEngineBakeoffCycleSummaryValid")
+    $externalCycleStatus = [string](Get-JsonValue $Validation "externalEngineBakeoffCycleStatus")
+    if ([string]::IsNullOrWhiteSpace($externalCycleStatus)) {
+        $externalCycleStatus = if ($externalCyclePresent) { "invalid" } else { "not-captured" }
+    }
+    $externalCycleReadyToExecute = Test-Truthy (Get-JsonValue $Validation "externalEngineBakeoffCycleReadyToExecute")
+    $externalCycleExecuted = Test-Truthy (Get-JsonValue $Validation "externalEngineBakeoffCycleExecuted")
+    $externalCycleReady = ($externalCycleValid -and ($externalCycleStatus -in @("ready", "succeeded")))
+    $externalCycleGateStatus = if (-not $externalBakeoffReady) {
+        "not-in-scope"
+    }
+    elseif (-not $externalCyclePresent) {
+        "not-captured"
+    }
+    elseif (-not $externalCycleValid) {
+        "invalid"
+    }
+    else {
+        $externalCycleStatus
+    }
+    $gates.Add((New-EvidenceGateRecord `
+                -GateId "external-engine-bakeoff-cycle" `
+                -Name "External DSP/ML bakeoff cycle summary" `
+                -Ready:((-not $externalBakeoffReady) -or $externalCycleReady) `
+                -Status $externalCycleGateStatus `
+                -RequiredForAcceptance:$false `
+                -Detail "bakeoffReady=$externalBakeoffReady; present=$externalCyclePresent; valid=$externalCycleValid; status=$externalCycleStatus; mode=$(Get-JsonValue $Validation "externalEngineBakeoffCycleMode"); candidate=$(Get-JsonValue $Validation "externalEngineBakeoffCycleCandidateId"); comparison=$(Get-JsonValue $Validation "externalEngineBakeoffCycleComparisonId"); readyToExecute=$externalCycleReadyToExecute; executed=$externalCycleExecuted; missingPrerequisites=$(Get-JsonValue $Validation "externalEngineBakeoffCycleMissingPrerequisiteCount"); commandSteps=$(Get-JsonValue $Validation "externalEngineBakeoffCycleCommandStepCount"); expectedArtifacts=$(Get-JsonValue $Validation "externalEngineBakeoffCycleExpectedArtifactCount"); nonZeroExits=$(Get-JsonValue $Validation "externalEngineBakeoffCycleNonZeroExitCount"); sourceReady=$(Get-JsonValue $Validation "externalEngineBakeoffCycleSourceExternalBakeoffReady"); sourceAction=$(Get-JsonValue $Validation "externalEngineBakeoffCycleSourceExternalBakeoffActionPresent"); path=$(Get-JsonValue $Validation "externalEngineBakeoffCyclePath")" `
+                -Remediation "Run run-dsp-external-engine-bakeoff.ps1 with -PlanOnly after the external bakeoff report is ready; use -Execute only after fixture metrics exist and the operator has enabled the post-demod candidate path.")) | Out-Null
 
     $metricComparisonReady = Test-Truthy (Get-JsonValue $Validation "metricComparisonReady")
     $metricComparisonStatus = if ($metricComparisonReady) { "ready" } else { "not-ready" }
@@ -757,6 +851,43 @@ function Get-EvidenceGateRecords {
                 -RequiredForAcceptance:$false `
                 -Detail "reports=$(Get-JsonValue $Validation "liveMatrixMixedWeakStrongReportCount"); schemaV2Reports=$(Get-JsonValue $Validation "liveMatrixMixedWeakStrongSchemaV2ReportCount"); readyReports=$(Get-JsonValue $Validation "liveMatrixMixedWeakStrongReadyReportCount"); mixedTraces=$(Get-JsonValue $Validation "liveMatrixMixedWeakStrongTraceCount"); readyTraces=$(Get-JsonValue $Validation "liveMatrixMixedWeakStrongReadyTraceCount"); missingRuns=$(Get-JsonValue $Validation "liveMatrixMixedWeakStrongMissingRunCount"); gapWatchRuns=$(Get-JsonValue $Validation "liveMatrixMixedWeakStrongGapWatchRunCount"); weakSamples=$(Get-JsonValue $Validation "liveMatrixMixedWeakStrongWeakInputSampleCount"); strongSamples=$(Get-JsonValue $Validation "liveMatrixMixedWeakStrongStrongInputSampleCount"); best=$liveMatrixMixedWeakStrongBestText" `
                 -Remediation "Use the matrix best run as the next G2 live-history/comparison target, or keep scanning active SSB windows until a schema-v2 matrix reports mixed weak+strong hunt readiness.")) | Out-Null
+
+    $g2RxPeakHuntPresent = Test-Truthy (Get-JsonValue $Validation "g2RxPeakHuntReportPresent")
+    $g2RxPeakHuntReady = if ($g2RxPeakHuntPresent) {
+        Test-Truthy (Get-JsonValue $Validation "g2RxPeakHuntReportReady")
+    }
+    else {
+        $true
+    }
+    $g2RxPeakHuntStatus = [string](Get-JsonValue $Validation "g2RxPeakHuntReportStatus")
+    if ([string]::IsNullOrWhiteSpace($g2RxPeakHuntStatus)) {
+        $g2RxPeakHuntStatus = if ($g2RxPeakHuntPresent) { "not-ready" } else { "not-present" }
+    }
+    $g2RxPeakHuntBestFrequencyHz = [string](Get-JsonValue $Validation "g2RxPeakHuntBestFrequencyHz")
+    $g2RxPeakHuntBestStatus = [string](Get-JsonValue $Validation "g2RxPeakHuntBestStatus")
+    $g2RxPeakHuntBestText = if ([string]::IsNullOrWhiteSpace($g2RxPeakHuntBestFrequencyHz)) {
+        "none"
+    }
+    else {
+        "$g2RxPeakHuntBestFrequencyHz Hz score=$(Get-JsonValue $Validation "g2RxPeakHuntBestScore") status=$g2RxPeakHuntBestStatus"
+    }
+    $g2RxPeakHuntReferencedWindowCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "g2RxPeakHuntReferencedWindowCount")
+    $g2RxPeakHuntReferencedWindowReadyCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "g2RxPeakHuntReferencedWindowReadyCount")
+    $g2RxPeakHuntReferencedWindowProblemCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "g2RxPeakHuntReferencedWindowProblemCount")
+    $g2RxPeakHuntBaseUrl = [string](Get-JsonValue $Validation "g2RxPeakHuntBaseUrl")
+    $g2RxPeakHuntRequestedBaseUrl = [string](Get-JsonValue $Validation "g2RxPeakHuntRequestedBaseUrl")
+    $g2RxPeakHuntAutoPhoneCluster = Test-Truthy (Get-JsonValue $Validation "g2RxPeakHuntAutoPhoneCluster")
+    $g2RxPeakHuntAutoPhoneClusterCandidateCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "g2RxPeakHuntAutoPhoneClusterCandidateCount")
+    $g2RxPeakHuntAutoPhoneClusterBandLowHz = Get-JsonValue $Validation "g2RxPeakHuntAutoPhoneClusterBandLowHz"
+    $g2RxPeakHuntAutoPhoneClusterBandHighHz = Get-JsonValue $Validation "g2RxPeakHuntAutoPhoneClusterBandHighHz"
+    $gates.Add((New-EvidenceGateRecord `
+                -GateId "g2-rx-peak-hunt" `
+                -Name "G2 RX peak-hunt evidence" `
+                -Ready:$g2RxPeakHuntReady `
+                -Status $g2RxPeakHuntStatus `
+                -RequiredForAcceptance:$false `
+                -Detail "present=$g2RxPeakHuntPresent; ok=$(Get-JsonValue $Validation "g2RxPeakHuntOk"); scanError=$(Get-JsonValue $Validation "g2RxPeakHuntScanError"); requestedBaseUrl=$g2RxPeakHuntRequestedBaseUrl; baseUrl=$g2RxPeakHuntBaseUrl; autoBaseDiscovered=$(Get-JsonValue $Validation "g2RxPeakHuntBaseUrlAutoDiscovered"); autoPhoneCluster=$g2RxPeakHuntAutoPhoneCluster; autoPhoneClusterCandidates=$g2RxPeakHuntAutoPhoneClusterCandidateCount; autoPhoneClusterBandHz=$g2RxPeakHuntAutoPhoneClusterBandLowHz-$g2RxPeakHuntAutoPhoneClusterBandHighHz; allowRetune=$(Get-JsonValue $Validation "g2RxPeakHuntAllowRetune"); passes=$(Get-JsonValue $Validation "g2RxPeakHuntCompletedPassCount")/$(Get-JsonValue $Validation "g2RxPeakHuntPassCount"); operatorCandidates=$(Get-JsonValue $Validation "g2RxPeakHuntOperatorCandidateCount"); runs=$(Get-JsonValue $Validation "g2RxPeakHuntActualRunCount"); failedRuns=$(Get-JsonValue $Validation "g2RxPeakHuntFailedRunCount"); referencedWindows=$g2RxPeakHuntReferencedWindowReadyCount/$g2RxPeakHuntReferencedWindowCount; referencedProblems=$g2RxPeakHuntReferencedWindowProblemCount; mixedReady=$(Get-JsonValue $Validation "g2RxPeakHuntMixedWeakStrongReady"); weakSamples=$(Get-JsonValue $Validation "g2RxPeakHuntWeakInputSampleCount"); strongSamples=$(Get-JsonValue $Validation "g2RxPeakHuntStrongInputSampleCount"); speechWeakStrong=$(Get-JsonValue $Validation "g2RxPeakHuntSpeechQualifiedWeakInputSampleCount")/$(Get-JsonValue $Validation "g2RxPeakHuntSpeechQualifiedStrongInputSampleCount"); passbandWeakStrong=$(Get-JsonValue $Validation "g2RxPeakHuntPassbandQualifiedWeakInputSampleCount")/$(Get-JsonValue $Validation "g2RxPeakHuntPassbandQualifiedStrongInputSampleCount"); nearPassband=$(Get-JsonValue $Validation "g2RxPeakHuntFrontendNearPassbandSampleCount"); candidateWeakLoss=$(Get-JsonValue $Validation "g2RxPeakHuntCandidateWeakLossSampleCount"); hotMakeup=$(Get-JsonValue $Validation "g2RxPeakHuntHotMakeupSampleCount"); hardBlockers=$(Get-JsonValue $Validation "g2RxPeakHuntHardBlockerSampleCount"); agcPumpingRuns=$(Get-JsonValue $Validation "g2RxPeakHuntAgcPumpingRiskRunCount"); vfoRestored=$(Get-JsonValue $Validation "g2RxPeakHuntSafetyOriginalVfoRestored"); best=$g2RxPeakHuntBestText" `
+                -Remediation "Use run-dsp-g2-rx-peak-hunt.ps1 as RX-only scouting evidence before mixed weak+strong live-history recapture; if present evidence is invalid, resolve RX-only safety, VFO restore, hard blockers, or AGC pumping before promoting a window.")) | Out-Null
 
     $liveMatrixArtifactControlStatus = [string](Get-JsonValue $Validation "liveMatrixArtifactControlStatus")
     if ([string]::IsNullOrWhiteSpace($liveMatrixArtifactControlStatus)) {
@@ -946,6 +1077,12 @@ function Get-AcceptanceReadinessRecords {
     $stages = New-Object System.Collections.Generic.List[object]
     $requiredBlockingGateIds = @(Get-BlockingEvidenceGateIds -Gates $EvidenceGates -RequiredOnly)
     $allBlockingGateIds = @(Get-BlockingEvidenceGateIds -Gates $EvidenceGates)
+    $crossRadioStatus = [string](Get-JsonValue $Validation "crossRadioValidationEvidenceStatus")
+    if ([string]::IsNullOrWhiteSpace($crossRadioStatus)) {
+        $crossRadioStatus = "not-captured"
+    }
+    $crossRadioReady = Test-Truthy (Get-JsonValue $Validation "crossRadioValidationReady")
+    $crossRadioTargets = (@(Get-JsonArray $Validation "crossRadioValidationNonG2TargetIds") | ForEach-Object { [string]$_ }) -join ", "
 
     $triageReady = [string]::Equals($ReportStatus, "ready", [StringComparison]::OrdinalIgnoreCase)
     $stages.Add((New-AcceptanceReadinessRecord `
@@ -963,6 +1100,7 @@ function Get-AcceptanceReadinessRecords {
             "benchmark-plan-coverage",
             "benchmark-metric-catalog",
             "external-engine-candidates",
+            "wdsp-source-drift-report",
             "wdsp-native-symbol-audit",
             "wdsp-runtime-artifact-audit")) {
         $buildOutPrerequisiteGateIds.Add($gateId) | Out-Null
@@ -986,7 +1124,7 @@ function Get-AcceptanceReadinessRecords {
                 -Status $buildOutStatus `
                 -BlocksDefaultChange:$false `
                 -Detail "requiredGates=$((@($buildOutPrerequisiteGateIds.ToArray())) -join ', '); blockingGates=$((@($buildOutBlockingGateIds.ToArray())) -join ', ')" `
-                -NextAction $(if ($buildOutReady) { "Start opt-in DSP implementation or bakeoff work behind explicit controls; keep defaults unchanged and gather G2 evidence before review." } else { "Complete benchmark plan/catalog, WDSP native/runtime audit, and external-candidate safety gates before starting new opt-in DSP build-out work." }) `
+                -NextAction $(if ($buildOutReady) { "Start opt-in DSP implementation or bakeoff work behind explicit controls; keep defaults unchanged and gather G2 evidence before review." } else { "Complete benchmark plan/catalog, WDSP source drift classification, WDSP native/runtime audit, and external-candidate safety gates before starting new opt-in DSP build-out work." }) `
                 -BlockingGateIds @($buildOutBlockingGateIds.ToArray()))) | Out-Null
 
     $g2Ready = ($triageReady `
@@ -1045,6 +1183,9 @@ function Get-AcceptanceReadinessRecords {
     $externalBlockedIds = Join-ExternalCandidateIds @(Get-JsonArray $Validation "externalEngineBakeoffBlockedCandidateIds")
     $externalTopIssue = Get-ExternalIssueTopText @(Get-JsonArray $Validation "externalEngineBakeoffCandidateIssueCounts")
     $externalScopeTriggers = (@(Get-JsonArray $Validation "externalEngineBakeoffScopeTriggers") | ForEach-Object { [string]$_ }) -join ", "
+    $externalFirstSafeCandidateId = [string](Get-JsonValue $Validation "externalEngineBakeoffFirstSafeCandidateId")
+    $externalFirstSafeScenarioIds = (@(Get-JsonArray $Validation "externalEngineBakeoffFirstSafeScenarioIds") | ForEach-Object { [string]$_ }) -join ", "
+    $externalEvaluationOrderIds = Join-ExternalCandidateIds @(Get-JsonArray $Validation "externalEngineBakeoffEvaluationOrderCandidateIds")
     if ([string]::IsNullOrWhiteSpace($externalTopIssue)) {
         $externalTopIssue = Get-ExternalIssueTopText @(Get-JsonArray $Validation "externalEngineCandidateIssueCounts")
     }
@@ -1076,19 +1217,36 @@ function Get-AcceptanceReadinessRecords {
                 -Ready:$externalStageReady `
                 -Status $externalStatus `
                 -BlocksDefaultChange:$false `
-                -Detail "requiredByScope=$externalRequired; scopeTriggers=$externalScopeTriggers; present=$externalPresent; ready=$externalReady; missingIds=$externalMissingIds; unsafeIds=$externalUnsafeIds; blockedIds=$externalBlockedIds; topIssue=$externalTopIssue; defaultBehaviorChangeReady=$(Get-JsonValue $Validation "externalEngineBakeoffPlanDefaultBehaviorChangeReady"); rawIqReplacementAllowed=$(Get-JsonValue $Validation "externalEngineBakeoffPlanRawWdspIqReplacementAllowed")" `
+                -Detail "requiredByScope=$externalRequired; scopeTriggers=$externalScopeTriggers; present=$externalPresent; ready=$externalReady; firstSafe=$externalFirstSafeCandidateId; firstSafeScenarios=$externalFirstSafeScenarioIds; evaluationOrder=$externalEvaluationOrderIds; missingIds=$externalMissingIds; unsafeIds=$externalUnsafeIds; blockedIds=$externalBlockedIds; topIssue=$externalTopIssue; defaultBehaviorChangeReady=$(Get-JsonValue $Validation "externalEngineBakeoffPlanDefaultBehaviorChangeReady"); rawIqReplacementAllowed=$(Get-JsonValue $Validation "externalEngineBakeoffPlanRawWdspIqReplacementAllowed")" `
                 -NextAction $externalNextAction `
                 -BlockingGateIds $externalBlockingGateIds)) | Out-Null
 
-    $defaultGraduationStatus = if ($g2Ready) { "blocked-cross-radio-validation" } else { "blocked-g2-prerequisites" }
+    $defaultGraduationStatus = if (-not $g2Ready) {
+        "blocked-g2-prerequisites"
+    }
+    elseif (-not $crossRadioReady) {
+        "blocked-cross-radio-validation"
+    }
+    else {
+        "blocked-explicit-default-approval"
+    }
+    $defaultGraduationNextAction = if (-not $g2Ready) {
+        "Finish G2 first-pass evidence before planning cross-radio/default-graduation review."
+    }
+    elseif (-not $crossRadioReady) {
+        "Capture and validate non-G2 cross-radio evidence before any default behavior change approval."
+    }
+    else {
+        "Review G2 and cross-radio evidence with explicit approval before any default behavior change."
+    }
     $stages.Add((New-AcceptanceReadinessRecord `
                 -StageId "default-dsp-graduation" `
                 -Name "Default DSP behavior graduation" `
                 -Ready:$false `
                 -Status $defaultGraduationStatus `
                 -BlocksDefaultChange:$true `
-                -Detail "defaultBehaviorChangeReady=False; crossRadioValidationRequired=True; crossRadioValidationEvidenceStatus=not-captured; blockingGateCount=$($allBlockingGateIds.Count)" `
-                -NextAction $(if ($g2Ready) { "Capture and validate non-G2 cross-radio evidence before any default behavior change approval." } else { "Finish G2 first-pass evidence before planning cross-radio/default-graduation review." }) `
+                -Detail "defaultBehaviorChangeReady=False; crossRadioValidationRequired=True; crossRadioValidationEvidenceStatus=$crossRadioStatus; crossRadioValidationReady=$crossRadioReady; crossRadioNonG2Targets=$crossRadioTargets; blockingGateCount=$($allBlockingGateIds.Count)" `
+                -NextAction $defaultGraduationNextAction `
                 -BlockingGateIds $allBlockingGateIds)) | Out-Null
 
     return @($stages.ToArray())
@@ -1308,6 +1466,34 @@ function Add-AcceptanceActionForGate {
                         -ExpectedArtifact 'artifacts/wdsp-runtime-artifact-audit.json' `
                         -FollowUp "Package the expected win-x64 WDSP runtime artifact before acceptance review.")) | Out-Null
         }
+        "native-stage-timing-report" {
+            $Actions.Add((New-AcceptanceActionRecord `
+                        -ActionId "summarize-native-stage-timing" `
+                        -Priority 32 `
+                        -StageId "opt-in-dsp-buildout-prerequisites" `
+                        -GateId $gateId `
+                        -Category "benchmark-fixture" `
+                        -RequiredForAcceptance:$true `
+                        -BlocksDefaultChange:$true `
+                        -Reason $reason `
+                        -CommandTemplate 'powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-native-stage-timing.ps1 -BundleDir "$bundleDir" -MetricsPath "$bundleDir\artifacts\offline-fixture-metrics.json" -ReportPath "$bundleDir\artifacts\native-stage-timing-report.json" -Force -FailOnBudget' `
+                        -ExpectedArtifact 'artifacts/native-stage-timing-report.json' `
+                        -FollowUp "If this report still says native C instrumentation is pending, treat it as wrapper-level timing/allocation evidence only; do not claim internal WDSP allocator timing until native probes are added.")) | Out-Null
+        }
+        "wdsp-source-drift-report" {
+            $Actions.Add((New-AcceptanceActionRecord `
+                        -ActionId "classify-wdsp-source-drift" `
+                        -Priority 33 `
+                        -StageId "opt-in-dsp-buildout-prerequisites" `
+                        -GateId $gateId `
+                        -Category "wdsp-audit" `
+                        -RequiredForAcceptance:$false `
+                        -BlocksDefaultChange:$false `
+                        -Reason $reason `
+                        -CommandTemplate 'powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-wdsp-source-drift.ps1 -ReferenceDir "<local-thetis-wdsp>" -CandidateDir native\wdsp -ReportPath "$bundleDir\artifacts\wdsp-source-drift-report.json" -FailOnLikelyDefect' `
+                        -ExpectedArtifact 'artifacts/wdsp-source-drift-report.json' `
+                        -FollowUp "Replace <local-thetis-wdsp> with the local Thetis WDSP source path, then classify or resolve any likely-defect source drift before native WDSP code changes.")) | Out-Null
+        }
         "benchmark-plan-coverage" {
             $missingFamilies = @(Get-JsonArray $Validation "benchmarkPlanMissingAcceptanceScenarioFamilyIds")
             $missingFamiliesText = $missingFamilies -join ", "
@@ -1481,6 +1667,25 @@ function Add-AcceptanceActionForGate {
                 Add-LiveMatrixAcceptanceAction -Actions $Actions -GateId $gateId -Reason $reason
             }
         }
+        "puresignal-safe-bypass" {
+            $missingModes = (@(Get-JsonArray $Validation "pureSignalSafeBypassMissingModes") | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ", "
+            $pureSignalReason = "$reason Status=$(Get-JsonValue $Validation "pureSignalSafeBypassReportStatus"), disabledReady=$(Get-JsonValue $Validation "pureSignalSafeBypassDisabledPathReady"), enabledReady=$(Get-JsonValue $Validation "pureSignalSafeBypassEnabledPathReady"), missingModes=$missingModes, clipping=$(Get-JsonValue $Validation "pureSignalSafeBypassClippingCountTotal"), gateFailures=$(Get-JsonValue $Validation "pureSignalSafeBypassGateFailureCount")."
+            $Actions.Add((New-AcceptanceActionRecord `
+                        -ActionId "capture-puresignal-safe-bypass-bench" `
+                        -Priority 68 `
+                        -StageId "g2-first-pass-evidence" `
+                        -GateId $gateId `
+                        -Category "tx-puresignal" `
+                        -RequiredForAcceptance:$gateRequired `
+                        -BlocksDefaultChange:$true `
+                        -Reason $pureSignalReason `
+                        -CommandSteps @(
+                            'powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-puresignal-bench.ps1 -BundleDir "$bundleDir" -DisabledTracePath "$bundleDir\artifacts\puresignal-disabled.json" -EnabledTracePath "$bundleDir\artifacts\puresignal-enabled.json" -ReportPath "$bundleDir\artifacts\puresignal-safe-bypass-report.json" -Force'
+                        ) `
+                        -ManualAction "On G2, capture TX/PureSignal bench traces with PureSignal disabled/bypassed and enabled before running the summary command. Do not route external DSP/ML, TX monitor audio, or default profile changes into the PureSignal feedback path." `
+                        -ExpectedArtifact "artifacts/puresignal-safe-bypass-report.json" `
+                        -FollowUp "Rerun strict validation and validation triage; TX profile graduation remains blocked until the report is ready and defaultBehaviorChangeApproved remains false.")) | Out-Null
+        }
         "external-engine-candidates" {
             $externalMissingIds = Join-ExternalCandidateIds @(Get-JsonArray $Validation "externalEngineCandidateMissingIds")
             $externalUnsafeIds = Join-ExternalCandidateIds @(Get-JsonArray $Validation "externalEngineCandidateUnsafeIds")
@@ -1547,6 +1752,52 @@ function Add-AcceptanceActionForGate {
                         -CommandTemplate 'powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-external-engine-candidates.ps1 -BundleDir "$bundleDir" -CandidatePath "$bundleDir\external-engine-candidates.json" -SnapshotPath "$bundleDir\modernization-snapshot.json" -ReportPath "$bundleDir\artifacts\external-engine-bakeoff-report.json" -FailOnUnsafe' `
                         -ExpectedArtifact 'artifacts/external-engine-bakeoff-report.json' `
                         -FollowUp "External DSP/ML remains opt-in and post-demod only until missing/unsafe candidate IDs are cleared and explicit radio-safety approval exists.")) | Out-Null
+        }
+        "external-engine-bakeoff-cycle" {
+            $externalFirstSafeCandidateId = [string](Get-JsonValue $Validation "externalEngineBakeoffFirstSafeCandidateId")
+            if ([string]::IsNullOrWhiteSpace($externalFirstSafeCandidateId)) {
+                $externalFirstSafeCandidateId = [string](Get-JsonValue $Validation "externalEngineBakeoffCycleCandidateId")
+            }
+            if ([string]::IsNullOrWhiteSpace($externalFirstSafeCandidateId)) {
+                $externalFirstSafeCandidateId = "<external-bakeoff-candidate-id>"
+            }
+
+            $externalFirstSafeScenarioIds = @(Get-JsonArray $Validation "externalEngineBakeoffFirstSafeScenarioIds" | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            if ($externalFirstSafeScenarioIds.Count -eq 0) {
+                $externalFirstSafeScenarioIds = @(Get-JsonArray $Validation "externalEngineBakeoffCycleScenarioIds" | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            }
+            if ($externalFirstSafeScenarioIds.Count -eq 0) {
+                $externalFirstSafeScenarioIds = @(Get-JsonArray $Validation "externalEngineBakeoffPlanScenarioIds" | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            }
+            $scenarioRunnerArgument = if ($externalFirstSafeScenarioIds.Count -gt 0) {
+                $externalFirstSafeScenarioIds -join " "
+            }
+            else {
+                "<external-bakeoff-scenario-ids>"
+            }
+
+            $cycleStatus = [string](Get-JsonValue $Validation "externalEngineBakeoffCycleStatus")
+            $cycleReason = "$reason Cycle status='$cycleStatus', valid=$(Get-JsonValue $Validation "externalEngineBakeoffCycleSummaryValid"), readyToExecute=$(Get-JsonValue $Validation "externalEngineBakeoffCycleReadyToExecute"), missingPrerequisites=$(Get-JsonValue $Validation "externalEngineBakeoffCycleMissingPrerequisiteCount"), nonZeroExits=$(Get-JsonValue $Validation "externalEngineBakeoffCycleNonZeroExitCount")."
+
+            $Actions.Add((New-AcceptanceActionRecord `
+                        -ActionId "run-first-safe-external-engine-bakeoff" `
+                        -Priority 72 `
+                        -StageId "external-dsp-ml-bakeoff" `
+                        -GateId $gateId `
+                        -Category "external-dsp-ml" `
+                        -RequiredForAcceptance:$gateRequired `
+                        -BlocksDefaultChange:$false `
+                        -Reason $cycleReason `
+                        -CommandSteps @(
+                            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-external-engine-bakeoff.ps1 -BundleDir `"`$bundleDir`" -CandidateId $externalFirstSafeCandidateId -ScenarioIds $scenarioRunnerArgument -PlanOnly"
+                        ) `
+                        -ManualAction "Produce or enable only the post-demod, operator-opt-in '$externalFirstSafeCandidateId' candidate path before executing the runner plan. Start with -PlanOnly; use -Execute only after fixture metrics exist and the operator has intentionally enabled the candidate path. Do not route raw WDSP IQ, TX audio, TX monitor, or PureSignal feedback through the external engine." `
+                        -ExpectedArtifact "artifacts/external-engine-bakeoff-cycle-summary.json" `
+                        -ExpectedArtifacts @(
+                            "artifacts/external-engine-bakeoff-cycle-summary.json",
+                            "artifacts/external-engine-bakeoff-cycle-summary.md"
+                        ) `
+                        -FollowUp "Review the bakeoff cycle summary, then execute its child plan only as exploratory opt-in evidence. External DSP/ML remains post-demod and off by default until fixture metrics, G2 live evidence, operator notes, package/license review, and cross-radio validation all pass.")) | Out-Null
         }
         "live-matrix-artifact-control" {
             $artifactStatus = [string](Get-JsonValue $Validation "liveMatrixArtifactControlStatus")
@@ -1651,6 +1902,36 @@ function Add-AcceptanceActionForGate {
                             -FollowUp "Acceptance remains blocked until strict validation reports liveDiagnosticsHistoryMixedWeakStrongEvidenceReady=true and the G2/Thetis/current-Zeus comparisons still pass.")) | Out-Null
             }
             else {
+                $peakHuntReason = ""
+                $peakHuntManualContext = ""
+                if (Test-Truthy (Get-JsonValue $Validation "g2RxPeakHuntReportPresent")) {
+                    $peakHuntStatus = [string](Get-JsonValue $Validation "g2RxPeakHuntReportStatus")
+                    $peakHuntWeakSamples = Get-IntegerValueOrDefault (Get-JsonValue $Validation "g2RxPeakHuntWeakInputSampleCount")
+                    $peakHuntStrongSamples = Get-IntegerValueOrDefault (Get-JsonValue $Validation "g2RxPeakHuntStrongInputSampleCount")
+                    $peakHuntBestFrequencyHz = [string](Get-JsonValue $Validation "g2RxPeakHuntBestFrequencyHz")
+                    $peakHuntBestScore = Get-JsonValue $Validation "g2RxPeakHuntBestScore"
+                    $peakHuntBestStatus = [string](Get-JsonValue $Validation "g2RxPeakHuntBestStatus")
+                    $peakHuntBestReportPath = [string](Get-JsonValue $Validation "g2RxPeakHuntBestReportPath")
+                    $peakHuntWindowReadyCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "g2RxPeakHuntReferencedWindowReadyCount")
+                    $peakHuntWindowCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "g2RxPeakHuntReferencedWindowCount")
+                    $peakHuntProblemCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "g2RxPeakHuntReferencedWindowProblemCount")
+                    $peakHuntReason = " Latest G2 peak-hunt report status='$peakHuntStatus', weakSamples=$peakHuntWeakSamples, strongSamples=$peakHuntStrongSamples, referencedWindows=$peakHuntWindowReadyCount/$peakHuntWindowCount, referencedProblems=$peakHuntProblemCount, bestFrequencyHz=$peakHuntBestFrequencyHz, bestScore=$peakHuntBestScore, bestStatus='$peakHuntBestStatus', bestReportPath='$peakHuntBestReportPath'."
+                    if ($peakHuntStatus -eq "weak-only" -or $peakHuntBestStatus -eq "missing-strong-input" -or ($peakHuntWeakSamples -gt 0 -and $peakHuntStrongSamples -le 0)) {
+                        $peakHuntReason += " That weak-only or missing-strong-input scan is useful scouting evidence, but it cannot satisfy mixed weak+strong acceptance."
+                        $peakHuntManualContext = " The latest G2 peak hunt was weak-only/missing strong input, so keep scanning or retune to a window with both weak and strong speech before promotion."
+                    }
+                    elseif ($peakHuntStatus -eq "invalid") {
+                        $peakHuntReason += " The present peak-hunt report is invalid; recapture it with bundle-relative per-window watcher JSON/JSONL before using it as promotion evidence."
+                        $peakHuntManualContext = " The present G2 peak-hunt report is invalid, so recapture it into the bundle before promoting a window."
+                    }
+                }
+                $peakHuntCommandSteps = @(
+                    'powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-g2-rx-peak-hunt.ps1 -BaseUrl http://127.0.0.1:6060 -OutputRoot "$bundleDir\artifacts\g2-rx-peak-hunt" -ReportPath "$bundleDir\artifacts\g2-rx-peak-hunt-report.json" -AllowRetune -StopOnReady -SamplesPerWindow 24 -IntervalMs 250 -MaxPeaks 6',
+                    'powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir "$bundleDir" -ComparisonId nr5-spnr -IndexPath "$bundleDir\artifacts\live-diagnostics-trace-index.mixed-weak-strong-followup.json" -ReportPath "$bundleDir\artifacts\live-diagnostics-matrix-report.mixed-weak-strong-followup.json" -Samples 90 -IntervalMs 1000 -ContinueOnError',
+                    'powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-live-diagnostics-history.ps1 -BundleDir "$bundleDir" -ReportPath "$bundleDir\artifacts\live-diagnostics-history.json"',
+                    'powershell -NoProfile -ExecutionPolicy Bypass -File tools\validate-dsp-modernization-bundle.ps1 -BundleDir "$bundleDir" -RequireArtifactFiles -ReportPath "$bundleDir\validation-report.json"',
+                    'powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-modernization-validation-report.ps1 -BundleDir "$bundleDir" -ReportPath "$bundleDir\validation-triage-report.json" -MarkdownPath "$bundleDir\validation-triage-report.md" -FailOnIssues'
+                )
                 $Actions.Add((New-AcceptanceActionRecord `
                             -ActionId "capture-mixed-weak-strong-live-history" `
                             -Priority 79 `
@@ -1659,9 +1940,19 @@ function Add-AcceptanceActionForGate {
                             -Category "live-diagnostics" `
                             -RequiredForAcceptance:$gateRequired `
                             -BlocksDefaultChange:$true `
-                            -Reason $reason `
-                            -ManualAction "Use G2 on an active SSB/CW-adjacent window with both weak and strong speech samples, capture NR5/SPNR live diagnostics, then regenerate artifacts/live-diagnostics-history.json and strict validation. The v14 history must report mixedWeakStrongEvidenceStatus=ready." `
+                            -Reason "$reason$peakHuntReason" `
+                            -CommandSteps $peakHuntCommandSteps `
+                            -ManualAction "Use G2 on an active SSB/CW-adjacent window with both weak and strong speech samples. Start with run-dsp-g2-rx-peak-hunt to scan current frontend peaks; omit -AllowRetune for a current-VFO-only dry run.$peakHuntManualContext Then capture NR5/SPNR live diagnostics, regenerate artifacts/live-diagnostics-history.json, and rerun strict validation. The v14 history must report mixedWeakStrongEvidenceStatus=ready." `
                             -ExpectedArtifact 'artifacts/live-diagnostics-history.json' `
+                            -ExpectedArtifacts @(
+                                'artifacts/g2-rx-peak-hunt-report.json',
+                                'artifacts/live-diagnostics-trace-index.mixed-weak-strong-followup.json',
+                                'artifacts/live-diagnostics-matrix-report.mixed-weak-strong-followup.json',
+                                'artifacts/live-diagnostics-history.json',
+                                'validation-report.json',
+                                'validation-triage-report.json',
+                                'validation-triage-report.md'
+                            ) `
                             -FollowUp "Do not treat weak-only or quiet/intermittent captures as volume-normalization proof; they remain useful for weak-signal tuning but not for acceptance.")) | Out-Null
             }
         }
@@ -1738,6 +2029,61 @@ function Get-AcceptanceActionPlanRecords {
             $liveArtifactReason = "Required live acceptance artifacts are missing: $(Format-LiveAcceptanceArtifactProblemIds -Records $liveAcceptanceArtifactProblems). Capture the full live matrix, regenerate the required-live manifest, rerun strict validation, and review validation triage."
             Add-LiveMatrixAcceptanceAction -Actions $actions -GateId "validation-report" -Reason $liveArtifactReason
         }
+
+        $externalBakeoffPresent = Test-Truthy (Get-JsonValue $Validation "externalEngineBakeoffReportPresent")
+        $externalBakeoffReady = Test-Truthy (Get-JsonValue $Validation "externalEngineBakeoffReady")
+        $externalFirstSafeCandidateId = [string](Get-JsonValue $Validation "externalEngineBakeoffFirstSafeCandidateId")
+        if ($externalBakeoffPresent -and $externalBakeoffReady -and -not [string]::IsNullOrWhiteSpace($externalFirstSafeCandidateId) -and
+            -not (Test-AcceptanceActionExists -Actions $actions -ActionId "run-first-safe-external-engine-bakeoff")) {
+            $externalFirstSafeScenarioIds = @(Get-JsonArray $Validation "externalEngineBakeoffFirstSafeScenarioIds" | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            if ($externalFirstSafeScenarioIds.Count -eq 0) {
+                $externalFirstSafeScenarioIds = @(Get-JsonArray $Validation "externalEngineBakeoffPlanScenarioIds" | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            }
+            $scenarioArgument = if ($externalFirstSafeScenarioIds.Count -gt 0) {
+                $externalFirstSafeScenarioIds -join ","
+            }
+            else {
+                "<external-bakeoff-scenario-ids>"
+            }
+            $scenarioRunnerArgument = if ($externalFirstSafeScenarioIds.Count -gt 0) {
+                $externalFirstSafeScenarioIds -join " "
+            }
+            else {
+                "<external-bakeoff-scenario-ids>"
+            }
+            $fixtureTemplate = [string](Get-JsonValue $Validation "externalEngineBakeoffPlanFixtureComparisonCommandTemplate")
+            $liveTemplate = [string](Get-JsonValue $Validation "externalEngineBakeoffPlanLiveMatrixCommandTemplate")
+            $evaluationOrderIds = Join-ExternalCandidateIds @(Get-JsonArray $Validation "externalEngineBakeoffEvaluationOrderCandidateIds")
+            $externalBakeoffReason = "External DSP/ML bakeoff report is ready. First safe opt-in candidate is '$externalFirstSafeCandidateId'; evaluation order is '$evaluationOrderIds'; first-safe scenarios are '$scenarioArgument'."
+            if (-not [string]::IsNullOrWhiteSpace($fixtureTemplate)) {
+                $externalBakeoffReason = "$externalBakeoffReason Fixture template: $fixtureTemplate."
+            }
+            if (-not [string]::IsNullOrWhiteSpace($liveTemplate)) {
+                $externalBakeoffReason = "$externalBakeoffReason Live template: $liveTemplate."
+            }
+
+            $externalCommandSteps = @(
+                "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-external-engine-bakeoff.ps1 -BundleDir `"`$bundleDir`" -CandidateId $externalFirstSafeCandidateId -ScenarioIds $scenarioRunnerArgument -PlanOnly"
+            )
+
+            $actions.Add((New-AcceptanceActionRecord `
+                        -ActionId "run-first-safe-external-engine-bakeoff" `
+                        -Priority 72 `
+                        -StageId "external-dsp-ml-bakeoff" `
+                        -GateId "external-engine-bakeoff" `
+                        -Category "external-dsp-ml" `
+                        -RequiredForAcceptance:$false `
+                        -BlocksDefaultChange:$false `
+                        -Reason $externalBakeoffReason `
+                        -CommandSteps $externalCommandSteps `
+                        -ManualAction "Produce or enable only the post-demod, operator-opt-in '$externalFirstSafeCandidateId' candidate path before executing the runner plan. Start with -PlanOnly; use -Execute only after fixture metrics exist and the operator has intentionally enabled the candidate path. Do not route raw WDSP IQ, TX audio, TX monitor, or PureSignal feedback through the external engine." `
+                        -ExpectedArtifact "artifacts/external-engine-bakeoff-cycle-summary.json" `
+                        -ExpectedArtifacts @(
+                            "artifacts/external-engine-bakeoff-cycle-summary.json",
+                            "artifacts/external-engine-bakeoff-cycle-summary.md"
+                        ) `
+                        -FollowUp "Review the bakeoff cycle summary, then execute its child plan only as exploratory opt-in evidence. External DSP/ML remains post-demod and off by default until fixture metrics, G2 live evidence, operator notes, package/license review, and cross-radio validation all pass.")) | Out-Null
+        }
     }
 
     $g2Stage = $null
@@ -1748,7 +2094,8 @@ function Get-AcceptanceActionPlanRecords {
         }
     }
 
-    if ($null -ne $g2Stage -and (Test-Truthy (Get-JsonValue $g2Stage "ready"))) {
+    $crossRadioReady = Test-Truthy (Get-JsonValue $Validation "crossRadioValidationReady")
+    if ($null -ne $g2Stage -and (Test-Truthy (Get-JsonValue $g2Stage "ready")) -and -not $crossRadioReady) {
         $actions.Add((New-AcceptanceActionRecord `
                     -ActionId "capture-cross-radio-validation" `
                     -Priority 100 `
@@ -1757,8 +2104,8 @@ function Get-AcceptanceActionPlanRecords {
                     -RequiredForAcceptance:$true `
                     -BlocksDefaultChange:$true `
                     -Reason "Default DSP behavior cannot graduate from G2-only evidence." `
-                    -ManualAction "Repeat the accepted fixture/live evidence bundle on at least one non-G2 radio target and attach that validation before any default behavior change approval." `
-                    -ExpectedArtifact "cross-radio validation bundle" `
+                    -ManualAction "Repeat the accepted fixture/live evidence bundle on at least one non-G2 radio target, run summarize-dsp-cross-radio-validation.ps1 with the resulting source validation report, and attach the source-backed cross-radio report before any default behavior change approval." `
+                    -ExpectedArtifact "artifacts/cross-radio-validation-report.json" `
                     -FollowUp "After cross-radio evidence exists, rerun strict validation and triage before asking for default behavior approval.")) | Out-Null
     }
 
@@ -1806,6 +2153,20 @@ function Build-MarkdownReport {
     $evidenceGates = @(Get-JsonArray $Report "evidenceGates")
     if ($evidenceGates.Count -gt 0) {
         $lines.Add("## Evidence Gates") | Out-Null
+        $lines.Add("") | Out-Null
+        $requiredProblemGateIds = @((Get-JsonArray $Report "requiredEvidenceGateProblemIds") | ForEach-Object { [string]$_ })
+        $advisoryProblemGateIds = @((Get-JsonArray $Report "advisoryEvidenceGateProblemIds") | ForEach-Object { [string]$_ })
+        $requiredProblemGateSummary = "none"
+        if ($requiredProblemGateIds.Count -gt 0) {
+            $requiredProblemGateSummary = $requiredProblemGateIds -join ', '
+        }
+        $advisoryProblemGateSummary = "none"
+        if ($advisoryProblemGateIds.Count -gt 0) {
+            $advisoryProblemGateSummary = $advisoryProblemGateIds -join ', '
+        }
+        $lines.Add("- Gate problems: $(Get-JsonValue $Report "evidenceGateProblemCount") total / $(Get-JsonValue $Report "requiredEvidenceGateProblemCount") required / $(Get-JsonValue $Report "advisoryEvidenceGateProblemCount") advisory") | Out-Null
+        $lines.Add("- Required problem gates: $(Format-MarkdownCell $requiredProblemGateSummary)") | Out-Null
+        $lines.Add("- Advisory problem gates: $(Format-MarkdownCell $advisoryProblemGateSummary)") | Out-Null
         $lines.Add("") | Out-Null
         $lines.Add("| Gate | Ready | Status | Required | Detail | Action |") | Out-Null
         $lines.Add("|---|---:|---|---:|---|---|") | Out-Null
@@ -1873,6 +2234,7 @@ function Build-MarkdownReport {
     if (([int](Get-JsonValue $Report "externalEngineCandidateCount") -gt 0) -or
         (Test-Truthy (Get-JsonValue $Report "externalEngineBakeoffRequiredByScope")) -or
         (Test-Truthy (Get-JsonValue $Report "externalEngineBakeoffReportPresent")) -or
+        (Test-Truthy (Get-JsonValue $Report "externalEngineBakeoffCycleSummaryPresent")) -or
         $externalCandidateMissingIds.Count -gt 0 -or
         $externalBakeoffMissingIds.Count -gt 0 -or
         $externalCandidateUnsafeDetails.Count -gt 0 -or
@@ -1885,6 +2247,14 @@ function Build-MarkdownReport {
         $lines.Add("- Catalog top issue: $(Format-MarkdownCell (Get-ExternalIssueTopText $externalCandidateIssueCounts))") | Out-Null
         $lines.Add("- Bakeoff required/present/ready: $(Get-JsonValue $Report "externalEngineBakeoffRequiredByScope") / $(Get-JsonValue $Report "externalEngineBakeoffReportPresent") / $(Get-JsonValue $Report "externalEngineBakeoffReady")") | Out-Null
         $lines.Add("- Bakeoff scope triggers: $(Format-MarkdownCell ((@(Get-JsonArray $Report "externalEngineBakeoffScopeTriggers") | ForEach-Object { [string]$_ }) -join ', '))") | Out-Null
+        $lines.Add("- Bakeoff first safe candidate: $(Format-MarkdownCell (Get-JsonValue $Report "externalEngineBakeoffFirstSafeCandidateId"))") | Out-Null
+        $lines.Add("- Bakeoff first safe scenarios: $(Format-MarkdownCell ((@(Get-JsonArray $Report "externalEngineBakeoffFirstSafeScenarioIds") | ForEach-Object { [string]$_ }) -join ', '))") | Out-Null
+        $lines.Add("- Bakeoff evaluation order: $(Format-MarkdownCell ((@(Get-JsonArray $Report "externalEngineBakeoffEvaluationOrderCandidateIds") | ForEach-Object { [string]$_ }) -join ', '))") | Out-Null
+        $lines.Add("- Bakeoff fixture command template: $(Format-MarkdownCell (Get-JsonValue $Report "externalEngineBakeoffPlanFixtureComparisonCommandTemplate"))") | Out-Null
+        $lines.Add("- Bakeoff live matrix command template: $(Format-MarkdownCell (Get-JsonValue $Report "externalEngineBakeoffPlanLiveMatrixCommandTemplate"))") | Out-Null
+        if (Test-Truthy (Get-JsonValue $Report "externalEngineBakeoffCycleSummaryPresent")) {
+            $lines.Add("- Bakeoff cycle summary: status $(Format-MarkdownCell (Get-JsonValue $Report "externalEngineBakeoffCycleStatus")) / valid $(Get-JsonValue $Report "externalEngineBakeoffCycleSummaryValid") / mode $(Format-MarkdownCell (Get-JsonValue $Report "externalEngineBakeoffCycleMode")) / candidate $(Format-MarkdownCell (Get-JsonValue $Report "externalEngineBakeoffCycleCandidateId")) / ready $(Get-JsonValue $Report "externalEngineBakeoffCycleReadyToExecute") / executed $(Get-JsonValue $Report "externalEngineBakeoffCycleExecuted") / missing prereqs $(Get-JsonValue $Report "externalEngineBakeoffCycleMissingPrerequisiteCount") / nonzero exits $(Get-JsonValue $Report "externalEngineBakeoffCycleNonZeroExitCount") / path $(Format-MarkdownCell (Get-JsonValue $Report "externalEngineBakeoffCyclePath"))") | Out-Null
+        }
         $lines.Add("- Bakeoff missing IDs: $(Format-MarkdownCell ((@(Get-ExternalCandidateIds $externalBakeoffMissingIds)) -join ', '))") | Out-Null
         $lines.Add("- Bakeoff unsafe IDs: $(Format-MarkdownCell ((@(Get-ExternalCandidateIds (Get-JsonArray $Report "externalEngineBakeoffUnsafeCandidateIds"))) -join ', '))") | Out-Null
         $lines.Add("- Bakeoff blocked-for-integration IDs: $(Format-MarkdownCell ((@(Get-ExternalCandidateIds (Get-JsonArray $Report "externalEngineBakeoffBlockedCandidateIds"))) -join ', '))") | Out-Null
@@ -1903,6 +2273,18 @@ function Build-MarkdownReport {
         }
     }
 
+    if ((Test-Truthy (Get-JsonValue $Report "wdspSourceDriftReportPresent")) -or
+        -not (Test-Truthy (Get-JsonValue $Report "wdspSourceDriftReportReady"))) {
+        $lines.Add("## WDSP Source Drift") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("- Present/ready/status: $(Get-JsonValue $Report "wdspSourceDriftReportPresent") / $(Get-JsonValue $Report "wdspSourceDriftReportReady") / $(Format-MarkdownCell (Get-JsonValue $Report "wdspSourceDriftReportStatus"))") | Out-Null
+        $lines.Add("- Files reference/candidate/total: $(Get-JsonValue $Report "wdspSourceDriftReferenceFileCount") / $(Get-JsonValue $Report "wdspSourceDriftCandidateFileCount") / $(Get-JsonValue $Report "wdspSourceDriftFileCount")") | Out-Null
+        $lines.Add("- Deltas / likely defects: $(Get-JsonValue $Report "wdspSourceDriftDeltaCount") / $(Get-JsonValue $Report "wdspSourceDriftLikelyDefectCount")") | Out-Null
+        $lines.Add("- Normalized line endings: $(Get-JsonValue $Report "wdspSourceDriftReportNormalizedLineEndings")") | Out-Null
+        $lines.Add("- Report path: $(Format-MarkdownCell (Get-JsonValue $Report "wdspSourceDriftReportPath"))") | Out-Null
+        $lines.Add("") | Out-Null
+    }
+
     $fixtureMissingScenarios = @(Get-JsonArray $Report "metricComparisonMissingScenarios")
     $fixtureMissingScenarioCount = [int](Get-JsonValue $Report "metricComparisonMissingScenarioCount")
     $fixtureMissingCurrentCount = [int](Get-JsonValue $Report "metricComparisonMissingCurrentBaselineCount")
@@ -1910,6 +2292,21 @@ function Build-MarkdownReport {
     $fixtureMissingCandidateCount = [int](Get-JsonValue $Report "metricComparisonMissingCandidateCount")
     $fixtureMissingMetricValueCount = [int](Get-JsonValue $Report "metricComparisonMissingMetricValueCount")
     $fixtureWdspBacked = Test-Truthy (Get-JsonValue $Report "metricComparisonWdspBackedEvidence")
+    $nativeStageTimingPresent = Test-Truthy (Get-JsonValue $Report "nativeStageTimingReportPresent")
+    $nativeStageTimingReady = Test-Truthy (Get-JsonValue $Report "nativeStageTimingReportReady")
+    if ($nativeStageTimingPresent -or -not $nativeStageTimingReady) {
+        $lines.Add("## Native Stage Timing") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("- Status: $(Format-MarkdownCell (Get-JsonValue $Report "nativeStageTimingReportStatus")) / ready $nativeStageTimingReady / present $nativeStageTimingPresent") | Out-Null
+        $lines.Add("- Runs/stage records: $(Get-JsonValue $Report "nativeStageTimingRunCount") / $(Get-JsonValue $Report "nativeStageTimingStageRecordCount")") | Out-Null
+        $lines.Add("- Missing stage/allocation runs: $(Get-JsonValue $Report "nativeStageTimingMissingStageTimingRunCount") / $(Get-JsonValue $Report "nativeStageTimingMissingAllocationProbeRunCount")") | Out-Null
+        $lines.Add("- Budget failures: $(Get-JsonValue $Report "nativeStageTimingBudgetFailureCount")") | Out-Null
+        $lines.Add("- Max stage/run/allocation: $(Get-JsonValue $Report "nativeStageTimingMaxStageElapsedMs") ms / $(Get-JsonValue $Report "nativeStageTimingMaxRunElapsedMs") ms / $(Get-JsonValue $Report "nativeStageTimingMaxManagedAllocationBytes") bytes") | Out-Null
+        $lines.Add("- Source metrics hash: $(Format-MarkdownCell (Get-JsonValue $Report "nativeStageTimingMetricsHashStatus")); runtime hash: $(Format-MarkdownCell (Get-JsonValue $Report "nativeStageTimingWdspRuntimeHashStatus"))") | Out-Null
+        $lines.Add("- Native C instrumentation: $(Format-MarkdownCell (Get-JsonValue $Report "nativeStageTimingNativeCStageInstrumentationStatus")); allocation probe: $(Format-MarkdownCell (Get-JsonValue $Report "nativeStageTimingNativeAllocationProbeStatus"))") | Out-Null
+        $lines.Add("") | Out-Null
+    }
+
     if ($fixtureMissingScenarioCount -gt 0 -or
         $fixtureMissingCurrentCount -gt 0 -or
         $fixtureMissingThetisCount -gt 0 -or
@@ -1999,6 +2396,36 @@ function Build-MarkdownReport {
         $lines.Add("") | Out-Null
     }
 
+    if (Test-Truthy (Get-JsonValue $Report "g2RxPeakHuntReportPresent")) {
+        $lines.Add("## G2 RX Peak-Hunt Evidence") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("- Report ready/status: $(Get-JsonValue $Report "g2RxPeakHuntReportReady") / $(Format-MarkdownCell (Get-JsonValue $Report "g2RxPeakHuntReportStatus"))") | Out-Null
+        $lines.Add("- Report ok/scan error: $(Get-JsonValue $Report "g2RxPeakHuntOk") / $(Format-MarkdownCell (Get-JsonValue $Report "g2RxPeakHuntScanError"))") | Out-Null
+        $lines.Add("- Base URL requested/resolved/auto-discovered: $(Format-MarkdownCell (Get-JsonValue $Report "g2RxPeakHuntRequestedBaseUrl")) / $(Format-MarkdownCell (Get-JsonValue $Report "g2RxPeakHuntBaseUrl")) / $(Get-JsonValue $Report "g2RxPeakHuntBaseUrlAutoDiscovered")") | Out-Null
+        $lines.Add("- RX-only/VFO restored/retune attempts: $(Get-JsonValue $Report "g2RxPeakHuntSafetyRxOnly") / $(Get-JsonValue $Report "g2RxPeakHuntSafetyOriginalVfoRestored") / $(Get-JsonValue $Report "g2RxPeakHuntRetuneAttemptCount")") | Out-Null
+        $lines.Add("- Scan passes completed/planned/delay: $(Get-JsonValue $Report "g2RxPeakHuntCompletedPassCount") / $(Get-JsonValue $Report "g2RxPeakHuntPassCount") / $(Get-JsonValue $Report "g2RxPeakHuntPassDelaySec") sec") | Out-Null
+        $lines.Add("- Operator candidate frequencies/count: $(Get-JsonValue $Report "g2RxPeakHuntCandidateFrequencyHzCount") / $(Get-JsonValue $Report "g2RxPeakHuntOperatorCandidateCount")") | Out-Null
+        $lines.Add("- Auto phone cluster enabled/candidates/lookback/band: $(Get-JsonValue $Report "g2RxPeakHuntAutoPhoneCluster") / $(Get-JsonValue $Report "g2RxPeakHuntAutoPhoneClusterCandidateCount") / $(Get-JsonValue $Report "g2RxPeakHuntAutoPhoneClusterLookbackHours") h / $(Get-JsonValue $Report "g2RxPeakHuntAutoPhoneClusterBandLowHz")-$(Get-JsonValue $Report "g2RxPeakHuntAutoPhoneClusterBandHighHz") Hz") | Out-Null
+        $lines.Add("- Runs/failed/planned: $(Get-JsonValue $Report "g2RxPeakHuntActualRunCount") / $(Get-JsonValue $Report "g2RxPeakHuntFailedRunCount") / $(Get-JsonValue $Report "g2RxPeakHuntPlannedRunCount")") | Out-Null
+        $lines.Add("- Referenced windows ready/total/problems: $(Get-JsonValue $Report "g2RxPeakHuntReferencedWindowReadyCount") / $(Get-JsonValue $Report "g2RxPeakHuntReferencedWindowCount") / $(Get-JsonValue $Report "g2RxPeakHuntReferencedWindowProblemCount")") | Out-Null
+        $lines.Add("- Referenced window missing/non-portable/invalid/JSONL missing: $(Get-JsonValue $Report "g2RxPeakHuntReferencedWindowMissingCount") / $(Get-JsonValue $Report "g2RxPeakHuntReferencedWindowNonPortableCount") / $(Get-JsonValue $Report "g2RxPeakHuntReferencedWindowInvalidCount") / $(Get-JsonValue $Report "g2RxPeakHuntReferencedJsonlMissingCount")") | Out-Null
+        $lines.Add("- Mixed ready/runs: $(Get-JsonValue $Report "g2RxPeakHuntMixedWeakStrongReady") / $(Get-JsonValue $Report "g2RxPeakHuntMixedWeakStrongReadyRunCount")") | Out-Null
+        $lines.Add("- Weak/strong samples: $(Get-JsonValue $Report "g2RxPeakHuntWeakInputSampleCount") / $(Get-JsonValue $Report "g2RxPeakHuntStrongInputSampleCount")") | Out-Null
+        $lines.Add("- Speech-qualified weak/strong samples: $(Get-JsonValue $Report "g2RxPeakHuntSpeechQualifiedWeakInputSampleCount") / $(Get-JsonValue $Report "g2RxPeakHuntSpeechQualifiedStrongInputSampleCount")") | Out-Null
+        $lines.Add("- Passband-qualified weak/strong samples: $(Get-JsonValue $Report "g2RxPeakHuntPassbandQualifiedWeakInputSampleCount") / $(Get-JsonValue $Report "g2RxPeakHuntPassbandQualifiedStrongInputSampleCount")") | Out-Null
+        $lines.Add("- Frontend near-passband samples: $(Get-JsonValue $Report "g2RxPeakHuntFrontendNearPassbandSampleCount")") | Out-Null
+        $lines.Add("- Weak loss/hot makeup/hard blockers/AGC pumping runs: $(Get-JsonValue $Report "g2RxPeakHuntCandidateWeakLossSampleCount") / $(Get-JsonValue $Report "g2RxPeakHuntHotMakeupSampleCount") / $(Get-JsonValue $Report "g2RxPeakHuntHardBlockerSampleCount") / $(Get-JsonValue $Report "g2RxPeakHuntAgcPumpingRiskRunCount")") | Out-Null
+        $lines.Add("- Live diagnostics NR mode/ready: $(Format-MarkdownCell (Get-JsonValue $Report "g2RxPeakHuntLiveDiagnosticsEffectiveNrMode")) / $(Get-JsonValue $Report "g2RxPeakHuntLiveDiagnosticsReadyForNr5Tuning")") | Out-Null
+        $lines.Add("- Frontend status/top peaks: $(Format-MarkdownCell (Get-JsonValue $Report "g2RxPeakHuntFrontendSceneStatus")) / $(Get-JsonValue $Report "g2RxPeakHuntFrontendSceneTopPeakCount")") | Out-Null
+        $bestPeakHuntReportPath = [string](Get-JsonValue $Report "g2RxPeakHuntBestReportPath")
+        if (-not [string]::IsNullOrWhiteSpace($bestPeakHuntReportPath)) {
+            $lines.Add("- Best run: $(Format-MarkdownCell (Get-JsonValue $Report "g2RxPeakHuntBestFrequencyHz")) Hz score $(Get-JsonValue $Report "g2RxPeakHuntBestScore") status $(Format-MarkdownCell (Get-JsonValue $Report "g2RxPeakHuntBestStatus"))") | Out-Null
+            $lines.Add("- Best run report: $(Format-MarkdownCell $bestPeakHuntReportPath)") | Out-Null
+            $lines.Add("- Best run JSONL: $(Format-MarkdownCell (Get-JsonValue $Report "g2RxPeakHuntBestJsonlPath"))") | Out-Null
+        }
+        $lines.Add("") | Out-Null
+    }
+
     $liveMatrixArtifactControlReportCount = Get-IntegerValueOrDefault (Get-JsonValue $Report "liveMatrixArtifactControlReportCount")
     $liveMatrixArtifactControlStatus = [string](Get-JsonValue $Report "liveMatrixArtifactControlStatus")
     if ($liveMatrixArtifactControlReportCount -gt 0 -or -not [string]::IsNullOrWhiteSpace($liveMatrixArtifactControlStatus)) {
@@ -2057,6 +2484,34 @@ function Build-MarkdownReport {
         if (-not [string]::IsNullOrWhiteSpace($cyclePrimaryFollowUp)) {
             $lines.Add("- Triage primary follow-up: $(Format-MarkdownCell $cyclePrimaryFollowUp)") | Out-Null
         }
+        if (Test-Truthy (Get-JsonValue $Report "liveAcceptanceCycleTriageExternalEngineBakeoffActionPresent")) {
+            $lines.Add("- Triage external DSP/ML bakeoff action: $(Format-MarkdownCell (Get-JsonValue $Report "liveAcceptanceCycleTriageExternalEngineBakeoffActionId")) / $(Format-MarkdownCell (Get-JsonValue $Report "liveAcceptanceCycleTriageExternalEngineBakeoffActionCategory")) / steps $(Get-JsonValue $Report "liveAcceptanceCycleTriageExternalEngineBakeoffCommandStepCount") / expected artifacts $(Get-JsonValue $Report "liveAcceptanceCycleTriageExternalEngineBakeoffExpectedArtifactCount")") | Out-Null
+            $cycleExternalCommandOrManual = [string](Get-JsonValue $Report "liveAcceptanceCycleTriageExternalEngineBakeoffCommandTemplate")
+            if ([string]::IsNullOrWhiteSpace($cycleExternalCommandOrManual)) {
+                $cycleExternalCommandOrManual = [string](Get-JsonValue $Report "liveAcceptanceCycleTriageExternalEngineBakeoffManualAction")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($cycleExternalCommandOrManual)) {
+                $lines.Add("- Triage external DSP/ML bakeoff command/manual action: $(Format-MarkdownCell $cycleExternalCommandOrManual)") | Out-Null
+            }
+            $cycleExternalFollowUp = [string](Get-JsonValue $Report "liveAcceptanceCycleTriageExternalEngineBakeoffFollowUp")
+            if (-not [string]::IsNullOrWhiteSpace($cycleExternalFollowUp)) {
+                $lines.Add("- Triage external DSP/ML bakeoff follow-up: $(Format-MarkdownCell $cycleExternalFollowUp)") | Out-Null
+            }
+        }
+        if (Test-Truthy (Get-JsonValue $Report "liveAcceptanceCycleTriagePureSignalSafeBypassActionPresent")) {
+            $lines.Add("- Triage PureSignal safe-bypass action: $(Format-MarkdownCell (Get-JsonValue $Report "liveAcceptanceCycleTriagePureSignalSafeBypassActionId")) / $(Format-MarkdownCell (Get-JsonValue $Report "liveAcceptanceCycleTriagePureSignalSafeBypassActionCategory")) / steps $(Get-JsonValue $Report "liveAcceptanceCycleTriagePureSignalSafeBypassCommandStepCount") / expected artifacts $(Get-JsonValue $Report "liveAcceptanceCycleTriagePureSignalSafeBypassExpectedArtifactCount")") | Out-Null
+            $cyclePureSignalCommandOrManual = [string](Get-JsonValue $Report "liveAcceptanceCycleTriagePureSignalSafeBypassCommandTemplate")
+            if ([string]::IsNullOrWhiteSpace($cyclePureSignalCommandOrManual)) {
+                $cyclePureSignalCommandOrManual = [string](Get-JsonValue $Report "liveAcceptanceCycleTriagePureSignalSafeBypassManualAction")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($cyclePureSignalCommandOrManual)) {
+                $lines.Add("- Triage PureSignal safe-bypass command/manual action: $(Format-MarkdownCell $cyclePureSignalCommandOrManual)") | Out-Null
+            }
+            $cyclePureSignalFollowUp = [string](Get-JsonValue $Report "liveAcceptanceCycleTriagePureSignalSafeBypassFollowUp")
+            if (-not [string]::IsNullOrWhiteSpace($cyclePureSignalFollowUp)) {
+                $lines.Add("- Triage PureSignal safe-bypass follow-up: $(Format-MarkdownCell $cyclePureSignalFollowUp)") | Out-Null
+            }
+        }
         $lines.Add("- Summary path: $(Format-MarkdownCell (Get-JsonValue $Report "liveAcceptanceCycleSummaryPath"))") | Out-Null
         $lines.Add("") | Out-Null
 
@@ -2079,7 +2534,7 @@ function Build-MarkdownReport {
         $lines.Add("- G2 first-pass ready: $(Get-JsonValue $Report "g2FirstPassAcceptanceReady")") | Out-Null
         $lines.Add("- Opt-in candidate comparison ready: $(Get-JsonValue $Report "candidateComparisonReady")") | Out-Null
         $lines.Add("- Default behavior change ready: $(Get-JsonValue $Report "defaultBehaviorChangeReady")") | Out-Null
-        $lines.Add("- Cross-radio validation evidence: $(Get-JsonValue $Report "crossRadioValidationEvidenceStatus")") | Out-Null
+        $lines.Add("- Cross-radio validation evidence: $(Get-JsonValue $Report "crossRadioValidationEvidenceStatus") / ready $(Get-JsonValue $Report "crossRadioValidationReady") / source-backed $(Get-JsonValue $Report "crossRadioValidationSourceBackedEvidenceReady") / non-G2 targets $(Format-MarkdownCell ((@(Get-JsonArray $Report "crossRadioValidationNonG2TargetIds") | ForEach-Object { [string]$_ }) -join ', ')) / source reports $(Get-JsonValue $Report "crossRadioValidationSourceReportCount") total, $(Get-JsonValue $Report "crossRadioValidationReadyNonG2SourceReportCount") ready non-G2") | Out-Null
         $lines.Add("") | Out-Null
         $lines.Add("| Stage | Ready | Status | Blocks Default Change | Detail | Next Action | Blocking Gates |") | Out-Null
         $lines.Add("|---|---:|---|---:|---|---|---|") | Out-Null
@@ -2300,6 +2755,13 @@ $evidenceGates = @(Get-EvidenceGateRecords `
         -LiveSourceProblemCount $failedLiveSources.Count)
 $evidenceGateProblems = @($evidenceGates | Where-Object { -not (Test-Truthy (Get-JsonValue $_ "ready")) })
 $requiredEvidenceGateProblems = @($evidenceGateProblems | Where-Object { Test-Truthy (Get-JsonValue $_ "requiredForAcceptance") })
+$advisoryEvidenceGateProblems = @($evidenceGateProblems | Where-Object { -not (Test-Truthy (Get-JsonValue $_ "requiredForAcceptance")) })
+$evidenceGateProblemIds = @($evidenceGateProblems | ForEach-Object { [string](Get-JsonValue $_ "gateId") } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$evidenceGateProblemNames = @($evidenceGateProblems | ForEach-Object { [string](Get-JsonValue $_ "name") } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$requiredEvidenceGateProblemIds = @($requiredEvidenceGateProblems | ForEach-Object { [string](Get-JsonValue $_ "gateId") } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$requiredEvidenceGateProblemNames = @($requiredEvidenceGateProblems | ForEach-Object { [string](Get-JsonValue $_ "name") } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$advisoryEvidenceGateProblemIds = @($advisoryEvidenceGateProblems | ForEach-Object { [string](Get-JsonValue $_ "gateId") } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$advisoryEvidenceGateProblemNames = @($advisoryEvidenceGateProblems | ForEach-Object { [string](Get-JsonValue $_ "name") } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $liveHistoryPresent = Test-Truthy (Get-JsonValue $validation "liveDiagnosticsHistoryPresent")
 $liveHistoryGate = @($evidenceGates | Where-Object { [string](Get-JsonValue $_ "gateId") -eq "live-history-provenance" } | Select-Object -First 1)
 $liveHistoryGateReady = $false
@@ -2359,6 +2821,15 @@ if ((Test-Truthy (Get-JsonValue $validation "offlineFixtureMetricsPresent")) -an
     }
     $recommendations.Add("Regenerate artifacts/offline-fixture-metrics.json with run-dsp-wdsp-fixture-matrix.ps1; current source metrics evidenceEngine='$engineText' is not WDSP-backed.") | Out-Null
 }
+$nativeStageTimingPresent = Test-Truthy (Get-JsonValue $validation "nativeStageTimingReportPresent")
+$nativeStageTimingReady = Test-Truthy (Get-JsonValue $validation "nativeStageTimingReportReady")
+if (-not $nativeStageTimingReady) {
+    $nativeStageTimingStatus = [string](Get-JsonValue $validation "nativeStageTimingReportStatus")
+    if ([string]::IsNullOrWhiteSpace($nativeStageTimingStatus)) {
+        $nativeStageTimingStatus = if ($nativeStageTimingPresent) { "not-ready" } else { "not-captured" }
+    }
+    $recommendations.Add("Run summarize-dsp-native-stage-timing.ps1 after WDSP-backed offline fixture evidence; native-stage-timing-report status is '$nativeStageTimingStatus'.") | Out-Null
+}
 $sourceHashStatus = [string](Get-JsonValue $validation "metricComparisonSourceMetricsHashStatus")
 if ((Test-Truthy (Get-JsonValue $validation "metricComparisonPresent")) -and
     -not [string]::IsNullOrWhiteSpace($sourceHashStatus) -and
@@ -2380,8 +2851,10 @@ if ((Test-Truthy (Get-JsonValue $validation "offlineFixtureMetricsPresent")) -an
     $recommendations.Add("Regenerate WDSP fixture evidence from the packaged runtime under review or refresh wdsp-runtime-artifact-audit; runtime artifact hash status is '$runtimeArtifactHashStatus'.") | Out-Null
 }
 if ($requiredEvidenceGateProblems.Count -gt 0) {
-    $gateNames = @($requiredEvidenceGateProblems | ForEach-Object { [string](Get-JsonValue $_ "name") })
-    $recommendations.Add("Resolve required evidence gates before acceptance review: $($gateNames -join ', ').") | Out-Null
+    $recommendations.Add("Resolve required evidence gates before acceptance review: $($requiredEvidenceGateProblemNames -join ', ').") | Out-Null
+}
+if ($advisoryEvidenceGateProblems.Count -gt 0) {
+    $recommendations.Add("Review advisory evidence gates before next-level DSP build-out or external/new-tech bakeoff: $($advisoryEvidenceGateProblemNames -join ', ').") | Out-Null
 }
 if ($recommendations.Count -eq 0) {
     $recommendations.Add("No validation-triage issues were found; continue with required benchmark, G2/on-air, and cross-radio acceptance gates before any default DSP behavior change.") | Out-Null
@@ -2619,6 +3092,95 @@ $report = [ordered]@{
     liveMatrixMixedWeakStrongStrongInputSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "liveMatrixMixedWeakStrongStrongInputSampleCount")
     liveMatrixMixedWeakStrongStatusCounts = @(Get-JsonArray $validation "liveMatrixMixedWeakStrongStatusCounts")
     liveMatrixMixedWeakStrongBestRun = Get-JsonValue $validation "liveMatrixMixedWeakStrongBestRun"
+    g2RxPeakHuntReportPresent = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntReportPresent")
+    g2RxPeakHuntReportReady = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntReportReady")
+    g2RxPeakHuntReportValid = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntReportValid")
+    g2RxPeakHuntReportStatus = [string](Get-JsonValue $validation "g2RxPeakHuntReportStatus")
+    g2RxPeakHuntReportPath = [string](Get-JsonValue $validation "g2RxPeakHuntReportPath")
+    g2RxPeakHuntReportSha256 = [string](Get-JsonValue $validation "g2RxPeakHuntReportSha256")
+    g2RxPeakHuntComparisonId = [string](Get-JsonValue $validation "g2RxPeakHuntComparisonId")
+    g2RxPeakHuntOk = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntOk")
+    g2RxPeakHuntScanError = [string](Get-JsonValue $validation "g2RxPeakHuntScanError")
+    g2RxPeakHuntRequestedBaseUrl = [string](Get-JsonValue $validation "g2RxPeakHuntRequestedBaseUrl")
+    g2RxPeakHuntBaseUrl = [string](Get-JsonValue $validation "g2RxPeakHuntBaseUrl")
+    g2RxPeakHuntBaseUrlAutoDiscoverRequested = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntBaseUrlAutoDiscoverRequested")
+    g2RxPeakHuntBaseUrlAutoDiscovered = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntBaseUrlAutoDiscovered")
+    g2RxPeakHuntBaseUrlAutoDiscoverError = [string](Get-JsonValue $validation "g2RxPeakHuntBaseUrlAutoDiscoverError")
+    g2RxPeakHuntBaseUrlProbeResultCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntBaseUrlProbeResultCount")
+    g2RxPeakHuntAllowRetune = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntAllowRetune")
+    g2RxPeakHuntSkipCurrentVfo = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntSkipCurrentVfo")
+    g2RxPeakHuntStopOnReady = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntStopOnReady")
+    g2RxPeakHuntSamplesPerWindow = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntSamplesPerWindow")
+    g2RxPeakHuntIntervalMs = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntIntervalMs")
+    g2RxPeakHuntPassCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntPassCount")
+    g2RxPeakHuntPassDelaySec = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntPassDelaySec")
+    g2RxPeakHuntCompletedPassCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntCompletedPassCount")
+    g2RxPeakHuntScanPassCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntScanPassCount")
+    g2RxPeakHuntCandidateFrequencyHzCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntCandidateFrequencyHzCount")
+    g2RxPeakHuntAutoPhoneCluster = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntAutoPhoneCluster")
+    g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHzCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHzCount")
+    g2RxPeakHuntAutoPhoneClusterCandidateCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntAutoPhoneClusterCandidateCount")
+    g2RxPeakHuntAutoPhoneClusterMaxCandidates = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntAutoPhoneClusterMaxCandidates")
+    g2RxPeakHuntAutoPhoneClusterLookbackHours = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntAutoPhoneClusterLookbackHours")
+    g2RxPeakHuntAutoPhoneClusterMinSpeechSamples = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntAutoPhoneClusterMinSpeechSamples")
+    g2RxPeakHuntAutoPhoneClusterBandLowHz = Get-JsonValue $validation "g2RxPeakHuntAutoPhoneClusterBandLowHz"
+    g2RxPeakHuntAutoPhoneClusterBandHighHz = Get-JsonValue $validation "g2RxPeakHuntAutoPhoneClusterBandHighHz"
+    g2RxPeakHuntOperatorCandidateCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntOperatorCandidateCount")
+    g2RxPeakHuntPlannedRunCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntPlannedRunCount")
+    g2RxPeakHuntActualRunCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntActualRunCount")
+    g2RxPeakHuntFailedRunCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntFailedRunCount")
+    g2RxPeakHuntMixedWeakStrongReady = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntMixedWeakStrongReady")
+    g2RxPeakHuntMixedWeakStrongReadyRunCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntMixedWeakStrongReadyRunCount")
+    g2RxPeakHuntWeakInputSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntWeakInputSampleCount")
+    g2RxPeakHuntStrongInputSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntStrongInputSampleCount")
+    g2RxPeakHuntSpeechQualifiedWeakInputSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntSpeechQualifiedWeakInputSampleCount")
+    g2RxPeakHuntSpeechQualifiedStrongInputSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntSpeechQualifiedStrongInputSampleCount")
+    g2RxPeakHuntPassbandQualifiedWeakInputSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntPassbandQualifiedWeakInputSampleCount")
+    g2RxPeakHuntPassbandQualifiedStrongInputSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntPassbandQualifiedStrongInputSampleCount")
+    g2RxPeakHuntFrontendNearPassbandSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntFrontendNearPassbandSampleCount")
+    g2RxPeakHuntCandidateWeakLossSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntCandidateWeakLossSampleCount")
+    g2RxPeakHuntHotMakeupSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntHotMakeupSampleCount")
+    g2RxPeakHuntHardBlockerSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntHardBlockerSampleCount")
+    g2RxPeakHuntAgcPumpingRiskRunCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntAgcPumpingRiskRunCount")
+    g2RxPeakHuntPeakCandidateCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntPeakCandidateCount")
+    g2RxPeakHuntRetuneAttemptCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntRetuneAttemptCount")
+    g2RxPeakHuntSafetyRxOnly = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntSafetyRxOnly")
+    g2RxPeakHuntSafetyTxEndpointsTouched = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntSafetyTxEndpointsTouched")
+    g2RxPeakHuntSafetyOriginalVfoRestoreAttempted = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntSafetyOriginalVfoRestoreAttempted")
+    g2RxPeakHuntSafetyOriginalVfoRestored = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntSafetyOriginalVfoRestored")
+    g2RxPeakHuntSafetyRestoreError = [string](Get-JsonValue $validation "g2RxPeakHuntSafetyRestoreError")
+    g2RxPeakHuntHardwareConnectionStatus = [string](Get-JsonValue $validation "g2RxPeakHuntHardwareConnectionStatus")
+    g2RxPeakHuntHardwareEndpoint = [string](Get-JsonValue $validation "g2RxPeakHuntHardwareEndpoint")
+    g2RxPeakHuntHardwareEffectiveBoard = [string](Get-JsonValue $validation "g2RxPeakHuntHardwareEffectiveBoard")
+    g2RxPeakHuntHardwareVariant = [string](Get-JsonValue $validation "g2RxPeakHuntHardwareVariant")
+    g2RxPeakHuntHardwareOriginalVfoHz = Get-JsonValue $validation "g2RxPeakHuntHardwareOriginalVfoHz"
+    g2RxPeakHuntHardwareRestoredVfoHz = Get-JsonValue $validation "g2RxPeakHuntHardwareRestoredVfoHz"
+    g2RxPeakHuntHardwareSampleRate = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntHardwareSampleRate")
+    g2RxPeakHuntLiveDiagnosticsStatus = [string](Get-JsonValue $validation "g2RxPeakHuntLiveDiagnosticsStatus")
+    g2RxPeakHuntLiveDiagnosticsReadyForLiveBenchmark = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntLiveDiagnosticsReadyForLiveBenchmark")
+    g2RxPeakHuntLiveDiagnosticsWdspActive = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntLiveDiagnosticsWdspActive")
+    g2RxPeakHuntLiveDiagnosticsWdspNativeLoadable = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntLiveDiagnosticsWdspNativeLoadable")
+    g2RxPeakHuntLiveDiagnosticsRequestedNrMode = [string](Get-JsonValue $validation "g2RxPeakHuntLiveDiagnosticsRequestedNrMode")
+    g2RxPeakHuntLiveDiagnosticsEffectiveNrMode = [string](Get-JsonValue $validation "g2RxPeakHuntLiveDiagnosticsEffectiveNrMode")
+    g2RxPeakHuntLiveDiagnosticsReadyForNr5Tuning = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntLiveDiagnosticsReadyForNr5Tuning")
+    g2RxPeakHuntLiveDiagnosticsFrontendSceneFresh = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntLiveDiagnosticsFrontendSceneFresh")
+    g2RxPeakHuntFrontendSceneStatus = [string](Get-JsonValue $validation "g2RxPeakHuntFrontendSceneStatus")
+    g2RxPeakHuntFrontendSceneFresh = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntFrontendSceneFresh")
+    g2RxPeakHuntFrontendSceneSignalProfile = [string](Get-JsonValue $validation "g2RxPeakHuntFrontendSceneSignalProfile")
+    g2RxPeakHuntFrontendSceneTopPeakCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntFrontendSceneTopPeakCount")
+    g2RxPeakHuntBestRun = Get-JsonValue $validation "g2RxPeakHuntBestRun"
+    g2RxPeakHuntBestFrequencyHz = Get-JsonValue $validation "g2RxPeakHuntBestFrequencyHz"
+    g2RxPeakHuntBestScore = Get-JsonValue $validation "g2RxPeakHuntBestScore"
+    g2RxPeakHuntBestStatus = [string](Get-JsonValue $validation "g2RxPeakHuntBestStatus")
+    g2RxPeakHuntBestReportPath = [string](Get-JsonValue $validation "g2RxPeakHuntBestReportPath")
+    g2RxPeakHuntBestJsonlPath = [string](Get-JsonValue $validation "g2RxPeakHuntBestJsonlPath")
+    g2RxPeakHuntReferencedWindowCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntReferencedWindowCount")
+    g2RxPeakHuntReferencedWindowReadyCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntReferencedWindowReadyCount")
+    g2RxPeakHuntReferencedWindowProblemCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntReferencedWindowProblemCount")
+    g2RxPeakHuntReferencedWindowMissingCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntReferencedWindowMissingCount")
+    g2RxPeakHuntReferencedWindowNonPortableCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntReferencedWindowNonPortableCount")
+    g2RxPeakHuntReferencedWindowInvalidCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntReferencedWindowInvalidCount")
+    g2RxPeakHuntReferencedJsonlMissingCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntReferencedJsonlMissingCount")
     liveMatrixArtifactControlStatus = [string](Get-JsonValue $validation "liveMatrixArtifactControlStatus")
     liveMatrixArtifactControlReportCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "liveMatrixArtifactControlReportCount")
     liveMatrixArtifactControlSchemaV3ReportCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "liveMatrixArtifactControlSchemaV3ReportCount")
@@ -2648,6 +3210,38 @@ $report = [ordered]@{
     liveAcceptanceCycleTriagePrimaryAcceptanceExpectedArtifactCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "liveAcceptanceCycleTriagePrimaryAcceptanceExpectedArtifactCount")
     liveAcceptanceCycleTriagePrimaryAcceptanceExpectedArtifacts = @(Get-JsonArray $validation "liveAcceptanceCycleTriagePrimaryAcceptanceExpectedArtifacts")
     liveAcceptanceCycleTriagePrimaryAcceptanceFollowUp = [string](Get-JsonValue $validation "liveAcceptanceCycleTriagePrimaryAcceptanceFollowUp")
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionPresent = Test-Truthy (Get-JsonValue $validation "liveAcceptanceCycleTriageExternalEngineBakeoffActionPresent")
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionId = [string](Get-JsonValue $validation "liveAcceptanceCycleTriageExternalEngineBakeoffActionId")
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionPriority = Get-JsonValue $validation "liveAcceptanceCycleTriageExternalEngineBakeoffActionPriority"
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionStageId = [string](Get-JsonValue $validation "liveAcceptanceCycleTriageExternalEngineBakeoffActionStageId")
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionGateId = [string](Get-JsonValue $validation "liveAcceptanceCycleTriageExternalEngineBakeoffActionGateId")
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionCategory = [string](Get-JsonValue $validation "liveAcceptanceCycleTriageExternalEngineBakeoffActionCategory")
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionRequired = Test-Truthy (Get-JsonValue $validation "liveAcceptanceCycleTriageExternalEngineBakeoffActionRequired")
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionManual = Test-Truthy (Get-JsonValue $validation "liveAcceptanceCycleTriageExternalEngineBakeoffActionManual")
+    liveAcceptanceCycleTriageExternalEngineBakeoffCommandTemplate = [string](Get-JsonValue $validation "liveAcceptanceCycleTriageExternalEngineBakeoffCommandTemplate")
+    liveAcceptanceCycleTriageExternalEngineBakeoffCommandStepCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "liveAcceptanceCycleTriageExternalEngineBakeoffCommandStepCount")
+    liveAcceptanceCycleTriageExternalEngineBakeoffCommandSteps = @(Get-JsonArray $validation "liveAcceptanceCycleTriageExternalEngineBakeoffCommandSteps")
+    liveAcceptanceCycleTriageExternalEngineBakeoffManualAction = [string](Get-JsonValue $validation "liveAcceptanceCycleTriageExternalEngineBakeoffManualAction")
+    liveAcceptanceCycleTriageExternalEngineBakeoffExpectedArtifact = [string](Get-JsonValue $validation "liveAcceptanceCycleTriageExternalEngineBakeoffExpectedArtifact")
+    liveAcceptanceCycleTriageExternalEngineBakeoffExpectedArtifactCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "liveAcceptanceCycleTriageExternalEngineBakeoffExpectedArtifactCount")
+    liveAcceptanceCycleTriageExternalEngineBakeoffExpectedArtifacts = @(Get-JsonArray $validation "liveAcceptanceCycleTriageExternalEngineBakeoffExpectedArtifacts")
+    liveAcceptanceCycleTriageExternalEngineBakeoffFollowUp = [string](Get-JsonValue $validation "liveAcceptanceCycleTriageExternalEngineBakeoffFollowUp")
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionPresent = Test-Truthy (Get-JsonValue $validation "liveAcceptanceCycleTriagePureSignalSafeBypassActionPresent")
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionId = [string](Get-JsonValue $validation "liveAcceptanceCycleTriagePureSignalSafeBypassActionId")
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionPriority = Get-JsonValue $validation "liveAcceptanceCycleTriagePureSignalSafeBypassActionPriority"
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionStageId = [string](Get-JsonValue $validation "liveAcceptanceCycleTriagePureSignalSafeBypassActionStageId")
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionGateId = [string](Get-JsonValue $validation "liveAcceptanceCycleTriagePureSignalSafeBypassActionGateId")
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionCategory = [string](Get-JsonValue $validation "liveAcceptanceCycleTriagePureSignalSafeBypassActionCategory")
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionRequired = Test-Truthy (Get-JsonValue $validation "liveAcceptanceCycleTriagePureSignalSafeBypassActionRequired")
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionManual = Test-Truthy (Get-JsonValue $validation "liveAcceptanceCycleTriagePureSignalSafeBypassActionManual")
+    liveAcceptanceCycleTriagePureSignalSafeBypassCommandTemplate = [string](Get-JsonValue $validation "liveAcceptanceCycleTriagePureSignalSafeBypassCommandTemplate")
+    liveAcceptanceCycleTriagePureSignalSafeBypassCommandStepCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "liveAcceptanceCycleTriagePureSignalSafeBypassCommandStepCount")
+    liveAcceptanceCycleTriagePureSignalSafeBypassCommandSteps = @(Get-JsonArray $validation "liveAcceptanceCycleTriagePureSignalSafeBypassCommandSteps")
+    liveAcceptanceCycleTriagePureSignalSafeBypassManualAction = [string](Get-JsonValue $validation "liveAcceptanceCycleTriagePureSignalSafeBypassManualAction")
+    liveAcceptanceCycleTriagePureSignalSafeBypassExpectedArtifact = [string](Get-JsonValue $validation "liveAcceptanceCycleTriagePureSignalSafeBypassExpectedArtifact")
+    liveAcceptanceCycleTriagePureSignalSafeBypassExpectedArtifactCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "liveAcceptanceCycleTriagePureSignalSafeBypassExpectedArtifactCount")
+    liveAcceptanceCycleTriagePureSignalSafeBypassExpectedArtifacts = @(Get-JsonArray $validation "liveAcceptanceCycleTriagePureSignalSafeBypassExpectedArtifacts")
+    liveAcceptanceCycleTriagePureSignalSafeBypassFollowUp = [string](Get-JsonValue $validation "liveAcceptanceCycleTriagePureSignalSafeBypassFollowUp")
     liveAcceptanceCycleRequiredLiveAcceptanceArtifactProblemCount = [int](Get-JsonValue $validation "liveAcceptanceCycleRequiredLiveAcceptanceArtifactProblemCount")
     liveAcceptanceCycleSummaryPath = [string](Get-JsonValue $validation "liveAcceptanceCycleSummaryPath")
     liveAcceptanceCycleSummarySha256 = [string](Get-JsonValue $validation "liveAcceptanceCycleSummarySha256")
@@ -2659,7 +3253,14 @@ $report = [ordered]@{
     liveHistoryTraceJsonlHashStatusCounts = @(Convert-CountsToRecords -Counts $liveJsonlHashStatusCounts -NameField "jsonlHashStatus")
     evidenceGateCount = $evidenceGates.Count
     evidenceGateProblemCount = $evidenceGateProblems.Count
+    evidenceGateProblemIds = @($evidenceGateProblemIds)
+    evidenceGateProblemNames = @($evidenceGateProblemNames)
     requiredEvidenceGateProblemCount = $requiredEvidenceGateProblems.Count
+    requiredEvidenceGateProblemIds = @($requiredEvidenceGateProblemIds)
+    requiredEvidenceGateProblemNames = @($requiredEvidenceGateProblemNames)
+    advisoryEvidenceGateProblemCount = $advisoryEvidenceGateProblems.Count
+    advisoryEvidenceGateProblemIds = @($advisoryEvidenceGateProblemIds)
+    advisoryEvidenceGateProblemNames = @($advisoryEvidenceGateProblemNames)
     evidenceGates = @($evidenceGates)
     benchmarkPlanStatus = [string](Get-JsonValue $validation "benchmarkPlanStatus")
     benchmarkPlanScenarioCount = [int](Get-JsonValue $validation "benchmarkPlanScenarioCount")
@@ -2730,6 +3331,30 @@ $report = [ordered]@{
     externalEngineBakeoffSnapshotMismatchCount = [int](Get-JsonValue $validation "externalEngineBakeoffSnapshotMismatchCount")
     externalEngineBakeoffSnapshotMismatchCandidateIds = @(Get-JsonArray $validation "externalEngineBakeoffSnapshotMismatchCandidateIds")
     externalEngineBakeoffCandidateIssueCounts = @(Get-JsonArray $validation "externalEngineBakeoffCandidateIssueCounts")
+    externalEngineBakeoffPlanScenarioIds = @(Get-JsonArray $validation "externalEngineBakeoffPlanScenarioIds")
+    externalEngineBakeoffPlanFixtureComparisonCommandTemplate = [string](Get-JsonValue $validation "externalEngineBakeoffPlanFixtureComparisonCommandTemplate")
+    externalEngineBakeoffPlanLiveMatrixCommandTemplate = [string](Get-JsonValue $validation "externalEngineBakeoffPlanLiveMatrixCommandTemplate")
+    externalEngineBakeoffFirstSafeCandidateId = [string](Get-JsonValue $validation "externalEngineBakeoffFirstSafeCandidateId")
+    externalEngineBakeoffFirstSafeScenarioIds = @(Get-JsonArray $validation "externalEngineBakeoffFirstSafeScenarioIds")
+    externalEngineBakeoffEvaluationOrderCandidateIds = @(Get-JsonArray $validation "externalEngineBakeoffEvaluationOrderCandidateIds")
+    externalEngineBakeoffEvaluationOrder = @(Get-JsonArray $validation "externalEngineBakeoffEvaluationOrder")
+    externalEngineBakeoffCycleSummaryPresent = Test-Truthy (Get-JsonValue $validation "externalEngineBakeoffCycleSummaryPresent")
+    externalEngineBakeoffCycleSummaryValid = Test-Truthy (Get-JsonValue $validation "externalEngineBakeoffCycleSummaryValid")
+    externalEngineBakeoffCycleStatus = [string](Get-JsonValue $validation "externalEngineBakeoffCycleStatus")
+    externalEngineBakeoffCycleMode = [string](Get-JsonValue $validation "externalEngineBakeoffCycleMode")
+    externalEngineBakeoffCycleCandidateId = [string](Get-JsonValue $validation "externalEngineBakeoffCycleCandidateId")
+    externalEngineBakeoffCycleComparisonId = [string](Get-JsonValue $validation "externalEngineBakeoffCycleComparisonId")
+    externalEngineBakeoffCycleScenarioIds = @(Get-JsonArray $validation "externalEngineBakeoffCycleScenarioIds")
+    externalEngineBakeoffCycleReadyToExecute = Test-Truthy (Get-JsonValue $validation "externalEngineBakeoffCycleReadyToExecute")
+    externalEngineBakeoffCycleExecuted = Test-Truthy (Get-JsonValue $validation "externalEngineBakeoffCycleExecuted")
+    externalEngineBakeoffCycleMissingPrerequisiteCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "externalEngineBakeoffCycleMissingPrerequisiteCount")
+    externalEngineBakeoffCycleCommandStepCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "externalEngineBakeoffCycleCommandStepCount")
+    externalEngineBakeoffCycleExpectedArtifactCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "externalEngineBakeoffCycleExpectedArtifactCount")
+    externalEngineBakeoffCycleNonZeroExitCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "externalEngineBakeoffCycleNonZeroExitCount")
+    externalEngineBakeoffCycleSourceExternalBakeoffReady = Test-Truthy (Get-JsonValue $validation "externalEngineBakeoffCycleSourceExternalBakeoffReady")
+    externalEngineBakeoffCycleSourceExternalBakeoffActionPresent = Test-Truthy (Get-JsonValue $validation "externalEngineBakeoffCycleSourceExternalBakeoffActionPresent")
+    externalEngineBakeoffCyclePath = [string](Get-JsonValue $validation "externalEngineBakeoffCyclePath")
+    externalEngineBakeoffCycleSha256 = [string](Get-JsonValue $validation "externalEngineBakeoffCycleSha256")
     offlineFixtureMetricsPresent = Test-Truthy (Get-JsonValue $validation "offlineFixtureMetricsPresent")
     offlineFixtureMetricsEvidenceEngine = [string](Get-JsonValue $validation "offlineFixtureMetricsEvidenceEngine")
     offlineFixtureMetricsEvidenceTool = [string](Get-JsonValue $validation "offlineFixtureMetricsEvidenceTool")
@@ -2747,6 +3372,31 @@ $report = [ordered]@{
     offlineFixtureMetricsWdspRuntimeSha256 = [string](Get-JsonValue $validation "offlineFixtureMetricsWdspRuntimeSha256")
     offlineFixtureMetricsWdspRuntimeStatus = [string](Get-JsonValue $validation "offlineFixtureMetricsWdspRuntimeStatus")
     offlineFixtureMetricsRuntimeArtifactHashStatus = [string](Get-JsonValue $validation "offlineFixtureMetricsRuntimeArtifactHashStatus")
+    nativeStageTimingReportPresent = Test-Truthy (Get-JsonValue $validation "nativeStageTimingReportPresent")
+    nativeStageTimingReportReady = Test-Truthy (Get-JsonValue $validation "nativeStageTimingReportReady")
+    nativeStageTimingReportStatus = [string](Get-JsonValue $validation "nativeStageTimingReportStatus")
+    nativeStageTimingReportPath = [string](Get-JsonValue $validation "nativeStageTimingReportPath")
+    nativeStageTimingReportSha256 = [string](Get-JsonValue $validation "nativeStageTimingReportSha256")
+    nativeStageTimingReportSchemaVersion = [int](Get-JsonValue $validation "nativeStageTimingReportSchemaVersion")
+    nativeStageTimingReportTool = [string](Get-JsonValue $validation "nativeStageTimingReportTool")
+    nativeStageTimingMetricsPath = [string](Get-JsonValue $validation "nativeStageTimingMetricsPath")
+    nativeStageTimingMetricsSha256 = [string](Get-JsonValue $validation "nativeStageTimingMetricsSha256")
+    nativeStageTimingMetricsHashStatus = [string](Get-JsonValue $validation "nativeStageTimingMetricsHashStatus")
+    nativeStageTimingWdspBackedEvidence = Test-Truthy (Get-JsonValue $validation "nativeStageTimingWdspBackedEvidence")
+    nativeStageTimingWdspRuntimeRid = [string](Get-JsonValue $validation "nativeStageTimingWdspRuntimeRid")
+    nativeStageTimingWdspRuntimeSha256 = [string](Get-JsonValue $validation "nativeStageTimingWdspRuntimeSha256")
+    nativeStageTimingWdspRuntimeHashStatus = [string](Get-JsonValue $validation "nativeStageTimingWdspRuntimeHashStatus")
+    nativeStageTimingRunCount = [int](Get-JsonValue $validation "nativeStageTimingRunCount")
+    nativeStageTimingStageRecordCount = [int](Get-JsonValue $validation "nativeStageTimingStageRecordCount")
+    nativeStageTimingMissingStageTimingRunCount = [int](Get-JsonValue $validation "nativeStageTimingMissingStageTimingRunCount")
+    nativeStageTimingMissingAllocationProbeRunCount = [int](Get-JsonValue $validation "nativeStageTimingMissingAllocationProbeRunCount")
+    nativeStageTimingBudgetFailureCount = [int](Get-JsonValue $validation "nativeStageTimingBudgetFailureCount")
+    nativeStageTimingMaxStageElapsedMs = [double](Get-JsonValue $validation "nativeStageTimingMaxStageElapsedMs")
+    nativeStageTimingMaxRunElapsedMs = [double](Get-JsonValue $validation "nativeStageTimingMaxRunElapsedMs")
+    nativeStageTimingMaxManagedAllocationBytes = [int64](Get-JsonValue $validation "nativeStageTimingMaxManagedAllocationBytes")
+    nativeStageTimingNativeCStageInstrumentationReady = Test-Truthy (Get-JsonValue $validation "nativeStageTimingNativeCStageInstrumentationReady")
+    nativeStageTimingNativeCStageInstrumentationStatus = [string](Get-JsonValue $validation "nativeStageTimingNativeCStageInstrumentationStatus")
+    nativeStageTimingNativeAllocationProbeStatus = [string](Get-JsonValue $validation "nativeStageTimingNativeAllocationProbeStatus")
     metricComparisonPresent = Test-Truthy (Get-JsonValue $validation "metricComparisonPresent")
     metricComparisonReady = Test-Truthy (Get-JsonValue $validation "metricComparisonReady")
     metricComparisonReportReadyForReview = Test-Truthy (Get-JsonValue $validation "metricComparisonReportReadyForReview")
@@ -2790,6 +3440,19 @@ $report = [ordered]@{
     nativeRuntimeArtifactAuditWinX64NativePath = [string](Get-JsonValue $validation "nativeRuntimeArtifactAuditWinX64NativePath")
     nativeRuntimeArtifactAuditWinX64NativeLength = [int64](Get-JsonValue $validation "nativeRuntimeArtifactAuditWinX64NativeLength")
     nativeRuntimeArtifactAuditWinX64NativeSha256 = [string](Get-JsonValue $validation "nativeRuntimeArtifactAuditWinX64NativeSha256")
+    wdspSourceDriftReportPresent = Test-Truthy (Get-JsonValue $validation "wdspSourceDriftReportPresent")
+    wdspSourceDriftReportReady = Test-Truthy (Get-JsonValue $validation "wdspSourceDriftReportReady")
+    wdspSourceDriftReportStatus = [string](Get-JsonValue $validation "wdspSourceDriftReportStatus")
+    wdspSourceDriftReportPath = [string](Get-JsonValue $validation "wdspSourceDriftReportPath")
+    wdspSourceDriftReportSha256 = [string](Get-JsonValue $validation "wdspSourceDriftReportSha256")
+    wdspSourceDriftReportNormalizedLineEndings = Test-Truthy (Get-JsonValue $validation "wdspSourceDriftReportNormalizedLineEndings")
+    wdspSourceDriftReferenceFileCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "wdspSourceDriftReferenceFileCount")
+    wdspSourceDriftCandidateFileCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "wdspSourceDriftCandidateFileCount")
+    wdspSourceDriftFileCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "wdspSourceDriftFileCount")
+    wdspSourceDriftDeltaCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "wdspSourceDriftDeltaCount")
+    wdspSourceDriftLikelyDefectCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "wdspSourceDriftLikelyDefectCount")
+    wdspSourceDriftStatusCounts = @(Get-JsonArray $validation "wdspSourceDriftStatusCounts")
+    wdspSourceDriftCategoryCounts = @(Get-JsonArray $validation "wdspSourceDriftCategoryCounts")
     acceptanceReadinessStageCount = $acceptanceReadiness.Count
     acceptanceReadinessReadyStageCount = $acceptanceReadyStages.Count
     optInDspBuildOutReady = Test-Truthy (Get-JsonValue $optInBuildOutStage "ready")
@@ -2800,7 +3463,25 @@ $report = [ordered]@{
     defaultBehaviorChangeReady = $false
     defaultGraduationReady = $false
     crossRadioValidationRequired = $true
-    crossRadioValidationEvidenceStatus = "not-captured"
+    crossRadioValidationPresent = Test-Truthy (Get-JsonValue $validation "crossRadioValidationPresent")
+    crossRadioValidationReady = Test-Truthy (Get-JsonValue $validation "crossRadioValidationReady")
+    crossRadioValidationEvidenceStatus = if ([string]::IsNullOrWhiteSpace([string](Get-JsonValue $validation "crossRadioValidationEvidenceStatus"))) { "not-captured" } else { [string](Get-JsonValue $validation "crossRadioValidationEvidenceStatus") }
+    crossRadioValidationNonG2TargetCount = [int](Get-JsonValue $validation "crossRadioValidationNonG2TargetCount")
+    crossRadioValidationNonG2TargetIds = @(Get-JsonArray $validation "crossRadioValidationNonG2TargetIds")
+    crossRadioValidationScenarioCount = [int](Get-JsonValue $validation "crossRadioValidationScenarioCount")
+    crossRadioValidationScenarioIds = @(Get-JsonArray $validation "crossRadioValidationScenarioIds")
+    crossRadioValidationComparisonCount = [int](Get-JsonValue $validation "crossRadioValidationComparisonCount")
+    crossRadioValidationComparisonIds = @(Get-JsonArray $validation "crossRadioValidationComparisonIds")
+    crossRadioValidationDefaultBehaviorChangeApproved = Test-Truthy (Get-JsonValue $validation "crossRadioValidationDefaultBehaviorChangeApproved")
+    crossRadioValidationSourceReportCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "crossRadioValidationSourceReportCount")
+    crossRadioValidationSourceProblemReportCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "crossRadioValidationSourceProblemReportCount")
+    crossRadioValidationSourceWarningReportCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "crossRadioValidationSourceWarningReportCount")
+    crossRadioValidationNonG2SourceReportCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "crossRadioValidationNonG2SourceReportCount")
+    crossRadioValidationReadyNonG2SourceReportCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "crossRadioValidationReadyNonG2SourceReportCount")
+    crossRadioValidationSourceMetricComparisonReadyCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "crossRadioValidationSourceMetricComparisonReadyCount")
+    crossRadioValidationSourceLiveTraceComparisonReadyCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "crossRadioValidationSourceLiveTraceComparisonReadyCount")
+    crossRadioValidationSourceThetisLiveTraceComparisonReadyCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "crossRadioValidationSourceThetisLiveTraceComparisonReadyCount")
+    crossRadioValidationSourceBackedEvidenceReady = Test-Truthy (Get-JsonValue $validation "crossRadioValidationSourceBackedEvidenceReady")
     acceptanceReadiness = @($acceptanceReadiness)
     acceptanceActionPlanCount = $acceptanceActionPlan.Count
     acceptanceRequiredActionCount = $acceptanceRequiredActions.Count

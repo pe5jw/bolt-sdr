@@ -80,7 +80,7 @@ const BRACKET_OVERLAP_RATIO = 0.45;    // suppress duplicate labels on the same 
 const PEAK_PIN_MAX = 2;                // quiet held peak hints, not measurement labels
 const PEAK_PIN_MIN_CONFIDENCE = 0.42;
 const MEASUREMENT_PEAK_HOLD_MS = 1000; // hold prominent-frequency readouts for operator readability
-const EQ_METER_BANDS = 32;             // bottom parametric-EQ style activity rail
+const EQ_METER_BANDS = 32;             // max bottom parametric-EQ blocks inside the passband
 const EQ_METER_AVG_MS = 5000;          // each EQ band shows a 5-second level average
 const PEAKHOLD_DECAY_PX = 0.45;       // peak-hold envelope fall rate (px/frame ≈ 13 px/s)
 const FIT_HIT_PX = 26;                // click-to-fit grab radius around a carrier
@@ -343,6 +343,14 @@ function rangeOverlapRatio(aLo: number, aHi: number, bLo: number, bHi: number): 
   return overlap / denom;
 }
 
+function formatEqPeakOffset(hz: number): string {
+  const rounded = Math.round(hz);
+  const sign = rounded < 0 ? '-' : '+';
+  const abs = Math.abs(rounded);
+  if (abs >= 1000) return `${sign}${(abs / 1000).toFixed(abs >= 10_000 ? 0 : 1)}k`;
+  return `${sign}${abs}`;
+}
+
 export function FilterMiniPan() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // Visible span lives in a ref (read by the imperative draw loop) plus a state
@@ -399,6 +407,7 @@ export function FilterMiniPan() {
     let peakHoldY: Float32Array | null = null; // per-column peak-hold envelope (Y)
     let peakHoldKey = ''; // geometry key; reset the envelope when it changes
     let eqMeterAvg: Float32Array | null = null; // bottom EQ-style 5-second averaged levels
+    let eqMeterPeakOffAvg: Float32Array | null = null; // 5-second averaged peak offset per EQ band
     let eqMeterKey = ''; // geometry key; reset EQ meter when the window changes
     let eqMeterLastAt = 0;
     let autoLoDb = NaN; // EMA of the visible-window floor (dynamic vertical scale)
@@ -584,6 +593,106 @@ export function FilterMiniPan() {
         return plotTop + plotH - Math.max(0, Math.min(1, norm)) * plotH;
       };
 
+      const drawEqMeter = () => {
+        if (!panDb || bins <= 0 || binsPerHz <= 0) return;
+        const rawMeterLeft = ((c.filterLowHz + spanHz / 2) / spanHz) * w;
+        const rawMeterRight = ((c.filterHighHz + spanHz / 2) / spanHz) * w;
+        const meterLeft = Math.max(0, Math.min(w, rawMeterLeft));
+        const meterRight = Math.max(0, Math.min(w, rawMeterRight));
+        const meterW = meterRight - meterLeft;
+        if (meterW < Math.max(18, Math.round(18 * dpr)) || c.filterHighHz <= c.filterLowHz) return;
+        const targetBlockPx = Math.max(36, Math.round(42 * dpr));
+        const meterBands = Math.max(1, Math.min(EQ_METER_BANDS, Math.floor(meterW / targetBlockPx)));
+        if (
+          eqMeterAvg === null ||
+          eqMeterAvg.length !== EQ_METER_BANDS ||
+          eqMeterPeakOffAvg === null ||
+          eqMeterPeakOffAvg.length !== EQ_METER_BANDS
+        ) {
+          eqMeterAvg = new Float32Array(EQ_METER_BANDS);
+          eqMeterPeakOffAvg = new Float32Array(EQ_METER_BANDS);
+          eqMeterKey = '';
+          eqMeterLastAt = 0;
+        }
+        const meterKey = `${d.centerHz}:${d.hzPerPixel}:${panDb.length}:${vfo}:${spanHz}:${w}:${c.filterLowHz}:${c.filterHighHz}:${meterBands}`;
+        const avg = eqMeterAvg;
+        const peakOffAvg = eqMeterPeakOffAvg;
+        if (meterKey !== eqMeterKey) {
+          eqMeterKey = meterKey;
+          avg.fill(0);
+          peakOffAvg.fill(0);
+          eqMeterLastAt = 0;
+        }
+        const meterDtMs = eqMeterLastAt > 0 ? Math.max(0, Math.min(1000, now - eqMeterLastAt)) : 0;
+        const avgAlpha = eqMeterLastAt > 0 ? 1 - Math.exp(-meterDtMs / EQ_METER_AVG_MS) : 1;
+        eqMeterLastAt = now;
+
+        const haveFloor = floor !== null && floor.length === panDb.length;
+        const meterH = Math.max(14, Math.round(19 * dpr));
+        const meterBottom = plotBottom - Math.round(2 * dpr);
+        const meterTop = Math.max(plotTop + Math.round(8 * dpr), meterBottom - meterH);
+        const usableH = Math.max(1, meterBottom - meterTop);
+        ctx.fillStyle = 'rgba(4, 6, 10, 0.48)';
+        ctx.fillRect(meterLeft, meterTop, meterW, usableH);
+
+        for (let band = 0; band < meterBands; band++) {
+          const x0 = Math.floor(meterLeft + (band / meterBands) * meterW);
+          const x1 = Math.max(x0 + 1, Math.floor(meterLeft + ((band + 1) / meterBands) * meterW));
+          const bandLoHz = vfo + c.filterLowHz + (band / meterBands) * (c.filterHighHz - c.filterLowHz);
+          const bandHiHz = vfo + c.filterLowHz + ((band + 1) / meterBands) * (c.filterHighHz - c.filterLowHz);
+          const b0 = Math.max(binStart, Math.min(binEnd - 1, Math.floor((bandLoHz - fullStartHz) * binsPerHz)));
+          const b1 = Math.max(b0 + 1, Math.min(binEnd, Math.ceil((bandHiHz - fullStartHz) * binsPerHz)));
+          let live = 0;
+          let peakBin = b0;
+          if (haveFloor) {
+            let peakSnr = 0;
+            for (let i = b0; i < b1; i++) {
+              const snr = (panDb[i] ?? DB_FLOOR) - (floor![i] ?? DB_FLOOR);
+              if (snr > peakSnr) {
+                peakSnr = snr;
+                peakBin = i;
+              }
+            }
+            live = Math.max(0, Math.min(1, peakSnr / POP_RANGE_DB));
+          } else {
+            let peakDb = -Infinity;
+            for (let i = b0; i < b1; i++) {
+              const v = panDb[i] ?? DB_FLOOR;
+              if (v > peakDb) {
+                peakDb = v;
+                peakBin = i;
+              }
+            }
+            live = peakDb === -Infinity ? 0 : Math.max(0, Math.min(1, (peakDb - loDb) / dbSpan));
+          }
+          live = live ** 0.82;
+          avg[band] = avg[band]! + avgAlpha * (live - avg[band]!);
+          const peakOffHz = fullStartHz + peakBin * d.hzPerPixel - vfo;
+          peakOffAvg[band] = peakOffAvg[band]! + avgAlpha * (peakOffHz - peakOffAvg[band]!);
+          const level = avg[band]!;
+          const barH = Math.max(1, Math.round(level * usableH));
+          const gap = Math.max(1, Math.round(1 * dpr));
+          const bx = x0 + gap;
+          const bw = Math.max(1, x1 - x0 - gap * 2);
+          const paint = accent;
+          ctx.fillStyle = paint(0.18 + 0.62 * level);
+          ctx.fillRect(bx, meterBottom - barH, bw, barH);
+          if (level > 0.14) {
+            ctx.fillStyle = paint(0.38 + 0.50 * level);
+            ctx.fillRect(bx, meterBottom - barH, bw, Math.max(1, Math.round(1 * dpr)));
+          }
+          const label = formatEqPeakOffset(peakOffAvg[band]!);
+          ctx.font = `650 ${Math.max(6, Math.round(7 * dpr))}px "SFMono-Regular", ui-monospace, monospace`;
+          ctx.textBaseline = 'middle';
+          ctx.textAlign = 'center';
+          const textY = meterTop + usableH * 0.46;
+          ctx.fillStyle = 'rgba(3, 5, 9, 0.58)';
+          ctx.fillRect(bx, meterTop + Math.round(1 * dpr), bw, Math.max(8, Math.round(9 * dpr)));
+          ctx.fillStyle = ink0(0.74 + 0.18 * level);
+          ctx.fillText(label, x0 + (x1 - x0) / 2, textY);
+        }
+      };
+
       if (panDb && bins > 0) {
         // Faint floor contour (non-Pop) so the operator can see the estimated
         // noise floor riding under the trace. In Pop mode the floor IS the
@@ -703,55 +812,6 @@ export function FilterMiniPan() {
           if (x === 0) ctx.moveTo(x, sm[x]!); else ctx.lineTo(x, sm[x]!);
         }
         ctx.stroke();
-
-        // Bottom EQ-style activity rail. Each band is a 5-second average of
-        // its frequency segment so it shows sustained hot spots, not momentary
-        // detector jitter.
-        if (w > 0) {
-          if (eqMeterAvg === null || eqMeterAvg.length !== EQ_METER_BANDS) {
-            eqMeterAvg = new Float32Array(EQ_METER_BANDS);
-            eqMeterKey = '';
-            eqMeterLastAt = 0;
-          }
-          const meterKey = `${c.vfoHz}:${spanHz}:${w}:${EQ_METER_BANDS}`;
-          const avg = eqMeterAvg;
-          if (meterKey !== eqMeterKey) {
-            eqMeterKey = meterKey;
-            avg.fill(0);
-            eqMeterLastAt = 0;
-          }
-          const meterDtMs = eqMeterLastAt > 0 ? Math.max(0, Math.min(1000, now - eqMeterLastAt)) : 0;
-          const avgAlpha = eqMeterLastAt > 0 ? 1 - Math.exp(-meterDtMs / EQ_METER_AVG_MS) : 1;
-          eqMeterLastAt = now;
-          const meterH = Math.max(7, Math.round(12 * dpr));
-          const meterBottom = plotBottom - Math.round(2 * dpr);
-          const meterTop = Math.max(plotTop + Math.round(6 * dpr), meterBottom - meterH);
-          const usableH = Math.max(1, meterBottom - meterTop);
-          ctx.fillStyle = 'rgba(4, 6, 10, 0.34)';
-          ctx.fillRect(0, meterTop, w, usableH);
-          for (let band = 0; band < EQ_METER_BANDS; band++) {
-            const x0 = Math.floor((band / EQ_METER_BANDS) * w);
-            const x1 = Math.max(x0 + 1, Math.floor(((band + 1) / EQ_METER_BANDS) * w));
-            let topY = plotBottom;
-            for (let x = x0; x < x1; x++) topY = Math.min(topY, sm[Math.min(w - 1, x)]!);
-            const live = Math.max(0, Math.min(1, ((plotBottom - topY) / plotH) ** 0.82));
-            avg[band] = avg[band]! + avgAlpha * (live - avg[band]!);
-            const level = avg[band]!;
-            const barH = Math.max(1, Math.round(level * usableH));
-            const gap = Math.max(1, Math.round(1 * dpr));
-            const bx = x0 + gap;
-            const bw = Math.max(1, x1 - x0 - gap * 2);
-            const centerOffHz = ((x0 + x1) / 2 / w - 0.5) * spanHz;
-            const accepted = centerOffHz >= c.filterLowHz && centerOffHz <= c.filterHighHz;
-            const paint = accepted ? accent : signal;
-            ctx.fillStyle = paint(0.14 + 0.54 * level);
-            ctx.fillRect(bx, meterBottom - barH, bw, barH);
-            if (level > 0.18) {
-              ctx.fillStyle = paint(0.28 + 0.54 * level);
-              ctx.fillRect(bx, meterBottom - barH, bw, Math.max(1, Math.round(1 * dpr)));
-            }
-          }
-        }
 
         // Pop-mode floor baseline: a faint flat rail at SNR=0 with an "NF" tag.
         if (popOn) {
@@ -1133,6 +1193,8 @@ export function FilterMiniPan() {
         ctx.textAlign = 'start';
         ctx.letterSpacing = '0px';
       }
+
+      drawEqMeter();
 
       // X-axis tick labels. One label every tickStep (scaled by span), centered
       // on the VFO. VFO sits at the middle tick.

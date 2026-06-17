@@ -140,3 +140,23 @@ state to disk or train a model on operator audio.
   modulation, impulsive noise with NB off/on, and noise-only stability.
 - Capture live NR5 traces with `tools/watch-dsp-live-diagnostics.ps1`; inspect
   `nr5WeakSignalWatch` before changing recovery or makeup constants.
+- When on-air G2 captures are weak-only or off-signal, use
+  `tools/run-dsp-g2-rx-peak-hunt.ps1` to find a better RX evidence window from
+  current frontend top peaks. Run it without `-AllowRetune` for a dry
+  current-VFO capture; add `-AllowRetune -StopOnReady` only when temporary RX
+  VFO movement is acceptable. Use `-PassCount` and `-PassDelaySec` for bounded
+  intermittent-signal scans, and `-CandidateMHz` or `-CandidateFrequencyHz` for
+  operator-supplied active frequencies. Candidate frequencies are listed in dry
+  runs but only captured when retune is explicitly allowed. The tool restores
+  the original VFO and still delegates each evidence window to
+  `watch-dsp-live-diagnostics.ps1`; it does not approve NR5 default changes by
+  itself. Include its optional
+  `artifacts/g2-rx-peak-hunt-report.json` as `g2-rx-peak-hunt-report-json` in
+  artifact manifests when preserving scan evidence; strict validation surfaces
+  the RX-only safety, VFO restore, pass counts, operator candidate counts,
+  weak/strong sample counts, hard blockers, and AGC pumping risk as
+  `g2RxPeakHunt*` fields and an advisory triage gate. The report must keep
+  per-window watcher JSON and JSONL paths bundle-relative under
+  `artifacts/g2-rx-peak-hunt`; copied reports with absolute or missing child
+  paths are invalid and reported through `g2RxPeakHuntReferencedWindow*`
+  counters.

@@ -35,6 +35,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { useTxStore } from './tx-store';
+import { uninstallPlugin as apiUninstall } from '../plugins/api/plugins';
+import { reloadInstalledPluginUis } from '../plugins/runtime/pluginRuntime';
 
 /** Minimum window dimensions enforced on drag-resize. */
 export const AUDIO_SUITE_WINDOW_MIN_WIDTH = 480;
@@ -468,9 +470,6 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           }
           // New plugins were installed + activated server-side. Re-register
           // their UI panels and refresh the chain order so the rack updates.
-          const { reloadInstalledPluginUis } = await import(
-            '../plugins/runtime/pluginRuntime'
-          );
           await reloadInstalledPluginUis();
           await get().loadChainOrderFromServer();
           return {
@@ -489,17 +488,11 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
 
       uninstallPlugin: async (pluginId) => {
         try {
-          const { uninstallPlugin: apiUninstall } = await import(
-            '../plugins/api/plugins'
-          );
           const result = await apiUninstall(pluginId);
           // The server has already detached the plugin from the chain
           // (ChainOrderService.OnPluginDetached). Re-register the UI panels
           // (which now prunes the gone plugin's panel) and re-pull the chain
           // order so the rack + sidebar update without a page reload.
-          const { reloadInstalledPluginUis } = await import(
-            '../plugins/runtime/pluginRuntime'
-          );
           await reloadInstalledPluginUis();
           await get().loadChainOrderFromServer();
           // If the detail pane was showing this plugin, drop the selection so

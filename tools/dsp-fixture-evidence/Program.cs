@@ -117,6 +117,9 @@ internal static class WdspFixtureEvidenceTool
                         ["sampleRateHz"] = run.SampleRateHz,
                         ["sampleCount"] = run.SampleCount,
                         ["processingElapsedMs"] = Math.Round(run.ElapsedMs, 6),
+                        ["throughputRatio"] = Math.Round(ComputeThroughputRatio(run), 6),
+                        ["nativeStageTiming"] = NewStageTimingRecord(run),
+                        ["managedAllocation"] = NewManagedAllocationRecord(run),
                         ["wdspRuntimeRid"] = nativeRuntime.Rid,
                         ["wdspRuntimeSha256"] = nativeRuntime.Sha256,
                         ["wdspRuntimeStatus"] = nativeRuntime.Status,
@@ -157,6 +160,7 @@ internal static class WdspFixtureEvidenceTool
                         ["wdspRuntimeStatus"] = nativeRuntime.Status,
                         ["tonePowerDb"] = run.Metrics.TonePowerDb,
                         ["wantedSnrDb"] = Math.Round(ComputeWantedSnrDb(run.Metrics), 6),
+                        ["signalSinadDb"] = Math.Round(ComputeSignalSinadDb(run.Metrics), 6),
                         ["wantedAdjacentRatioDb"] = Math.Round(ComputeWantedAdjacentRatioDb(run.Metrics), 6),
                         ["intermodulationProxy"] = Math.Round(run.IntermodulationProxy, 6),
                         ["summary"] = fixture.Summary,
@@ -199,6 +203,8 @@ internal static class WdspFixtureEvidenceTool
                         ["profile"] = run.Profile,
                         ["metrics"] = metrics,
                         ["gates"] = NewGateRecords(scenario, run),
+                        ["nativeStageTiming"] = NewStageTimingRecord(run),
+                        ["managedAllocation"] = NewManagedAllocationRecord(run),
                         ["evidence"] = new Dictionary<string, object?>
                         {
                             ["audioPath"] = audioRelativePath,
@@ -338,28 +344,35 @@ internal static class WdspFixtureEvidenceTool
         if (fixture.IqInterleaved is null)
             throw new ArgumentException("RX fixture is missing IQ samples.", nameof(fixture));
 
-        var sw = Stopwatch.StartNew();
+        var stages = new List<StageProbe>();
+        var sw = new Stopwatch();
         using var engine = new WdspDspEngine();
-        int channel = engine.OpenChannel(fixture.SampleRateHz, PixelWidth);
+        int channel = MeasureStage(stages, "rx-open-channel", "RXA OpenChannel", () => engine.OpenChannel(fixture.SampleRateHz, PixelWidth));
         try
         {
-            engine.SetMode(channel, RxMode.USB);
-            engine.SetFilter(channel, 150, 2850);
-            engine.SetVfoHz(channel, 14_200_000);
-            engine.SetAgcTop(channel, 80.0);
-            engine.SetNoiseReduction(channel, new NrConfig(NrMode: profile.NrMode));
+            MeasureStage(stages, "rx-configure-channel", "RXA mode/filter/AGC/NR setup", () =>
+            {
+                engine.SetMode(channel, RxMode.USB);
+                engine.SetFilter(channel, 150, 2850);
+                engine.SetVfoHz(channel, 14_200_000);
+                engine.SetAgcTop(channel, 80.0);
+                engine.SetNoiseReduction(channel, new NrConfig(NrMode: profile.NrMode));
+            });
 
+            sw.Start();
             for (int repeat = 0; repeat < FixtureRepeats; repeat++)
-                FeedFixtureIq(engine, channel, fixture.IqInterleaved);
+                MeasureStage(stages, "rx-feed-iq", "RXA FeedIq fixture block", () => FeedFixtureIq(engine, channel, fixture.IqInterleaved));
 
-            var audio = DrainAudio(engine, channel);
+            var audio = MeasureStage(stages, "rx-drain-audio", "RXA ReadAudio drain", () => DrainAudio(engine, channel));
             if (audio.Length < 1024)
                 throw new InvalidOperationException($"{fixture.Name}/{profile.Id}: expected WDSP RX audio, got {audio.Length} samples.");
 
             sw.Stop();
             float[] analysis = Tail(audio, AnalysisSamples);
-            var metrics = DspBenchmarkAnalyzer.AnalyzeAudio(analysis, AudioSampleRateHz, fixture.ExpectedTonesHz);
-            var nr5Diagnostics = profile.NrMode == NrMode.Nr5 ? engine.TryGetNr5SpnrDiagnostics(channel) : null;
+            var metrics = MeasureStage(stages, "rx-analyze-audio", "RXA output analysis", () => DspBenchmarkAnalyzer.AnalyzeAudio(analysis, AudioSampleRateHz, fixture.ExpectedTonesHz));
+            var nr5Diagnostics = profile.NrMode == NrMode.Nr5
+                ? MeasureStage(stages, "rx-fetch-nr5-diagnostics", "RXA NR5/SPNR diagnostics fetch", () => engine.TryGetNr5SpnrDiagnostics(channel))
+                : null;
 
             return new FixtureRunResult(
                 Profile: profile.Label,
@@ -371,11 +384,12 @@ internal static class WdspFixtureEvidenceTool
                 IntermodulationProxy: 0.0,
                 SamplePreview: PreviewAudio(analysis),
                 TxMeters: null,
-                Nr5Diagnostics: nr5Diagnostics);
+                Nr5Diagnostics: nr5Diagnostics,
+                StageProbes: stages);
         }
         finally
         {
-            engine.CloseChannel(channel);
+            MeasureStage(stages, "rx-close-channel", "RXA CloseChannel", () => engine.CloseChannel(channel));
         }
     }
 
@@ -384,16 +398,20 @@ internal static class WdspFixtureEvidenceTool
         if (fixture.Audio is null)
             throw new ArgumentException("TX fixture is missing audio samples.", nameof(fixture));
 
-        var sw = Stopwatch.StartNew();
+        var stages = new List<StageProbe>();
+        var sw = new Stopwatch();
         using var engine = new WdspDspEngine();
-        int rx = engine.OpenChannel(AudioSampleRateHz, 1024);
+        int rx = MeasureStage(stages, "tx-open-rx-channel", "TXA support OpenChannel", () => engine.OpenChannel(AudioSampleRateHz, 1024));
         try
         {
-            engine.OpenTxChannel();
-            engine.SetTxMode(RxMode.USB);
-            engine.SetTxFilter(150, 2850);
-            engine.SetTxLeveling(rx, new TxLevelingConfig());
-            engine.SetMox(true);
+            MeasureStage(stages, "tx-configure-channel", "TXA open/filter/leveler/MOX setup", () =>
+            {
+                engine.OpenTxChannel();
+                engine.SetTxMode(RxMode.USB);
+                engine.SetTxFilter(150, 2850);
+                engine.SetTxLeveling(rx, new TxLevelingConfig());
+                engine.SetMox(true);
+            });
 
             int block = engine.TxBlockSamples;
             int outSamples = engine.TxOutputSamples;
@@ -401,27 +419,31 @@ internal static class WdspFixtureEvidenceTool
             var iq = new float[2 * outSamples];
             var output = new List<double>(fixture.Audio.Length * 2);
 
-            for (int offset = 0; offset < fixture.Audio.Length; offset += block)
+            sw.Start();
+            MeasureStage(stages, "tx-process-audio", "TXA ProcessTxBlock fixture audio", () =>
             {
-                Array.Clear(mic);
-                int take = Math.Min(block, fixture.Audio.Length - offset);
-                Array.Copy(fixture.Audio, offset, mic, 0, take);
-
-                int produced = engine.ProcessTxBlock(mic, iq);
-                for (int i = 0; i < produced; i++)
+                for (int offset = 0; offset < fixture.Audio.Length; offset += block)
                 {
-                    output.Add(iq[2 * i]);
-                    output.Add(iq[2 * i + 1]);
+                    Array.Clear(mic);
+                    int take = Math.Min(block, fixture.Audio.Length - offset);
+                    Array.Copy(fixture.Audio, offset, mic, 0, take);
+
+                    int produced = engine.ProcessTxBlock(mic, iq);
+                    for (int i = 0; i < produced; i++)
+                    {
+                        output.Add(iq[2 * i]);
+                        output.Add(iq[2 * i + 1]);
+                    }
                 }
-            }
+            });
 
             sw.Stop();
             if (output.Count < 2 * block)
                 throw new InvalidOperationException($"{fixture.Name}/{profile.Id}: expected WDSP TX IQ, got {output.Count / 2} complex samples.");
 
             double[] analysis = TailIq(output.ToArray(), Math.Min(AnalysisSamples, output.Count / 2));
-            var metrics = DspBenchmarkAnalyzer.AnalyzeIq(analysis, AudioSampleRateHz, fixture.ExpectedTonesHz);
-            var txMeters = engine.GetTxStageMeters();
+            var metrics = MeasureStage(stages, "tx-analyze-iq", "TXA output analysis", () => DspBenchmarkAnalyzer.AnalyzeIq(analysis, AudioSampleRateHz, fixture.ExpectedTonesHz));
+            var txMeters = MeasureStage(stages, "tx-fetch-stage-meters", "TXA stage meter fetch", engine.GetTxStageMeters);
 
             return new FixtureRunResult(
                 Profile: profile.Label,
@@ -433,12 +455,45 @@ internal static class WdspFixtureEvidenceTool
                 IntermodulationProxy: ComputeIntermodulationProxy(analysis, AudioSampleRateHz, fixture.ExpectedTonesHz),
                 SamplePreview: PreviewIq(analysis),
                 TxMeters: TxMetersToJson(txMeters),
-                Nr5Diagnostics: null);
+                Nr5Diagnostics: null,
+                StageProbes: stages);
         }
         finally
         {
-            engine.SetMox(false);
-            engine.CloseChannel(rx);
+            MeasureStage(stages, "tx-teardown-channel", "TXA MOX off and CloseChannel", () =>
+            {
+                engine.SetMox(false);
+                engine.CloseChannel(rx);
+            });
+        }
+    }
+
+    private static void MeasureStage(ICollection<StageProbe> stages, string stageId, string label, Action action)
+    {
+        MeasureStage(stages, stageId, label, () =>
+        {
+            action();
+            return 0;
+        });
+    }
+
+    private static T MeasureStage<T>(ICollection<StageProbe> stages, string stageId, string label, Func<T> action)
+    {
+        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        long started = Stopwatch.GetTimestamp();
+        try
+        {
+            return action();
+        }
+        finally
+        {
+            long elapsedTicks = Stopwatch.GetTimestamp() - started;
+            long allocatedAfter = GC.GetAllocatedBytesForCurrentThread();
+            stages.Add(new StageProbe(
+                StageId: stageId,
+                Label: label,
+                ElapsedMs: elapsedTicks * 1000.0 / Stopwatch.Frequency,
+                ManagedAllocatedBytes: Math.Max(0L, allocatedAfter - allocatedBefore)));
         }
     }
 
@@ -504,6 +559,7 @@ internal static class WdspFixtureEvidenceTool
         {
             "coherenttonepower" => FirstTonePower(run.Metrics),
             "wantedsnr" => ComputeWantedSnrDb(run.Metrics),
+            "signalsinad" => ComputeSignalSinadDb(run.Metrics),
             "spectralpreservation" => ComputeTonePreservationScore(source, run.Metrics),
             "outputrms" => run.Metrics.Rms,
             "latency" => EstimatePipelineLatencyMs(run),
@@ -512,6 +568,8 @@ internal static class WdspFixtureEvidenceTool
             "artifactscore" => ComputeArtifactScore(run),
             "rmsmovement" => run.Metrics.WindowedRmsSpreadDb,
             "cpu" => run.ElapsedMs,
+            "processingelapsedms" => run.ElapsedMs,
+            "throughputratio" => ComputeThroughputRatio(run),
             "windowedrmsmovement" => run.Metrics.WindowedRmsSpreadDb,
             "coherenttonecontinuity" => 1.0 / (1.0 + Math.Max(0.0, run.Metrics.WindowedRmsSpreadDb) / 12.0),
             "agcgainmovement" => run.Metrics.WindowedRmsSpreadDb,
@@ -535,6 +593,12 @@ internal static class WdspFixtureEvidenceTool
             "intermodulationproxy" => run.IntermodulationProxy,
             "rms" => run.Metrics.Rms,
             "spectralbalance" => ComputeSpectralBalanceScore(run.Metrics),
+            "txlevelergainreduction" => GetTxMeterValue(run, "levelerGainReductionDb"),
+            "txcfcgainreduction" => GetTxMeterValue(run, "cfcGainReductionDb"),
+            "txcompressorpeak" => GetTxMeterValue(run, "compressorPkDbfs", -400.0),
+            "txalcgainreduction" => GetTxMeterValue(run, "alcGainReductionDb"),
+            "txoutputpeak" => GetTxMeterValue(run, "outPkDbfs", ToDb(run.Metrics.Peak)),
+            "txoutputaverage" => GetTxMeterValue(run, "outAvDbfs", ToDb(run.Metrics.Rms)),
             _ => direction == "informational" ? run.Metrics.Rms : run.Metrics.WindowedRmsSpreadDb,
         };
     }
@@ -614,6 +678,68 @@ internal static class WdspFixtureEvidenceTool
         return 10.0 * Math.Log10(Math.Max(tonePower / noisePower, 1.0e-300));
     }
 
+    private static double ComputeSignalSinadDb(DspBenchmarkMetrics metrics) =>
+        ComputeWantedSnrDb(metrics);
+
+    private static double ComputeThroughputRatio(FixtureRunResult run)
+    {
+        if (run.SampleRateHz <= 0 || run.SampleCount <= 0 || run.ElapsedMs <= 0.0)
+            return 0.0;
+
+        double fixtureSeconds = run.SampleCount / (double)run.SampleRateHz;
+        double processingSeconds = run.ElapsedMs / 1000.0;
+        return fixtureSeconds / processingSeconds;
+    }
+
+    private static object NewStageTimingRecord(FixtureRunResult run)
+    {
+        var stages = run.StageProbes;
+        return new Dictionary<string, object?>
+        {
+            ["schemaVersion"] = 1,
+            ["probeKind"] = "managed-wrapper-stage-timing",
+            ["timingSource"] = "Stopwatch.GetTimestamp",
+            ["allocationProbeKind"] = "GC.GetAllocatedBytesForCurrentThread",
+            ["nativeCStageInstrumentationStatus"] = "not-instrumented",
+            ["nativeAllocationProbeStatus"] = "managed-thread-delta-only",
+            ["stageCount"] = stages.Count,
+            ["totalStageElapsedMs"] = Math.Round(stages.Sum(static stage => stage.ElapsedMs), 6),
+            ["processingStageElapsedMs"] = Math.Round(stages
+                .Where(static stage => stage.StageId.Contains("feed", StringComparison.Ordinal) ||
+                    stage.StageId.Contains("drain", StringComparison.Ordinal) ||
+                    stage.StageId.Contains("process", StringComparison.Ordinal))
+                .Sum(static stage => stage.ElapsedMs), 6),
+            ["maxStageElapsedMs"] = stages.Count == 0 ? 0.0 : Math.Round(stages.Max(static stage => stage.ElapsedMs), 6),
+            ["totalManagedAllocatedBytes"] = stages.Sum(static stage => stage.ManagedAllocatedBytes),
+            ["maxStageManagedAllocatedBytes"] = stages.Count == 0 ? 0L : stages.Max(static stage => stage.ManagedAllocatedBytes),
+            ["stages"] = stages.Select(static stage => new Dictionary<string, object?>
+            {
+                ["stageId"] = stage.StageId,
+                ["label"] = stage.Label,
+                ["elapsedMs"] = Math.Round(stage.ElapsedMs, 6),
+                ["managedAllocatedBytes"] = stage.ManagedAllocatedBytes,
+            }).ToArray(),
+        };
+    }
+
+    private static object NewManagedAllocationRecord(FixtureRunResult run)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["schemaVersion"] = 1,
+            ["probeKind"] = "managed-thread-delta",
+            ["allocationSource"] = "GC.GetAllocatedBytesForCurrentThread",
+            ["totalManagedAllocatedBytes"] = run.StageProbes.Sum(static stage => stage.ManagedAllocatedBytes),
+            ["maxStageManagedAllocatedBytes"] = run.StageProbes.Count == 0 ? 0L : run.StageProbes.Max(static stage => stage.ManagedAllocatedBytes),
+            ["nativeAllocationProbeStatus"] = "not-instrumented",
+            ["limitations"] = new[]
+            {
+                "Managed allocation deltas expose wrapper/tooling pressure only.",
+                "Native C heap allocation telemetry requires explicit WDSP allocator instrumentation before it can be treated as native-allocation proof.",
+            },
+        };
+    }
+
     private static double ComputeTonePreservationScore(DspBenchmarkMetrics source, DspBenchmarkMetrics output)
     {
         if (source.TonePowerDb.Count == 0 || output.TonePowerDb.Count == 0)
@@ -656,6 +782,34 @@ internal static class WdspFixtureEvidenceTool
         run.TxMeters is null
             ? 7.5
             : 1000.0 * 512.0 / 48_000.0;
+
+    private static double ToDb(double value) =>
+        20.0 * Math.Log10(Math.Max(value, 1.0e-300));
+
+    private static double GetTxMeterValue(FixtureRunResult run, string name, double fallback = 0.0)
+    {
+        if (run.TxMeters is null || !run.TxMeters.TryGetValue(name, out object? value) || value is null)
+            return fallback;
+
+        if (value is float f && float.IsFinite(f))
+            return f;
+        if (value is double d && double.IsFinite(d))
+            return d;
+        if (value is int i)
+            return i;
+        if (value is long l)
+            return l;
+        if (value is decimal m)
+            return (double)m;
+
+        return double.TryParse(
+            Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture),
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out double parsed) && double.IsFinite(parsed)
+            ? parsed
+            : fallback;
+    }
 
     private static double ComputeImpulseSuppressionDb(DspBenchmarkMetrics source, DspBenchmarkMetrics output)
     {
@@ -1030,16 +1184,17 @@ internal static class WdspFixtureEvidenceTool
     private static string GetDefaultMetricDirection(string metricId) =>
         metricId switch
         {
-            "coherenttonepower" or "wantedsnr" or "spectralpreservation" or
+            "coherenttonepower" or "wantedsnr" or "signalsinad" or "spectralpreservation" or
             "speechbandpreservation" or "noisereduction" or "coherenttonecontinuity" or
             "impulsesuppression" or "wantedadjacentratio" or "feedbackstability" or
-            "statetransitionsuccess" => "higher",
-            "latency" or "cpu" or "artifactscore" or "rmsmovement" or
+            "statetransitionsuccess" or "throughputratio" => "higher",
+            "latency" or "cpu" or "processingelapsedms" or "artifactscore" or "rmsmovement" or
             "windowedrmsmovement" or "agcgainmovement" or "postblankerringing" or
             "filterleakage" or "falseopenrate" or "noisefloormovement" or
             "settlingtime" or "overshoot" or "openlatency" or "closelatency" or
             "audiodiscontinuity" or "clippingcount" or "intermodulationproxy" or
-            "txmonitorcoupling" or "meterescape" or "audiodrain" or "nativeexceptioncount" => "lower",
+            "txmonitorcoupling" or "txlevelergainreduction" or "txalcgainreduction" or
+            "txoutputpeak" or "meterescape" or "audiodrain" or "nativeexceptioncount" => "lower",
             _ => "informational",
         };
 
@@ -1062,8 +1217,15 @@ internal static class WdspFixtureEvidenceTool
         int ClippingCount,
         double IntermodulationProxy,
         object SamplePreview,
-        object? TxMeters,
-        object? Nr5Diagnostics);
+        IReadOnlyDictionary<string, object?>? TxMeters,
+        object? Nr5Diagnostics,
+        IReadOnlyList<StageProbe> StageProbes);
+
+    private sealed record StageProbe(
+        string StageId,
+        string Label,
+        double ElapsedMs,
+        long ManagedAllocatedBytes);
 
     private sealed record NativeRuntimeIdentity(
         string Rid,

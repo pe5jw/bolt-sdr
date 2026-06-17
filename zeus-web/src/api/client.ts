@@ -958,6 +958,7 @@ export type FrontendDspSceneDiagnosticsDto = {
   peakCount: number | null;
   coherentPeakCount: number | null;
   coherentSubthresholdSignal: boolean | null;
+  topPeaks: FrontendDspSceneTopPeakDto[];
   adjacentNoiseUsable: boolean | null;
   adjacentNoiseBins: number | null;
   adjacentNoiseLeftBins: number | null;
@@ -970,6 +971,15 @@ export type FrontendDspSceneDiagnosticsDto = {
   adjacentNoiseRightFloorDb: number | null;
   adjacentNoiseSlopeDbPerKhz: number | null;
   adjacentNoiseRejectedPct: number | null;
+};
+
+export type FrontendDspSceneTopPeakDto = {
+  frequencyHz: number;
+  offsetHz: number;
+  snrDb: number;
+  dbfs: number;
+  confidence: number | null;
+  coherent: boolean;
 };
 
 export type FrontendDspSceneDiagnosticsPayload = {
@@ -994,6 +1004,7 @@ export type FrontendDspSceneDiagnosticsPayload = {
   peakCount?: number | null;
   coherentPeakCount?: number | null;
   coherentSubthresholdSignal?: boolean | null;
+  topPeaks?: FrontendDspSceneTopPeakDto[] | null;
   adjacentNoiseUsable?: boolean | null;
   adjacentNoiseBins?: number | null;
   adjacentNoiseLeftBins?: number | null;
@@ -2557,6 +2568,34 @@ function diagStringArray(raw: unknown): string[] {
   return raw.filter((v): v is string => typeof v === 'string');
 }
 
+function normalizeFrontendDspSceneTopPeaks(raw: unknown): FrontendDspSceneTopPeakDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry) => {
+    const r = asDiagRecord(entry);
+    const frequencyHz = diagNumber(r.frequencyHz);
+    const offsetHz = diagNumber(r.offsetHz);
+    const snrDb = diagNumber(r.snrDb);
+    const dbfs = diagNumber(r.dbfs);
+    if (
+      frequencyHz === null ||
+      offsetHz === null ||
+      snrDb === null ||
+      dbfs === null
+    ) {
+      return [];
+    }
+
+    return [{
+      frequencyHz,
+      offsetHz,
+      snrDb,
+      dbfs,
+      confidence: diagNumber(r.confidence),
+      coherent: Boolean(r.coherent),
+    }];
+  });
+}
+
 function normalizeNr5SpnrDiagnostics(raw: unknown): Nr5SpnrDiagnosticsDto | null {
   if (raw === null || raw === undefined) return null;
   const r = asDiagRecord(raw);
@@ -3288,6 +3327,7 @@ function normalizeFrontendDspScene(raw: unknown): FrontendDspSceneDiagnosticsDto
     peakCount: diagNumber(r.peakCount),
     coherentPeakCount: diagNumber(r.coherentPeakCount),
     coherentSubthresholdSignal: diagBool(r.coherentSubthresholdSignal),
+    topPeaks: normalizeFrontendDspSceneTopPeaks(r.topPeaks),
     adjacentNoiseUsable: diagBool(r.adjacentNoiseUsable),
     adjacentNoiseBins: diagNumber(r.adjacentNoiseBins),
     adjacentNoiseLeftBins: diagNumber(r.adjacentNoiseLeftBins),

@@ -14,11 +14,10 @@ namespace Zeus.Protocol2.Tests;
 
 /// <summary>
 /// True second-receiver (RX2) DDC wiring on Protocol 2. RX2 streams its own
-/// independent DDC (RxBaseDdc + 1) so it can sit on a different band than RX1 —
-/// replacing the old software sub-receiver that fed RX2 a copy of RX1's IQ
-/// (the "duplicate waterfall" bug). These pin the CmdRx enable-mask and the
-/// per-DDC config-block offsets so the wire shape can't regress without a test
-/// failure; the live IQ routing + NCO timing still need bench validation.
+/// independent DDC (RxBaseDdc + 1) sourced from the RX2 ADC on dual-ADC boards
+/// so it can sit on a different band/input than RX1. These pin the CmdRx
+/// enable-mask, per-DDC config-block offsets, and ADC source so the wire shape
+/// cannot regress to RX1 mirroring without a test failure.
 /// </summary>
 public class Rx2DdcTests
 {
@@ -29,6 +28,23 @@ public class Rx2DdcTests
         Assert.Equal(3, Protocol2Client.Rx2Ddc(HpsdrBoardKind.OrionMkII));
         Assert.Equal(1, Protocol2Client.Rx2Ddc(HpsdrBoardKind.Hermes));
         Assert.Equal(1, Protocol2Client.Rx2Ddc(HpsdrBoardKind.HermesII));
+    }
+
+    [Fact]
+    public void Rx2AdcSource_DualAdcBoards_UseAdc1()
+    {
+        Assert.Equal((byte)0x01, Protocol2Client.Rx2AdcSource(2, HpsdrBoardKind.OrionMkII));
+        Assert.Equal((byte)0x01, Protocol2Client.Rx2AdcSource(2, HpsdrBoardKind.Angelia));
+        Assert.Equal((byte)0x01, Protocol2Client.Rx2AdcSource(2, HpsdrBoardKind.Unknown));
+    }
+
+    [Fact]
+    public void Rx2AdcSource_SingleAdcBoards_StayOnAdc0()
+    {
+        Assert.Equal((byte)0x00, Protocol2Client.Rx2AdcSource(1, HpsdrBoardKind.OrionMkII));
+        Assert.Equal((byte)0x00, Protocol2Client.Rx2AdcSource(2, HpsdrBoardKind.Hermes));
+        Assert.Equal((byte)0x00, Protocol2Client.Rx2AdcSource(2, HpsdrBoardKind.HermesII));
+        Assert.Equal((byte)0x00, Protocol2Client.Rx2AdcSource(2, HpsdrBoardKind.HermesC10));
     }
 
     [Fact]
@@ -55,8 +71,8 @@ public class Rx2DdcTests
 
         // DDC2 (RX1) + DDC3 (RX2) both enabled.
         Assert.Equal((byte)(0x04 | 0x08), p[7]);
-        // RX2 DDC3 config block at 17 + 3*6 = 35: ADC0, sample-rate BE, 24-bit.
-        Assert.Equal((byte)0x00, p[35]);  // ADC0
+        // RX2 DDC3 config block at 17 + 3*6 = 35: ADC1/RX2, sample-rate BE, 24-bit.
+        Assert.Equal((byte)0x01, p[35]);  // ADC1 / RX2
         Assert.Equal((byte)0x00, p[36]);  // 48 kHz BE high
         Assert.Equal((byte)48,   p[37]);  // 48 kHz BE low
         Assert.Equal((byte)24,   p[40]);  // 24-bit
@@ -77,5 +93,37 @@ public class Rx2DdcTests
         Assert.Equal((byte)0x00, p[24]);  // 48 kHz BE high
         Assert.Equal((byte)48,   p[25]);  // 48 kHz BE low
         Assert.Equal((byte)24,   p[28]);  // 24-bit
+    }
+
+    [Fact]
+    public void Alex1FilterWord_Rx2Enabled_FollowsVfoB()
+    {
+        uint alex1 = Protocol2Client.ComposeAlex1Word(
+            rxFreqHz: 14_200_000,
+            rx2FreqHz: 7_200_000,
+            rx2Enabled: true,
+            moxOn: false,
+            psEnabled: false,
+            board: HpsdrBoardKind.OrionMkII);
+
+        Assert.Equal(
+            Protocol2Client.ComputeAlexWord(7_200_000, 7_200_000, txAnt: 1, board: HpsdrBoardKind.OrionMkII),
+            alex1);
+    }
+
+    [Fact]
+    public void Alex1FilterWord_Rx2Disabled_FollowsVfoA()
+    {
+        uint alex1 = Protocol2Client.ComposeAlex1Word(
+            rxFreqHz: 14_200_000,
+            rx2FreqHz: 7_200_000,
+            rx2Enabled: false,
+            moxOn: false,
+            psEnabled: false,
+            board: HpsdrBoardKind.OrionMkII);
+
+        Assert.Equal(
+            Protocol2Client.ComputeAlexWord(14_200_000, 14_200_000, txAnt: 1, board: HpsdrBoardKind.OrionMkII),
+            alex1);
     }
 }

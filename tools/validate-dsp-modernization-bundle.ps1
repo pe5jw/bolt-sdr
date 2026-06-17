@@ -139,6 +139,21 @@ function Get-JsonArray {
     return @($value)
 }
 
+function Get-AcceptanceActionById {
+    param(
+        $Report,
+        [Parameter(Mandatory = $true)][string]$ActionId
+    )
+
+    foreach ($action in @(Get-JsonArray $Report "acceptanceActionPlan")) {
+        if ([string](Get-JsonValue $action "actionId") -eq $ActionId) {
+            return $action
+        }
+    }
+
+    return $null
+}
+
 function Test-Truthy {
     param($Value)
 
@@ -2884,7 +2899,7 @@ function Get-RequiredBenchmarkScenarioFamilies {
         [ordered]@{
             familyId = "puresignal-safe-bypass"
             name = "PureSignal-safe bypass"
-            acceptedScenarioIds = @("puresignal-safe-bypass", "puresignal-bypass", "pure-signal-safe-bypass", "pure-signal-bypass", "tx-puresignal-bypass")
+            acceptedScenarioIds = @("puresignal-safe-bypass", "puresignal-bypass", "pure-signal-safe-bypass", "pure-signal-bypass", "tx-puresignal-safe-bypass", "tx-puresignal-bypass")
         },
         [ordered]@{
             familyId = "channel-lifecycle"
@@ -3978,6 +3993,57 @@ function Test-G2BenchmarkTarget {
     return (ConvertTo-HardwareId $Value) -eq "g2"
 }
 
+function Get-CrossRadioValidationTargetId {
+    param($Target)
+
+    if ($null -eq $Target) {
+        return ""
+    }
+
+    if ($Target -is [string]) {
+        return [string]$Target
+    }
+
+    foreach ($fieldName in @("id", "hardwareTarget", "target", "radioModel", "name")) {
+        $value = [string](Get-JsonValue $Target $fieldName)
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            return $value
+        }
+    }
+
+    return ""
+}
+
+function Get-CrossRadioValidationTargetIds {
+    param($Report)
+
+    $ids = New-Object System.Collections.Generic.List[string]
+    foreach ($target in @(Get-JsonArray $Report "hardwareTargets")) {
+        $targetId = Get-CrossRadioValidationTargetId $target
+        if (-not [string]::IsNullOrWhiteSpace($targetId)) {
+            $ids.Add($targetId.Trim()) | Out-Null
+        }
+    }
+
+    if ($ids.Count -eq 0) {
+        $targetId = [string](Get-JsonValue $Report "hardwareTarget")
+        if (-not [string]::IsNullOrWhiteSpace($targetId)) {
+            $ids.Add($targetId.Trim()) | Out-Null
+        }
+    }
+
+    return @($ids.ToArray() | Select-Object -Unique)
+}
+
+function Get-NonG2CrossRadioValidationTargetIds {
+    param($TargetIds)
+
+    return @($TargetIds | Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_) -and
+            -not (Test-G2BenchmarkTarget ([string]$_))
+        })
+}
+
 function Test-OrionMkIIBoard {
     param([string]$Value)
 
@@ -4021,6 +4087,54 @@ function Get-BundlePath {
     }
 
     return Join-Path $BundlePath $Path
+}
+
+function Test-BundleRelativeEvidencePath {
+    param(
+        [string]$Path,
+        [string]$BundlePath = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $false
+    }
+
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return $false
+    }
+
+    $normalized = ConvertTo-NormalizedEvidencePathText $Path
+    if ($normalized -eq ".." -or
+        $normalized.StartsWith("../", [StringComparison]::Ordinal) -or
+        $normalized.StartsWith("..\", [StringComparison]::Ordinal)) {
+        return $false
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($BundlePath)) {
+        try {
+            $bundleFull = [System.IO.Path]::GetFullPath($BundlePath)
+            $candidateFull = [System.IO.Path]::GetFullPath((Join-Path $BundlePath $Path))
+            $trimChars = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+            $bundleComparable = $bundleFull.TrimEnd($trimChars)
+            $candidateComparable = $candidateFull.TrimEnd($trimChars)
+            if ([string]::Equals($bundleComparable, $candidateComparable, [StringComparison]::OrdinalIgnoreCase)) {
+                return $true
+            }
+
+            if (-not $bundleFull.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+                $bundleFull = $bundleFull + [System.IO.Path]::DirectorySeparatorChar
+            }
+
+            if (-not $candidateFull.StartsWith($bundleFull, [StringComparison]::OrdinalIgnoreCase)) {
+                return $false
+            }
+        }
+        catch {
+            return $false
+        }
+    }
+
+    return $true
 }
 
 function ConvertTo-NormalizedEvidencePathText {
@@ -4950,6 +5064,113 @@ function Test-OrderedStringArraysEqual {
     return $true
 }
 
+function Get-ExternalBakeoffEvaluationOrder {
+    param($CandidateSummaries)
+
+    $orderedCandidates = @($CandidateSummaries | Sort-Object `
+            @{ Expression = { if (Test-Truthy (Get-JsonValue $_ "safeForBakeoff")) { 0 } else { 1 } } }, `
+            @{ Expression = { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "combinedRiskScore") 999999) } }, `
+            @{ Expression = { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "blockerCount") 999999) } }, `
+            @{ Expression = { @(Get-JsonArray $_ "issues").Count } }, `
+            @{ Expression = { ConvertTo-CandidateId ([string](Get-JsonValue $_ "id")) } })
+
+    $records = New-Object System.Collections.Generic.List[object]
+    $priority = 1
+    foreach ($candidate in @($orderedCandidates)) {
+        $candidateId = ConvertTo-CandidateId ([string](Get-JsonValue $candidate "id"))
+        if ([string]::IsNullOrWhiteSpace($candidateId)) {
+            continue
+        }
+
+        $readyForBakeoff = Test-Truthy (Get-JsonValue $candidate "safeForBakeoff")
+        $records.Add([ordered]@{
+                priority = $priority
+                candidateId = $candidateId
+                readyForBakeoff = $readyForBakeoff
+                blockedForIntegration = Test-Truthy (Get-JsonValue $candidate "integrationBlocked")
+                combinedRiskScore = [int](Get-NumericValueOrDefault (Get-JsonValue $candidate "combinedRiskScore") 999999)
+                blockerCount = [int](Get-NumericValueOrDefault (Get-JsonValue $candidate "blockerCount") 999999)
+                issueCount = @(Get-JsonArray $candidate "issues").Count
+                runtimeRiskTier = [string](Get-JsonValue $candidate "runtimeRiskTier")
+                latencyRiskTier = [string](Get-JsonValue $candidate "latencyRiskTier")
+                radioSafetyRiskTier = [string](Get-JsonValue $candidate "radioSafetyRiskTier")
+                rationale = if ($readyForBakeoff) {
+                    "safe opt-in post-demod candidate; evaluate lower-risk entries first"
+                }
+                else {
+                    "unsafe catalog entry; fix issues before bakeoff"
+                }
+            }) | Out-Null
+        $priority++
+    }
+
+    return @($records.ToArray())
+}
+
+function Get-ExternalBakeoffFirstSafeCandidateId {
+    param($EvaluationOrder)
+
+    foreach ($record in @($EvaluationOrder)) {
+        if (Test-Truthy (Get-JsonValue $record "readyForBakeoff")) {
+            return ConvertTo-CandidateId ([string](Get-JsonValue $record "candidateId"))
+        }
+    }
+
+    return ""
+}
+
+function Get-ExternalBakeoffEvaluationOrderCandidateIds {
+    param($EvaluationOrder)
+
+    return @($EvaluationOrder | ForEach-Object {
+            ConvertTo-CandidateId ([string](Get-JsonValue $_ "candidateId"))
+        } | Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_)
+        })
+}
+
+function Test-ExternalBakeoffEvaluationOrderRecordsEqual {
+    param(
+        $Actual,
+        $Expected
+    )
+
+    $actualRecords = @($Actual)
+    $expectedRecords = @($Expected)
+    if ($actualRecords.Count -ne $expectedRecords.Count) {
+        return $false
+    }
+
+    for ($index = 0; $index -lt $expectedRecords.Count; $index++) {
+        $actualRecord = $actualRecords[$index]
+        $expectedRecord = $expectedRecords[$index]
+
+        foreach ($fieldName in @("candidateId", "runtimeRiskTier", "latencyRiskTier", "radioSafetyRiskTier", "rationale")) {
+            $actualValue = [string](Get-JsonValue $actualRecord $fieldName)
+            $expectedValue = [string](Get-JsonValue $expectedRecord $fieldName)
+            if (-not [string]::Equals($actualValue, $expectedValue, [StringComparison]::Ordinal)) {
+                return $false
+            }
+        }
+
+        foreach ($fieldName in @("readyForBakeoff", "blockedForIntegration")) {
+            if ((Test-Truthy (Get-JsonValue $actualRecord $fieldName)) -ne (Test-Truthy (Get-JsonValue $expectedRecord $fieldName))) {
+                return $false
+            }
+        }
+
+        foreach ($fieldName in @("priority", "combinedRiskScore", "blockerCount", "issueCount")) {
+            $actualValue = [int](Get-NumericValueOrDefault (Get-JsonValue $actualRecord $fieldName) -1)
+            $expectedValue = [int](Get-NumericValueOrDefault (Get-JsonValue $expectedRecord $fieldName) -1)
+            if ($actualValue -ne $expectedValue) {
+                return $false
+            }
+        }
+    }
+
+    return $true
+}
+
 function Get-ExternalBakeoffRequiredComparisons {
     return @("current-zeus", "nr5-spnr", "candidate-external-engine-opt-in")
 }
@@ -5463,6 +5684,34 @@ $offlineFixtureMetricsEvidence = [ordered]@{
     runtimeArtifactHashStatus = "not-evaluated"
     status = "not-evaluated"
 }
+$nativeStageTimingArtifactId = "native-stage-timing-report"
+$nativeStageTimingEvidence = [ordered]@{
+    present = $false
+    readyForReview = $false
+    path = ""
+    sha256 = ""
+    schemaVersion = 0
+    tool = ""
+    status = "not-captured"
+    metricsPath = ""
+    metricsSha256 = ""
+    metricsHashStatus = "not-evaluated"
+    wdspBackedEvidence = $false
+    wdspRuntimeRid = ""
+    wdspRuntimeSha256 = ""
+    runtimeHashStatus = "not-evaluated"
+    runCount = 0
+    stageRecordCount = 0
+    missingStageTimingRunCount = 0
+    missingAllocationProbeRunCount = 0
+    budgetFailureCount = 0
+    maxStageElapsedMs = 0.0
+    maxRunElapsedMs = 0.0
+    maxManagedAllocationBytes = 0
+    nativeCStageInstrumentationReady = $false
+    nativeCStageInstrumentationStatus = ""
+    nativeAllocationProbeStatus = ""
+}
 $metricComparisonEvidence = [ordered]@{
     present = $false
     readyForReview = $false
@@ -5501,6 +5750,31 @@ $metricComparisonEvidence = [ordered]@{
     metricCatalogContractProblemMetricCount = 0
     metricCatalogContractProblemMetricIds = @()
     status = "not-evaluated"
+}
+$pureSignalSafeBypassArtifactId = "puresignal-safe-bypass-report"
+$pureSignalSafeBypassEvidence = [ordered]@{
+    present = $false
+    readyForReview = $false
+    status = "not-evaluated"
+    path = ""
+    sha256 = ""
+    tool = ""
+    schemaVersion = 0
+    scenarioId = ""
+    hardwareTarget = ""
+    disabledPathReady = $false
+    enabledPathReady = $false
+    capturedModeCount = 0
+    missingModeCount = 0
+    missingModes = @()
+    pureSignalDefaultStatePreserved = $false
+    defaultBehaviorChangeApproved = $false
+    feedbackStabilityMin = 0.0
+    feedbackStabilityThreshold = 0.0
+    txMonitorCouplingMax = 0.0
+    txMonitorCouplingThreshold = 0.0
+    clippingCountTotal = 0
+    gateFailureCount = 0
 }
 $liveTraceComparisonArtifactId = "live-diagnostics-trace-comparison"
 $liveTraceThetisComparisonArtifactId = "live-diagnostics-trace-comparison-thetis-parity"
@@ -5777,6 +6051,38 @@ $liveAcceptanceCycleEvidence = [ordered]@{
     triagePrimaryAcceptanceExpectedArtifactCount = 0
     triagePrimaryAcceptanceExpectedArtifacts = @()
     triagePrimaryAcceptanceFollowUp = ""
+    triageExternalEngineBakeoffActionPresent = $false
+    triageExternalEngineBakeoffActionId = ""
+    triageExternalEngineBakeoffActionPriority = $null
+    triageExternalEngineBakeoffActionStageId = ""
+    triageExternalEngineBakeoffActionGateId = ""
+    triageExternalEngineBakeoffActionCategory = ""
+    triageExternalEngineBakeoffActionRequired = $false
+    triageExternalEngineBakeoffActionManual = $false
+    triageExternalEngineBakeoffCommandTemplate = ""
+    triageExternalEngineBakeoffCommandStepCount = 0
+    triageExternalEngineBakeoffCommandSteps = @()
+    triageExternalEngineBakeoffManualAction = ""
+    triageExternalEngineBakeoffExpectedArtifact = ""
+    triageExternalEngineBakeoffExpectedArtifactCount = 0
+    triageExternalEngineBakeoffExpectedArtifacts = @()
+    triageExternalEngineBakeoffFollowUp = ""
+    triagePureSignalSafeBypassActionPresent = $false
+    triagePureSignalSafeBypassActionId = ""
+    triagePureSignalSafeBypassActionPriority = $null
+    triagePureSignalSafeBypassActionStageId = ""
+    triagePureSignalSafeBypassActionGateId = ""
+    triagePureSignalSafeBypassActionCategory = ""
+    triagePureSignalSafeBypassActionRequired = $false
+    triagePureSignalSafeBypassActionManual = $false
+    triagePureSignalSafeBypassCommandTemplate = ""
+    triagePureSignalSafeBypassCommandStepCount = 0
+    triagePureSignalSafeBypassCommandSteps = @()
+    triagePureSignalSafeBypassManualAction = ""
+    triagePureSignalSafeBypassExpectedArtifact = ""
+    triagePureSignalSafeBypassExpectedArtifactCount = 0
+    triagePureSignalSafeBypassExpectedArtifacts = @()
+    triagePureSignalSafeBypassFollowUp = ""
     requiredLiveAcceptanceArtifactProblemCount = 0
     path = ""
     sha256 = ""
@@ -5813,6 +6119,102 @@ $liveMatrixArtifactControlEvidence = [ordered]@{
     status = "not-evaluated"
 }
 $liveMatrixArtifactControlStatusCountMap = @{}
+$g2RxPeakHuntArtifactId = "g2-rx-peak-hunt-report"
+$g2RxPeakHuntEvidence = [ordered]@{
+    present = $false
+    readyForReview = $false
+    valid = $false
+    path = ""
+    sha256 = ""
+    schemaVersion = 0
+    tool = ""
+    status = "not-captured"
+    comparisonId = ""
+    allowRetune = $false
+    skipCurrentVfo = $false
+    stopOnReady = $false
+    samplesPerWindow = 0
+    intervalMs = 0
+    plannedRunCount = 0
+    actualRunCount = 0
+    failedRunCount = 0
+    mixedWeakStrongReady = $false
+    mixedWeakStrongReadyRunCount = 0
+    weakInputSampleCount = 0
+    strongInputSampleCount = 0
+    candidateWeakLossSampleCount = 0
+    hotMakeupSampleCount = 0
+    hardBlockerSampleCount = 0
+    agcPumpingRiskRunCount = 0
+    peakCandidateCount = 0
+    retuneAttemptCount = 0
+    safetyRxOnly = $false
+    safetyTxEndpointsTouched = $false
+    safetyOriginalVfoRestoreAttempted = $false
+    safetyOriginalVfoRestored = $false
+    safetyRestoreError = ""
+    hardwareConnectionStatus = ""
+    hardwareEndpoint = ""
+    hardwareEffectiveBoard = ""
+    hardwareVariant = ""
+    hardwareOriginalVfoHz = $null
+    hardwareRestoredVfoHz = $null
+    hardwareSampleRate = 0
+    liveDiagnosticsStatus = ""
+    liveDiagnosticsReadyForLiveBenchmark = $false
+    liveDiagnosticsWdspActive = $false
+    liveDiagnosticsWdspNativeLoadable = $false
+    liveDiagnosticsRequestedNrMode = ""
+    liveDiagnosticsEffectiveNrMode = ""
+    liveDiagnosticsReadyForNr5Tuning = $false
+    liveDiagnosticsFrontendSceneFresh = $false
+    frontendSceneStatus = ""
+    frontendSceneFresh = $false
+    frontendSceneSignalProfile = ""
+    frontendSceneTopPeakCount = 0
+    bestRun = $null
+    bestFrequencyHz = $null
+    bestScore = $null
+    bestStatus = ""
+    bestReportPath = ""
+    bestJsonlPath = ""
+    referencedWindowCount = 0
+    referencedWindowReadyCount = 0
+    referencedWindowProblemCount = 0
+    referencedWindowMissingCount = 0
+    referencedWindowNonPortableCount = 0
+    referencedWindowInvalidCount = 0
+    referencedJsonlMissingCount = 0
+}
+$crossRadioValidationArtifactId = "cross-radio-validation-report"
+$crossRadioValidationEvidence = [ordered]@{
+    present = $false
+    readyForReview = $false
+    path = ""
+    sha256 = ""
+    schemaVersion = 0
+    tool = ""
+    targetCount = 0
+    targetIds = @()
+    nonG2TargetCount = 0
+    nonG2TargetIds = @()
+    scenarioCount = 0
+    scenarioIds = @()
+    comparisonCount = 0
+    comparisonIds = @()
+    defaultBehaviorChangeApproved = $false
+    sourceReportCount = 0
+    sourceProblemReportCount = 0
+    sourceWarningReportCount = 0
+    nonG2SourceReportCount = 0
+    readyNonG2SourceReportCount = 0
+    sourceMetricComparisonReadyCount = 0
+    sourceLiveTraceComparisonReadyCount = 0
+    sourceThetisLiveTraceComparisonReadyCount = 0
+    sourceBackedEvidenceReady = $false
+    sourceReports = @()
+    status = "not-captured"
+}
 $externalEngineBakeoffArtifactId = "external-engine-bakeoff-report"
 $externalEngineBakeoffEvidence = [ordered]@{
     present = $false
@@ -5838,9 +6240,39 @@ $externalEngineBakeoffEvidence = [ordered]@{
     snapshotSha256 = ""
     bakeoffPlanCandidateCount = 0
     bakeoffPlanScenarioCount = 0
+    bakeoffPlanScenarioIds = @()
+    bakeoffPlanFixtureComparisonCommandTemplate = ""
+    bakeoffPlanLiveMatrixCommandTemplate = ""
     bakeoffPlanDefaultBehaviorChangeReady = $false
     bakeoffPlanRawWdspIqReplacementAllowed = $false
+    firstSafeBakeoffCandidateId = ""
+    firstSafeBakeoffScenarioIds = @()
+    evaluationOrderCandidateIds = @()
+    evaluationOrder = @()
     status = "not-evaluated"
+}
+$externalEngineBakeoffCycleArtifactId = "external-engine-bakeoff-cycle-summary"
+$externalEngineBakeoffCycleEvidence = [ordered]@{
+    present = $false
+    valid = $false
+    path = ""
+    sha256 = ""
+    schemaVersion = 0
+    tool = ""
+    status = "not-captured"
+    mode = ""
+    candidateId = ""
+    comparisonId = ""
+    scenarioIds = @()
+    readyToExecute = $false
+    executed = $false
+    missingPrerequisiteCount = 0
+    commandStepCount = 0
+    expectedArtifactCount = 0
+    nonZeroExitCount = 0
+    sourceExternalBakeoffReady = $false
+    sourceExternalBakeoffActionPresent = $false
+    safetyPolicy = $null
 }
 $nativeSymbolAuditArtifactId = "wdsp-native-symbol-audit"
 $nativeSymbolAuditEvidence = [ordered]@{
@@ -5866,6 +6298,24 @@ $nativeRuntimeArtifactAuditEvidence = [ordered]@{
     winX64NativeLength = 0
     winX64NativeSha256 = ""
     status = "not-evaluated"
+}
+$wdspSourceDriftArtifactId = "wdsp-source-drift-report"
+$wdspSourceDriftEvidence = [ordered]@{
+    present = $false
+    readyForReview = $false
+    path = ""
+    sha256 = ""
+    schemaVersion = 0
+    tool = ""
+    normalizedLineEndings = $false
+    referenceFileCount = 0
+    candidateFileCount = 0
+    fileCount = 0
+    deltaCount = 0
+    likelyDefectCount = 0
+    statusCounts = @()
+    categoryCounts = @()
+    status = "not-captured"
 }
 $metricCatalogEvidence = [ordered]@{
     present = $false
@@ -6610,6 +7060,14 @@ else {
     $captureArtifactScenarioIds[$liveDiagnosticsHistoryArtifactId] = @(Get-JsonArray $manifest "scenarioIds")
     $captureAllArtifactIds["live-acceptance-cycle-summary"] = $true
     $captureArtifactScenarioIds["live-acceptance-cycle-summary"] = @(Get-JsonArray $manifest "scenarioIds")
+    $captureAllArtifactIds[$crossRadioValidationArtifactId] = $true
+    $captureAllArtifactIds[$wdspSourceDriftArtifactId] = $true
+    $captureAllArtifactIds[$externalEngineBakeoffCycleArtifactId] = $true
+    $captureAllArtifactIds[$g2RxPeakHuntArtifactId] = $true
+    $captureAllArtifactIds[$pureSignalSafeBypassArtifactId] = $true
+    $captureArtifactScenarioIds[$externalEngineBakeoffCycleArtifactId] = @(Get-JsonArray $manifest "scenarioIds")
+    $captureArtifactScenarioIds[$g2RxPeakHuntArtifactId] = @(Get-JsonArray $manifest "scenarioIds")
+    $captureArtifactScenarioIds[$pureSignalSafeBypassArtifactId] = @("tx-puresignal-safe-bypass")
     foreach ($matrixReportArtifactId in @(
             "live-diagnostics-matrix-report-off-baseline",
             "live-diagnostics-matrix-report-thetis-parity",
@@ -6963,6 +7421,38 @@ else {
                 $summaryTriagePrimaryExpectedArtifactCountValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceExpectedArtifactCount"
                 $summaryTriagePrimaryExpectedArtifactsValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceExpectedArtifacts"
                 $summaryTriagePrimaryFollowUpValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceFollowUp"
+                $summaryTriageExternalBakeoffActionPresentValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffActionPresent"
+                $summaryTriageExternalBakeoffActionIdValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffActionId"
+                $summaryTriageExternalBakeoffActionPriorityValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffActionPriority"
+                $summaryTriageExternalBakeoffActionStageIdValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffActionStageId"
+                $summaryTriageExternalBakeoffActionGateIdValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffActionGateId"
+                $summaryTriageExternalBakeoffActionCategoryValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffActionCategory"
+                $summaryTriageExternalBakeoffActionRequiredValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffActionRequired"
+                $summaryTriageExternalBakeoffActionManualValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffActionManual"
+                $summaryTriageExternalBakeoffCommandTemplateValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffCommandTemplate"
+                $summaryTriageExternalBakeoffCommandStepCountValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffCommandStepCount"
+                $summaryTriageExternalBakeoffCommandStepsValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffCommandSteps"
+                $summaryTriageExternalBakeoffManualActionValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffManualAction"
+                $summaryTriageExternalBakeoffExpectedArtifactValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffExpectedArtifact"
+                $summaryTriageExternalBakeoffExpectedArtifactCountValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffExpectedArtifactCount"
+                $summaryTriageExternalBakeoffExpectedArtifactsValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffExpectedArtifacts"
+                $summaryTriageExternalBakeoffFollowUpValue = Get-JsonValue $artifactJson "triageExternalEngineBakeoffFollowUp"
+                $summaryTriagePureSignalSafeBypassActionPresentValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassActionPresent"
+                $summaryTriagePureSignalSafeBypassActionIdValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassActionId"
+                $summaryTriagePureSignalSafeBypassActionPriorityValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassActionPriority"
+                $summaryTriagePureSignalSafeBypassActionStageIdValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassActionStageId"
+                $summaryTriagePureSignalSafeBypassActionGateIdValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassActionGateId"
+                $summaryTriagePureSignalSafeBypassActionCategoryValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassActionCategory"
+                $summaryTriagePureSignalSafeBypassActionRequiredValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassActionRequired"
+                $summaryTriagePureSignalSafeBypassActionManualValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassActionManual"
+                $summaryTriagePureSignalSafeBypassCommandTemplateValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassCommandTemplate"
+                $summaryTriagePureSignalSafeBypassCommandStepCountValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassCommandStepCount"
+                $summaryTriagePureSignalSafeBypassCommandStepsValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassCommandSteps"
+                $summaryTriagePureSignalSafeBypassManualActionValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassManualAction"
+                $summaryTriagePureSignalSafeBypassExpectedArtifactValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassExpectedArtifact"
+                $summaryTriagePureSignalSafeBypassExpectedArtifactCountValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassExpectedArtifactCount"
+                $summaryTriagePureSignalSafeBypassExpectedArtifactsValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassExpectedArtifacts"
+                $summaryTriagePureSignalSafeBypassFollowUpValue = Get-JsonValue $artifactJson "triagePureSignalSafeBypassFollowUp"
                 $summaryTriageRequiredActionCount = [int](Get-NumericValueOrDefault $summaryTriageRequiredActionCountValue)
                 $summaryTriageManualActionCount = [int](Get-NumericValueOrDefault $summaryTriageManualActionCountValue)
                 $summaryTriageActionCategoryCounts = @(Get-JsonArray $artifactJson "triageAcceptanceActionCategoryCounts")
@@ -6981,6 +7471,38 @@ else {
                 $summaryTriagePrimaryExpectedArtifactCount = [int](Get-NumericValueOrDefault $summaryTriagePrimaryExpectedArtifactCountValue)
                 $summaryTriagePrimaryExpectedArtifacts = @(Get-JsonArray $artifactJson "triagePrimaryAcceptanceExpectedArtifacts")
                 $summaryTriagePrimaryFollowUp = [string]$summaryTriagePrimaryFollowUpValue
+                $summaryTriageExternalBakeoffActionPresent = Test-Truthy $summaryTriageExternalBakeoffActionPresentValue
+                $summaryTriageExternalBakeoffActionId = [string]$summaryTriageExternalBakeoffActionIdValue
+                $summaryTriageExternalBakeoffActionPriority = Get-NumericValue $summaryTriageExternalBakeoffActionPriorityValue
+                $summaryTriageExternalBakeoffActionStageId = [string]$summaryTriageExternalBakeoffActionStageIdValue
+                $summaryTriageExternalBakeoffActionGateId = [string]$summaryTriageExternalBakeoffActionGateIdValue
+                $summaryTriageExternalBakeoffActionCategory = [string]$summaryTriageExternalBakeoffActionCategoryValue
+                $summaryTriageExternalBakeoffActionRequired = Test-Truthy $summaryTriageExternalBakeoffActionRequiredValue
+                $summaryTriageExternalBakeoffActionManual = Test-Truthy $summaryTriageExternalBakeoffActionManualValue
+                $summaryTriageExternalBakeoffCommandTemplate = [string]$summaryTriageExternalBakeoffCommandTemplateValue
+                $summaryTriageExternalBakeoffCommandStepCount = [int](Get-NumericValueOrDefault $summaryTriageExternalBakeoffCommandStepCountValue)
+                $summaryTriageExternalBakeoffCommandSteps = @(Get-JsonArray $artifactJson "triageExternalEngineBakeoffCommandSteps")
+                $summaryTriageExternalBakeoffManualAction = [string]$summaryTriageExternalBakeoffManualActionValue
+                $summaryTriageExternalBakeoffExpectedArtifact = [string]$summaryTriageExternalBakeoffExpectedArtifactValue
+                $summaryTriageExternalBakeoffExpectedArtifactCount = [int](Get-NumericValueOrDefault $summaryTriageExternalBakeoffExpectedArtifactCountValue)
+                $summaryTriageExternalBakeoffExpectedArtifacts = @(Get-JsonArray $artifactJson "triageExternalEngineBakeoffExpectedArtifacts")
+                $summaryTriageExternalBakeoffFollowUp = [string]$summaryTriageExternalBakeoffFollowUpValue
+                $summaryTriagePureSignalSafeBypassActionPresent = Test-Truthy $summaryTriagePureSignalSafeBypassActionPresentValue
+                $summaryTriagePureSignalSafeBypassActionId = [string]$summaryTriagePureSignalSafeBypassActionIdValue
+                $summaryTriagePureSignalSafeBypassActionPriority = Get-NumericValue $summaryTriagePureSignalSafeBypassActionPriorityValue
+                $summaryTriagePureSignalSafeBypassActionStageId = [string]$summaryTriagePureSignalSafeBypassActionStageIdValue
+                $summaryTriagePureSignalSafeBypassActionGateId = [string]$summaryTriagePureSignalSafeBypassActionGateIdValue
+                $summaryTriagePureSignalSafeBypassActionCategory = [string]$summaryTriagePureSignalSafeBypassActionCategoryValue
+                $summaryTriagePureSignalSafeBypassActionRequired = Test-Truthy $summaryTriagePureSignalSafeBypassActionRequiredValue
+                $summaryTriagePureSignalSafeBypassActionManual = Test-Truthy $summaryTriagePureSignalSafeBypassActionManualValue
+                $summaryTriagePureSignalSafeBypassCommandTemplate = [string]$summaryTriagePureSignalSafeBypassCommandTemplateValue
+                $summaryTriagePureSignalSafeBypassCommandStepCount = [int](Get-NumericValueOrDefault $summaryTriagePureSignalSafeBypassCommandStepCountValue)
+                $summaryTriagePureSignalSafeBypassCommandSteps = @(Get-JsonArray $artifactJson "triagePureSignalSafeBypassCommandSteps")
+                $summaryTriagePureSignalSafeBypassManualAction = [string]$summaryTriagePureSignalSafeBypassManualActionValue
+                $summaryTriagePureSignalSafeBypassExpectedArtifact = [string]$summaryTriagePureSignalSafeBypassExpectedArtifactValue
+                $summaryTriagePureSignalSafeBypassExpectedArtifactCount = [int](Get-NumericValueOrDefault $summaryTriagePureSignalSafeBypassExpectedArtifactCountValue)
+                $summaryTriagePureSignalSafeBypassExpectedArtifacts = @(Get-JsonArray $artifactJson "triagePureSignalSafeBypassExpectedArtifacts")
+                $summaryTriagePureSignalSafeBypassFollowUp = [string]$summaryTriagePureSignalSafeBypassFollowUpValue
                 $liveAcceptanceCycleEvidence["triageAcceptanceRequiredActionCount"] = $summaryTriageRequiredActionCount
                 $liveAcceptanceCycleEvidence["triageAcceptanceManualActionCount"] = $summaryTriageManualActionCount
                 $liveAcceptanceCycleEvidence["triageAcceptanceActionCategoryCounts"] = @($summaryTriageActionCategoryCounts)
@@ -6999,6 +7521,38 @@ else {
                 $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceExpectedArtifactCount"] = $summaryTriagePrimaryExpectedArtifactCount
                 $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceExpectedArtifacts"] = @($summaryTriagePrimaryExpectedArtifacts)
                 $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceFollowUp"] = $summaryTriagePrimaryFollowUp
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffActionPresent"] = $summaryTriageExternalBakeoffActionPresent
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffActionId"] = $summaryTriageExternalBakeoffActionId
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffActionPriority"] = $summaryTriageExternalBakeoffActionPriority
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffActionStageId"] = $summaryTriageExternalBakeoffActionStageId
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffActionGateId"] = $summaryTriageExternalBakeoffActionGateId
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffActionCategory"] = $summaryTriageExternalBakeoffActionCategory
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffActionRequired"] = $summaryTriageExternalBakeoffActionRequired
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffActionManual"] = $summaryTriageExternalBakeoffActionManual
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffCommandTemplate"] = $summaryTriageExternalBakeoffCommandTemplate
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffCommandStepCount"] = $summaryTriageExternalBakeoffCommandStepCount
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffCommandSteps"] = @($summaryTriageExternalBakeoffCommandSteps)
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffManualAction"] = $summaryTriageExternalBakeoffManualAction
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffExpectedArtifact"] = $summaryTriageExternalBakeoffExpectedArtifact
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffExpectedArtifactCount"] = $summaryTriageExternalBakeoffExpectedArtifactCount
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffExpectedArtifacts"] = @($summaryTriageExternalBakeoffExpectedArtifacts)
+                $liveAcceptanceCycleEvidence["triageExternalEngineBakeoffFollowUp"] = $summaryTriageExternalBakeoffFollowUp
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassActionPresent"] = $summaryTriagePureSignalSafeBypassActionPresent
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassActionId"] = $summaryTriagePureSignalSafeBypassActionId
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassActionPriority"] = $summaryTriagePureSignalSafeBypassActionPriority
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassActionStageId"] = $summaryTriagePureSignalSafeBypassActionStageId
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassActionGateId"] = $summaryTriagePureSignalSafeBypassActionGateId
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassActionCategory"] = $summaryTriagePureSignalSafeBypassActionCategory
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassActionRequired"] = $summaryTriagePureSignalSafeBypassActionRequired
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassActionManual"] = $summaryTriagePureSignalSafeBypassActionManual
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassCommandTemplate"] = $summaryTriagePureSignalSafeBypassCommandTemplate
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassCommandStepCount"] = $summaryTriagePureSignalSafeBypassCommandStepCount
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassCommandSteps"] = @($summaryTriagePureSignalSafeBypassCommandSteps)
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassManualAction"] = $summaryTriagePureSignalSafeBypassManualAction
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassExpectedArtifact"] = $summaryTriagePureSignalSafeBypassExpectedArtifact
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassExpectedArtifactCount"] = $summaryTriagePureSignalSafeBypassExpectedArtifactCount
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassExpectedArtifacts"] = @($summaryTriagePureSignalSafeBypassExpectedArtifacts)
+                $liveAcceptanceCycleEvidence["triagePureSignalSafeBypassFollowUp"] = $summaryTriagePureSignalSafeBypassFollowUp
                 $liveAcceptanceCycleEvidence["requiredLiveAcceptanceArtifactProblemCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "requiredLiveAcceptanceArtifactProblemCount"))
 
                 $tool = [string](Get-JsonValue $artifactJson "tool")
@@ -7008,8 +7562,13 @@ else {
                 }
 
                 $schemaVersion = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "schemaVersion"))
-                if ($schemaVersion -ne 7) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-schema-version-mismatch" "Artifact '$artifactId' schemaVersion=$schemaVersion but run-dsp-live-acceptance-cycle.ps1 currently emits schemaVersion=7."
+                if ($schemaVersion -ne 8) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-schema-version-mismatch" "Artifact '$artifactId' schemaVersion=$schemaVersion but run-dsp-live-acceptance-cycle.ps1 currently emits schemaVersion=8."
+                    $artifactValidationOk = $false
+                }
+
+                if ($schemaVersion -ge 8 -and $null -eq $summaryTriageExternalBakeoffActionPresentValue) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-external-bakeoff-present-missing" "Artifact '$artifactId' must declare triageExternalEngineBakeoffActionPresent so wrapper summaries expose whether validation triage generated the external DSP/ML bakeoff advisory."
                     $artifactValidationOk = $false
                 }
 
@@ -7598,6 +8157,142 @@ else {
                                 Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-category-count-mismatch" "Artifact '$artifactId' triageAcceptanceActionCategoryCounts does not match '$summaryTriagePath' acceptanceActionCategoryCounts."
                                 $artifactValidationOk = $false
                             }
+
+                            if ($schemaVersion -ge 8) {
+                                $reportExternalBakeoffAction = Get-AcceptanceActionById -Report $summaryTriageJson -ActionId "run-first-safe-external-engine-bakeoff"
+                                $reportExternalBakeoffActionPresent = $null -ne $reportExternalBakeoffAction
+                                if ($summaryTriageExternalBakeoffActionPresent -ne $reportExternalBakeoffActionPresent) {
+                                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-external-bakeoff-mismatch" "Artifact '$artifactId' triageExternalEngineBakeoffActionPresent=$summaryTriageExternalBakeoffActionPresent but '$summaryTriagePath' external bakeoff action present=$reportExternalBakeoffActionPresent."
+                                    $artifactValidationOk = $false
+                                }
+
+                                if ($reportExternalBakeoffActionPresent -and $summaryTriageExternalBakeoffActionPresent) {
+                                    $reportExternalBakeoffManualAction = [string](Get-JsonValue $reportExternalBakeoffAction "manualAction")
+                                    $reportExternalBakeoffCommandSteps = @(Get-JsonArray $reportExternalBakeoffAction "commandSteps")
+                                    $reportExternalBakeoffExpectedArtifacts = @(Get-JsonArray $reportExternalBakeoffAction "expectedArtifacts")
+                                    $reportExternalBakeoffCommandStepCount = [int](Get-NumericValueOrDefault (Get-JsonValue $reportExternalBakeoffAction "commandStepCount") $reportExternalBakeoffCommandSteps.Count)
+                                    $reportExternalBakeoffExpectedArtifactCount = [int](Get-NumericValueOrDefault (Get-JsonValue $reportExternalBakeoffAction "expectedArtifactCount") $reportExternalBakeoffExpectedArtifacts.Count)
+
+                                    foreach ($externalStringSpec in @(
+                                            @{ Summary = $summaryTriageExternalBakeoffActionId; Report = [string](Get-JsonValue $reportExternalBakeoffAction "actionId"); Name = "triageExternalEngineBakeoffActionId" },
+                                            @{ Summary = $summaryTriageExternalBakeoffActionStageId; Report = [string](Get-JsonValue $reportExternalBakeoffAction "stageId"); Name = "triageExternalEngineBakeoffActionStageId" },
+                                            @{ Summary = $summaryTriageExternalBakeoffActionGateId; Report = [string](Get-JsonValue $reportExternalBakeoffAction "gateId"); Name = "triageExternalEngineBakeoffActionGateId" },
+                                            @{ Summary = $summaryTriageExternalBakeoffActionCategory; Report = [string](Get-JsonValue $reportExternalBakeoffAction "category"); Name = "triageExternalEngineBakeoffActionCategory" },
+                                            @{ Summary = $summaryTriageExternalBakeoffCommandTemplate; Report = [string](Get-JsonValue $reportExternalBakeoffAction "commandTemplate"); Name = "triageExternalEngineBakeoffCommandTemplate" },
+                                            @{ Summary = $summaryTriageExternalBakeoffManualAction; Report = $reportExternalBakeoffManualAction; Name = "triageExternalEngineBakeoffManualAction" },
+                                            @{ Summary = $summaryTriageExternalBakeoffExpectedArtifact; Report = [string](Get-JsonValue $reportExternalBakeoffAction "expectedArtifact"); Name = "triageExternalEngineBakeoffExpectedArtifact" },
+                                            @{ Summary = $summaryTriageExternalBakeoffFollowUp; Report = [string](Get-JsonValue $reportExternalBakeoffAction "followUp"); Name = "triageExternalEngineBakeoffFollowUp" }
+                                        )) {
+                                        if (-not [string]::Equals([string]$externalStringSpec["Summary"], [string]$externalStringSpec["Report"], [StringComparison]::Ordinal)) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-external-bakeoff-mismatch" "Artifact '$artifactId' $([string]$externalStringSpec["Name"]) does not match '$summaryTriagePath' run-first-safe-external-engine-bakeoff action."
+                                            $artifactValidationOk = $false
+                                        }
+                                    }
+
+                                    foreach ($externalBoolSpec in @(
+                                            @{ Summary = $summaryTriageExternalBakeoffActionRequired; Report = Test-Truthy (Get-JsonValue $reportExternalBakeoffAction "requiredForAcceptance"); Name = "triageExternalEngineBakeoffActionRequired" },
+                                            @{ Summary = $summaryTriageExternalBakeoffActionManual; Report = -not [string]::IsNullOrWhiteSpace($reportExternalBakeoffManualAction); Name = "triageExternalEngineBakeoffActionManual" }
+                                        )) {
+                                        if ([bool]$externalBoolSpec["Summary"] -ne [bool]$externalBoolSpec["Report"]) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-external-bakeoff-mismatch" "Artifact '$artifactId' $([string]$externalBoolSpec["Name"])=$([bool]$externalBoolSpec["Summary"]) but '$summaryTriagePath' reports $([bool]$externalBoolSpec["Report"])."
+                                            $artifactValidationOk = $false
+                                        }
+                                    }
+
+                                    $reportExternalBakeoffPriority = Get-NumericValue (Get-JsonValue $reportExternalBakeoffAction "priority")
+                                    if (($null -eq $summaryTriageExternalBakeoffActionPriority -and $null -ne $reportExternalBakeoffPriority) -or
+                                        ($null -ne $summaryTriageExternalBakeoffActionPriority -and $null -eq $reportExternalBakeoffPriority) -or
+                                        ($null -ne $summaryTriageExternalBakeoffActionPriority -and $null -ne $reportExternalBakeoffPriority -and [Math]::Abs([double]$summaryTriageExternalBakeoffActionPriority - [double]$reportExternalBakeoffPriority) -gt 0.000001)) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-external-bakeoff-mismatch" "Artifact '$artifactId' triageExternalEngineBakeoffActionPriority='$summaryTriageExternalBakeoffActionPriority' but '$summaryTriagePath' reports '$reportExternalBakeoffPriority'."
+                                        $artifactValidationOk = $false
+                                    }
+
+                                    if ($summaryTriageExternalBakeoffCommandStepCount -ne $reportExternalBakeoffCommandStepCount) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-external-bakeoff-mismatch" "Artifact '$artifactId' triageExternalEngineBakeoffCommandStepCount=$summaryTriageExternalBakeoffCommandStepCount but '$summaryTriagePath' reports $reportExternalBakeoffCommandStepCount."
+                                        $artifactValidationOk = $false
+                                    }
+                                    if ($summaryTriageExternalBakeoffExpectedArtifactCount -ne $reportExternalBakeoffExpectedArtifactCount) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-external-bakeoff-mismatch" "Artifact '$artifactId' triageExternalEngineBakeoffExpectedArtifactCount=$summaryTriageExternalBakeoffExpectedArtifactCount but '$summaryTriagePath' reports $reportExternalBakeoffExpectedArtifactCount."
+                                        $artifactValidationOk = $false
+                                    }
+
+                                    if (-not (Test-StringArraysMatch -Actual $summaryTriageExternalBakeoffCommandSteps -Expected $reportExternalBakeoffCommandSteps)) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-external-bakeoff-mismatch" "Artifact '$artifactId' triageExternalEngineBakeoffCommandSteps does not match '$summaryTriagePath' run-first-safe-external-engine-bakeoff action."
+                                        $artifactValidationOk = $false
+                                    }
+                                    if (-not (Test-StringArraysMatch -Actual $summaryTriageExternalBakeoffExpectedArtifacts -Expected $reportExternalBakeoffExpectedArtifacts)) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-external-bakeoff-mismatch" "Artifact '$artifactId' triageExternalEngineBakeoffExpectedArtifacts does not match '$summaryTriagePath' run-first-safe-external-engine-bakeoff action."
+                                        $artifactValidationOk = $false
+                                    }
+                                }
+
+                                $reportPureSignalAction = Get-AcceptanceActionById -Report $summaryTriageJson -ActionId "capture-puresignal-safe-bypass-bench"
+                                $reportPureSignalActionPresent = $null -ne $reportPureSignalAction
+                                if ($summaryTriagePureSignalSafeBypassActionPresent -ne $reportPureSignalActionPresent) {
+                                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-puresignal-mismatch" "Artifact '$artifactId' triagePureSignalSafeBypassActionPresent=$summaryTriagePureSignalSafeBypassActionPresent but '$summaryTriagePath' PureSignal safe-bypass action present=$reportPureSignalActionPresent."
+                                    $artifactValidationOk = $false
+                                }
+
+                                if ($reportPureSignalActionPresent -and $summaryTriagePureSignalSafeBypassActionPresent) {
+                                    $reportPureSignalManualAction = [string](Get-JsonValue $reportPureSignalAction "manualAction")
+                                    $reportPureSignalCommandSteps = @(Get-JsonArray $reportPureSignalAction "commandSteps")
+                                    $reportPureSignalExpectedArtifacts = @(Get-JsonArray $reportPureSignalAction "expectedArtifacts")
+                                    $reportPureSignalCommandStepCount = [int](Get-NumericValueOrDefault (Get-JsonValue $reportPureSignalAction "commandStepCount") $reportPureSignalCommandSteps.Count)
+                                    $reportPureSignalExpectedArtifactCount = [int](Get-NumericValueOrDefault (Get-JsonValue $reportPureSignalAction "expectedArtifactCount") $reportPureSignalExpectedArtifacts.Count)
+
+                                    foreach ($pureSignalStringSpec in @(
+                                            @{ Summary = $summaryTriagePureSignalSafeBypassActionId; Report = [string](Get-JsonValue $reportPureSignalAction "actionId"); Name = "triagePureSignalSafeBypassActionId" },
+                                            @{ Summary = $summaryTriagePureSignalSafeBypassActionStageId; Report = [string](Get-JsonValue $reportPureSignalAction "stageId"); Name = "triagePureSignalSafeBypassActionStageId" },
+                                            @{ Summary = $summaryTriagePureSignalSafeBypassActionGateId; Report = [string](Get-JsonValue $reportPureSignalAction "gateId"); Name = "triagePureSignalSafeBypassActionGateId" },
+                                            @{ Summary = $summaryTriagePureSignalSafeBypassActionCategory; Report = [string](Get-JsonValue $reportPureSignalAction "category"); Name = "triagePureSignalSafeBypassActionCategory" },
+                                            @{ Summary = $summaryTriagePureSignalSafeBypassCommandTemplate; Report = [string](Get-JsonValue $reportPureSignalAction "commandTemplate"); Name = "triagePureSignalSafeBypassCommandTemplate" },
+                                            @{ Summary = $summaryTriagePureSignalSafeBypassManualAction; Report = $reportPureSignalManualAction; Name = "triagePureSignalSafeBypassManualAction" },
+                                            @{ Summary = $summaryTriagePureSignalSafeBypassExpectedArtifact; Report = [string](Get-JsonValue $reportPureSignalAction "expectedArtifact"); Name = "triagePureSignalSafeBypassExpectedArtifact" },
+                                            @{ Summary = $summaryTriagePureSignalSafeBypassFollowUp; Report = [string](Get-JsonValue $reportPureSignalAction "followUp"); Name = "triagePureSignalSafeBypassFollowUp" }
+                                        )) {
+                                        if (-not [string]::Equals([string]$pureSignalStringSpec["Summary"], [string]$pureSignalStringSpec["Report"], [StringComparison]::Ordinal)) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-puresignal-mismatch" "Artifact '$artifactId' $([string]$pureSignalStringSpec["Name"]) does not match '$summaryTriagePath' capture-puresignal-safe-bypass-bench action."
+                                            $artifactValidationOk = $false
+                                        }
+                                    }
+
+                                    foreach ($pureSignalBoolSpec in @(
+                                            @{ Summary = $summaryTriagePureSignalSafeBypassActionRequired; Report = Test-Truthy (Get-JsonValue $reportPureSignalAction "requiredForAcceptance"); Name = "triagePureSignalSafeBypassActionRequired" },
+                                            @{ Summary = $summaryTriagePureSignalSafeBypassActionManual; Report = -not [string]::IsNullOrWhiteSpace($reportPureSignalManualAction); Name = "triagePureSignalSafeBypassActionManual" }
+                                        )) {
+                                        if ([bool]$pureSignalBoolSpec["Summary"] -ne [bool]$pureSignalBoolSpec["Report"]) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-puresignal-mismatch" "Artifact '$artifactId' $([string]$pureSignalBoolSpec["Name"])=$([bool]$pureSignalBoolSpec["Summary"]) but '$summaryTriagePath' reports $([bool]$pureSignalBoolSpec["Report"])."
+                                            $artifactValidationOk = $false
+                                        }
+                                    }
+
+                                    $reportPureSignalPriority = Get-NumericValue (Get-JsonValue $reportPureSignalAction "priority")
+                                    if (($null -eq $summaryTriagePureSignalSafeBypassActionPriority -and $null -ne $reportPureSignalPriority) -or
+                                        ($null -ne $summaryTriagePureSignalSafeBypassActionPriority -and $null -eq $reportPureSignalPriority) -or
+                                        ($null -ne $summaryTriagePureSignalSafeBypassActionPriority -and $null -ne $reportPureSignalPriority -and [Math]::Abs([double]$summaryTriagePureSignalSafeBypassActionPriority - [double]$reportPureSignalPriority) -gt 0.000001)) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-puresignal-mismatch" "Artifact '$artifactId' triagePureSignalSafeBypassActionPriority='$summaryTriagePureSignalSafeBypassActionPriority' but '$summaryTriagePath' reports '$reportPureSignalPriority'."
+                                        $artifactValidationOk = $false
+                                    }
+
+                                    if ($summaryTriagePureSignalSafeBypassCommandStepCount -ne $reportPureSignalCommandStepCount) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-puresignal-mismatch" "Artifact '$artifactId' triagePureSignalSafeBypassCommandStepCount=$summaryTriagePureSignalSafeBypassCommandStepCount but '$summaryTriagePath' reports $reportPureSignalCommandStepCount."
+                                        $artifactValidationOk = $false
+                                    }
+                                    if ($summaryTriagePureSignalSafeBypassExpectedArtifactCount -ne $reportPureSignalExpectedArtifactCount) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-puresignal-mismatch" "Artifact '$artifactId' triagePureSignalSafeBypassExpectedArtifactCount=$summaryTriagePureSignalSafeBypassExpectedArtifactCount but '$summaryTriagePath' reports $reportPureSignalExpectedArtifactCount."
+                                        $artifactValidationOk = $false
+                                    }
+
+                                    if (-not (Test-StringArraysMatch -Actual $summaryTriagePureSignalSafeBypassCommandSteps -Expected $reportPureSignalCommandSteps)) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-puresignal-mismatch" "Artifact '$artifactId' triagePureSignalSafeBypassCommandSteps does not match '$summaryTriagePath' capture-puresignal-safe-bypass-bench action."
+                                        $artifactValidationOk = $false
+                                    }
+                                    if (-not (Test-StringArraysMatch -Actual $summaryTriagePureSignalSafeBypassExpectedArtifacts -Expected $reportPureSignalExpectedArtifacts)) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-puresignal-mismatch" "Artifact '$artifactId' triagePureSignalSafeBypassExpectedArtifacts does not match '$summaryTriagePath' capture-puresignal-safe-bypass-bench action."
+                                        $artifactValidationOk = $false
+                                    }
+                                }
+                            }
                         }
                         catch {
                             Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-json-invalid" "Artifact '$artifactId' could not read triageReportPath '$summaryTriagePath': $($_.Exception.Message)"
@@ -7957,6 +8652,100 @@ else {
                 else {
                     $metricComparisonEvidence["status"] = "not-ready"
                 }
+            }
+
+            if ($artifactKind -ieq "puresignal-safe-bypass-report-json" -or $artifactId -eq $pureSignalSafeBypassArtifactId) {
+                $pureSignalSafeBypassEvidence["present"] = $true
+                $pureSignalSafeBypassEvidence["path"] = $artifactPath
+                $pureSignalSafeBypassEvidence["sha256"] = Get-FileSha256 $resolvedArtifactPath
+
+                $tool = [string](Get-JsonValue $artifactJson "tool")
+                $schemaVersion = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "schemaVersion"))
+                $readyForReview = Test-Truthy (Get-JsonValue $artifactJson "readyForReview")
+                $scenarioId = [string](Get-JsonValue $artifactJson "scenarioId")
+                $hardwareTarget = [string](Get-JsonValue $artifactJson "hardwareTarget")
+                $disabledPathReady = Test-Truthy (Get-JsonValue $artifactJson "disabledPathReady")
+                $enabledPathReady = Test-Truthy (Get-JsonValue $artifactJson "enabledPathReady")
+                $capturedModeCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "capturedModeCount"))
+                $missingModes = @(Get-JsonArray $artifactJson "missingModes")
+                $missingModeCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "missingModeCount"))
+                if ($missingModeCount -eq 0 -and $missingModes.Count -gt 0) {
+                    $missingModeCount = $missingModes.Count
+                }
+                $pureSignalDefaultStatePreserved = Test-Truthy (Get-JsonValue $artifactJson "pureSignalDefaultStatePreserved")
+                $defaultBehaviorChangeApproved = Test-Truthy (Get-JsonValue $artifactJson "defaultBehaviorChangeApproved")
+                $feedbackStabilityMin = [double](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "feedbackStabilityMin"))
+                $feedbackStabilityThreshold = [double](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "feedbackStabilityThreshold"))
+                $txMonitorCouplingMax = [double](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "txMonitorCouplingMax"))
+                $txMonitorCouplingThreshold = [double](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "txMonitorCouplingThreshold"))
+                $clippingCountTotal = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "clippingCountTotal"))
+                $gateFailureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "gateFailureCount"))
+
+                $pureSignalSafeBypassEvidence["tool"] = $tool
+                $pureSignalSafeBypassEvidence["schemaVersion"] = $schemaVersion
+                $pureSignalSafeBypassEvidence["readyForReview"] = $readyForReview
+                $pureSignalSafeBypassEvidence["scenarioId"] = $scenarioId
+                $pureSignalSafeBypassEvidence["hardwareTarget"] = $hardwareTarget
+                $pureSignalSafeBypassEvidence["disabledPathReady"] = $disabledPathReady
+                $pureSignalSafeBypassEvidence["enabledPathReady"] = $enabledPathReady
+                $pureSignalSafeBypassEvidence["capturedModeCount"] = $capturedModeCount
+                $pureSignalSafeBypassEvidence["missingModeCount"] = $missingModeCount
+                $pureSignalSafeBypassEvidence["missingModes"] = @($missingModes)
+                $pureSignalSafeBypassEvidence["pureSignalDefaultStatePreserved"] = $pureSignalDefaultStatePreserved
+                $pureSignalSafeBypassEvidence["defaultBehaviorChangeApproved"] = $defaultBehaviorChangeApproved
+                $pureSignalSafeBypassEvidence["feedbackStabilityMin"] = $feedbackStabilityMin
+                $pureSignalSafeBypassEvidence["feedbackStabilityThreshold"] = $feedbackStabilityThreshold
+                $pureSignalSafeBypassEvidence["txMonitorCouplingMax"] = $txMonitorCouplingMax
+                $pureSignalSafeBypassEvidence["txMonitorCouplingThreshold"] = $txMonitorCouplingThreshold
+                $pureSignalSafeBypassEvidence["clippingCountTotal"] = $clippingCountTotal
+                $pureSignalSafeBypassEvidence["gateFailureCount"] = $gateFailureCount
+
+                if ($tool -ne "summarize-dsp-puresignal-bench") {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-tool-invalid" "Artifact '$artifactId' must be generated by summarize-dsp-puresignal-bench.ps1."
+                    $artifactValidationOk = $false
+                }
+                if ($schemaVersion -lt 1) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-schema-invalid" "Artifact '$artifactId' must declare schemaVersion >= 1."
+                    $artifactValidationOk = $false
+                }
+                if (-not [string]::Equals($scenarioId, "tx-puresignal-safe-bypass", [StringComparison]::Ordinal)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-scenario-invalid" "Artifact '$artifactId' must declare scenarioId='tx-puresignal-safe-bypass'."
+                    $artifactValidationOk = $false
+                }
+                if (-not $readyForReview) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-not-ready" "Artifact '$artifactId' reports readyForReview=false."
+                    $artifactValidationOk = $false
+                }
+                if (-not $disabledPathReady -or -not $enabledPathReady -or $missingModeCount -gt 0 -or $capturedModeCount -lt 2) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-mode-coverage-missing" "Artifact '$artifactId' must include ready disabled and enabled PureSignal bench captures; missingModes=$($missingModes -join ', ')."
+                    $artifactValidationOk = $false
+                }
+                if (-not $pureSignalDefaultStatePreserved) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-default-state-changed" "Artifact '$artifactId' does not prove PureSignal default/bypass state was preserved."
+                    $artifactValidationOk = $false
+                }
+                if ($defaultBehaviorChangeApproved) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-default-change-approved" "Artifact '$artifactId' must not approve default behavior changes."
+                    $artifactValidationOk = $false
+                }
+                if ($gateFailureCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-gate-failed" "Artifact '$artifactId' reports $gateFailureCount failed PureSignal safety gate(s)."
+                    $artifactValidationOk = $false
+                }
+                if ($clippingCountTotal -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-clipping" "Artifact '$artifactId' reports clippingCountTotal=$clippingCountTotal."
+                    $artifactValidationOk = $false
+                }
+                if ($feedbackStabilityThreshold -gt 0.0 -and $feedbackStabilityMin -lt $feedbackStabilityThreshold) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-feedback-unstable" "Artifact '$artifactId' feedbackStabilityMin=$feedbackStabilityMin is below threshold $feedbackStabilityThreshold."
+                    $artifactValidationOk = $false
+                }
+                if ($txMonitorCouplingThreshold -gt 0.0 -and $txMonitorCouplingMax -gt $txMonitorCouplingThreshold) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-monitor-coupling" "Artifact '$artifactId' txMonitorCouplingMax=$txMonitorCouplingMax is above threshold $txMonitorCouplingThreshold."
+                    $artifactValidationOk = $false
+                }
+
+                $pureSignalSafeBypassEvidence["status"] = if ($artifactValidationOk) { "ready" } else { "not-ready" }
             }
 
             $matrixRuns = @(Get-JsonArray $artifactJson "runs")
@@ -11037,6 +11826,195 @@ else {
                 }
             }
 
+            if ($artifactKind -ieq "cross-radio-validation-report-json" -or $artifactId -eq $crossRadioValidationArtifactId) {
+                $crossRadioValidationEvidence["present"] = $true
+                $crossRadioValidationEvidence["path"] = $artifactPath
+                $crossRadioValidationEvidence["sha256"] = Get-FileSha256 $resolvedArtifactPath
+
+                $tool = [string](Get-JsonValue $artifactJson "tool")
+                $schemaVersion = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "schemaVersion"))
+                $readyForReview = Test-Truthy (Get-JsonValue $artifactJson "readyForReview")
+                $targetIds = @(Get-CrossRadioValidationTargetIds $artifactJson)
+                $nonG2TargetIds = @(Get-NonG2CrossRadioValidationTargetIds $targetIds)
+                $scenarioIds = @(Get-JsonArray $artifactJson "scenarioIds" | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+                $comparisonIds = @(Get-JsonArray $artifactJson "comparisonIds" | ForEach-Object {
+                        ConvertTo-ComparisonId ([string]$_)
+                    } | Where-Object {
+                        -not [string]::IsNullOrWhiteSpace($_)
+                    } | Select-Object -Unique)
+                $defaultBehaviorChangeApproved = Test-Truthy (Get-JsonValue $artifactJson "defaultBehaviorChangeApproved")
+                $sourceReports = @(Get-JsonArray $artifactJson "sourceReports")
+                $normalizedSourceReports = New-Object System.Collections.Generic.List[object]
+                $sourceProblemReportCount = 0
+                $sourceWarningReportCount = 0
+                $nonG2SourceReportCount = 0
+                $readyNonG2SourceReportCount = 0
+                $sourceMetricComparisonReadyCount = 0
+                $sourceLiveTraceComparisonReadyCount = 0
+                $sourceThetisLiveTraceComparisonReadyCount = 0
+
+                foreach ($sourceReport in $sourceReports) {
+                    $sourcePath = [string](Get-JsonValue $sourceReport "path")
+                    $sourceTargetId = [string](Get-JsonValue $sourceReport "hardwareTarget")
+                    if ([string]::IsNullOrWhiteSpace($sourceTargetId)) {
+                        $sourceTargetId = [string](Get-JsonValue $sourceReport "target")
+                    }
+
+                    $sourceIsNonG2 = (-not [string]::IsNullOrWhiteSpace($sourceTargetId)) -and -not (Test-G2BenchmarkTarget $sourceTargetId)
+                    $sourceValidationOk = Test-Truthy (Get-JsonValue $sourceReport "validationOk")
+                    $sourceErrorCount = [int](Get-NumericValueOrDefault (Get-JsonValue $sourceReport "errorCount"))
+                    $sourceWarningCount = [int](Get-NumericValueOrDefault (Get-JsonValue $sourceReport "warningCount"))
+                    $sourceMetricReady = Test-Truthy (Get-JsonValue $sourceReport "metricComparisonReady")
+                    $sourceLiveTraceReady = Test-Truthy (Get-JsonValue $sourceReport "liveTraceComparisonReady")
+                    $sourceThetisLiveTraceReady = Test-Truthy (Get-JsonValue $sourceReport "liveTraceThetisComparisonReady")
+                    $sourceReadyForCrossRadio = $sourceValidationOk -and
+                    $sourceErrorCount -eq 0 -and
+                    $sourceIsNonG2 -and
+                    $sourceMetricReady -and
+                    $sourceLiveTraceReady -and
+                    $sourceThetisLiveTraceReady
+
+                    if (-not $sourceValidationOk -or $sourceErrorCount -gt 0) {
+                        $sourceProblemReportCount++
+                    }
+                    if ($sourceWarningCount -gt 0) {
+                        $sourceWarningReportCount++
+                    }
+                    if ($sourceIsNonG2) {
+                        $nonG2SourceReportCount++
+                    }
+                    if ($sourceReadyForCrossRadio) {
+                        $readyNonG2SourceReportCount++
+                    }
+                    if ($sourceMetricReady) {
+                        $sourceMetricComparisonReadyCount++
+                    }
+                    if ($sourceLiveTraceReady) {
+                        $sourceLiveTraceComparisonReadyCount++
+                    }
+                    if ($sourceThetisLiveTraceReady) {
+                        $sourceThetisLiveTraceComparisonReadyCount++
+                    }
+
+                    $normalizedSourceReports.Add([ordered]@{
+                            path = $sourcePath
+                            hardwareTarget = $sourceTargetId
+                            targetIsNonG2 = $sourceIsNonG2
+                            validationOk = $sourceValidationOk
+                            errorCount = $sourceErrorCount
+                            warningCount = $sourceWarningCount
+                            metricComparisonReady = $sourceMetricReady
+                            liveTraceComparisonReady = $sourceLiveTraceReady
+                            liveTraceThetisComparisonReady = $sourceThetisLiveTraceReady
+                            readyForCrossRadio = $sourceReadyForCrossRadio
+                        }) | Out-Null
+                }
+
+                $crossRadioValidationEvidence["tool"] = $tool
+                $crossRadioValidationEvidence["schemaVersion"] = $schemaVersion
+                $crossRadioValidationEvidence["readyForReview"] = $readyForReview
+                $crossRadioValidationEvidence["targetCount"] = $targetIds.Count
+                $crossRadioValidationEvidence["targetIds"] = @($targetIds)
+                $crossRadioValidationEvidence["nonG2TargetCount"] = $nonG2TargetIds.Count
+                $crossRadioValidationEvidence["nonG2TargetIds"] = @($nonG2TargetIds)
+                $crossRadioValidationEvidence["scenarioCount"] = $scenarioIds.Count
+                $crossRadioValidationEvidence["scenarioIds"] = @($scenarioIds)
+                $crossRadioValidationEvidence["comparisonCount"] = $comparisonIds.Count
+                $crossRadioValidationEvidence["comparisonIds"] = @($comparisonIds)
+                $crossRadioValidationEvidence["defaultBehaviorChangeApproved"] = $defaultBehaviorChangeApproved
+                $crossRadioValidationEvidence["sourceReportCount"] = $sourceReports.Count
+                $crossRadioValidationEvidence["sourceProblemReportCount"] = $sourceProblemReportCount
+                $crossRadioValidationEvidence["sourceWarningReportCount"] = $sourceWarningReportCount
+                $crossRadioValidationEvidence["nonG2SourceReportCount"] = $nonG2SourceReportCount
+                $crossRadioValidationEvidence["readyNonG2SourceReportCount"] = $readyNonG2SourceReportCount
+                $crossRadioValidationEvidence["sourceMetricComparisonReadyCount"] = $sourceMetricComparisonReadyCount
+                $crossRadioValidationEvidence["sourceLiveTraceComparisonReadyCount"] = $sourceLiveTraceComparisonReadyCount
+                $crossRadioValidationEvidence["sourceThetisLiveTraceComparisonReadyCount"] = $sourceThetisLiveTraceComparisonReadyCount
+                $crossRadioValidationEvidence["sourceBackedEvidenceReady"] = ($readyNonG2SourceReportCount -gt 0)
+                $crossRadioValidationEvidence["sourceReports"] = @($normalizedSourceReports.ToArray())
+
+                if ($schemaVersion -lt 1) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-schema-version-missing" "Artifact '$artifactId' must declare schemaVersion >= 1."
+                    $artifactValidationOk = $false
+                }
+
+                if ([string]::IsNullOrWhiteSpace($tool)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-tool-missing" "Artifact '$artifactId' must declare tool."
+                    $artifactValidationOk = $false
+                }
+                elseif ($tool -ne "cross-radio-validation-report" -and $tool -ne "summarize-dsp-cross-radio-validation") {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-tool-invalid" "Artifact '$artifactId' tool '$tool' is not a recognized cross-radio validation report producer."
+                    $artifactValidationOk = $false
+                }
+
+                if ($targetIds.Count -eq 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-targets-missing" "Artifact '$artifactId' must declare hardwareTargets with at least one non-G2 target."
+                    $artifactValidationOk = $false
+                }
+                elseif ($nonG2TargetIds.Count -eq 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-target-g2-only" "Artifact '$artifactId' only includes G2-class hardware targets; default graduation requires at least one non-G2 radio target."
+                    $artifactValidationOk = $false
+                }
+
+                if ($scenarioIds.Count -eq 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-scenarios-missing" "Artifact '$artifactId' must declare the scenarioIds covered by cross-radio validation."
+                    $artifactValidationOk = $false
+                }
+
+                if ($comparisonIds.Count -eq 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-comparisons-missing" "Artifact '$artifactId' must declare the comparisonIds covered by cross-radio validation."
+                    $artifactValidationOk = $false
+                }
+
+                if (-not $readyForReview) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-not-ready" "Artifact '$artifactId' reports readyForReview=false."
+                    $artifactValidationOk = $false
+                }
+
+                if ($defaultBehaviorChangeApproved) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-default-approval-claimed" "Artifact '$artifactId' must not approve default DSP behavior changes; explicit approval is a separate gate after G2 and cross-radio evidence review."
+                    $artifactValidationOk = $false
+                }
+
+                if ($sourceReports.Count -eq 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-reports-missing" "Artifact '$artifactId' must include sourceReports from strict non-G2 validation; manual target/scenario/comparison declarations are preflight only."
+                    $artifactValidationOk = $false
+                }
+                elseif ($nonG2SourceReportCount -eq 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-non-g2-source-report-missing" "Artifact '$artifactId' must include at least one source report from a non-G2 hardware target."
+                    $artifactValidationOk = $false
+                }
+
+                foreach ($sourceReport in @($normalizedSourceReports.ToArray() | Where-Object { Test-Truthy (Get-JsonValue $_ "targetIsNonG2") })) {
+                    $sourcePath = [string](Get-JsonValue $sourceReport "path")
+                    if (-not (Test-Truthy (Get-JsonValue $sourceReport "validationOk")) -or
+                        ([int](Get-NumericValueOrDefault (Get-JsonValue $sourceReport "errorCount"))) -gt 0) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-not-clean" "Artifact '$artifactId' source report '$sourcePath' must be clean."
+                        $artifactValidationOk = $false
+                    }
+                    if (-not (Test-Truthy (Get-JsonValue $sourceReport "metricComparisonReady"))) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-metric-comparison-not-ready" "Artifact '$artifactId' source report '$sourcePath' must have metricComparisonReady=true."
+                        $artifactValidationOk = $false
+                    }
+                    if (-not (Test-Truthy (Get-JsonValue $sourceReport "liveTraceComparisonReady"))) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-live-trace-comparison-not-ready" "Artifact '$artifactId' source report '$sourcePath' must have liveTraceComparisonReady=true."
+                        $artifactValidationOk = $false
+                    }
+                    if (-not (Test-Truthy (Get-JsonValue $sourceReport "liveTraceThetisComparisonReady"))) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-thetis-live-trace-comparison-not-ready" "Artifact '$artifactId' source report '$sourcePath' must have liveTraceThetisComparisonReady=true."
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                if ($artifactValidationOk -and $readyForReview -and $nonG2TargetIds.Count -gt 0 -and $scenarioIds.Count -gt 0 -and $comparisonIds.Count -gt 0 -and $readyNonG2SourceReportCount -gt 0) {
+                    $crossRadioValidationEvidence["status"] = "cross-radio-evidence-ready"
+                }
+                else {
+                    $crossRadioValidationEvidence["readyForReview"] = $false
+                    $crossRadioValidationEvidence["status"] = "not-ready"
+                }
+            }
+
             if ($artifactKind -ieq "external-candidate-report-json" -or $artifactId -eq $externalEngineBakeoffArtifactId) {
                 $externalEngineBakeoffEvidence["present"] = $true
 
@@ -11062,6 +12040,14 @@ else {
                 $candidateSummaries = @(Get-JsonArray $artifactJson "candidateSummaries")
                 $externalBakeoffPlan = Get-JsonValue $artifactJson "externalBakeoffPlan"
                 $externalBakeoffPlanRequired = ($schemaVersion -ge 2 -or $null -ne $externalBakeoffPlan)
+                $externalBakeoffEvaluationOrderRequired = ($schemaVersion -ge 4)
+                $reportedFirstSafeBakeoffCandidateId = ConvertTo-CandidateId ([string](Get-JsonValue $artifactJson "firstSafeBakeoffCandidateId"))
+                $reportedEvaluationOrderCandidateIds = @(Get-JsonArray $artifactJson "externalBakeoffEvaluationOrderCandidateIds" | ForEach-Object {
+                        ConvertTo-CandidateId ([string]$_)
+                    } | Where-Object {
+                        -not [string]::IsNullOrWhiteSpace($_)
+                    })
+                $reportedEvaluationOrder = @(Get-JsonArray $artifactJson "externalBakeoffEvaluationOrder")
                 $reportedMissingCandidateIds = @(Get-JsonArray $artifactJson "missingCandidateIds" | ForEach-Object {
                         ConvertTo-CandidateId ([string]$_)
                     } | Where-Object {
@@ -11094,6 +12080,30 @@ else {
                         $bakeoffSnapshotMismatchCandidateDetails.Add($detail) | Out-Null
                     }
                 }
+                $expectedEvaluationOrder = @(Get-ExternalBakeoffEvaluationOrder -CandidateSummaries $candidateSummaries)
+                $expectedEvaluationOrderCandidateIds = @(Get-ExternalBakeoffEvaluationOrderCandidateIds -EvaluationOrder $expectedEvaluationOrder)
+                $expectedFirstSafeBakeoffCandidateId = Get-ExternalBakeoffFirstSafeCandidateId -EvaluationOrder $expectedEvaluationOrder
+                $reportedBakeoffPlanScenarioIds = @(Get-JsonArray $externalBakeoffPlan "scenarioIds" | ForEach-Object {
+                        ([string]$_).Trim().ToLowerInvariant()
+                    } | Where-Object {
+                        -not [string]::IsNullOrWhiteSpace($_)
+                    } | Sort-Object -Unique)
+                $reportedFirstSafeBakeoffScenarioIds = @()
+                if (-not [string]::IsNullOrWhiteSpace($expectedFirstSafeBakeoffCandidateId)) {
+                    $firstSafeCandidatePlan = @(Get-JsonArray $externalBakeoffPlan "candidatePlans" | Where-Object {
+                            [string]::Equals(
+                                (ConvertTo-CandidateId ([string](Get-JsonValue $_ "candidateId"))),
+                                $expectedFirstSafeBakeoffCandidateId,
+                                [StringComparison]::Ordinal)
+                        } | Select-Object -First 1)
+                    if ($firstSafeCandidatePlan.Count -gt 0) {
+                        $reportedFirstSafeBakeoffScenarioIds = @(Get-JsonArray ($firstSafeCandidatePlan[0]) "scenarios" | ForEach-Object {
+                                ([string](Get-JsonValue $_ "scenarioId")).Trim().ToLowerInvariant()
+                            } | Where-Object {
+                                -not [string]::IsNullOrWhiteSpace($_)
+                            })
+                    }
+                }
 
                 $externalEngineBakeoffEvidence["readyForReview"] = $readyForReview
                 $externalEngineBakeoffEvidence["candidateCount"] = $candidateCount
@@ -11117,8 +12127,71 @@ else {
                 $externalEngineBakeoffEvidence["snapshotSha256"] = $snapshotSha256
                 $externalEngineBakeoffEvidence["bakeoffPlanCandidateCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $externalBakeoffPlan "candidatePlanCount"))
                 $externalEngineBakeoffEvidence["bakeoffPlanScenarioCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $externalBakeoffPlan "scenarioCount"))
+                $externalEngineBakeoffEvidence["bakeoffPlanScenarioIds"] = @($reportedBakeoffPlanScenarioIds)
+                $externalEngineBakeoffEvidence["bakeoffPlanFixtureComparisonCommandTemplate"] = [string](Get-JsonValue $externalBakeoffPlan "fixtureComparisonCommandTemplate")
+                $externalEngineBakeoffEvidence["bakeoffPlanLiveMatrixCommandTemplate"] = [string](Get-JsonValue $externalBakeoffPlan "liveMatrixCommandTemplate")
                 $externalEngineBakeoffEvidence["bakeoffPlanDefaultBehaviorChangeReady"] = Test-Truthy (Get-JsonValue $externalBakeoffPlan "defaultBehaviorChangeReady")
                 $externalEngineBakeoffEvidence["bakeoffPlanRawWdspIqReplacementAllowed"] = Test-Truthy (Get-JsonValue $externalBakeoffPlan "rawWdspIqReplacementAllowed")
+                $externalEngineBakeoffEvidence["firstSafeBakeoffCandidateId"] = $expectedFirstSafeBakeoffCandidateId
+                $externalEngineBakeoffEvidence["firstSafeBakeoffScenarioIds"] = @($reportedFirstSafeBakeoffScenarioIds)
+                $externalEngineBakeoffEvidence["evaluationOrderCandidateIds"] = @($expectedEvaluationOrderCandidateIds)
+                $externalEngineBakeoffEvidence["evaluationOrder"] = @($expectedEvaluationOrder)
+
+                if ($externalBakeoffEvaluationOrderRequired) {
+                    if ([string]::IsNullOrWhiteSpace($reportedFirstSafeBakeoffCandidateId)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-first-candidate-missing" "Artifact '$artifactId' schemaVersion=$schemaVersion must declare firstSafeBakeoffCandidateId."
+                        $artifactValidationOk = $false
+                    }
+                    elseif (-not [string]::Equals($reportedFirstSafeBakeoffCandidateId, $expectedFirstSafeBakeoffCandidateId, [StringComparison]::Ordinal)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-first-candidate-mismatch" "Artifact '$artifactId' firstSafeBakeoffCandidateId='$reportedFirstSafeBakeoffCandidateId' but candidateSummaries imply '$expectedFirstSafeBakeoffCandidateId'."
+                        $artifactValidationOk = $false
+                    }
+
+                    if ($reportedEvaluationOrderCandidateIds.Count -eq 0) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-evaluation-order-missing" "Artifact '$artifactId' schemaVersion=$schemaVersion must declare externalBakeoffEvaluationOrderCandidateIds."
+                        $artifactValidationOk = $false
+                    }
+                    elseif (-not (Test-OrderedStringArraysEqual -Actual $reportedEvaluationOrderCandidateIds -Expected $expectedEvaluationOrderCandidateIds)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-evaluation-order-mismatch" "Artifact '$artifactId' externalBakeoffEvaluationOrderCandidateIds='$($reportedEvaluationOrderCandidateIds -join ', ')' but candidateSummaries imply '$($expectedEvaluationOrderCandidateIds -join ', ')'."
+                        $artifactValidationOk = $false
+                    }
+
+                    if ($reportedEvaluationOrder.Count -ne $expectedEvaluationOrder.Count) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-evaluation-order-count-mismatch" "Artifact '$artifactId' externalBakeoffEvaluationOrder has $($reportedEvaluationOrder.Count) record(s) but candidateSummaries imply $($expectedEvaluationOrder.Count)."
+                        $artifactValidationOk = $false
+                    }
+                    elseif (-not (Test-ExternalBakeoffEvaluationOrderRecordsEqual -Actual $reportedEvaluationOrder -Expected $expectedEvaluationOrder)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-evaluation-order-record-mismatch" "Artifact '$artifactId' externalBakeoffEvaluationOrder records do not match the deterministic order implied by candidateSummaries."
+                        $artifactValidationOk = $false
+                    }
+
+                    if ($null -ne $externalBakeoffPlan) {
+                        $reportedPlanFirstSafeBakeoffCandidateId = ConvertTo-CandidateId ([string](Get-JsonValue $externalBakeoffPlan "firstSafeBakeoffCandidateId"))
+                        $reportedPlanEvaluationOrderCandidateIds = @(Get-JsonArray $externalBakeoffPlan "evaluationOrderCandidateIds" | ForEach-Object {
+                                ConvertTo-CandidateId ([string]$_)
+                            } | Where-Object {
+                                -not [string]::IsNullOrWhiteSpace($_)
+                            })
+                        $reportedPlanEvaluationOrder = @(Get-JsonArray $externalBakeoffPlan "evaluationOrder")
+
+                        if (-not [string]::Equals($reportedPlanFirstSafeBakeoffCandidateId, $expectedFirstSafeBakeoffCandidateId, [StringComparison]::Ordinal)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-plan-first-candidate-mismatch" "Artifact '$artifactId' externalBakeoffPlan.firstSafeBakeoffCandidateId='$reportedPlanFirstSafeBakeoffCandidateId' but candidateSummaries imply '$expectedFirstSafeBakeoffCandidateId'."
+                            $artifactValidationOk = $false
+                        }
+                        if (-not (Test-OrderedStringArraysEqual -Actual $reportedPlanEvaluationOrderCandidateIds -Expected $expectedEvaluationOrderCandidateIds)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-plan-evaluation-order-mismatch" "Artifact '$artifactId' externalBakeoffPlan.evaluationOrderCandidateIds does not match the deterministic order implied by candidateSummaries."
+                            $artifactValidationOk = $false
+                        }
+                        if ($reportedPlanEvaluationOrder.Count -ne $expectedEvaluationOrder.Count) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-plan-evaluation-order-count-mismatch" "Artifact '$artifactId' externalBakeoffPlan.evaluationOrder has $($reportedPlanEvaluationOrder.Count) record(s) but candidateSummaries imply $($expectedEvaluationOrder.Count)."
+                            $artifactValidationOk = $false
+                        }
+                        elseif (-not (Test-ExternalBakeoffEvaluationOrderRecordsEqual -Actual $reportedPlanEvaluationOrder -Expected $expectedEvaluationOrder)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-plan-evaluation-order-record-mismatch" "Artifact '$artifactId' externalBakeoffPlan.evaluationOrder records do not match the deterministic order implied by candidateSummaries."
+                            $artifactValidationOk = $false
+                        }
+                    }
+                }
 
                 if ([string]::IsNullOrWhiteSpace($candidatePath)) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-candidate-path-missing" "Artifact '$artifactId' does not declare candidatePath."
@@ -11498,7 +12571,7 @@ else {
                             Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-plan-candidate-expected-scenario-count-mismatch" "Artifact '$artifactId' externalBakeoffPlan candidate '$candidateId' scenarioCount=$scenarioCount but the generated bakeoff plan requires $($expectedScenarios.Count)."
                             $artifactValidationOk = $false
                         }
-                        $expectedRequiredControls = @(Get-ExternalBakeoffRequiredControls)
+                        $expectedRequiredControls = @((@(Get-ExternalBakeoffRequiredControls) + @(Get-JsonArray $summary "requiredControls" | ForEach-Object { [string]$_ })) | Select-Object -Unique)
                         $requiredControls = @(Get-JsonArray $candidatePlan "requiredControls" | ForEach-Object { [string]$_ })
                         foreach ($control in @($expectedRequiredControls)) {
                             if ($requiredControls -notcontains $control) {
@@ -11586,6 +12659,733 @@ else {
                 }
             }
 
+            if ($artifactKind -ieq "external-engine-bakeoff-cycle-summary-json" -or $artifactId -eq $externalEngineBakeoffCycleArtifactId) {
+                $externalEngineBakeoffCycleEvidence["present"] = $true
+                $externalEngineBakeoffCycleEvidence["path"] = $artifactPath
+                $externalEngineBakeoffCycleEvidence["sha256"] = Get-FileSha256 $resolvedArtifactPath
+
+                $schemaVersion = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "schemaVersion"))
+                $tool = [string](Get-JsonValue $artifactJson "tool")
+                $mode = [string](Get-JsonValue $artifactJson "mode")
+                $status = [string](Get-JsonValue $artifactJson "status")
+                $candidateId = ConvertTo-CandidateId ([string](Get-JsonValue $artifactJson "candidateId"))
+                $comparisonId = ConvertTo-ComparisonId ([string](Get-JsonValue $artifactJson "comparisonId"))
+                $scenarioIds = @(Get-JsonArray $artifactJson "scenarioIds" | ForEach-Object {
+                        ([string]$_).Trim().ToLowerInvariant()
+                    } | Where-Object {
+                        -not [string]::IsNullOrWhiteSpace($_)
+                    })
+                $readyToExecute = Test-Truthy (Get-JsonValue $artifactJson "readyToExecute")
+                $executed = Test-Truthy (Get-JsonValue $artifactJson "executed")
+                $missingPrerequisiteCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "missingPrerequisiteCount"))
+                $commandSteps = @(Get-JsonArray $artifactJson "commandSteps" | ForEach-Object { [string]$_ })
+                $commandStepCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "commandStepCount"))
+                $expectedArtifacts = @(Get-JsonArray $artifactJson "expectedArtifacts" | ForEach-Object { [string]$_ })
+                $expectedArtifactCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "expectedArtifactCount"))
+                $exitCodes = @(Get-JsonArray $artifactJson "exitCodes")
+                $nonZeroExitCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "nonZeroExitCount"))
+                $sourceExternalBakeoffReady = Test-Truthy (Get-JsonValue $artifactJson "sourceExternalBakeoffReady")
+                $sourceExternalBakeoffActionPresent = Test-Truthy (Get-JsonValue $artifactJson "sourceExternalBakeoffActionPresent")
+                $safetyPolicy = Get-JsonValue $artifactJson "safetyPolicy"
+                $skipFixtureComparison = Test-Truthy (Get-JsonValue $artifactJson "skipFixtureComparison")
+                $skipLiveMatrix = Test-Truthy (Get-JsonValue $artifactJson "skipLiveMatrix")
+
+                $externalEngineBakeoffCycleEvidence["schemaVersion"] = $schemaVersion
+                $externalEngineBakeoffCycleEvidence["tool"] = $tool
+                $externalEngineBakeoffCycleEvidence["status"] = $status
+                $externalEngineBakeoffCycleEvidence["mode"] = $mode
+                $externalEngineBakeoffCycleEvidence["candidateId"] = $candidateId
+                $externalEngineBakeoffCycleEvidence["comparisonId"] = $comparisonId
+                $externalEngineBakeoffCycleEvidence["scenarioIds"] = @($scenarioIds)
+                $externalEngineBakeoffCycleEvidence["readyToExecute"] = $readyToExecute
+                $externalEngineBakeoffCycleEvidence["executed"] = $executed
+                $externalEngineBakeoffCycleEvidence["missingPrerequisiteCount"] = $missingPrerequisiteCount
+                $externalEngineBakeoffCycleEvidence["commandStepCount"] = $commandStepCount
+                $externalEngineBakeoffCycleEvidence["expectedArtifactCount"] = $expectedArtifactCount
+                $externalEngineBakeoffCycleEvidence["nonZeroExitCount"] = $nonZeroExitCount
+                $externalEngineBakeoffCycleEvidence["sourceExternalBakeoffReady"] = $sourceExternalBakeoffReady
+                $externalEngineBakeoffCycleEvidence["sourceExternalBakeoffActionPresent"] = $sourceExternalBakeoffActionPresent
+                $externalEngineBakeoffCycleEvidence["safetyPolicy"] = $safetyPolicy
+
+                if ($schemaVersion -ne 1) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-schema-unsupported" "Artifact '$artifactId' schemaVersion must be 1."
+                    $artifactValidationOk = $false
+                }
+
+                if ($tool -ne "run-dsp-external-engine-bakeoff") {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-tool-invalid" "Artifact '$artifactId' must be generated by run-dsp-external-engine-bakeoff.ps1."
+                    $artifactValidationOk = $false
+                }
+
+                if ([string]::IsNullOrWhiteSpace($candidateId)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-candidate-missing" "Artifact '$artifactId' must declare candidateId."
+                    $artifactValidationOk = $false
+                }
+
+                if ($comparisonId -ne $externalEngineOptInComparisonId) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-comparison-invalid" "Artifact '$artifactId' comparisonId must be '$externalEngineOptInComparisonId'."
+                    $artifactValidationOk = $false
+                }
+
+                if ($scenarioIds.Count -eq 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-scenarios-missing" "Artifact '$artifactId' must declare the external bakeoff scenarioIds."
+                    $artifactValidationOk = $false
+                }
+
+                foreach ($expectedScenarioId in @($externalEngineBakeoffEvidence.firstSafeBakeoffScenarioIds)) {
+                    $normalizedExpectedScenarioId = ([string]$expectedScenarioId).Trim().ToLowerInvariant()
+                    if (-not [string]::IsNullOrWhiteSpace($normalizedExpectedScenarioId) -and $scenarioIds -notcontains $normalizedExpectedScenarioId) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-scenario-mismatch" "Artifact '$artifactId' scenarioIds do not include first-safe bakeoff scenario '$normalizedExpectedScenarioId'."
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace([string]$externalEngineBakeoffEvidence.firstSafeBakeoffCandidateId) -and
+                    -not [string]::Equals($candidateId, [string]$externalEngineBakeoffEvidence.firstSafeBakeoffCandidateId, [StringComparison]::Ordinal)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-candidate-mismatch" "Artifact '$artifactId' candidateId='$candidateId' but external bakeoff evidence selected '$($externalEngineBakeoffEvidence.firstSafeBakeoffCandidateId)' as the first safe candidate."
+                    $artifactValidationOk = $false
+                }
+
+                if ((Test-Truthy $externalEngineBakeoffEvidence.present) -and $sourceExternalBakeoffReady -ne (Test-Truthy $externalEngineBakeoffEvidence.readyForReview)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-source-ready-mismatch" "Artifact '$artifactId' sourceExternalBakeoffReady=$sourceExternalBakeoffReady but validated external bakeoff readiness is $($externalEngineBakeoffEvidence.readyForReview)."
+                    $artifactValidationOk = $false
+                }
+
+                if ($sourceExternalBakeoffReady -and -not $sourceExternalBakeoffActionPresent) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-source-action-missing" "Artifact '$artifactId' was generated from ready external bakeoff evidence but did not preserve the validation-triage first-safe bakeoff action."
+                    $artifactValidationOk = $false
+                }
+
+                foreach ($policyName in @("optInOnly", "postDemodOnly", "rxOnly", "fallbackRequired")) {
+                    if (-not (Test-Truthy (Get-JsonValue $safetyPolicy $policyName))) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-safety-policy-invalid" "Artifact '$artifactId' safetyPolicy.$policyName must be true."
+                        $artifactValidationOk = $false
+                    }
+                }
+                foreach ($policyName in @("defaultBehaviorChangeApproved", "rawWdspIqAllowed", "txPathAllowed", "txMonitorAllowed", "pureSignalAllowed")) {
+                    if (Test-Truthy (Get-JsonValue $safetyPolicy $policyName)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-safety-policy-invalid" "Artifact '$artifactId' safetyPolicy.$policyName must be false."
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                if ($commandStepCount -ne $commandSteps.Count) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-command-count-mismatch" "Artifact '$artifactId' commandStepCount=$commandStepCount but commandSteps contains $($commandSteps.Count) item(s)."
+                    $artifactValidationOk = $false
+                }
+
+                if ($expectedArtifactCount -ne $expectedArtifacts.Count) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-expected-artifact-count-mismatch" "Artifact '$artifactId' expectedArtifactCount=$expectedArtifactCount but expectedArtifacts contains $($expectedArtifacts.Count) item(s)."
+                    $artifactValidationOk = $false
+                }
+
+                if ($readyToExecute -and $missingPrerequisiteCount -ne 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-ready-with-missing-prerequisites" "Artifact '$artifactId' reports readyToExecute=true while missingPrerequisiteCount=$missingPrerequisiteCount."
+                    $artifactValidationOk = $false
+                }
+
+                if ($executed -and $nonZeroExitCount -ne 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-execution-failed" "Artifact '$artifactId' executed with nonZeroExitCount=$nonZeroExitCount."
+                    $artifactValidationOk = $false
+                }
+
+                $computedNonZeroExitCount = @($exitCodes | Where-Object {
+                        [int](Get-NumericValueOrDefault (Get-JsonValue $_ "exitCode")) -ne 0
+                    }).Count
+                if ($computedNonZeroExitCount -ne $nonZeroExitCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-exit-count-mismatch" "Artifact '$artifactId' nonZeroExitCount=$nonZeroExitCount but exitCodes imply $computedNonZeroExitCount."
+                    $artifactValidationOk = $false
+                }
+
+                foreach ($pathField in @(
+                        "sourceValidationReportPath",
+                        "sourceTriageReportPath",
+                        "baselineFixturePath",
+                        "candidateFixturePath",
+                        "fixtureComparisonReportPath",
+                        "fixtureComparisonMarkdownPath",
+                        "liveIndexPath",
+                        "liveReportPath",
+                        "reportPath",
+                        "markdownPath"
+                    )) {
+                    $pathValue = [string](Get-JsonValue $artifactJson $pathField)
+                    if ([string]::IsNullOrWhiteSpace($pathValue)) {
+                        continue
+                    }
+
+                    if ([System.IO.Path]::IsPathRooted($pathValue) -or $pathValue.StartsWith("../", [StringComparison]::Ordinal) -or $pathValue.StartsWith("..\", [StringComparison]::Ordinal)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-path-not-portable" "Artifact '$artifactId' field '$pathField' must be bundle-relative, but was '$pathValue'."
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                $commandStepsJoined = $commandSteps -join "`n"
+                $expectedCommandNames = New-Object System.Collections.Generic.List[string]
+                if (-not $skipFixtureComparison) {
+                    $expectedCommandNames.Add("compare-dsp-fixture-metrics.ps1") | Out-Null
+                }
+                if (-not $skipLiveMatrix) {
+                    $expectedCommandNames.Add("run-dsp-live-diagnostics-matrix.ps1") | Out-Null
+                }
+                $expectedCommandNames.Add("validate-dsp-modernization-bundle.ps1") | Out-Null
+                $expectedCommandNames.Add("summarize-dsp-modernization-validation-report.ps1") | Out-Null
+
+                foreach ($expectedCommandName in @($expectedCommandNames.ToArray())) {
+                    if ($commandStepsJoined.IndexOf($expectedCommandName, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-command-missing" "Artifact '$artifactId' commandSteps is missing '$expectedCommandName'."
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                if ($commandStepsJoined.IndexOf($externalEngineOptInComparisonId, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-command-comparison-missing" "Artifact '$artifactId' commandSteps does not preserve '$externalEngineOptInComparisonId'."
+                    $artifactValidationOk = $false
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($candidateId) -and $commandStepsJoined.IndexOf($candidateId, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-cycle-command-candidate-missing" "Artifact '$artifactId' commandSteps does not preserve candidate '$candidateId'."
+                    $artifactValidationOk = $false
+                }
+
+                $externalEngineBakeoffCycleEvidence["valid"] = $artifactValidationOk
+                if (-not $artifactValidationOk) {
+                    $externalEngineBakeoffCycleEvidence["status"] = "invalid"
+                }
+                elseif ($executed) {
+                    $externalEngineBakeoffCycleEvidence["status"] = "succeeded"
+                }
+                elseif ($readyToExecute) {
+                    $externalEngineBakeoffCycleEvidence["status"] = "ready"
+                }
+                else {
+                    $externalEngineBakeoffCycleEvidence["status"] = "preflight-blocked"
+                }
+            }
+
+            if ($artifactKind -ieq "g2-rx-peak-hunt-report-json" -or $artifactId -eq $g2RxPeakHuntArtifactId) {
+                $g2RxPeakHuntEvidence["present"] = $true
+                $g2RxPeakHuntEvidence["path"] = $artifactPath
+                $g2RxPeakHuntEvidence["sha256"] = Get-FileSha256 $resolvedArtifactPath
+
+                $schemaVersion = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "schemaVersion"))
+                $tool = [string](Get-JsonValue $artifactJson "tool")
+                $reportOkRaw = Get-JsonValue $artifactJson "ok"
+                $reportOk = if ($null -eq $reportOkRaw) { $true } else { Test-Truthy $reportOkRaw }
+                $scanError = [string](Get-JsonValue $artifactJson "scanError")
+                $requestedBaseUrl = [string](Get-JsonValue $artifactJson "requestedBaseUrl")
+                $baseUrl = [string](Get-JsonValue $artifactJson "baseUrl")
+                $baseUrlAutoDiscoverRequested = Test-Truthy (Get-JsonValue $artifactJson "baseUrlAutoDiscoverRequested")
+                $baseUrlAutoDiscovered = Test-Truthy (Get-JsonValue $artifactJson "baseUrlAutoDiscovered")
+                $baseUrlAutoDiscoverError = [string](Get-JsonValue $artifactJson "baseUrlAutoDiscoverError")
+                $baseUrlProbeResults = @(Get-JsonArray $artifactJson "baseUrlProbeResults")
+                $comparisonId = [string](Get-JsonValue $artifactJson "comparisonId")
+                $allowRetune = Test-Truthy (Get-JsonValue $artifactJson "allowRetune")
+                $skipCurrentVfo = Test-Truthy (Get-JsonValue $artifactJson "skipCurrentVfo")
+                $stopOnReady = Test-Truthy (Get-JsonValue $artifactJson "stopOnReady")
+                $samplesPerWindow = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "samplesPerWindow"))
+                $intervalMs = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "intervalMs"))
+                $passCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "passCount"))
+                $passDelaySec = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "passDelaySec"))
+                $completedPassCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "completedPassCount"))
+                $scanPasses = @(Get-JsonArray $artifactJson "scanPasses")
+                $candidateFrequencyHz = @(Get-JsonArray $artifactJson "candidateFrequencyHz")
+                $autoPhoneCluster = Test-Truthy (Get-JsonValue $artifactJson "autoPhoneCluster")
+                $autoPhoneClusterCandidateFrequencyHz = @(Get-JsonArray $artifactJson "autoPhoneClusterCandidateFrequencyHz")
+                $autoPhoneClusterCandidates = @(Get-JsonArray $artifactJson "autoPhoneClusterCandidates")
+                $autoPhoneClusterCandidateCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "autoPhoneClusterCandidateCount"))
+                $autoPhoneClusterMaxCandidates = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "autoPhoneClusterMaxCandidates"))
+                $autoPhoneClusterLookbackHours = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "autoPhoneClusterLookbackHours"))
+                $autoPhoneClusterMinSpeechSamples = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "autoPhoneClusterMinSpeechSamples"))
+                $autoPhoneClusterBandLowHz = [long](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "autoPhoneClusterBandLowHz"))
+                $autoPhoneClusterBandHighHz = [long](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "autoPhoneClusterBandHighHz"))
+                $operatorCandidates = @(Get-JsonArray $artifactJson "operatorCandidates")
+                $operatorCandidateCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "operatorCandidateCount"))
+                $plannedRunCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "plannedRunCount"))
+                $actualRunCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "actualRunCount"))
+                $failedRunCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "failedRunCount"))
+                $mixedWeakStrongReady = Test-Truthy (Get-JsonValue $artifactJson "mixedWeakStrongReady")
+                $mixedWeakStrongReadyRunCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "mixedWeakStrongReadyRunCount"))
+                $weakInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "weakInputSampleCount"))
+                $strongInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "strongInputSampleCount"))
+                $speechQualifiedWeakInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "speechQualifiedWeakInputSampleCount"))
+                $speechQualifiedStrongInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "speechQualifiedStrongInputSampleCount"))
+                $passbandQualifiedWeakInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "passbandQualifiedWeakInputSampleCount"))
+                $passbandQualifiedStrongInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "passbandQualifiedStrongInputSampleCount"))
+                $frontendNearPassbandSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "frontendNearPassbandSampleCount"))
+                $candidateWeakLossSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "candidateWeakLossSampleCount"))
+                $hotMakeupSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "hotMakeupSampleCount"))
+                $hardBlockerSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "hardBlockerSampleCount"))
+                $agcPumpingRiskRunCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "agcPumpingRiskRunCount"))
+                $peakCandidates = @(Get-JsonArray $artifactJson "peakCandidates")
+                $retuneAttempts = @(Get-JsonArray $artifactJson "retuneAttempts")
+                $safety = Get-JsonValue $artifactJson "safety"
+                $hardware = Get-JsonValue $artifactJson "hardware"
+                $liveDiagnostics = Get-JsonValue $artifactJson "liveDiagnostics"
+                $frontendScene = Get-JsonValue $artifactJson "frontendScene"
+                $bestRunRaw = Get-JsonValue $artifactJson "bestRun"
+                $bestRun = $bestRunRaw
+                if ($bestRunRaw -is [System.Array]) {
+                    $bestRunItems = @($bestRunRaw | Where-Object { $null -ne $_ })
+                    $bestRun = if ($bestRunItems.Count -gt 0) { $bestRunItems[0] } else { $null }
+                }
+
+                $safetyRxOnly = Test-Truthy (Get-JsonValue $safety "rxOnly")
+                $safetyTxEndpointsTouched = Test-Truthy (Get-JsonValue $safety "txEndpointsTouched")
+                $safetyOriginalVfoRestoreAttempted = Test-Truthy (Get-JsonValue $safety "originalVfoRestoreAttempted")
+                $safetyOriginalVfoRestored = Test-Truthy (Get-JsonValue $safety "originalVfoRestored")
+                $safetyRestoreError = [string](Get-JsonValue $safety "restoreError")
+                $bestFrequencyHz = $null
+                if ($null -ne $bestRun) {
+                    $bestFrequencyHzValue = Get-NumericValue (Get-JsonValue $bestRun "frequencyHz")
+                    if ($null -ne $bestFrequencyHzValue) {
+                        $bestFrequencyHz = [long]$bestFrequencyHzValue
+                    }
+                }
+
+                $g2RxPeakHuntEvidence["schemaVersion"] = $schemaVersion
+                $g2RxPeakHuntEvidence["tool"] = $tool
+                $g2RxPeakHuntEvidence["ok"] = $reportOk
+                $g2RxPeakHuntEvidence["scanError"] = $scanError
+                $g2RxPeakHuntEvidence["requestedBaseUrl"] = $requestedBaseUrl
+                $g2RxPeakHuntEvidence["baseUrl"] = $baseUrl
+                $g2RxPeakHuntEvidence["baseUrlAutoDiscoverRequested"] = $baseUrlAutoDiscoverRequested
+                $g2RxPeakHuntEvidence["baseUrlAutoDiscovered"] = $baseUrlAutoDiscovered
+                $g2RxPeakHuntEvidence["baseUrlAutoDiscoverError"] = $baseUrlAutoDiscoverError
+                $g2RxPeakHuntEvidence["baseUrlProbeResultCount"] = $baseUrlProbeResults.Count
+                $g2RxPeakHuntEvidence["comparisonId"] = $comparisonId
+                $g2RxPeakHuntEvidence["allowRetune"] = $allowRetune
+                $g2RxPeakHuntEvidence["skipCurrentVfo"] = $skipCurrentVfo
+                $g2RxPeakHuntEvidence["stopOnReady"] = $stopOnReady
+                $g2RxPeakHuntEvidence["samplesPerWindow"] = $samplesPerWindow
+                $g2RxPeakHuntEvidence["intervalMs"] = $intervalMs
+                $g2RxPeakHuntEvidence["passCount"] = $passCount
+                $g2RxPeakHuntEvidence["passDelaySec"] = $passDelaySec
+                $g2RxPeakHuntEvidence["completedPassCount"] = $completedPassCount
+                $g2RxPeakHuntEvidence["scanPassCount"] = $scanPasses.Count
+                $g2RxPeakHuntEvidence["candidateFrequencyHzCount"] = $candidateFrequencyHz.Count
+                $g2RxPeakHuntEvidence["autoPhoneCluster"] = $autoPhoneCluster
+                $g2RxPeakHuntEvidence["autoPhoneClusterCandidateFrequencyHzCount"] = $autoPhoneClusterCandidateFrequencyHz.Count
+                $g2RxPeakHuntEvidence["autoPhoneClusterCandidateCount"] = if ($autoPhoneClusterCandidateCount -gt 0) { $autoPhoneClusterCandidateCount } else { $autoPhoneClusterCandidates.Count }
+                $g2RxPeakHuntEvidence["autoPhoneClusterMaxCandidates"] = $autoPhoneClusterMaxCandidates
+                $g2RxPeakHuntEvidence["autoPhoneClusterLookbackHours"] = $autoPhoneClusterLookbackHours
+                $g2RxPeakHuntEvidence["autoPhoneClusterMinSpeechSamples"] = $autoPhoneClusterMinSpeechSamples
+                $g2RxPeakHuntEvidence["autoPhoneClusterBandLowHz"] = $autoPhoneClusterBandLowHz
+                $g2RxPeakHuntEvidence["autoPhoneClusterBandHighHz"] = $autoPhoneClusterBandHighHz
+                $g2RxPeakHuntEvidence["operatorCandidateCount"] = if ($operatorCandidateCount -gt 0) { $operatorCandidateCount } else { $operatorCandidates.Count }
+                $g2RxPeakHuntEvidence["plannedRunCount"] = $plannedRunCount
+                $g2RxPeakHuntEvidence["actualRunCount"] = $actualRunCount
+                $g2RxPeakHuntEvidence["failedRunCount"] = $failedRunCount
+                $g2RxPeakHuntEvidence["mixedWeakStrongReady"] = $mixedWeakStrongReady
+                $g2RxPeakHuntEvidence["mixedWeakStrongReadyRunCount"] = $mixedWeakStrongReadyRunCount
+                $g2RxPeakHuntEvidence["weakInputSampleCount"] = $weakInputSampleCount
+                $g2RxPeakHuntEvidence["strongInputSampleCount"] = $strongInputSampleCount
+                $g2RxPeakHuntEvidence["speechQualifiedWeakInputSampleCount"] = $speechQualifiedWeakInputSampleCount
+                $g2RxPeakHuntEvidence["speechQualifiedStrongInputSampleCount"] = $speechQualifiedStrongInputSampleCount
+                $g2RxPeakHuntEvidence["passbandQualifiedWeakInputSampleCount"] = $passbandQualifiedWeakInputSampleCount
+                $g2RxPeakHuntEvidence["passbandQualifiedStrongInputSampleCount"] = $passbandQualifiedStrongInputSampleCount
+                $g2RxPeakHuntEvidence["frontendNearPassbandSampleCount"] = $frontendNearPassbandSampleCount
+                $g2RxPeakHuntEvidence["candidateWeakLossSampleCount"] = $candidateWeakLossSampleCount
+                $g2RxPeakHuntEvidence["hotMakeupSampleCount"] = $hotMakeupSampleCount
+                $g2RxPeakHuntEvidence["hardBlockerSampleCount"] = $hardBlockerSampleCount
+                $g2RxPeakHuntEvidence["agcPumpingRiskRunCount"] = $agcPumpingRiskRunCount
+                $g2RxPeakHuntEvidence["peakCandidateCount"] = $peakCandidates.Count
+                $g2RxPeakHuntEvidence["retuneAttemptCount"] = $retuneAttempts.Count
+                $g2RxPeakHuntEvidence["safetyRxOnly"] = $safetyRxOnly
+                $g2RxPeakHuntEvidence["safetyTxEndpointsTouched"] = $safetyTxEndpointsTouched
+                $g2RxPeakHuntEvidence["safetyOriginalVfoRestoreAttempted"] = $safetyOriginalVfoRestoreAttempted
+                $g2RxPeakHuntEvidence["safetyOriginalVfoRestored"] = $safetyOriginalVfoRestored
+                $g2RxPeakHuntEvidence["safetyRestoreError"] = $safetyRestoreError
+                $g2RxPeakHuntEvidence["hardwareConnectionStatus"] = [string](Get-JsonValue $hardware "connectionStatus")
+                $g2RxPeakHuntEvidence["hardwareEndpoint"] = [string](Get-JsonValue $hardware "endpoint")
+                $g2RxPeakHuntEvidence["hardwareEffectiveBoard"] = [string](Get-JsonValue $hardware "effectiveBoard")
+                $g2RxPeakHuntEvidence["hardwareVariant"] = [string](Get-JsonValue $hardware "orionMkIIVariant")
+                $g2RxPeakHuntEvidence["hardwareOriginalVfoHz"] = Get-JsonValue $hardware "originalVfoHz"
+                $g2RxPeakHuntEvidence["hardwareRestoredVfoHz"] = Get-JsonValue $hardware "restoredVfoHz"
+                $g2RxPeakHuntEvidence["hardwareSampleRate"] = [int](Get-NumericValueOrDefault (Get-JsonValue $hardware "sampleRate"))
+                $g2RxPeakHuntEvidence["liveDiagnosticsStatus"] = [string](Get-JsonValue $liveDiagnostics "status")
+                $g2RxPeakHuntEvidence["liveDiagnosticsReadyForLiveBenchmark"] = Test-Truthy (Get-JsonValue $liveDiagnostics "readyForLiveBenchmark")
+                $g2RxPeakHuntEvidence["liveDiagnosticsWdspActive"] = Test-Truthy (Get-JsonValue $liveDiagnostics "wdspActive")
+                $g2RxPeakHuntEvidence["liveDiagnosticsWdspNativeLoadable"] = Test-Truthy (Get-JsonValue $liveDiagnostics "wdspNativeLoadable")
+                $g2RxPeakHuntEvidence["liveDiagnosticsRequestedNrMode"] = [string](Get-JsonValue $liveDiagnostics "requestedNrMode")
+                $g2RxPeakHuntEvidence["liveDiagnosticsEffectiveNrMode"] = [string](Get-JsonValue $liveDiagnostics "effectiveNrMode")
+                $g2RxPeakHuntEvidence["liveDiagnosticsReadyForNr5Tuning"] = Test-Truthy (Get-JsonValue $liveDiagnostics "readyForNr5Tuning")
+                $g2RxPeakHuntEvidence["liveDiagnosticsFrontendSceneFresh"] = Test-Truthy (Get-JsonValue $liveDiagnostics "frontendSceneFresh")
+                $g2RxPeakHuntEvidence["frontendSceneStatus"] = [string](Get-JsonValue $frontendScene "status")
+                $g2RxPeakHuntEvidence["frontendSceneFresh"] = Test-Truthy (Get-JsonValue $frontendScene "fresh")
+                $g2RxPeakHuntEvidence["frontendSceneSignalProfile"] = [string](Get-JsonValue $frontendScene "signalProfile")
+                $g2RxPeakHuntEvidence["frontendSceneTopPeakCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $frontendScene "topPeakCount"))
+                $g2RxPeakHuntEvidence["bestRun"] = $bestRun
+                $g2RxPeakHuntEvidence["bestFrequencyHz"] = $bestFrequencyHz
+                $g2RxPeakHuntEvidence["bestScore"] = Get-JsonValue $bestRun "score"
+                $g2RxPeakHuntEvidence["bestStatus"] = [string](Get-JsonValue $bestRun "mixedWeakStrongEvidenceStatus")
+                $g2RxPeakHuntEvidence["bestReportPath"] = [string](Get-JsonValue $bestRun "reportPath")
+                $g2RxPeakHuntEvidence["bestJsonlPath"] = [string](Get-JsonValue $bestRun "jsonlPath")
+
+                if ($schemaVersion -lt 1) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-schema-version-missing" "Artifact '$artifactId' must declare schemaVersion >= 1."
+                    $artifactValidationOk = $false
+                }
+                if ($tool -ne "run-dsp-g2-rx-peak-hunt") {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-tool-invalid" "Artifact '$artifactId' must be generated by run-dsp-g2-rx-peak-hunt.ps1."
+                    $artifactValidationOk = $false
+                }
+                if (-not $reportOk -or -not [string]::IsNullOrWhiteSpace($scanError)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-scan-error" "Artifact '$artifactId' reports scanError='$scanError'. Recapture or inspect partial evidence before promotion."
+                    $artifactValidationOk = $false
+                }
+                if (-not $safetyRxOnly) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-not-rx-only" "Artifact '$artifactId' must declare safety.rxOnly=true."
+                    $artifactValidationOk = $false
+                }
+                if ($safetyTxEndpointsTouched) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-tx-endpoint-touched" "Artifact '$artifactId' must declare safety.txEndpointsTouched=false."
+                    $artifactValidationOk = $false
+                }
+                if (-not $safetyOriginalVfoRestoreAttempted) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-vfo-restore-not-attempted" "Artifact '$artifactId' must declare safety.originalVfoRestoreAttempted=true."
+                    $artifactValidationOk = $false
+                }
+                if (($allowRetune -or $retuneAttempts.Count -gt 0) -and -not $safetyOriginalVfoRestored) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-vfo-not-restored" "Artifact '$artifactId' retuned or allowed retune but did not prove safety.originalVfoRestored=true. restoreError='$safetyRestoreError'."
+                    $artifactValidationOk = $false
+                }
+                if ($retuneAttempts.Count -gt 0 -and -not $allowRetune) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-retuned-without-allow-retune" "Artifact '$artifactId' contains retune attempts but allowRetune=false."
+                    $artifactValidationOk = $false
+                }
+                if ($actualRunCount -le 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-run-count-empty" "Artifact '$artifactId' did not capture any watch windows."
+                    $artifactValidationOk = $false
+                }
+                if ($failedRunCount -gt $actualRunCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-failed-run-count-invalid" "Artifact '$artifactId' failedRunCount=$failedRunCount exceeds actualRunCount=$actualRunCount."
+                    $artifactValidationOk = $false
+                }
+                if ($hardBlockerSampleCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-hard-blockers" "Artifact '$artifactId' reports $hardBlockerSampleCount hard-blocker sample(s); do not promote this scan until endpoint/runtime blockers are cleared."
+                    $artifactValidationOk = $false
+                }
+                if ($agcPumpingRiskRunCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-agc-pumping-risk" "Artifact '$artifactId' reports AGC pumping risk in $agcPumpingRiskRunCount run(s); reject those windows for tuning promotion."
+                    $artifactValidationOk = $false
+                }
+                if ($candidateWeakLossSampleCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-candidate-weak-loss" "Artifact '$artifactId' reports $candidateWeakLossSampleCount candidate weak-loss sample(s); inspect per-window weak-loss details before tuning."
+                }
+                if ($hotMakeupSampleCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-hot-makeup" "Artifact '$artifactId' reports $hotMakeupSampleCount hot-makeup sample(s); inspect recovery/makeup behavior before tuning."
+                }
+
+                $g2ReferencedWindowCount = 0
+                $g2ReferencedWindowReadyCount = 0
+                $g2ReferencedWindowProblemCount = 0
+                $g2ReferencedWindowMissingCount = 0
+                $g2ReferencedWindowNonPortableCount = 0
+                $g2ReferencedWindowInvalidCount = 0
+                $g2ReferencedJsonlMissingCount = 0
+                $g2ReferencedReportPaths = @{}
+                $g2Runs = @(Get-JsonArray $artifactJson "runs")
+
+                if ($actualRunCount -gt 0 -and $g2Runs.Count -le 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-runs-missing" "Artifact '$artifactId' actualRunCount=$actualRunCount but runs is empty, so per-window watcher evidence cannot be validated."
+                    $artifactValidationOk = $false
+                }
+
+                foreach ($run in $g2Runs) {
+                    $runReportPath = [string](Get-JsonValue $run "reportPath")
+                    $runJsonlPath = [string](Get-JsonValue $run "jsonlPath")
+                    $runFrequencyHz = Get-JsonValue $run "frequencyHz"
+                    $runCandidateSource = [string](Get-JsonValue $run "candidateSource")
+                    $runWindow = Get-JsonValue $run "window"
+                    $windowRecord = [ordered]@{
+                        artifactId = $artifactId
+                        artifactKind = $artifactKind
+                        sourceType = "g2-rx-peak-hunt-window"
+                        frequencyHz = $runFrequencyHz
+                        candidateSource = $runCandidateSource
+                        window = $runWindow
+                        path = $runReportPath
+                        jsonlPath = $runJsonlPath
+                        required = $effectiveRequired
+                        ok = $false
+                        sourceStatus = "unchecked"
+                        jsonlStatus = "unchecked"
+                        sourceSha256 = ""
+                        jsonlSha256 = ""
+                    }
+                    $artifactReferencedFiles.Add($windowRecord) | Out-Null
+                    if ($effectiveRequired) {
+                        $requiredArtifactReferencedFileCount++
+                    }
+
+                    $g2ReferencedWindowCount++
+                    $windowOk = $true
+                    if ([string]::IsNullOrWhiteSpace($runReportPath)) {
+                        $windowRecord["sourceStatus"] = "path-missing"
+                        $g2ReferencedWindowMissingCount++
+                        $windowOk = $false
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-window-report-path-missing" "Artifact '$artifactId' run frequency='$runFrequencyHz' source='$runCandidateSource' window='$runWindow' is missing reportPath."
+                        $artifactValidationOk = $false
+                    }
+                    elseif (-not (Test-BundleRelativeEvidencePath -Path $runReportPath -BundlePath $bundlePath)) {
+                        $windowRecord["sourceStatus"] = "path-not-portable"
+                        $g2ReferencedWindowNonPortableCount++
+                        $windowOk = $false
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-window-report-path-not-portable" "Artifact '$artifactId' run frequency='$runFrequencyHz' source='$runCandidateSource' window='$runWindow' reportPath='$runReportPath' must be bundle-relative and remain inside the bundle."
+                        $artifactValidationOk = $false
+                    }
+                    else {
+                        $g2ReferencedReportPaths[(ConvertTo-ComparableEvidencePath -BundlePath $bundlePath -Path $runReportPath)] = $true
+                        $resolvedRunReportPath = Get-BundlePath $bundlePath $runReportPath
+                        if (-not (Test-Path -LiteralPath $resolvedRunReportPath -PathType Leaf)) {
+                            $windowRecord["sourceStatus"] = "file-missing"
+                            $g2ReferencedWindowMissingCount++
+                            $windowOk = $false
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-window-report-file-missing" "Artifact '$artifactId' run frequency='$runFrequencyHz' source='$runCandidateSource' window='$runWindow' references missing watcher summary '$runReportPath'."
+                            $artifactValidationOk = $false
+                        }
+                        else {
+                            $windowRecord["sourceSha256"] = Get-FileSha256 $resolvedRunReportPath
+                            $watchSummary = $null
+                            try {
+                                $watchSummary = Read-JsonFile $resolvedRunReportPath
+                            }
+                            catch {
+                                $windowRecord["sourceStatus"] = "json-invalid"
+                                $g2ReferencedWindowInvalidCount++
+                                $windowOk = $false
+                                Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-window-report-json-invalid" "Artifact '$artifactId' run frequency='$runFrequencyHz' source='$runCandidateSource' window='$runWindow' references watcher summary '$runReportPath' that cannot be parsed: $($_.Exception.Message)"
+                                $artifactValidationOk = $false
+                            }
+
+                            if ($null -ne $watchSummary) {
+                                $watchTool = [string](Get-JsonValue $watchSummary "tool")
+                                if ($watchTool -ne "watch-dsp-live-diagnostics") {
+                                    $windowRecord["sourceStatus"] = "tool-invalid"
+                                    $g2ReferencedWindowInvalidCount++
+                                    $windowOk = $false
+                                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-window-report-tool-invalid" "Artifact '$artifactId' run frequency='$runFrequencyHz' source='$runCandidateSource' window='$runWindow' watcher summary '$runReportPath' must be generated by watch-dsp-live-diagnostics.ps1; found tool '$watchTool'."
+                                    $artifactValidationOk = $false
+                                }
+                                else {
+                                    $windowRecord["sourceStatus"] = "matched"
+                                }
+                            }
+                        }
+                    }
+
+                    if ([string]::IsNullOrWhiteSpace($runJsonlPath)) {
+                        $windowRecord["jsonlStatus"] = "path-missing"
+                        $g2ReferencedJsonlMissingCount++
+                        $windowOk = $false
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-window-jsonl-path-missing" "Artifact '$artifactId' run frequency='$runFrequencyHz' source='$runCandidateSource' window='$runWindow' is missing jsonlPath."
+                        $artifactValidationOk = $false
+                    }
+                    elseif (-not (Test-BundleRelativeEvidencePath -Path $runJsonlPath -BundlePath $bundlePath)) {
+                        $windowRecord["jsonlStatus"] = "path-not-portable"
+                        $g2ReferencedWindowNonPortableCount++
+                        $windowOk = $false
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-window-jsonl-path-not-portable" "Artifact '$artifactId' run frequency='$runFrequencyHz' source='$runCandidateSource' window='$runWindow' jsonlPath='$runJsonlPath' must be bundle-relative and remain inside the bundle."
+                        $artifactValidationOk = $false
+                    }
+                    else {
+                        $resolvedRunJsonlPath = Get-BundlePath $bundlePath $runJsonlPath
+                        if (-not (Test-Path -LiteralPath $resolvedRunJsonlPath -PathType Leaf)) {
+                            $windowRecord["jsonlStatus"] = "file-missing"
+                            $g2ReferencedJsonlMissingCount++
+                            $windowOk = $false
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-window-jsonl-file-missing" "Artifact '$artifactId' run frequency='$runFrequencyHz' source='$runCandidateSource' window='$runWindow' references missing JSONL trace '$runJsonlPath'."
+                            $artifactValidationOk = $false
+                        }
+                        else {
+                            $windowRecord["jsonlStatus"] = "matched"
+                            $windowRecord["jsonlSha256"] = Get-FileSha256 $resolvedRunJsonlPath
+                        }
+                    }
+
+                    if ($windowOk) {
+                        $windowRecord["ok"] = $true
+                        $g2ReferencedWindowReadyCount++
+                    }
+                    else {
+                        $g2ReferencedWindowProblemCount++
+                    }
+                }
+
+                $bestReportPath = [string](Get-JsonValue $bestRun "reportPath")
+                if (-not [string]::IsNullOrWhiteSpace($bestReportPath)) {
+                    $bestComparableReportPath = ConvertTo-ComparableEvidencePath -BundlePath $bundlePath -Path $bestReportPath
+                    if (-not $g2ReferencedReportPaths.ContainsKey($bestComparableReportPath)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-best-run-report-path-untracked" "Artifact '$artifactId' bestRun.reportPath='$bestReportPath' does not match any validated runs[].reportPath entry."
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                $g2RxPeakHuntEvidence["referencedWindowCount"] = $g2ReferencedWindowCount
+                $g2RxPeakHuntEvidence["referencedWindowReadyCount"] = $g2ReferencedWindowReadyCount
+                $g2RxPeakHuntEvidence["referencedWindowProblemCount"] = $g2ReferencedWindowProblemCount
+                $g2RxPeakHuntEvidence["referencedWindowMissingCount"] = $g2ReferencedWindowMissingCount
+                $g2RxPeakHuntEvidence["referencedWindowNonPortableCount"] = $g2ReferencedWindowNonPortableCount
+                $g2RxPeakHuntEvidence["referencedWindowInvalidCount"] = $g2ReferencedWindowInvalidCount
+                $g2RxPeakHuntEvidence["referencedJsonlMissingCount"] = $g2ReferencedJsonlMissingCount
+
+                $g2PeakHuntStatus = if (-not $artifactValidationOk) {
+                    "invalid"
+                }
+                elseif ($mixedWeakStrongReady) {
+                    "mixed-ready"
+                }
+                elseif ($actualRunCount -le 0) {
+                    "no-runs"
+                }
+                elseif ($weakInputSampleCount -gt 0 -and $strongInputSampleCount -le 0) {
+                    "weak-only"
+                }
+                elseif ($strongInputSampleCount -gt 0 -and $weakInputSampleCount -le 0) {
+                    "strong-only"
+                }
+                elseif ($weakInputSampleCount -gt 0 -and $strongInputSampleCount -gt 0) {
+                    "mixed-not-ready"
+                }
+                else {
+                    "no-signal"
+                }
+
+                $g2RxPeakHuntEvidence["valid"] = $artifactValidationOk
+                $g2RxPeakHuntEvidence["readyForReview"] = $artifactValidationOk
+                $g2RxPeakHuntEvidence["status"] = $g2PeakHuntStatus
+            }
+
+            if ($artifactKind -ieq "native-stage-timing-report-json" -or $artifactId -eq $nativeStageTimingArtifactId) {
+                $nativeStageTimingEvidence["present"] = $true
+                $nativeStageTimingEvidence["path"] = $artifactPath
+                $nativeStageTimingEvidence["sha256"] = Get-FileSha256 $resolvedArtifactPath
+
+                $tool = [string](Get-JsonValue $artifactJson "tool")
+                $schemaVersion = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "schemaVersion"))
+                $readyForReview = Test-Truthy (Get-JsonValue $artifactJson "readyForReview")
+                $status = [string](Get-JsonValue $artifactJson "status")
+                $metricsPath = [string](Get-JsonValue $artifactJson "metricsPath")
+                $metricsSha256 = ([string](Get-JsonValue $artifactJson "metricsSha256")).Trim().ToLowerInvariant()
+                $wdspBackedEvidence = Test-Truthy (Get-JsonValue $artifactJson "wdspBackedEvidence")
+                $runtimeRid = [string](Get-JsonValue $artifactJson "wdspRuntimeRid")
+                $runtimeSha256 = ([string](Get-JsonValue $artifactJson "wdspRuntimeSha256")).Trim().ToLowerInvariant()
+                $runCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "runCount"))
+                $stageRecordCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "stageRecordCount"))
+                $missingStageTimingRunCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "missingStageTimingRunCount"))
+                $missingAllocationProbeRunCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "missingAllocationProbeRunCount"))
+                $budgetFailureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "budgetFailureCount"))
+                $maxStageElapsedMs = [double](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "maxStageElapsedMs"))
+                $maxRunElapsedMs = [double](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "maxRunElapsedMs"))
+                $maxManagedAllocationBytes = [int64](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "maxManagedAllocationBytes"))
+                $nativeCStageInstrumentationReady = Test-Truthy (Get-JsonValue $artifactJson "nativeCStageInstrumentationReady")
+                $nativeCStageInstrumentationStatus = [string](Get-JsonValue $artifactJson "nativeCStageInstrumentationStatus")
+                $nativeAllocationProbeStatus = [string](Get-JsonValue $artifactJson "nativeAllocationProbeStatus")
+
+                $nativeStageTimingEvidence["tool"] = $tool
+                $nativeStageTimingEvidence["schemaVersion"] = $schemaVersion
+                $nativeStageTimingEvidence["readyForReview"] = $readyForReview
+                $nativeStageTimingEvidence["status"] = $status
+                $nativeStageTimingEvidence["metricsPath"] = $metricsPath
+                $nativeStageTimingEvidence["metricsSha256"] = $metricsSha256
+                $nativeStageTimingEvidence["wdspBackedEvidence"] = $wdspBackedEvidence
+                $nativeStageTimingEvidence["wdspRuntimeRid"] = $runtimeRid
+                $nativeStageTimingEvidence["wdspRuntimeSha256"] = $runtimeSha256
+                $nativeStageTimingEvidence["runCount"] = $runCount
+                $nativeStageTimingEvidence["stageRecordCount"] = $stageRecordCount
+                $nativeStageTimingEvidence["missingStageTimingRunCount"] = $missingStageTimingRunCount
+                $nativeStageTimingEvidence["missingAllocationProbeRunCount"] = $missingAllocationProbeRunCount
+                $nativeStageTimingEvidence["budgetFailureCount"] = $budgetFailureCount
+                $nativeStageTimingEvidence["maxStageElapsedMs"] = $maxStageElapsedMs
+                $nativeStageTimingEvidence["maxRunElapsedMs"] = $maxRunElapsedMs
+                $nativeStageTimingEvidence["maxManagedAllocationBytes"] = $maxManagedAllocationBytes
+                $nativeStageTimingEvidence["nativeCStageInstrumentationReady"] = $nativeCStageInstrumentationReady
+                $nativeStageTimingEvidence["nativeCStageInstrumentationStatus"] = $nativeCStageInstrumentationStatus
+                $nativeStageTimingEvidence["nativeAllocationProbeStatus"] = $nativeAllocationProbeStatus
+
+                if ($schemaVersion -lt 1) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "native-stage-timing-schema-version-missing" "Artifact '$artifactId' must declare schemaVersion >= 1."
+                    $artifactValidationOk = $false
+                }
+                if ($tool -ne "summarize-dsp-native-stage-timing") {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "native-stage-timing-tool-invalid" "Artifact '$artifactId' must be generated by summarize-dsp-native-stage-timing.ps1."
+                    $artifactValidationOk = $false
+                }
+                if (-not $readyForReview) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "native-stage-timing-not-ready" "Artifact '$artifactId' reports readyForReview=false with status='$status'."
+                    $artifactValidationOk = $false
+                }
+                if (-not $wdspBackedEvidence) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "native-stage-timing-not-wdsp-backed" "Artifact '$artifactId' must summarize WDSP-backed fixture evidence."
+                    $artifactValidationOk = $false
+                }
+                if ($runCount -le 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "native-stage-timing-run-count-empty" "Artifact '$artifactId' did not summarize any fixture runs."
+                    $artifactValidationOk = $false
+                }
+                if ($stageRecordCount -le 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "native-stage-timing-stage-record-empty" "Artifact '$artifactId' did not summarize any stage records."
+                    $artifactValidationOk = $false
+                }
+                if ($missingStageTimingRunCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "native-stage-timing-missing-stage-runs" "Artifact '$artifactId' reports $missingStageTimingRunCount run(s) without stage timing."
+                    $artifactValidationOk = $false
+                }
+                if ($missingAllocationProbeRunCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "native-stage-timing-missing-allocation-runs" "Artifact '$artifactId' reports $missingAllocationProbeRunCount run(s) without allocation probe metadata."
+                    $artifactValidationOk = $false
+                }
+                if ($budgetFailureCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "native-stage-timing-budget-failure" "Artifact '$artifactId' reports $budgetFailureCount timing/allocation budget failure(s)."
+                    $artifactValidationOk = $false
+                }
+                if ([string]::IsNullOrWhiteSpace($metricsPath)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "native-stage-timing-metrics-path-missing" "Artifact '$artifactId' must declare metricsPath."
+                    $artifactValidationOk = $false
+                }
+                else {
+                    $resolvedMetricsPath = Get-BundlePath $bundlePath $metricsPath
+                    if (-not (Test-Path -LiteralPath $resolvedMetricsPath -PathType Leaf)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "native-stage-timing-metrics-file-missing" "Artifact '$artifactId' references a missing metricsPath: $metricsPath"
+                        $artifactValidationOk = $false
+                    }
+                    elseif ([string]::IsNullOrWhiteSpace($metricsSha256)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "native-stage-timing-metrics-hash-missing" "Artifact '$artifactId' must declare metricsSha256."
+                        $artifactValidationOk = $false
+                    }
+                    else {
+                        $actualMetricsSha256 = Get-FileSha256 $resolvedMetricsPath
+                        if (-not [string]::Equals($metricsSha256, $actualMetricsSha256, [StringComparison]::OrdinalIgnoreCase)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "native-stage-timing-metrics-hash-mismatch" "Artifact '$artifactId' metricsSha256='$metricsSha256' but '$metricsPath' hashes to '$actualMetricsSha256'."
+                            $artifactValidationOk = $false
+                            $nativeStageTimingEvidence["metricsHashStatus"] = "mismatch"
+                        }
+                        else {
+                            $nativeStageTimingEvidence["metricsHashStatus"] = "match"
+                        }
+                    }
+                }
+                if ([string]::IsNullOrWhiteSpace($runtimeSha256)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "native-stage-timing-runtime-hash-missing" "Artifact '$artifactId' must declare wdspRuntimeSha256."
+                    $artifactValidationOk = $false
+                }
+                if ([string]::IsNullOrWhiteSpace($nativeAllocationProbeStatus)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "native-stage-timing-allocation-probe-status-missing" "Artifact '$artifactId' must declare nativeAllocationProbeStatus so native allocation limitations are explicit."
+                    $artifactValidationOk = $false
+                }
+
+                if ($artifactValidationOk) {
+                    $nativeStageTimingEvidence["status"] = if ([string]::IsNullOrWhiteSpace($status)) { "ready" } else { $status }
+                }
+                else {
+                    $nativeStageTimingEvidence["readyForReview"] = $false
+                    if ([string]::IsNullOrWhiteSpace($nativeStageTimingEvidence.status) -or $nativeStageTimingEvidence.status -eq "not-captured") {
+                        $nativeStageTimingEvidence["status"] = "not-ready"
+                    }
+                }
+            }
+
             if ($artifactKind -ieq "native-audit-json" -or $artifactId -eq $nativeSymbolAuditArtifactId) {
                 $nativeSymbolAuditEvidence["present"] = $true
 
@@ -11647,6 +13447,77 @@ else {
                 }
                 else {
                     $nativeSymbolAuditEvidence["status"] = "not-ready"
+                }
+            }
+
+            if ($artifactKind -ieq "wdsp-source-drift-report-json" -or $artifactId -eq $wdspSourceDriftArtifactId) {
+                $wdspSourceDriftEvidence["present"] = $true
+                $wdspSourceDriftEvidence["path"] = $artifactPath
+                $wdspSourceDriftEvidence["sha256"] = Get-FileSha256 $resolvedArtifactPath
+
+                $tool = [string](Get-JsonValue $artifactJson "tool")
+                $schemaVersion = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "schemaVersion"))
+                $readyForReview = Test-Truthy (Get-JsonValue $artifactJson "readyForReview")
+                $normalizedLineEndings = Test-Truthy (Get-JsonValue $artifactJson "normalizedLineEndings")
+                $referenceFileCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "referenceFileCount"))
+                $candidateFileCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "candidateFileCount"))
+                $fileCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "fileCount"))
+                $deltaCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "deltaCount"))
+                $likelyDefectCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "likelyDefectCount"))
+                $statusCounts = @(Get-JsonArray $artifactJson "statusCounts")
+                $categoryCounts = @(Get-JsonArray $artifactJson "categoryCounts")
+
+                $wdspSourceDriftEvidence["tool"] = $tool
+                $wdspSourceDriftEvidence["schemaVersion"] = $schemaVersion
+                $wdspSourceDriftEvidence["readyForReview"] = $readyForReview
+                $wdspSourceDriftEvidence["normalizedLineEndings"] = $normalizedLineEndings
+                $wdspSourceDriftEvidence["referenceFileCount"] = $referenceFileCount
+                $wdspSourceDriftEvidence["candidateFileCount"] = $candidateFileCount
+                $wdspSourceDriftEvidence["fileCount"] = $fileCount
+                $wdspSourceDriftEvidence["deltaCount"] = $deltaCount
+                $wdspSourceDriftEvidence["likelyDefectCount"] = $likelyDefectCount
+                $wdspSourceDriftEvidence["statusCounts"] = @($statusCounts)
+                $wdspSourceDriftEvidence["categoryCounts"] = @($categoryCounts)
+
+                if ($schemaVersion -lt 1) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-source-drift-schema-version-missing" "Artifact '$artifactId' must declare schemaVersion >= 1."
+                    $artifactValidationOk = $false
+                }
+                if ($tool -ne "compare-wdsp-source-drift") {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-source-drift-tool-invalid" "Artifact '$artifactId' must be generated by compare-wdsp-source-drift.ps1."
+                    $artifactValidationOk = $false
+                }
+                if (-not $normalizedLineEndings) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-source-drift-line-ending-normalization-missing" "Artifact '$artifactId' must compare WDSP source with normalizedLineEndings=true."
+                    $artifactValidationOk = $false
+                }
+                if ($referenceFileCount -le 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-source-drift-reference-empty" "Artifact '$artifactId' must include at least one reference WDSP source file."
+                    $artifactValidationOk = $false
+                }
+                if ($candidateFileCount -le 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-source-drift-candidate-empty" "Artifact '$artifactId' must include at least one Zeus candidate WDSP source file."
+                    $artifactValidationOk = $false
+                }
+                if ($fileCount -le 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-source-drift-file-count-empty" "Artifact '$artifactId' did not compare any WDSP source files."
+                    $artifactValidationOk = $false
+                }
+                if ($likelyDefectCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-source-drift-likely-defect" "Artifact '$artifactId' reports $likelyDefectCount likely-defect WDSP source drift record(s) that need explicit Thetis parity classification."
+                    $artifactValidationOk = $false
+                }
+                if (-not $readyForReview) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-source-drift-not-ready" "Artifact '$artifactId' reports readyForReview=false."
+                    $artifactValidationOk = $false
+                }
+
+                if ($artifactValidationOk) {
+                    $wdspSourceDriftEvidence["status"] = "ready"
+                }
+                else {
+                    $wdspSourceDriftEvidence["readyForReview"] = $false
+                    $wdspSourceDriftEvidence["status"] = "not-ready"
                 }
             }
 
@@ -12522,6 +14393,76 @@ if ((Test-Truthy $offlineFixtureMetricsEvidence.present) -and (Test-Truthy $metr
     }
 }
 
+if ((Test-Truthy $offlineFixtureMetricsEvidence.present) -and (Test-Truthy $nativeStageTimingEvidence.present)) {
+    $stageMetricsPath = [string]$nativeStageTimingEvidence.metricsPath
+    if ([string]::IsNullOrWhiteSpace($stageMetricsPath)) {
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "native-stage-timing-source-metrics-path-missing" "Native stage timing report must declare the metricsPath used to generate it."
+        $nativeStageTimingEvidence["readyForReview"] = $false
+        $nativeStageTimingEvidence["status"] = "not-ready"
+    }
+    else {
+        $sameMetricsPath = Test-ComparableEvidencePathSame -BundlePath $bundlePath -ExpectedPath ([string]$offlineFixtureMetricsEvidence.path) -ActualPath $stageMetricsPath
+        if ($null -eq $sameMetricsPath -or -not $sameMetricsPath) {
+            Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "native-stage-timing-source-metrics-path-mismatch" "Native stage timing report metricsPath '$stageMetricsPath' does not match artifact-manifest offline-fixture-metrics path '$($offlineFixtureMetricsEvidence.path)'."
+            $nativeStageTimingEvidence["readyForReview"] = $false
+            $nativeStageTimingEvidence["status"] = "not-ready"
+        }
+    }
+
+    $expectedStageMetricsSha256 = ([string]$offlineFixtureMetricsEvidence.sha256).Trim().ToLowerInvariant()
+    $actualStageMetricsSha256 = ([string]$nativeStageTimingEvidence.metricsSha256).Trim().ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($actualStageMetricsSha256)) {
+        $nativeStageTimingEvidence["metricsHashStatus"] = "missing"
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "native-stage-timing-source-metrics-hash-missing" "Native stage timing report must declare metricsSha256 for the source offline-fixture-metrics artifact."
+        $nativeStageTimingEvidence["readyForReview"] = $false
+        $nativeStageTimingEvidence["status"] = "not-ready"
+    }
+    elseif ([string]::IsNullOrWhiteSpace($expectedStageMetricsSha256)) {
+        $nativeStageTimingEvidence["metricsHashStatus"] = "source-missing"
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "native-stage-timing-source-metrics-hash-source-missing" "Strict validation could not compute SHA-256 for the offline-fixture-metrics artifact."
+        $nativeStageTimingEvidence["readyForReview"] = $false
+        $nativeStageTimingEvidence["status"] = "not-ready"
+    }
+    elseif (-not [string]::Equals($expectedStageMetricsSha256, $actualStageMetricsSha256, [StringComparison]::OrdinalIgnoreCase)) {
+        $nativeStageTimingEvidence["metricsHashStatus"] = "mismatch"
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "native-stage-timing-source-metrics-hash-mismatch" "Native stage timing report metricsSha256 '$actualStageMetricsSha256' does not match current offline-fixture-metrics SHA-256 '$expectedStageMetricsSha256'. Rerun summarize-dsp-native-stage-timing.ps1 after regenerating fixture evidence."
+        $nativeStageTimingEvidence["readyForReview"] = $false
+        $nativeStageTimingEvidence["status"] = "not-ready"
+    }
+    else {
+        $nativeStageTimingEvidence["metricsHashStatus"] = "match"
+    }
+
+    $expectedStageRuntimeSha256 = ([string]$offlineFixtureMetricsEvidence.wdspRuntimeSha256).Trim().ToLowerInvariant()
+    $actualStageRuntimeSha256 = ([string]$nativeStageTimingEvidence.wdspRuntimeSha256).Trim().ToLowerInvariant()
+    if ((Test-Truthy $offlineFixtureMetricsEvidence.wdspBackedEvidence) -or (Test-Truthy $nativeStageTimingEvidence.wdspBackedEvidence)) {
+        if ([string]::IsNullOrWhiteSpace($actualStageRuntimeSha256)) {
+            $nativeStageTimingEvidence["runtimeHashStatus"] = "missing"
+            Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "native-stage-timing-runtime-hash-missing" "Native stage timing report must declare wdspRuntimeSha256 for the WDSP runtime used by the fixture run."
+            $nativeStageTimingEvidence["readyForReview"] = $false
+            $nativeStageTimingEvidence["status"] = "not-ready"
+        }
+        elseif ([string]::IsNullOrWhiteSpace($expectedStageRuntimeSha256)) {
+            $nativeStageTimingEvidence["runtimeHashStatus"] = "source-missing"
+            Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "native-stage-timing-source-runtime-hash-missing" "offline-fixture-metrics must declare wdspRuntimeSha256 before native stage timing evidence can be accepted."
+            $nativeStageTimingEvidence["readyForReview"] = $false
+            $nativeStageTimingEvidence["status"] = "not-ready"
+        }
+        elseif (-not [string]::Equals($expectedStageRuntimeSha256, $actualStageRuntimeSha256, [StringComparison]::OrdinalIgnoreCase)) {
+            $nativeStageTimingEvidence["runtimeHashStatus"] = "mismatch"
+            Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "native-stage-timing-runtime-hash-mismatch" "Native stage timing report wdspRuntimeSha256 '$actualStageRuntimeSha256' does not match offline-fixture-metrics wdspRuntimeSha256 '$expectedStageRuntimeSha256'. Rerun summarize-dsp-native-stage-timing.ps1 after regenerating fixture evidence."
+            $nativeStageTimingEvidence["readyForReview"] = $false
+            $nativeStageTimingEvidence["status"] = "not-ready"
+        }
+        else {
+            $nativeStageTimingEvidence["runtimeHashStatus"] = "match"
+        }
+    }
+    else {
+        $nativeStageTimingEvidence["runtimeHashStatus"] = "not-wdsp-backed"
+    }
+}
+
 if ((Test-Truthy $offlineFixtureMetricsEvidence.present) -and (Test-Truthy $nativeRuntimeArtifactAuditEvidence.present)) {
     $sourceRuntimeRid = [string]$offlineFixtureMetricsEvidence.wdspRuntimeRid
     $sourceRuntimeSha256 = ([string]$offlineFixtureMetricsEvidence.wdspRuntimeSha256).Trim().ToLowerInvariant()
@@ -12651,6 +14592,30 @@ $report = [ordered]@{
     captureHardwareTarget = $hardwareEvidence.manifestTarget
     hardwareDiagnosticsPresent = $hardwareEvidence.diagnosticsPresent
     hardwareEvidenceStatus = $hardwareEvidence.status
+    crossRadioValidationRequired = $true
+    crossRadioValidationPresent = $crossRadioValidationEvidence.present
+    crossRadioValidationReady = $crossRadioValidationEvidence.readyForReview
+    crossRadioValidationEvidenceStatus = $crossRadioValidationEvidence.status
+    crossRadioValidationPath = $crossRadioValidationEvidence.path
+    crossRadioValidationSha256 = $crossRadioValidationEvidence.sha256
+    crossRadioValidationTargetCount = $crossRadioValidationEvidence.targetCount
+    crossRadioValidationTargetIds = @($crossRadioValidationEvidence.targetIds)
+    crossRadioValidationNonG2TargetCount = $crossRadioValidationEvidence.nonG2TargetCount
+    crossRadioValidationNonG2TargetIds = @($crossRadioValidationEvidence.nonG2TargetIds)
+    crossRadioValidationScenarioCount = $crossRadioValidationEvidence.scenarioCount
+    crossRadioValidationScenarioIds = @($crossRadioValidationEvidence.scenarioIds)
+    crossRadioValidationComparisonCount = $crossRadioValidationEvidence.comparisonCount
+    crossRadioValidationComparisonIds = @($crossRadioValidationEvidence.comparisonIds)
+    crossRadioValidationDefaultBehaviorChangeApproved = $crossRadioValidationEvidence.defaultBehaviorChangeApproved
+    crossRadioValidationSourceReportCount = $crossRadioValidationEvidence.sourceReportCount
+    crossRadioValidationSourceProblemReportCount = $crossRadioValidationEvidence.sourceProblemReportCount
+    crossRadioValidationSourceWarningReportCount = $crossRadioValidationEvidence.sourceWarningReportCount
+    crossRadioValidationNonG2SourceReportCount = $crossRadioValidationEvidence.nonG2SourceReportCount
+    crossRadioValidationReadyNonG2SourceReportCount = $crossRadioValidationEvidence.readyNonG2SourceReportCount
+    crossRadioValidationSourceMetricComparisonReadyCount = $crossRadioValidationEvidence.sourceMetricComparisonReadyCount
+    crossRadioValidationSourceLiveTraceComparisonReadyCount = $crossRadioValidationEvidence.sourceLiveTraceComparisonReadyCount
+    crossRadioValidationSourceThetisLiveTraceComparisonReadyCount = $crossRadioValidationEvidence.sourceThetisLiveTraceComparisonReadyCount
+    crossRadioValidationSourceBackedEvidenceReady = $crossRadioValidationEvidence.sourceBackedEvidenceReady
     liveMatrixMixedWeakStrongHuntReady = $liveMatrixMixedWeakStrongEvidence.huntReady
     liveMatrixMixedWeakStrongStatus = $liveMatrixMixedWeakStrongEvidence.status
     liveMatrixMixedWeakStrongReportCount = $liveMatrixMixedWeakStrongEvidence.reportCount
@@ -12664,6 +14629,97 @@ $report = [ordered]@{
     liveMatrixMixedWeakStrongStrongInputSampleCount = $liveMatrixMixedWeakStrongEvidence.strongInputSampleCount
     liveMatrixMixedWeakStrongStatusCounts = @($liveMatrixMixedWeakStrongEvidence.statusCounts)
     liveMatrixMixedWeakStrongBestRun = $liveMatrixMixedWeakStrongEvidence.bestRun
+    g2RxPeakHuntReportPresent = $g2RxPeakHuntEvidence.present
+    g2RxPeakHuntReportReady = $g2RxPeakHuntEvidence.readyForReview
+    g2RxPeakHuntReportValid = $g2RxPeakHuntEvidence.valid
+    g2RxPeakHuntReportStatus = $g2RxPeakHuntEvidence.status
+    g2RxPeakHuntReportPath = $g2RxPeakHuntEvidence.path
+    g2RxPeakHuntReportSha256 = $g2RxPeakHuntEvidence.sha256
+    g2RxPeakHuntSchemaVersion = $g2RxPeakHuntEvidence.schemaVersion
+    g2RxPeakHuntTool = $g2RxPeakHuntEvidence.tool
+    g2RxPeakHuntOk = $g2RxPeakHuntEvidence.ok
+    g2RxPeakHuntScanError = $g2RxPeakHuntEvidence.scanError
+    g2RxPeakHuntRequestedBaseUrl = $g2RxPeakHuntEvidence.requestedBaseUrl
+    g2RxPeakHuntBaseUrl = $g2RxPeakHuntEvidence.baseUrl
+    g2RxPeakHuntBaseUrlAutoDiscoverRequested = $g2RxPeakHuntEvidence.baseUrlAutoDiscoverRequested
+    g2RxPeakHuntBaseUrlAutoDiscovered = $g2RxPeakHuntEvidence.baseUrlAutoDiscovered
+    g2RxPeakHuntBaseUrlAutoDiscoverError = $g2RxPeakHuntEvidence.baseUrlAutoDiscoverError
+    g2RxPeakHuntBaseUrlProbeResultCount = $g2RxPeakHuntEvidence.baseUrlProbeResultCount
+    g2RxPeakHuntComparisonId = $g2RxPeakHuntEvidence.comparisonId
+    g2RxPeakHuntAllowRetune = $g2RxPeakHuntEvidence.allowRetune
+    g2RxPeakHuntSkipCurrentVfo = $g2RxPeakHuntEvidence.skipCurrentVfo
+    g2RxPeakHuntStopOnReady = $g2RxPeakHuntEvidence.stopOnReady
+    g2RxPeakHuntSamplesPerWindow = $g2RxPeakHuntEvidence.samplesPerWindow
+    g2RxPeakHuntIntervalMs = $g2RxPeakHuntEvidence.intervalMs
+    g2RxPeakHuntPassCount = $g2RxPeakHuntEvidence.passCount
+    g2RxPeakHuntPassDelaySec = $g2RxPeakHuntEvidence.passDelaySec
+    g2RxPeakHuntCompletedPassCount = $g2RxPeakHuntEvidence.completedPassCount
+    g2RxPeakHuntScanPassCount = $g2RxPeakHuntEvidence.scanPassCount
+    g2RxPeakHuntCandidateFrequencyHzCount = $g2RxPeakHuntEvidence.candidateFrequencyHzCount
+    g2RxPeakHuntAutoPhoneCluster = $g2RxPeakHuntEvidence.autoPhoneCluster
+    g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHzCount = $g2RxPeakHuntEvidence.autoPhoneClusterCandidateFrequencyHzCount
+    g2RxPeakHuntAutoPhoneClusterCandidateCount = $g2RxPeakHuntEvidence.autoPhoneClusterCandidateCount
+    g2RxPeakHuntAutoPhoneClusterMaxCandidates = $g2RxPeakHuntEvidence.autoPhoneClusterMaxCandidates
+    g2RxPeakHuntAutoPhoneClusterLookbackHours = $g2RxPeakHuntEvidence.autoPhoneClusterLookbackHours
+    g2RxPeakHuntAutoPhoneClusterMinSpeechSamples = $g2RxPeakHuntEvidence.autoPhoneClusterMinSpeechSamples
+    g2RxPeakHuntAutoPhoneClusterBandLowHz = $g2RxPeakHuntEvidence.autoPhoneClusterBandLowHz
+    g2RxPeakHuntAutoPhoneClusterBandHighHz = $g2RxPeakHuntEvidence.autoPhoneClusterBandHighHz
+    g2RxPeakHuntOperatorCandidateCount = $g2RxPeakHuntEvidence.operatorCandidateCount
+    g2RxPeakHuntPlannedRunCount = $g2RxPeakHuntEvidence.plannedRunCount
+    g2RxPeakHuntActualRunCount = $g2RxPeakHuntEvidence.actualRunCount
+    g2RxPeakHuntFailedRunCount = $g2RxPeakHuntEvidence.failedRunCount
+    g2RxPeakHuntMixedWeakStrongReady = $g2RxPeakHuntEvidence.mixedWeakStrongReady
+    g2RxPeakHuntMixedWeakStrongReadyRunCount = $g2RxPeakHuntEvidence.mixedWeakStrongReadyRunCount
+    g2RxPeakHuntWeakInputSampleCount = $g2RxPeakHuntEvidence.weakInputSampleCount
+    g2RxPeakHuntStrongInputSampleCount = $g2RxPeakHuntEvidence.strongInputSampleCount
+    g2RxPeakHuntSpeechQualifiedWeakInputSampleCount = $g2RxPeakHuntEvidence.speechQualifiedWeakInputSampleCount
+    g2RxPeakHuntSpeechQualifiedStrongInputSampleCount = $g2RxPeakHuntEvidence.speechQualifiedStrongInputSampleCount
+    g2RxPeakHuntPassbandQualifiedWeakInputSampleCount = $g2RxPeakHuntEvidence.passbandQualifiedWeakInputSampleCount
+    g2RxPeakHuntPassbandQualifiedStrongInputSampleCount = $g2RxPeakHuntEvidence.passbandQualifiedStrongInputSampleCount
+    g2RxPeakHuntFrontendNearPassbandSampleCount = $g2RxPeakHuntEvidence.frontendNearPassbandSampleCount
+    g2RxPeakHuntCandidateWeakLossSampleCount = $g2RxPeakHuntEvidence.candidateWeakLossSampleCount
+    g2RxPeakHuntHotMakeupSampleCount = $g2RxPeakHuntEvidence.hotMakeupSampleCount
+    g2RxPeakHuntHardBlockerSampleCount = $g2RxPeakHuntEvidence.hardBlockerSampleCount
+    g2RxPeakHuntAgcPumpingRiskRunCount = $g2RxPeakHuntEvidence.agcPumpingRiskRunCount
+    g2RxPeakHuntPeakCandidateCount = $g2RxPeakHuntEvidence.peakCandidateCount
+    g2RxPeakHuntRetuneAttemptCount = $g2RxPeakHuntEvidence.retuneAttemptCount
+    g2RxPeakHuntSafetyRxOnly = $g2RxPeakHuntEvidence.safetyRxOnly
+    g2RxPeakHuntSafetyTxEndpointsTouched = $g2RxPeakHuntEvidence.safetyTxEndpointsTouched
+    g2RxPeakHuntSafetyOriginalVfoRestoreAttempted = $g2RxPeakHuntEvidence.safetyOriginalVfoRestoreAttempted
+    g2RxPeakHuntSafetyOriginalVfoRestored = $g2RxPeakHuntEvidence.safetyOriginalVfoRestored
+    g2RxPeakHuntSafetyRestoreError = $g2RxPeakHuntEvidence.safetyRestoreError
+    g2RxPeakHuntHardwareConnectionStatus = $g2RxPeakHuntEvidence.hardwareConnectionStatus
+    g2RxPeakHuntHardwareEndpoint = $g2RxPeakHuntEvidence.hardwareEndpoint
+    g2RxPeakHuntHardwareEffectiveBoard = $g2RxPeakHuntEvidence.hardwareEffectiveBoard
+    g2RxPeakHuntHardwareVariant = $g2RxPeakHuntEvidence.hardwareVariant
+    g2RxPeakHuntHardwareOriginalVfoHz = $g2RxPeakHuntEvidence.hardwareOriginalVfoHz
+    g2RxPeakHuntHardwareRestoredVfoHz = $g2RxPeakHuntEvidence.hardwareRestoredVfoHz
+    g2RxPeakHuntHardwareSampleRate = $g2RxPeakHuntEvidence.hardwareSampleRate
+    g2RxPeakHuntLiveDiagnosticsStatus = $g2RxPeakHuntEvidence.liveDiagnosticsStatus
+    g2RxPeakHuntLiveDiagnosticsReadyForLiveBenchmark = $g2RxPeakHuntEvidence.liveDiagnosticsReadyForLiveBenchmark
+    g2RxPeakHuntLiveDiagnosticsWdspActive = $g2RxPeakHuntEvidence.liveDiagnosticsWdspActive
+    g2RxPeakHuntLiveDiagnosticsWdspNativeLoadable = $g2RxPeakHuntEvidence.liveDiagnosticsWdspNativeLoadable
+    g2RxPeakHuntLiveDiagnosticsRequestedNrMode = $g2RxPeakHuntEvidence.liveDiagnosticsRequestedNrMode
+    g2RxPeakHuntLiveDiagnosticsEffectiveNrMode = $g2RxPeakHuntEvidence.liveDiagnosticsEffectiveNrMode
+    g2RxPeakHuntLiveDiagnosticsReadyForNr5Tuning = $g2RxPeakHuntEvidence.liveDiagnosticsReadyForNr5Tuning
+    g2RxPeakHuntLiveDiagnosticsFrontendSceneFresh = $g2RxPeakHuntEvidence.liveDiagnosticsFrontendSceneFresh
+    g2RxPeakHuntFrontendSceneStatus = $g2RxPeakHuntEvidence.frontendSceneStatus
+    g2RxPeakHuntFrontendSceneFresh = $g2RxPeakHuntEvidence.frontendSceneFresh
+    g2RxPeakHuntFrontendSceneSignalProfile = $g2RxPeakHuntEvidence.frontendSceneSignalProfile
+    g2RxPeakHuntFrontendSceneTopPeakCount = $g2RxPeakHuntEvidence.frontendSceneTopPeakCount
+    g2RxPeakHuntBestRun = $g2RxPeakHuntEvidence.bestRun
+    g2RxPeakHuntBestFrequencyHz = $g2RxPeakHuntEvidence.bestFrequencyHz
+    g2RxPeakHuntBestScore = $g2RxPeakHuntEvidence.bestScore
+    g2RxPeakHuntBestStatus = $g2RxPeakHuntEvidence.bestStatus
+    g2RxPeakHuntBestReportPath = $g2RxPeakHuntEvidence.bestReportPath
+    g2RxPeakHuntBestJsonlPath = $g2RxPeakHuntEvidence.bestJsonlPath
+    g2RxPeakHuntReferencedWindowCount = $g2RxPeakHuntEvidence.referencedWindowCount
+    g2RxPeakHuntReferencedWindowReadyCount = $g2RxPeakHuntEvidence.referencedWindowReadyCount
+    g2RxPeakHuntReferencedWindowProblemCount = $g2RxPeakHuntEvidence.referencedWindowProblemCount
+    g2RxPeakHuntReferencedWindowMissingCount = $g2RxPeakHuntEvidence.referencedWindowMissingCount
+    g2RxPeakHuntReferencedWindowNonPortableCount = $g2RxPeakHuntEvidence.referencedWindowNonPortableCount
+    g2RxPeakHuntReferencedWindowInvalidCount = $g2RxPeakHuntEvidence.referencedWindowInvalidCount
+    g2RxPeakHuntReferencedJsonlMissingCount = $g2RxPeakHuntEvidence.referencedJsonlMissingCount
     liveMatrixArtifactControlStatus = $liveMatrixArtifactControlEvidence.status
     liveMatrixArtifactControlReportCount = $liveMatrixArtifactControlEvidence.reportCount
     liveMatrixArtifactControlSchemaV3ReportCount = $liveMatrixArtifactControlEvidence.schemaV3ReportCount
@@ -12690,6 +14746,31 @@ $report = [ordered]@{
     offlineFixtureMetricsWdspRuntimeSha256 = $offlineFixtureMetricsEvidence.wdspRuntimeSha256
     offlineFixtureMetricsWdspRuntimeStatus = $offlineFixtureMetricsEvidence.wdspRuntimeStatus
     offlineFixtureMetricsRuntimeArtifactHashStatus = $offlineFixtureMetricsEvidence.runtimeArtifactHashStatus
+    nativeStageTimingReportPresent = $nativeStageTimingEvidence.present
+    nativeStageTimingReportReady = $nativeStageTimingEvidence.readyForReview
+    nativeStageTimingReportStatus = $nativeStageTimingEvidence.status
+    nativeStageTimingReportPath = $nativeStageTimingEvidence.path
+    nativeStageTimingReportSha256 = $nativeStageTimingEvidence.sha256
+    nativeStageTimingReportSchemaVersion = $nativeStageTimingEvidence.schemaVersion
+    nativeStageTimingReportTool = $nativeStageTimingEvidence.tool
+    nativeStageTimingMetricsPath = $nativeStageTimingEvidence.metricsPath
+    nativeStageTimingMetricsSha256 = $nativeStageTimingEvidence.metricsSha256
+    nativeStageTimingMetricsHashStatus = $nativeStageTimingEvidence.metricsHashStatus
+    nativeStageTimingWdspBackedEvidence = $nativeStageTimingEvidence.wdspBackedEvidence
+    nativeStageTimingWdspRuntimeRid = $nativeStageTimingEvidence.wdspRuntimeRid
+    nativeStageTimingWdspRuntimeSha256 = $nativeStageTimingEvidence.wdspRuntimeSha256
+    nativeStageTimingWdspRuntimeHashStatus = $nativeStageTimingEvidence.runtimeHashStatus
+    nativeStageTimingRunCount = $nativeStageTimingEvidence.runCount
+    nativeStageTimingStageRecordCount = $nativeStageTimingEvidence.stageRecordCount
+    nativeStageTimingMissingStageTimingRunCount = $nativeStageTimingEvidence.missingStageTimingRunCount
+    nativeStageTimingMissingAllocationProbeRunCount = $nativeStageTimingEvidence.missingAllocationProbeRunCount
+    nativeStageTimingBudgetFailureCount = $nativeStageTimingEvidence.budgetFailureCount
+    nativeStageTimingMaxStageElapsedMs = $nativeStageTimingEvidence.maxStageElapsedMs
+    nativeStageTimingMaxRunElapsedMs = $nativeStageTimingEvidence.maxRunElapsedMs
+    nativeStageTimingMaxManagedAllocationBytes = $nativeStageTimingEvidence.maxManagedAllocationBytes
+    nativeStageTimingNativeCStageInstrumentationReady = $nativeStageTimingEvidence.nativeCStageInstrumentationReady
+    nativeStageTimingNativeCStageInstrumentationStatus = $nativeStageTimingEvidence.nativeCStageInstrumentationStatus
+    nativeStageTimingNativeAllocationProbeStatus = $nativeStageTimingEvidence.nativeAllocationProbeStatus
     metricComparisonPresent = $metricComparisonEvidence.present
     metricComparisonReady = $metricComparisonEvidence.readyForReview
     metricComparisonReportReadyForReview = $metricComparisonEvidence.reportReadyForReview
@@ -13020,6 +15101,38 @@ $report = [ordered]@{
     liveAcceptanceCycleTriagePrimaryAcceptanceExpectedArtifactCount = $liveAcceptanceCycleEvidence.triagePrimaryAcceptanceExpectedArtifactCount
     liveAcceptanceCycleTriagePrimaryAcceptanceExpectedArtifacts = @($liveAcceptanceCycleEvidence.triagePrimaryAcceptanceExpectedArtifacts)
     liveAcceptanceCycleTriagePrimaryAcceptanceFollowUp = $liveAcceptanceCycleEvidence.triagePrimaryAcceptanceFollowUp
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionPresent = $liveAcceptanceCycleEvidence.triageExternalEngineBakeoffActionPresent
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionId = $liveAcceptanceCycleEvidence.triageExternalEngineBakeoffActionId
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionPriority = $liveAcceptanceCycleEvidence.triageExternalEngineBakeoffActionPriority
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionStageId = $liveAcceptanceCycleEvidence.triageExternalEngineBakeoffActionStageId
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionGateId = $liveAcceptanceCycleEvidence.triageExternalEngineBakeoffActionGateId
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionCategory = $liveAcceptanceCycleEvidence.triageExternalEngineBakeoffActionCategory
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionRequired = $liveAcceptanceCycleEvidence.triageExternalEngineBakeoffActionRequired
+    liveAcceptanceCycleTriageExternalEngineBakeoffActionManual = $liveAcceptanceCycleEvidence.triageExternalEngineBakeoffActionManual
+    liveAcceptanceCycleTriageExternalEngineBakeoffCommandTemplate = $liveAcceptanceCycleEvidence.triageExternalEngineBakeoffCommandTemplate
+    liveAcceptanceCycleTriageExternalEngineBakeoffCommandStepCount = $liveAcceptanceCycleEvidence.triageExternalEngineBakeoffCommandStepCount
+    liveAcceptanceCycleTriageExternalEngineBakeoffCommandSteps = @($liveAcceptanceCycleEvidence.triageExternalEngineBakeoffCommandSteps)
+    liveAcceptanceCycleTriageExternalEngineBakeoffManualAction = $liveAcceptanceCycleEvidence.triageExternalEngineBakeoffManualAction
+    liveAcceptanceCycleTriageExternalEngineBakeoffExpectedArtifact = $liveAcceptanceCycleEvidence.triageExternalEngineBakeoffExpectedArtifact
+    liveAcceptanceCycleTriageExternalEngineBakeoffExpectedArtifactCount = $liveAcceptanceCycleEvidence.triageExternalEngineBakeoffExpectedArtifactCount
+    liveAcceptanceCycleTriageExternalEngineBakeoffExpectedArtifacts = @($liveAcceptanceCycleEvidence.triageExternalEngineBakeoffExpectedArtifacts)
+    liveAcceptanceCycleTriageExternalEngineBakeoffFollowUp = $liveAcceptanceCycleEvidence.triageExternalEngineBakeoffFollowUp
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionPresent = $liveAcceptanceCycleEvidence.triagePureSignalSafeBypassActionPresent
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionId = $liveAcceptanceCycleEvidence.triagePureSignalSafeBypassActionId
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionPriority = $liveAcceptanceCycleEvidence.triagePureSignalSafeBypassActionPriority
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionStageId = $liveAcceptanceCycleEvidence.triagePureSignalSafeBypassActionStageId
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionGateId = $liveAcceptanceCycleEvidence.triagePureSignalSafeBypassActionGateId
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionCategory = $liveAcceptanceCycleEvidence.triagePureSignalSafeBypassActionCategory
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionRequired = $liveAcceptanceCycleEvidence.triagePureSignalSafeBypassActionRequired
+    liveAcceptanceCycleTriagePureSignalSafeBypassActionManual = $liveAcceptanceCycleEvidence.triagePureSignalSafeBypassActionManual
+    liveAcceptanceCycleTriagePureSignalSafeBypassCommandTemplate = $liveAcceptanceCycleEvidence.triagePureSignalSafeBypassCommandTemplate
+    liveAcceptanceCycleTriagePureSignalSafeBypassCommandStepCount = $liveAcceptanceCycleEvidence.triagePureSignalSafeBypassCommandStepCount
+    liveAcceptanceCycleTriagePureSignalSafeBypassCommandSteps = @($liveAcceptanceCycleEvidence.triagePureSignalSafeBypassCommandSteps)
+    liveAcceptanceCycleTriagePureSignalSafeBypassManualAction = $liveAcceptanceCycleEvidence.triagePureSignalSafeBypassManualAction
+    liveAcceptanceCycleTriagePureSignalSafeBypassExpectedArtifact = $liveAcceptanceCycleEvidence.triagePureSignalSafeBypassExpectedArtifact
+    liveAcceptanceCycleTriagePureSignalSafeBypassExpectedArtifactCount = $liveAcceptanceCycleEvidence.triagePureSignalSafeBypassExpectedArtifactCount
+    liveAcceptanceCycleTriagePureSignalSafeBypassExpectedArtifacts = @($liveAcceptanceCycleEvidence.triagePureSignalSafeBypassExpectedArtifacts)
+    liveAcceptanceCycleTriagePureSignalSafeBypassFollowUp = $liveAcceptanceCycleEvidence.triagePureSignalSafeBypassFollowUp
     liveAcceptanceCycleRequiredLiveAcceptanceArtifactProblemCount = $liveAcceptanceCycleEvidence.requiredLiveAcceptanceArtifactProblemCount
     liveAcceptanceCycleSummaryPath = $liveAcceptanceCycleEvidence.path
     liveAcceptanceCycleSummarySha256 = $liveAcceptanceCycleEvidence.sha256
@@ -13038,6 +15151,20 @@ $report = [ordered]@{
     nativeRuntimeArtifactAuditWinX64NativePath = $nativeRuntimeArtifactAuditEvidence.winX64NativePath
     nativeRuntimeArtifactAuditWinX64NativeLength = $nativeRuntimeArtifactAuditEvidence.winX64NativeLength
     nativeRuntimeArtifactAuditWinX64NativeSha256 = $nativeRuntimeArtifactAuditEvidence.winX64NativeSha256
+    wdspSourceDriftReportPresent = $wdspSourceDriftEvidence.present
+    wdspSourceDriftReportReady = $wdspSourceDriftEvidence.readyForReview
+    wdspSourceDriftReportStatus = $wdspSourceDriftEvidence.status
+    wdspSourceDriftReportPath = $wdspSourceDriftEvidence.path
+    wdspSourceDriftReportSha256 = $wdspSourceDriftEvidence.sha256
+    wdspSourceDriftReportSchemaVersion = $wdspSourceDriftEvidence.schemaVersion
+    wdspSourceDriftReportNormalizedLineEndings = $wdspSourceDriftEvidence.normalizedLineEndings
+    wdspSourceDriftReferenceFileCount = $wdspSourceDriftEvidence.referenceFileCount
+    wdspSourceDriftCandidateFileCount = $wdspSourceDriftEvidence.candidateFileCount
+    wdspSourceDriftFileCount = $wdspSourceDriftEvidence.fileCount
+    wdspSourceDriftDeltaCount = $wdspSourceDriftEvidence.deltaCount
+    wdspSourceDriftLikelyDefectCount = $wdspSourceDriftEvidence.likelyDefectCount
+    wdspSourceDriftStatusCounts = @($wdspSourceDriftEvidence.statusCounts)
+    wdspSourceDriftCategoryCounts = @($wdspSourceDriftEvidence.categoryCounts)
     benchmarkPlanStatus = $benchmarkPlanEvidence.status
     benchmarkPlanScenarioCount = $benchmarkPlanEvidence.scenarioCount
     benchmarkPlanScenarioIds = @($benchmarkPlanEvidence.scenarioIds)
@@ -13114,16 +15241,65 @@ $report = [ordered]@{
     externalEngineBakeoffSnapshotSha256 = $externalEngineBakeoffEvidence.snapshotSha256
     externalEngineBakeoffPlanCandidateCount = $externalEngineBakeoffEvidence.bakeoffPlanCandidateCount
     externalEngineBakeoffPlanScenarioCount = $externalEngineBakeoffEvidence.bakeoffPlanScenarioCount
+    externalEngineBakeoffPlanScenarioIds = @($externalEngineBakeoffEvidence.bakeoffPlanScenarioIds)
+    externalEngineBakeoffPlanFixtureComparisonCommandTemplate = $externalEngineBakeoffEvidence.bakeoffPlanFixtureComparisonCommandTemplate
+    externalEngineBakeoffPlanLiveMatrixCommandTemplate = $externalEngineBakeoffEvidence.bakeoffPlanLiveMatrixCommandTemplate
     externalEngineBakeoffPlanDefaultBehaviorChangeReady = $externalEngineBakeoffEvidence.bakeoffPlanDefaultBehaviorChangeReady
     externalEngineBakeoffPlanRawWdspIqReplacementAllowed = $externalEngineBakeoffEvidence.bakeoffPlanRawWdspIqReplacementAllowed
+    externalEngineBakeoffFirstSafeCandidateId = $externalEngineBakeoffEvidence.firstSafeBakeoffCandidateId
+    externalEngineBakeoffFirstSafeScenarioIds = @($externalEngineBakeoffEvidence.firstSafeBakeoffScenarioIds)
+    externalEngineBakeoffEvaluationOrderCandidateIds = @($externalEngineBakeoffEvidence.evaluationOrderCandidateIds)
+    externalEngineBakeoffEvaluationOrder = @($externalEngineBakeoffEvidence.evaluationOrder)
+    externalEngineBakeoffCycleSummaryPresent = $externalEngineBakeoffCycleEvidence.present
+    externalEngineBakeoffCycleSummaryValid = $externalEngineBakeoffCycleEvidence.valid
+    externalEngineBakeoffCycleStatus = $externalEngineBakeoffCycleEvidence.status
+    externalEngineBakeoffCycleMode = $externalEngineBakeoffCycleEvidence.mode
+    externalEngineBakeoffCycleCandidateId = $externalEngineBakeoffCycleEvidence.candidateId
+    externalEngineBakeoffCycleComparisonId = $externalEngineBakeoffCycleEvidence.comparisonId
+    externalEngineBakeoffCycleScenarioIds = @($externalEngineBakeoffCycleEvidence.scenarioIds)
+    externalEngineBakeoffCycleReadyToExecute = $externalEngineBakeoffCycleEvidence.readyToExecute
+    externalEngineBakeoffCycleExecuted = $externalEngineBakeoffCycleEvidence.executed
+    externalEngineBakeoffCycleMissingPrerequisiteCount = $externalEngineBakeoffCycleEvidence.missingPrerequisiteCount
+    externalEngineBakeoffCycleCommandStepCount = $externalEngineBakeoffCycleEvidence.commandStepCount
+    externalEngineBakeoffCycleExpectedArtifactCount = $externalEngineBakeoffCycleEvidence.expectedArtifactCount
+    externalEngineBakeoffCycleNonZeroExitCount = $externalEngineBakeoffCycleEvidence.nonZeroExitCount
+    externalEngineBakeoffCycleSourceExternalBakeoffReady = $externalEngineBakeoffCycleEvidence.sourceExternalBakeoffReady
+    externalEngineBakeoffCycleSourceExternalBakeoffActionPresent = $externalEngineBakeoffCycleEvidence.sourceExternalBakeoffActionPresent
+    externalEngineBakeoffCyclePath = $externalEngineBakeoffCycleEvidence.path
+    externalEngineBakeoffCycleSha256 = $externalEngineBakeoffCycleEvidence.sha256
+    pureSignalSafeBypassReportPresent = $pureSignalSafeBypassEvidence.present
+    pureSignalSafeBypassReportReady = $pureSignalSafeBypassEvidence.readyForReview
+    pureSignalSafeBypassReportStatus = $pureSignalSafeBypassEvidence.status
+    pureSignalSafeBypassReportPath = $pureSignalSafeBypassEvidence.path
+    pureSignalSafeBypassReportSha256 = $pureSignalSafeBypassEvidence.sha256
+    pureSignalSafeBypassScenarioId = $pureSignalSafeBypassEvidence.scenarioId
+    pureSignalSafeBypassHardwareTarget = $pureSignalSafeBypassEvidence.hardwareTarget
+    pureSignalSafeBypassDisabledPathReady = $pureSignalSafeBypassEvidence.disabledPathReady
+    pureSignalSafeBypassEnabledPathReady = $pureSignalSafeBypassEvidence.enabledPathReady
+    pureSignalSafeBypassCapturedModeCount = $pureSignalSafeBypassEvidence.capturedModeCount
+    pureSignalSafeBypassMissingModeCount = $pureSignalSafeBypassEvidence.missingModeCount
+    pureSignalSafeBypassMissingModes = @($pureSignalSafeBypassEvidence.missingModes)
+    pureSignalSafeBypassDefaultStatePreserved = $pureSignalSafeBypassEvidence.pureSignalDefaultStatePreserved
+    pureSignalSafeBypassDefaultBehaviorChangeApproved = $pureSignalSafeBypassEvidence.defaultBehaviorChangeApproved
+    pureSignalSafeBypassFeedbackStabilityMin = $pureSignalSafeBypassEvidence.feedbackStabilityMin
+    pureSignalSafeBypassFeedbackStabilityThreshold = $pureSignalSafeBypassEvidence.feedbackStabilityThreshold
+    pureSignalSafeBypassTxMonitorCouplingMax = $pureSignalSafeBypassEvidence.txMonitorCouplingMax
+    pureSignalSafeBypassTxMonitorCouplingThreshold = $pureSignalSafeBypassEvidence.txMonitorCouplingThreshold
+    pureSignalSafeBypassClippingCountTotal = $pureSignalSafeBypassEvidence.clippingCountTotal
+    pureSignalSafeBypassGateFailureCount = $pureSignalSafeBypassEvidence.gateFailureCount
     errorCount = $errors.Count
     warningCount = $warnings.Count
     hardwareEvidence = $hardwareEvidence
     benchmarkPlanEvidence = $benchmarkPlanEvidence
     metricCatalogEvidence = $metricCatalogEvidence
     offlineFixtureMetricsEvidence = $offlineFixtureMetricsEvidence
+    nativeStageTimingEvidence = $nativeStageTimingEvidence
     externalEngineCandidateEvidence = $externalEngineCandidateEvidence
+    crossRadioValidationEvidence = $crossRadioValidationEvidence
+    g2RxPeakHuntEvidence = $g2RxPeakHuntEvidence
     externalEngineBakeoffEvidence = $externalEngineBakeoffEvidence
+    externalEngineBakeoffCycleEvidence = $externalEngineBakeoffCycleEvidence
+    pureSignalSafeBypassEvidence = $pureSignalSafeBypassEvidence
     metricComparisonEvidence = $metricComparisonEvidence
     liveTraceComparisonEvidence = $liveTraceComparisonEvidence
     liveTraceThetisComparisonEvidence = $liveTraceThetisComparisonEvidence
@@ -13131,6 +15307,7 @@ $report = [ordered]@{
     liveAcceptanceCycleEvidence = $liveAcceptanceCycleEvidence
     nativeSymbolAuditEvidence = $nativeSymbolAuditEvidence
     nativeRuntimeArtifactAuditEvidence = $nativeRuntimeArtifactAuditEvidence
+    wdspSourceDriftEvidence = $wdspSourceDriftEvidence
     artifactFiles = @($artifactFiles.ToArray())
     artifactReferencedFiles = @($artifactReferencedFiles.ToArray())
     artifactScenarioCoverage = @($artifactScenarioCoverage.ToArray())

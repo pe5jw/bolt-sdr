@@ -86,6 +86,13 @@ const DEFAULT_POP_FLOOR_DB = 3;
 const DEFAULT_POP_SPAN_DB = 30;
 const DEFAULT_POP_GAMMA = 0.5;
 const DEFAULT_POP_RENDER_INTENSITY = 72;
+// Display-only sensitivity trim. popFloorDb is the shared noise gate that also
+// feeds the signal-texture / confidence path consumed by snap, peak and scene
+// automation, so it must NOT be raised just to calm the picture. Instead the
+// Pop *display* ramp (enhanceInto height + terrain) starts this many dB above
+// the detection gate, so weak near-floor grass reads a little darker while the
+// detector still sees — and automation still acts on — the same weak energy.
+const POP_DISPLAY_GATE_MARGIN_DB = 2;
 const LEGACY_WATERFALL_RELIEF_DEPTH = 48;
 const LEGACY_WATERFALL_SMOOTHNESS = 42;
 const DEFAULT_WATERFALL_RELIEF_DEPTH = 92;
@@ -481,6 +488,25 @@ export type AdjacentNoiseProfile = {
   rejectedPct: number;
 };
 
+export type SceneTopPeak = {
+  frequencyHz: number;
+  offsetHz: number;
+  snrDb: number;
+  dbfs: number;
+  confidence: number | null;
+  coherent: boolean;
+};
+
+export type SceneTopPeaksInput = {
+  spectrum: Float32Array | null;
+  floor: Float32Array | null;
+  confidence?: Float32Array | null;
+  centerHz: number | bigint;
+  hzPerPixel: number;
+  dialHz: number;
+  limit?: number;
+};
+
 const SCENE_PEAK_GATE_DB = 8;
 const SCENE_BUSY_PEAKS_PER_10KHZ = 3.5;
 const SCENE_BUSY_OCCUPIED_RATIO = 0.14;
@@ -692,6 +718,67 @@ export function estimateAdjacentNoiseProfile(input: AdjacentNoiseProfileInput): 
     slopeDbPerKhz: slopeDbPerKhz === null ? null : round1(slopeDbPerKhz),
     rejectedPct: round1(rejectedPct),
   };
+}
+
+export function estimateSceneTopPeaks(input: SceneTopPeaksInput): SceneTopPeak[] {
+  const spec = input.spectrum;
+  const floorArr = input.floor;
+  const centerHz = absoluteCenterHz(input.centerHz);
+  const limit = Math.max(0, Math.min(12, Math.floor(input.limit ?? 8)));
+  if (
+    limit === 0 ||
+    spec === null ||
+    floorArr === null ||
+    spec.length < 3 ||
+    floorArr.length !== spec.length ||
+    centerHz === null ||
+    !validHzPerPixel(input.hzPerPixel) ||
+    !Number.isFinite(input.dialHz)
+  ) {
+    return [];
+  }
+
+  const n = spec.length;
+  const half = n / 2;
+  const useConfidence = input.confidence !== null &&
+    input.confidence !== undefined &&
+    input.confidence.length === n;
+  const peaks: SceneTopPeak[] = [];
+  for (let i = 1; i < n - 1; i++) {
+    const snr = sceneSnr(spec, floorArr, i);
+    const center = finiteSample(spec, i);
+    const left = finiteSample(spec, i - 1);
+    const right = finiteSample(spec, i + 1);
+    if (
+      snr === null ||
+      center === null ||
+      left === null ||
+      right === null ||
+      snr < SCENE_PEAK_GATE_DB ||
+      center < left ||
+      center <= right
+    ) {
+      continue;
+    }
+
+    const confidence = useConfidence ? finiteConfidenceValue(input.confidence!, n, i) : null;
+    const frequencyHz = centerHz + (i - half) * input.hzPerPixel;
+    peaks.push({
+      frequencyHz: Math.round(frequencyHz),
+      offsetHz: Math.round(frequencyHz - input.dialHz),
+      snrDb: round1(snr),
+      dbfs: round1(center),
+      confidence,
+      coherent: confidence !== null ? confidence >= COHERENCE_HOLD_GATE : true,
+    });
+  }
+
+  return peaks
+    .sort((a, b) => {
+      if (a.coherent !== b.coherent) return a.coherent ? -1 : 1;
+      return b.snrDb - a.snrDb;
+    })
+    .slice(0, limit);
 }
 
 function sceneSnr(spec: Float32Array, f: Float32Array, index: number): number | null {
@@ -1701,7 +1788,9 @@ export function enhanceInto(raw: Float32Array, out: Float32Array, terrainOut?: F
     return;
   }
   const st = useSignalEnhanceStore.getState();
-  const gate = st.popFloorDb;
+  // Detection (texture/confidence/AGC) still gates at the true popFloorDb; only
+  // the display ramp below starts a touch higher so the picture is less twitchy.
+  const gate = st.popFloorDb + POP_DISPLAY_GATE_MARGIN_DB;
   const baseSpan = st.popSpanDb > 1 ? st.popSpanDb : 1;
   const gamma = st.popGamma;
   const hold = signalHold && signalHold.length === n ? signalHold : null;
@@ -2255,7 +2344,16 @@ function modeTuneHz(
  *  though its tuning (high) edge is kilohertz away — the dial then lands on that
  *  high edge. Clusters whose body is more than `maxRadiusHz` from the click are
  *  ignored, so a click over bare spectrum returns null and the caller tunes
- *  normally at the click point. */
+ *  normally at the click point.
+ *
+ *  HYSTERESIS (close-neighbour flip-flop). With two carriers spaced close
+ *  together, a cursor parked near the midpoint would otherwise re-pick the
+ *  "nearest" one every frame as the measured edges breathe — the preview flips
+ *  back and forth. `stickyHz` is the frequency the previous resolve locked onto;
+ *  the cluster that still contains it keeps a `hysteresisHz` distance discount,
+ *  so the snap stays on the signal it already chose until a neighbour is closer
+ *  to the cursor by more than that margin. Passing hysteresisHz=0 (the default)
+ *  restores the plain nearest-body behaviour. */
 export function computeSnapToLineHz(
   spec: Float32Array,
   centerHz: number,
@@ -2263,6 +2361,8 @@ export function computeSnapToLineHz(
   mode: RxMode,
   lineHz: number,
   maxRadiusHz: number,
+  stickyHz: number | null = null,
+  hysteresisHz = 0,
 ): number | null {
   const n = spec.length;
   if (
@@ -2276,9 +2376,14 @@ export function computeSnapToLineHz(
   const st = useSignalEnhanceStore.getState();
   const binToHz = (b: number): number => centerHz + (b - half) * hzPerPixel;
   const maxBins = Math.max(2, Math.round(SNAP_MAX_SIGNAL_HZ / hzPerPixel));
+  // Re-identify the previously-locked cluster across edge breathing: treat the
+  // sticky frequency as "inside this cluster" if it falls within a few-bin gap
+  // tolerance of the body. Clearly-separated neighbours never both claim it.
+  const stick = stickyHz != null && Number.isFinite(stickyHz) && hysteresisHz > 0;
+  const identTolHz = hzPerPixel * SNAP_EDGE_GAP_BINS;
 
   let best: number | null = null;
-  let bestDist = Infinity;
+  let bestScore = Infinity;
   let i = 1;
   const end = n - 2;
   while (i <= end) {
@@ -2296,8 +2401,15 @@ export function computeSnapToLineHz(
     const loHz = binToHz(loEdge);
     const hiHz = binToHz(hiEdge);
     const dist = lineHz < loHz ? loHz - lineHz : lineHz > hiHz ? lineHz - hiHz : 0;
-    if (dist <= maxRadiusHz && dist < bestDist) {
-      bestDist = dist;
+    // The cluster we were already on keeps a hysteresisHz head start, so a
+    // neighbour only wins once the cursor is closer to it by more than that
+    // margin. The discount is NOT floored at 0: a signal the cursor is actually
+    // inside (dist 0) must still beat a stuck neighbour the cursor only sits
+    // NEAR, otherwise you could never move the snap onto it.
+    const onSticky = stick && stickyHz! >= loHz - identTolHz && stickyHz! <= hiHz + identTolHz;
+    const score = onSticky ? dist - hysteresisHz : dist;
+    if (dist <= maxRadiusHz && score < bestScore) {
+      bestScore = score;
       best = modeTuneHz(spec, loEdge, hiEdge, mode, binToHz);
     }
     i = Math.max(i + 1, hiEdge + 1);

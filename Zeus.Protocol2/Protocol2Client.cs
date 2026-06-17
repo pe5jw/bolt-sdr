@@ -1248,6 +1248,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         return numAdc == 0 ? (byte)0 : (byte)0x07;
     }
 
+    internal static byte Rx2AdcSource(byte numAdc, HpsdrBoardKind boardKind)
+    {
+        if (numAdc < 2) return 0x00;
+        return boardKind is HpsdrBoardKind.Hermes or HpsdrBoardKind.HermesII or HpsdrBoardKind.HermesC10
+            ? (byte)0x00
+            : (byte)0x01;
+    }
+
     // Static byte composer — pure function over (seq, numAdc, sampleRateKhz,
     // psEnabled, boardKind, ADC options). Exposed internal so wire-format
     // tests don't need a live socket. SendCmdRx constructs the same bytes and
@@ -1314,10 +1322,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
         if (rx2Active)
         {
-            // RX2 DDC config block: ADC0 source, same sample rate, 24-bit —
-            // identical shape to the primary RX block (P2 has no per-DDC rate).
+            // RX2 DDC config block: on dual-ADC Orion/Saturn/G2-class boards,
+            // source ADC1 (the RX2 input/filter bank), not ADC0. Hermes-class
+            // P2 boards remain ADC0 because they expose only one receive ADC.
             int off2 = 17 + rx2Ddc * 6;
-            p[off2 + 0] = 0x00;
+            p[off2 + 0] = Rx2AdcSource(numAdc, boardKind);
             WriteBeU16(p, off2 + 1, sampleRateKhz);
             p[off2 + 5] = 24;
         }
@@ -1535,18 +1544,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // harmonics. Alex1 additionally gets RX_GNDonTX to short the RX input
         // while keyed, protecting the ADC.
         bool xmit = _moxOn || _tuneActive;
-        uint alexCommon = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: 1, board: _boardKind);
-        uint alex0 = alexCommon | (xmit ? ALEX_TX_RELAY : 0u);
-        uint alex1 = alexCommon | (xmit ? ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX : 0u);
+        bool rx2Enabled = Volatile.Read(ref _rx2Enabled) != 0;
+        uint alex0Common = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: 1, board: _boardKind);
+        uint alex0 = alex0Common | (xmit ? ALEX_TX_RELAY : 0u);
+        uint alex1 = ComposeAlex1Word(
+            _rxFreqHz,
+            _rx2FreqHz,
+            rx2Enabled,
+            xmit,
+            _psFeedbackEnabled,
+            _boardKind);
         // ALEX_PS_BIT (0x00040000): pihpsdr new_protocol.c:994-998 ORs this
-        // into alex0 (during xmit) and alex1 (always-on while PS armed). The
-        // BPF board uses it to swap to the feedback-coupler tap on the TX
-        // path so DDC0/DDC1 see the post-PA signal.
-        if (_psFeedbackEnabled)
-        {
-            alex1 |= AlexPsBit;
-            if (xmit) alex0 |= AlexPsBit;
-        }
+        // into alex0 (during xmit) and alex1 (always-on while PS armed).
+        // ComposeAlex1Word owns the alex1 side because it also owns ADC1/RX2
+        // filter-bank selection.
+        if (_psFeedbackEnabled && xmit) alex0 |= AlexPsBit;
         // External (Bypass) feedback antenna — pihpsdr new_protocol.c:1284-
         // 1296 ORs ALEX_RX_ANTENNA_BYPASS into alex0 only during xmit when
         // PS is armed and the operator selected the external path. Internal
@@ -1642,6 +1654,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (psEnabled && moxOn) alex0 |= AlexPsBit;
         if (psEnabled && psExternal && moxOn) alex0 |= AlexRxAntennaBypass;
         return alex0;
+    }
+
+    internal static uint ComposeAlex1Word(
+        uint rxFreqHz,
+        uint rx2FreqHz,
+        bool rx2Enabled,
+        bool moxOn,
+        bool psEnabled,
+        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII)
+    {
+        uint rx2FilterFreqHz = rx2Enabled ? rx2FreqHz : rxFreqHz;
+        uint alex1 = ComputeAlexWord(rx2FilterFreqHz, rx2FilterFreqHz, txAnt: 1, board: board);
+        if (moxOn) alex1 |= ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX;
+        if (psEnabled) alex1 |= AlexPsBit;
+        return alex1;
     }
 
     internal static uint ComputeAlexWord(uint rxFreqHz, uint txFreqHz, int txAnt, HpsdrBoardKind board = HpsdrBoardKind.OrionMkII)

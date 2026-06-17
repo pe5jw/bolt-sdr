@@ -39,6 +39,15 @@
   gap: 6px;
   flex-shrink: 0;
 }
+.m-brand-mark {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+}
+.m-brand-mark .brand-mark-logo {
+  width: 18px;
+  height: 18px;
+}
 /* Stacked brand mark — tiny "OPENHPSDR" eyebrow over a larger "Zeus". Lets
    the brand stay narrow without dropping the OpenHpsdr provenance. */
 .m-brand-text {
@@ -353,7 +362,9 @@
   inset: 0;
   z-index: 1;
   display: grid;
-  grid-template-rows: 1fr 1fr;
+  /* panadapter / splitter / waterfall. MobileSpectrumStack overrides the
+     fr rows inline as the operator drags the divider. */
+  grid-template-rows: 0.4fr 10px 0.6fr;
   pointer-events: auto;
 }
 .m-pan,
@@ -361,7 +372,34 @@
   position: relative;
   background: transparent;
 }
-.m-pan { border-bottom: 1px solid var(--panel-border); }
+
+/* Draggable divider between panadapter and waterfall — mirrors the desktop
+   .spectrum-splitter. It is the middle grid row (its height is set inline by
+   MobileSpectrumStack); touch-action:none claims the gesture so dragging it
+   resizes the split instead of scrolling the page. A thin centred line grows
+   to a 3px accent bar while dragging so the touch target reads clearly. */
+.m-spectrum-splitter {
+  position: relative;
+  z-index: 6;
+  cursor: row-resize;
+  touch-action: none;
+  background: transparent;
+}
+.m-spectrum-splitter::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  background: var(--panel-border);
+  transition: background 120ms ease, height 120ms ease;
+}
+.m-spectrum-splitter.dragging::before {
+  height: 3px;
+  background: var(--accent);
+}
 /* Both child components fill their container via absolute children */
 .m-pan > *,
 .m-wf > * { position: absolute; inset: 0; }
@@ -589,21 +627,6 @@
   padding: 8px 4px;
   font-size: 13px;
   font-weight: 700;
-}
-.m-uplink-diag {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  color: var(--fg-3);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 1.3;
-}
-.m-uplink-diag span {
-  padding: 3px 6px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  background: var(--panel-1);
 }
 /* Compact the secondary buttons so three fit comfortably across. */
 .m-mox-row .btn,

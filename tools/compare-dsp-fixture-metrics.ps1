@@ -48,7 +48,24 @@ function Write-JsonFile {
 function Get-FileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $getFileHash = Get-Command Get-FileHash -ErrorAction SilentlyContinue
+    if ($null -ne $getFileHash) {
+        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return ([System.BitConverter]::ToString($sha256.ComputeHash($stream)) -replace "-", "").ToLowerInvariant()
+        }
+        finally {
+            $sha256.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
 }
 
 function Get-JsonValue {
@@ -449,6 +466,7 @@ function Get-MetricDirection {
     switch ($MetricId) {
         "coherenttonepower" { return "higher" }
         "wantedsnr" { return "higher" }
+        "signalsinad" { return "higher" }
         "spectralpreservation" { return "higher" }
         "speechbandpreservation" { return "higher" }
         "noisereduction" { return "higher" }
@@ -459,9 +477,11 @@ function Get-MetricDirection {
         "feedbackstability" { return "higher" }
         "scenefreshness" { return "higher" }
         "runtimealignment" { return "higher" }
+        "throughputratio" { return "higher" }
 
         "latency" { return "lower" }
         "cpu" { return "lower" }
+        "processingelapsedms" { return "lower" }
         "artifactscore" { return "lower" }
         "rmsmovement" { return "lower" }
         "windowedrmsmovement" { return "lower" }
@@ -480,6 +500,9 @@ function Get-MetricDirection {
         "nativeexceptioncount" { return "lower" }
         "meterescape" { return "lower" }
         "txmonitorcoupling" { return "lower" }
+        "txlevelergainreduction" { return "lower" }
+        "txalcgainreduction" { return "lower" }
+        "txoutputpeak" { return "lower" }
         default { return "informational" }
     }
 }

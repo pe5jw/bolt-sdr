@@ -50,6 +50,46 @@ import { VitePWA } from 'vite-plugin-pwa';
 const backendPort = process.env.BACKEND_PORT || '6060';
 const backendHost = process.env.BACKEND_HOST || 'localhost';
 
+function chunkNameFor(id: string): string | undefined {
+  const normalized = id.replace(/\\/g, '/');
+
+  if (!normalized.includes('/node_modules/')) {
+    return undefined;
+  }
+
+  if (
+    normalized.includes('/node_modules/react/') ||
+    normalized.includes('/node_modules/react-dom/') ||
+    normalized.includes('/node_modules/scheduler/')
+  ) {
+    return 'vendor-react';
+  }
+  if (
+    normalized.includes('/node_modules/leaflet/') ||
+    normalized.includes('/node_modules/react-leaflet/') ||
+    normalized.includes('/node_modules/@react-leaflet/')
+  ) {
+    return 'vendor-map';
+  }
+  if (
+    normalized.includes('/node_modules/react-grid-layout/') ||
+    normalized.includes('/node_modules/react-resizable/') ||
+    normalized.includes('/node_modules/react-draggable/')
+  ) {
+    return 'vendor-layout';
+  }
+  if (normalized.includes('/node_modules/onnxruntime-web/')) {
+    return 'vendor-onnx';
+  }
+  if (normalized.includes('/node_modules/lucide-react/')) {
+    return 'vendor-icons';
+  }
+  if (normalized.includes('/node_modules/zustand/')) {
+    return 'vendor-state';
+  }
+  return 'vendor';
+}
+
 export default defineConfig({
   plugins: [
     react(),
@@ -111,5 +151,11 @@ export default defineConfig({
   build: {
     outDir: '../Zeus.Server.Hosting/wwwroot',
     emptyOutDir: true,
+    chunkSizeWarningLimit: 1100,
+    rollupOptions: {
+      output: {
+        manualChunks: chunkNameFor,
+      },
+    },
   },
 });

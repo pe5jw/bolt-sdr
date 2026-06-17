@@ -59,6 +59,7 @@ native/build/
 native/build-miniaudio/
 native/build-nr5-live/
 native/build-nr5-live-ninja/
+native/build-nr5-local/
 
 # Playwright-MCP accessibility snapshots and console logs — regenerated
 # on every browser-automation run; do not track.

@@ -127,7 +127,7 @@ public static class DspBenchmarkPlanCatalog
             signalPath: "RX IQ",
             fixtureStatus: "offline-fixture-ready",
             appliesTo: ["NR2", "NR4", "NR5/SPNR", "external speech bypass"],
-            metrics: ["coherent tone power", "wanted SNR", "spectral preservation", "output RMS", "latency"],
+            metrics: ["coherent tone power", "wanted SNR", "signal SINAD", "spectral preservation", "output RMS", "latency", "processing elapsed ms", "throughput ratio"],
             gates:
             [
                 "Wanted coherent tone must not disappear below off/current Zeus baseline.",
@@ -142,7 +142,7 @@ public static class DspBenchmarkPlanCatalog
             signalPath: "RX audio",
             fixtureStatus: "offline-fixture-ready",
             appliesTo: ["NR2", "NR4", "NR5/SPNR", "RNNoise", "DeepFilterNet", "SpeexDSP", "WebRTC APM"],
-            metrics: ["speech-band preservation", "noise reduction", "artifact score", "RMS movement", "CPU", "latency"],
+            metrics: ["speech-band preservation", "noise reduction", "artifact score", "RMS movement", "CPU", "latency", "processing elapsed ms", "throughput ratio"],
             gates:
             [
                 "Speech readability must improve over current Zeus without metallic artifacts.",
@@ -157,7 +157,7 @@ public static class DspBenchmarkPlanCatalog
             signalPath: "RX IQ",
             fixtureStatus: "offline-fixture-ready",
             appliesTo: ["AGC", "NR2", "NR5/SPNR"],
-            metrics: ["windowed RMS movement", "coherent tone continuity", "AGC gain movement", "latency"],
+            metrics: ["windowed RMS movement", "coherent tone continuity", "signal SINAD", "AGC gain movement", "latency", "processing elapsed ms", "throughput ratio"],
             gates:
             [
                 "Fading signal must remain audible without NR gate chatter.",
@@ -171,7 +171,7 @@ public static class DspBenchmarkPlanCatalog
             signalPath: "RX IQ",
             fixtureStatus: "offline-fixture-ready",
             appliesTo: ["NB1", "NB2", "SNB", "NR5/SPNR"],
-            metrics: ["impulse suppression", "wanted SNR", "post-blanker ringing", "artifact score"],
+            metrics: ["impulse suppression", "wanted SNR", "signal SINAD", "post-blanker ringing", "artifact score", "processing elapsed ms", "throughput ratio"],
             gates:
             [
                 "Impulse suppression must not smear or mute wanted signal content.",
@@ -185,7 +185,7 @@ public static class DspBenchmarkPlanCatalog
             signalPath: "RX IQ",
             fixtureStatus: "offline-fixture-ready",
             appliesTo: ["filters", "AGC", "NR2", "NR4", "NR5/SPNR"],
-            metrics: ["wanted/adjacent ratio", "filter leakage", "AGC movement", "spectral preservation"],
+            metrics: ["wanted/adjacent ratio", "signal SINAD", "filter leakage", "AGC movement", "spectral preservation", "processing elapsed ms", "throughput ratio"],
             gates:
             [
                 "Adjacent energy must not drive AGC/NR into wanted signal loss.",
@@ -199,7 +199,7 @@ public static class DspBenchmarkPlanCatalog
             signalPath: "RX IQ/RX audio",
             fixtureStatus: "offline-fixture-ready",
             appliesTo: ["squelch", "Smart NR", "external speech engines"],
-            metrics: ["false-open rate", "noise floor movement", "artifact score", "CPU"],
+            metrics: ["false-open rate", "noise floor movement", "artifact score", "CPU", "processing elapsed ms", "throughput ratio"],
             gates:
             [
                 "No false coherent-signal detection on noise-only scenes.",
@@ -213,7 +213,7 @@ public static class DspBenchmarkPlanCatalog
             signalPath: "RX IQ/RX audio",
             fixtureStatus: "offline-fixture-ready",
             appliesTo: ["WDSP AGC", "Auto AGC", "NR5/SPNR AGC", "external post-demod engines"],
-            metrics: ["AGC gain movement", "windowed RMS movement", "settling time", "overshoot", "artifact score"],
+            metrics: ["AGC gain movement", "windowed RMS movement", "signal SINAD", "settling time", "overshoot", "artifact score", "processing elapsed ms", "throughput ratio"],
             gates:
             [
                 "No audible pumping, clipping, or noise-floor chase.",
@@ -227,7 +227,7 @@ public static class DspBenchmarkPlanCatalog
             signalPath: "RX audio",
             fixtureStatus: "offline-fixture-ready",
             appliesTo: ["SSQL", "AMSQ", "FMSQ", "adaptive squelch", "external post-demod engines"],
-            metrics: ["open latency", "close latency", "false-open rate", "audio discontinuity"],
+            metrics: ["open latency", "close latency", "false-open rate", "signal SINAD", "audio discontinuity", "processing elapsed ms", "throughput ratio"],
             gates:
             [
                 "Squelch must not chatter or open on external-engine artifacts.",
@@ -241,7 +241,21 @@ public static class DspBenchmarkPlanCatalog
             signalPath: "TX audio/TXA",
             fixtureStatus: "offline-fixture-ready",
             appliesTo: ["TX leveler", "CFC", "compressor", "ALC"],
-            metrics: ["peak", "crest factor", "clipping count", "intermodulation proxy", "latency"],
+            metrics:
+            [
+                "peak",
+                "crest factor",
+                "clipping count",
+                "intermodulation proxy",
+                "TX leveler gain reduction",
+                "TX CFC gain reduction",
+                "TX ALC gain reduction",
+                "TX output peak",
+                "TX output average",
+                "latency",
+                "processing elapsed ms",
+                "throughput ratio",
+            ],
             gates:
             [
                 "No TX clipping or uncontrolled ALC action.",
@@ -255,7 +269,22 @@ public static class DspBenchmarkPlanCatalog
             signalPath: "TX audio/TXA",
             fixtureStatus: "offline-fixture-ready",
             appliesTo: ["TX leveler", "CFC", "compressor", "ALC", "future external speech tools"],
-            metrics: ["RMS", "peak", "crest factor", "spectral balance", "latency"],
+            metrics:
+            [
+                "RMS",
+                "peak",
+                "crest factor",
+                "spectral balance",
+                "TX leveler gain reduction",
+                "TX CFC gain reduction",
+                "TX compressor peak",
+                "TX ALC gain reduction",
+                "TX output peak",
+                "TX output average",
+                "latency",
+                "processing elapsed ms",
+                "throughput ratio",
+            ],
             gates:
             [
                 "Voice-like TX audio must not clip, pump, or overdrive downstream TX stages.",
@@ -367,6 +396,8 @@ public static class DspBenchmarkPlanCatalog
             "Weak coherent carriers must not be attenuated below current Zeus or Thetis parity."),
         Metric(scenarios, "wanted SNR", "higher", "dB", "weak-signal-preservation",
             "Wanted signal-to-noise ratio is a direct preservation/improvement metric."),
+        Metric(scenarios, "signal SINAD", "higher", "dB", "weak-signal-preservation",
+            "Wanted signal over all residual noise, interference, and distortion must not regress on tone-bearing fixtures."),
         Metric(scenarios, "spectral preservation", "higher", "score", "weak-signal-preservation",
             "Preserve wanted spectral shape while reducing unwanted noise or adjacent energy."),
         Metric(scenarios, "output RMS", "informational", "linear-or-dBFS", "level-context",
@@ -384,6 +415,10 @@ public static class DspBenchmarkPlanCatalog
             "Lower processing cost leaves more margin for high-rate G2 workloads."),
         Metric(scenarios, "latency", "lower", "ms", "runtime-cost",
             "Lower latency is preferred when preservation and artifact gates still pass."),
+        Metric(scenarios, "processing elapsed ms", "lower", "ms", "runtime-cost",
+            "Per-fixture WDSP processing time should not regress when a candidate is enabled."),
+        Metric(scenarios, "throughput ratio", "higher", "x-real-time", "runtime-cost",
+            "Rendered fixture duration divided by processing time should stay comfortably above real time."),
 
         Metric(scenarios, "windowed RMS movement", "lower", "dB-or-score", "pumping-control",
             "Short-window level movement catches AGC/NR breathing and pumping."),
@@ -431,6 +466,18 @@ public static class DspBenchmarkPlanCatalog
             "RMS level is context for loudness and TX drive review."),
         Metric(scenarios, "spectral balance", "informational", "score", "tx-audio-context",
             "Desired spectral balance depends on TX profile and voice target."),
+        Metric(scenarios, "TX leveler gain reduction", "lower", "dB", "tx-dynamics-safety",
+            "Leveler gain reduction should stay bounded so TX loudness is controlled without pumping."),
+        Metric(scenarios, "TX CFC gain reduction", "informational", "dB", "tx-dynamics-context",
+            "CFC gain reduction is profile-dependent context; default-safe TX fixtures should expose whether it is bypassed or active."),
+        Metric(scenarios, "TX compressor peak", "informational", "dBFS", "tx-dynamics-context",
+            "Compressor-stage peak confirms whether compressor processing is bypassed or participating in TX shaping."),
+        Metric(scenarios, "TX ALC gain reduction", "lower", "dB", "tx-safety",
+            "ALC gain reduction should not increase without review because it can indicate limiting or overdrive."),
+        Metric(scenarios, "TX output peak", "lower", "dBFS", "tx-safety",
+            "TXA output peak should not move closer to clipping during benchmark comparisons."),
+        Metric(scenarios, "TX output average", "informational", "dBFS", "tx-level-context",
+            "TXA output average is station-audio context for density and drive review."),
 
         Metric(scenarios, "bypass state", "informational", "state", "puresignal-safety",
             "PureSignal bypass state is a safety invariant, not a numeric improvement target."),

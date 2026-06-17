@@ -5,7 +5,7 @@ import type {
   RxMode,
 } from '../api/client';
 import type { RxChainAnalysis } from '../dsp/rx-chain-health';
-import type { AdjacentNoiseProfile, SignalEnhanceSceneStatus } from '../dsp/signal-estimator';
+import type { AdjacentNoiseProfile, SceneTopPeak, SignalEnhanceSceneStatus } from '../dsp/signal-estimator';
 import type { SmartNrStatus } from '../state/smart-nr-store';
 
 let sessionClientId: string | null = null;
@@ -41,6 +41,7 @@ export function buildFrontendDspSceneDiagnosticsPayload(
   smart: SmartNrStatus | null,
   rxChain: RxChainAnalysis | null = null,
   adjacentNoise: AdjacentNoiseProfile | null = null,
+  topPeaks: SceneTopPeak[] = [],
 ): FrontendDspSceneDiagnosticsPayload | null {
   const rxLabel = smart?.rxChainLabel ?? rxChain?.label ?? null;
   const rxRecommendation = smart?.rxChainRecommendation ?? rxChain?.recommendation ?? null;
@@ -69,6 +70,14 @@ export function buildFrontendDspSceneDiagnosticsPayload(
     peakCount: n(smart?.peakCount ?? signal?.peakCount),
     coherentPeakCount: n(smart?.coherentPeakCount ?? signal?.coherentPeakCount),
     coherentSubthresholdSignal: smart?.coherentSubthresholdSignal ?? null,
+    topPeaks: topPeaks.map((peak) => ({
+      frequencyHz: peak.frequencyHz,
+      offsetHz: peak.offsetHz,
+      snrDb: peak.snrDb,
+      dbfs: peak.dbfs,
+      confidence: n(peak.confidence),
+      coherent: peak.coherent,
+    })),
     adjacentNoiseUsable: adjacentNoise?.usable ?? null,
     adjacentNoiseBins: n(adjacentNoise?.bins),
     adjacentNoiseLeftBins: n(adjacentNoise?.leftBins),

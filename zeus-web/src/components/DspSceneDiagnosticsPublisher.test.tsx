@@ -103,6 +103,30 @@ describe('buildFrontendDspSceneDiagnosticsPayload', () => {
     });
   });
 
+  it('mirrors scene top peaks into diagnostics payloads', () => {
+    const payload = buildFrontendDspSceneDiagnosticsPayload('USB', null, null, null, null, [
+      {
+        frequencyHz: 14_269_200,
+        offsetHz: 2200,
+        snrDb: 24,
+        dbfs: -86,
+        confidence: 0.7,
+        coherent: true,
+      },
+    ]);
+
+    expect(payload?.topPeaks).toEqual([
+      {
+        frequencyHz: 14_269_200,
+        offsetHz: 2200,
+        snrDb: 24,
+        dbfs: -86,
+        confidence: 0.7,
+        coherent: true,
+      },
+    ]);
+  });
+
   it('publishes a fresh client heartbeat when no scene evidence exists yet', () => {
     const payload = buildFrontendDspSceneDiagnosticsPayload('USB', null, null);
 
@@ -127,6 +151,7 @@ describe('buildFrontendDspSceneDiagnosticsPayload', () => {
       peakCount: null,
       coherentPeakCount: null,
       coherentSubthresholdSignal: null,
+      topPeaks: [],
     });
     expect(payload?.sourceClientId).toMatch(/^frontend-/);
   });

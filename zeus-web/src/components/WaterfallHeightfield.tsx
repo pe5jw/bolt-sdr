@@ -204,6 +204,9 @@ export function WaterfallHeightfield({
       // Temporal de-speckle only in Pop (where floor subtraction creates speckle);
       // off for raw RX/TX. Driven by the waterfall-smoothness knob.
       renderer.setCleanup(dom === 'pop' ? Math.max(0, Math.min(1, enhance.waterfallSmoothness / 100)) : 0);
+      // Pop signal-glow (crest lift + cyan-white highlight) only in Pop, driven by
+      // the pop-intensity knob; 0 in normal RX so the surface stays plain hillshade.
+      renderer.setPopGlow(dom === 'pop' ? Math.max(0, Math.min(1, enhance.popRenderIntensity / 100)) : 0);
       // View span: zoom is a single global setting (DspPipelineService applies the
       // same SetZoom to RX1 and RX2, and both frames carry the same hzPerPixel),
       // so BOTH halves follow the one shared zoom glide — RX2 scales as smoothly

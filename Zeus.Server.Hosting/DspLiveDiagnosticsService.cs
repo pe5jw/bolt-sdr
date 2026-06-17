@@ -28,6 +28,7 @@ public static class DspLiveDiagnosticsService
             "dsp-benchmark-metric-catalog",
             "dsp-live-runtime-evidence",
             "g2-live-capture",
+            "g2-rx-peak-hunt",
         };
 
         int score = 100;
@@ -343,6 +344,7 @@ public static class DspLiveDiagnosticsService
             FrontendSceneFresh: condition.Fresh,
             FrontendSceneStale: condition.Stale,
             FrontendSceneAgeMs: condition.AgeMs,
+            FrontendTopPeaks: condition.TopPeaks,
             FrontendAdjacentNoiseUsable: condition.AdjacentNoiseUsable,
             FrontendAdjacentNoiseBins: condition.AdjacentNoiseBins,
             FrontendAdjacentNoiseLeftBins: condition.AdjacentNoiseLeftBins,

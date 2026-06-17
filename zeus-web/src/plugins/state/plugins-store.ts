@@ -23,6 +23,7 @@ import {
   type RegistryCatalog,
   type UninstallResult,
 } from '../api/plugins';
+import { reloadInstalledPluginUis } from '../runtime/pluginRuntime';
 
 type LoadState = {
   loaded: boolean;
@@ -73,9 +74,6 @@ function errMessage(err: unknown): string {
 
 async function refreshRuntimePanels() {
   try {
-    const { reloadInstalledPluginUis } = await import(
-      '../runtime/pluginRuntime'
-    );
     await reloadInstalledPluginUis();
   } catch (err) {
     // jsdom's native fetch cannot resolve app-relative URLs when a test does

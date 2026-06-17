@@ -431,7 +431,12 @@ void main() {
     }
   }
   n = popLift(n, popI);
-  float colorLevel = mix(n, min(n, 0.68 + terrainDisplayHeight * 0.10), popI);
+  // Pop signal ceiling. The cap reserves the bright top of the ramp for the
+  // hillshade terrain relief, but at 0.68 even strong carriers topped out around
+  // light-blue and read as thin streaks instead of popping. Lifted so real
+  // signals reach the brighter end of the Pop palette (closer to how the normal
+  // textured waterfall lets them pop) while terrain still has headroom above.
+  float colorLevel = mix(n, min(n, 0.82 + terrainDisplayHeight * 0.12), popI);
   // Match the WebGPU heightfield tone: in normal RX mode pull the noise floor
   // down with a gamma so it reads dark and signals separate, instead of the
   // legacy lifted/harsh curve. Gated to normal mode (Pop/TX keep their mapping).

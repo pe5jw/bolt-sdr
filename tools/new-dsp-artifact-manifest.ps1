@@ -583,6 +583,20 @@ if (-not $seenArtifactIds.ContainsKey("fixture-metric-comparison-report")) {
         -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds")
 }
 
+if (-not $seenArtifactIds.ContainsKey("native-stage-timing-report")) {
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "native-stage-timing-report" `
+        -Kind "native-stage-timing-report-json" `
+        -Source "tools/summarize-dsp-native-stage-timing.ps1" `
+        -Purpose "Summarize WDSP fixture wrapper stage timing, managed allocation deltas, runtime hash provenance, and the remaining native C instrumentation gap before DSP build-out evidence is accepted." `
+        -Cadence "once-after-wdsp-offline-fixture-matrix" `
+        -Path "artifacts/native-stage-timing-report.json" `
+        -Required $true `
+        -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds")
+}
+
 if (($IncludeOptionalArtifacts -or $externalEngineBakeoffInScope) -and -not $seenArtifactIds.ContainsKey("external-engine-bakeoff-report")) {
     $externalBakeoffCadence = if ($externalEngineBakeoffInScope) {
         "once-per-capture-bundle-when-external-opt-in-comparison-is-in-scope"
@@ -603,6 +617,36 @@ if (($IncludeOptionalArtifacts -or $externalEngineBakeoffInScope) -and -not $see
         -Required $externalEngineBakeoffInScope `
         -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds") `
         -ComparisonIds @("candidate-external-engine-opt-in")
+}
+
+if ($externalEngineBakeoffInScope -and -not $seenArtifactIds.ContainsKey("external-engine-bakeoff-cycle-summary")) {
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "external-engine-bakeoff-cycle-summary" `
+        -Kind "external-engine-bakeoff-cycle-summary-json" `
+        -Source "tools/run-dsp-external-engine-bakeoff.ps1" `
+        -Purpose "Plan or summarize the operator-triggered first-safe external DSP/ML bakeoff cycle without approving raw WDSP IQ replacement, TX/PureSignal routing, or default behavior changes." `
+        -Cadence "optional-after-external-engine-bakeoff-report-is-ready" `
+        -Path "artifacts/external-engine-bakeoff-cycle-summary.json" `
+        -Required $false `
+        -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds") `
+        -ComparisonIds @("candidate-external-engine-opt-in")
+}
+
+if (($IncludeOptionalArtifacts -or $RequireLiveAcceptanceArtifacts) -and -not $seenArtifactIds.ContainsKey("g2-rx-peak-hunt-report")) {
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "g2-rx-peak-hunt-report" `
+        -Kind "g2-rx-peak-hunt-report-json" `
+        -Source "tools/run-dsp-g2-rx-peak-hunt.ps1" `
+        -Purpose "Summarize RX-only G2 frontend peak-hunt windows, VFO restore safety, weak/strong NR5 sample coverage, AGC pumping risk, and candidate mixed weak+strong promotion evidence before live-history recapture." `
+        -Cadence "optional-before-g2-live-history-mixed-weak-strong-recapture" `
+        -Path "artifacts/g2-rx-peak-hunt-report.json" `
+        -Required $false `
+        -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds") `
+        -ComparisonIds @("nr5-spnr")
 }
 
 if (($IncludeOptionalArtifacts -or $RequireLiveAcceptanceArtifacts) -and -not $seenArtifactIds.ContainsKey("live-diagnostics-history")) {
@@ -632,6 +676,35 @@ if (($IncludeOptionalArtifacts -or $RequireLiveAcceptanceArtifacts) -and -not $s
         -Required $false `
         -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds") `
         -ComparisonIds @("off-baseline", "thetis-parity", "current-zeus", "nr5-spnr")
+}
+
+if ($IncludeOptionalArtifacts -and -not $seenArtifactIds.ContainsKey("cross-radio-validation-report")) {
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "cross-radio-validation-report" `
+        -Kind "cross-radio-validation-report-json" `
+        -Source "tools/summarize-dsp-cross-radio-validation.ps1" `
+        -Purpose "Summarize non-G2 cross-radio scenario/comparison evidence before any default DSP graduation review; this artifact never approves default behavior by itself." `
+        -Cadence "once-after-non-g2-cross-radio-validation-pass" `
+        -Path "artifacts/cross-radio-validation-report.json" `
+        -Required $false `
+        -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds") `
+        -ComparisonIds @("current-zeus", "thetis-parity", "nr5-spnr")
+}
+
+if ($IncludeOptionalArtifacts -and -not $seenArtifactIds.ContainsKey("wdsp-source-drift-report")) {
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "wdsp-source-drift-report" `
+        -Kind "wdsp-source-drift-report-json" `
+        -Source "tools/compare-wdsp-source-drift.ps1" `
+        -Purpose "Compare Zeus native/wdsp against a local Thetis or other reference WDSP source tree with line-ending-insensitive hashes and classify every source delta before native code changes are accepted." `
+        -Cadence "once-before-native-wdsp-import-delete-or-refactor" `
+        -Path "artifacts/wdsp-source-drift-report.json" `
+        -Required $false `
+        -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds")
 }
 
 if (-not $seenArtifactIds.ContainsKey("operator-notes")) {
@@ -665,11 +738,16 @@ $output = [ordered]@{
         "Use run-dsp-live-diagnostics-matrix.ps1 for optional multi-scenario trace indexes; pass separate -IndexPath and -ReportPath values for off-baseline, Thetis-parity, current-Zeus baseline, and NR5/SPNR candidate runs. With -IncludeOptionalArtifacts, this scaffold emits separate off-baseline, Thetis-parity, baseline, and candidate live-diagnostics-trace-index and live-diagnostics-matrix-report entries.",
         "Use -RequireLiveAcceptanceArtifacts for G2 live acceptance review manifests after capture; it marks current-Zeus and Thetis-parity live-diagnostics-trace-comparison reports, the four live matrix trace-index/report pairs, and live-diagnostics-history required without pulling external-engine bakeoff into scope.",
         "The live-acceptance-cycle-summary artifact is optional because run-dsp-live-acceptance-cycle.ps1 writes it after strict validation; when present, strict validation verifies its wrapper identity and child report references.",
+        "Use summarize-dsp-cross-radio-validation.ps1 with -BundleDir after a non-G2 validation pass to generate the optional cross-radio-validation-report artifact; it is evidence only and cannot approve default DSP behavior changes.",
+        "Use summarize-dsp-puresignal-bench.ps1 after G2 TX bench captures to turn disabled and enabled PureSignal feedback traces into the required puresignal-safe-bypass-report artifact before TX profile graduation.",
         "Use compare-dsp-live-diagnostics-traces.ps1 with -BundleDir to compare baseline and candidate live traces before accepting a candidate window while keeping report paths portable.",
         "Use compare-dsp-live-diagnostics-matrix.ps1 with -BundleDir to compare baseline and candidate trace indexes across all captured live scenarios while keeping report paths portable; pass -BaselineComparisonId current-zeus and -CandidateComparisonId nr5-spnr for the required Zeus live acceptance comparison, then repeat with -BaselineComparisonId thetis-parity for the required WDSP authority comparison.",
         "live-diagnostics-trace-comparison reports carry capture-readiness comparison evidence into strict validation and validation triage, including hard-gate pass/fail, strict-preflight pass/fail, top soft constraints, and top hard gates.",
+        "Use run-dsp-g2-rx-peak-hunt.ps1 before mixed weak+strong live-history recapture when G2 windows are weak-only or off-signal; the optional report keeps RX-only safety, VFO restore, weak/strong sample coverage, and best-window recommendation evidence portable.",
         "Use summarize-dsp-live-diagnostics-history.ps1 with -BundleDir after several NR5/NR2 live attempts so best weak-signal, lowest-pumping, latest tuning directions, and per-trace watcher-summary/JSONL hashes are preserved as portable review evidence.",
         "Use summarize-dsp-external-engine-candidates.ps1 with -BundleDir before any external DSP/ML bakeoff so RNNoise/DeepFilterNet/SpeexDSP/WebRTC blockers, risk, and required evidence stay explicit.",
+        "Use compare-wdsp-source-drift.ps1 with -ReferenceDir pointing at the local Thetis WDSP source before native WDSP imports, deletions, or refactors; line-ending-only changes are ignored and likely-defect source drift must be explicitly classified.",
+        "Use summarize-dsp-native-stage-timing.ps1 after WDSP-backed offline fixture evidence so stage timing, managed allocation deltas, runtime hash provenance, and the native C instrumentation gap are explicit in strict validation.",
         "If benchmark-plan.requiredComparisons or benchmark-capture-manifest.requiredComparisons includes candidate-external-engine-opt-in, this scaffold emits external-engine-bakeoff-report as required even without -IncludeOptionalArtifacts because strict validation requires that report by scope.",
         "For acceptance review, regenerate with -AcceptanceManifest -RequireLiveAcceptanceArtifacts after the comparison report is captured so live trace regressions and incomplete history coverage fail strict validation.",
         "For single-comparison artifact indexes, add comparisonIds to the artifact entry so validation checks only the captured comparison scope.",

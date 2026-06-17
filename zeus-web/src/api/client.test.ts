@@ -1552,6 +1552,16 @@ describe('POST helpers', () => {
       peakCount: 1,
       coherentPeakCount: 1,
       coherentSubthresholdSignal: true,
+      topPeaks: [
+        {
+          frequencyHz: 14269200,
+          offsetHz: 2200,
+          snrDb: 24.1,
+          dbfs: -86.2,
+          confidence: 0.7,
+          coherent: true,
+        },
+      ],
       adjacentNoiseUsable: true,
       adjacentNoiseBins: 96,
       adjacentNoiseP50Db: -109.4,
@@ -1575,6 +1585,16 @@ describe('POST helpers', () => {
     expect(scene.smartNrRxChainTone).toBe('optimize');
     expect(scene.smartNrRxChainScore).toBe(68);
     expect(scene.coherentSubthresholdSignal).toBe(true);
+    expect(scene.topPeaks).toEqual([
+      {
+        frequencyHz: 14269200,
+        offsetHz: 2200,
+        snrDb: 24.1,
+        dbfs: -86.2,
+        confidence: 0.7,
+        coherent: true,
+      },
+    ]);
     expect(scene.adjacentNoiseUsable).toBe(true);
     expect(scene.adjacentNoiseBins).toBe(96);
     expect(scene.adjacentNoiseP50Db).toBe(-109.4);

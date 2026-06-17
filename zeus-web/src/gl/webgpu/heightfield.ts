@@ -60,6 +60,9 @@ export type HeightfieldRenderer = {
    *  into adjacent time rows (random noise breakthrough), keeping continuous
    *  signal traces. 0 = off (raw RX). Driven by the waterfall-smoothness knob. */
   setCleanup: (strength: number) => void;
+  /** 0..1 Pop signal-glow: lifts carrier crests into the bright colour band and
+   *  adds a cyan-white crest/specular highlight. 0 = off (plain hillshade). */
+  setPopGlow: (intensity: number) => void;
   /** Continuous scroll rate (rows/frame); parity with the WebGL knob. */
   setScrollSpeed: (speed: number) => void;
   /** Drop the visible history (writeRow/validRows reset) without reallocating.
@@ -91,7 +94,7 @@ struct Uniforms {
   p0 : vec4<f32>,  // writeRow, historyRows, texW, validRows
   p1 : vec4<f32>,  // dbMin, dbMax, reliefScale, reliefDepth
   p2 : vec4<f32>,  // canvasW, visibleRows, scroll, cleanup
-  p3 : vec4<f32>,  // viewCentreHz, viewHzPerPixel, _, _
+  p3 : vec4<f32>,  // viewCentreHz, viewHzPerPixel, popGlow, _
 };
 @group(0) @binding(0) var<uniform> u : Uniforms;
 @group(0) @binding(1) var historyTex : texture_2d<f32>;
@@ -158,6 +161,7 @@ fn fs(in : VsOut) -> @location(0) vec4<f32> {
   let canvasW = max(1.0, u.p2.x);
   let reliefScale = u.p1.z;
   let reliefDepth = u.p1.w;
+  let popGlow = u.p3.z;
 
   let age = in.uv.y * visibleRows / scroll;
   let level = cleanLevel(in.uv.x, age);
@@ -172,13 +176,35 @@ fn fs(in : VsOut) -> @location(0) vec4<f32> {
   let ol = cleanLevel(in.uv.x, age + dAge);
   let nw = cleanLevel(in.uv.x, max(0.0, age - dAge));
   let normal = normalize(vec3<f32>((lx - rx) * reliefScale, 1.0, (nw - ol) * reliefScale));
-  let lambert = clamp(dot(normal, normalize(u.lightDir.xyz)) * 0.5 + 0.5, 0.0, 1.0);
+  let lightDir = normalize(u.lightDir.xyz);
+  let lambert = clamp(dot(normal, lightDir) * 0.5 + 0.5, 0.0, 1.0);
   let shade = 0.10 + mix(1.55, 2.15, reliefDepth) * pow(lambert, 1.55);
 
-  // Modest midtone contrast about a 0.5 pivot, on top of the deepened blue floor.
-  let lvl = clamp((level - 0.5) * 1.12 + 0.5, 0.0, 1.0);
+  // Ridge prominence: how far this pixel stands above its 4-neighbour mean. High
+  // on carrier tops and signal edges, ~0 on flat noise/background — the basis for
+  // the Pop "lift + glow" that makes signals leap off the floor.
+  let cross = (lx + rx + ol + nw) * 0.25;
+  let crest = max(0.0, level - cross);
+  // Sharp specular glint on the lit face of a ridge — sparkle on strong carriers.
+  let spec = pow(max(dot(normal, lightDir), 0.0), 22.0);
+  // Only let glow touch real signal, never the noise floor.
+  let strength = smoothstep(0.18, 0.55, level);
+
+  // Pop lift: push crests into a brighter colour band so they separate from the
+  // floor — but only WITHIN the colormap, so the visual-AGC'd level (already
+  // scaled to the scene's peaks/floor) still owns where the top is. Gated by
+  // popGlow → zero in normal RX (the surface stays the plain hillshade there).
+  let lifted = clamp(level + crest * 1.1 * popGlow, 0.0, 1.0);
+  let lvl = clamp((lifted - 0.5) * 1.12 + 0.5, 0.0, 1.0);
   let base = textureSample(lutTex, lutSampler, vec2<f32>(lvl, 0.5)).rgb;
-  return vec4<f32>(base * shade, 1.0);
+  var col = base * shade;
+  // Crest sheen + specular glint, cyan-white. Faded by HEADROOM (1 - lvl) so the
+  // brightest carriers don't blow past the ramp top — they stay defined and the
+  // colormap owns the peak; the glow lives on the rising mid-levels.
+  let headroom = 1.0 - lvl;
+  let glow = (crest * 1.1 + spec * crest * 1.3) * strength * popGlow * headroom;
+  col += vec3<f32>(0.48, 0.74, 1.0) * glow;
+  return vec4<f32>(min(col, vec3<f32>(1.0)), 1.0);
 }
 `;
 
@@ -247,6 +273,7 @@ export function createHeightfieldRenderer(
   let reliefDepth = 0.55;
   let scrollSpeed = 1;
   let cleanup = 0;
+  let popGlow = 0;
   let anchorCenterHz: number | null = null;
   let anchorHzPerPixel = 0;
 
@@ -305,10 +332,10 @@ export function createHeightfieldRenderer(
     uniformData[13] = canvasH;
     uniformData[14] = scrollSpeed;
     uniformData[15] = cleanup;
-    // p3: viewCentreHz, viewHzPerPixel, _, _
+    // p3: viewCentreHz, viewHzPerPixel, popGlow, _
     uniformData[16] = viewCenterHz;
     uniformData[17] = viewHzPerPixel;
-    uniformData[18] = 0;
+    uniformData[18] = popGlow;
     uniformData[19] = 0;
     device.queue.writeBuffer(uniformBuffer, 0, gpuSrc(uniformData));
   };
@@ -364,6 +391,9 @@ export function createHeightfieldRenderer(
     },
     setReliefDepth(depth) {
       reliefDepth = Number.isFinite(depth) ? Math.max(0, Math.min(1, depth)) : reliefDepth;
+    },
+    setPopGlow(intensity) {
+      popGlow = Number.isFinite(intensity) ? Math.max(0, Math.min(1, intensity)) : 0;
     },
     setCleanup(strength) {
       cleanup = Number.isFinite(strength) ? Math.max(0, Math.min(1, strength)) : 0;

@@ -187,6 +187,18 @@ public class DspPipelineService : BackgroundService,
     private const double RxLevelerNr5BridgeMinProof = 0.18;
     private const double RxLevelerNr5BridgeMinOutputDbfs = -50.0;
     private const double RxLevelerNr5DeepWeakCatchupBoostSlewDbPerBlock = 24.0;
+    private const double RxLevelerNr5NativeValleyCatchupBoostSlewDbPerBlock = 18.0;
+    private const double RxLevelerNr5NativeValleyMaxBoostDb = 44.0;
+    private const double RxLevelerNr5NativeRecoveredCatchupBoostSlewDbPerBlock = 24.0;
+    private const double RxLevelerNr5RecoveredOnsetCatchupBoostSlewDbPerBlock = 36.0;
+    private const double RxLevelerNr5NativeRecoveredMaxBoostDb = 44.0;
+    private const double RxLevelerNr5ProfiledValleyCatchupBoostSlewDbPerBlock = 18.0;
+    private const double RxLevelerNr5ProfiledValleyMaxBoostDb = 42.0;
+    private const double RxLevelerNr5SuppressedOnsetCatchupBoostSlewDbPerBlock = 36.0;
+    private const double RxLevelerNr5HeldSuppressedTailCatchupBoostSlewDbPerBlock = 30.0;
+    private const double RxLevelerNr5PassbandSuppressedValleyCatchupBoostSlewDbPerBlock = 30.0;
+    private const double RxLevelerNr5FrontendDisagreementComfortCeilingDbfs = -46.0;
+    private const double RxLevelerNr5FrontendDisagreementComfortMaxDbfs = -43.0;
     private const double RxLevelerNr5WeakSpeechCrestAllowanceDb = 5.0;
     private const double RxLevelerNr5SpeechReleaseDbPerBlock = 3.5;
     private const double RxLevelerNr5SpeechHoldReleaseDbPerBlock = 4.5;
@@ -331,10 +343,162 @@ public class DspPipelineService : BackgroundService,
             weakNativeOutput);
     }
 
+    private static double Nr5LevelerSpeechValleyProof(Nr5SpnrDiagnosticsDto nr5)
+    {
+        if (nr5.SignalProbability < 0.118 || nr5.SignalConfidence < 0.270)
+            return 0.0;
+
+        double gateConfidence = ClampUnit((nr5.SignalConfidence - 0.258) / 0.120);
+        double gateOrPeak = Math.Max(
+            ClampUnit((nr5.AgcGate - 0.452) / 0.260),
+            0.78 * ClampUnit((nr5.PeakEvidence - 0.065) / 0.180));
+        double continuity = Math.Max(
+            Math.Max(
+                ClampUnit((nr5.SignalProbability - 0.118) / 0.105),
+                ClampUnit((nr5.WeakSignalMemory - 0.130) / 0.250)),
+            Math.Max(
+                0.76 * ClampUnit((nr5.RecoveryDrive - 0.230) / 0.200),
+                0.62 * ClampUnit((nr5.MaskSmoothing - 0.315) / 0.140)));
+        double tailSupport = Math.Max(
+            ClampUnit((nr5.RecoveryDrive - 0.210) / 0.240),
+            Math.Max(
+                0.72 * ClampUnit((nr5.MaskSmoothing - 0.310) / 0.170),
+                0.62 * ClampUnit((nr5.WeakSignalMemory - 0.240) / 0.280)));
+        double nativeLift = ClampUnit((nr5.OutputDbfs - nr5.InputDbfs - 4.5) / 10.0);
+        double usableOutput = ClampUnit((nr5.OutputDbfs + 44.0) / 12.0);
+
+        return ClampUnit(
+            Math.Sqrt(ClampUnit(gateConfidence * gateOrPeak * continuity * tailSupport)) *
+            (0.70 + 0.30 * nativeLift) *
+            usableOutput);
+    }
+
+    private static double Nr5LevelerProfiledValleyProof(Nr5SpnrDiagnosticsDto nr5)
+    {
+        double nativeLiftDb = nr5.OutputDbfs - nr5.InputDbfs;
+        if (!nr5.AdjacentNoiseUsable ||
+            nr5.AdjacentNoiseTrust < 0.52 ||
+            nr5.AdjacentNoiseDrive < 0.32 ||
+            nr5.SignalConfidence < 0.285 ||
+            nr5.SignalProbability < 0.128 ||
+            nr5.AgcGate < 0.60 ||
+            nativeLiftDb < 14.0)
+        {
+            return 0.0;
+        }
+
+        double adjacent = Math.Sqrt(ClampUnit(
+            ClampUnit((nr5.AdjacentNoiseTrust - 0.48) / 0.28) *
+            ClampUnit((nr5.AdjacentNoiseDrive - 0.30) / 0.44)));
+        double spectral = Math.Max(
+            ClampUnit((nr5.SignalConfidence - 0.282) / 0.090),
+            0.85 * ClampUnit((nr5.SignalProbability - 0.124) / 0.070));
+        double gate = ClampUnit((nr5.AgcGate - 0.58) / 0.24);
+        double continuity = Math.Max(
+            Math.Max(
+                ClampUnit((nr5.WeakSignalMemory - 0.30) / 0.30),
+                ClampUnit((nr5.RecoveryDrive - 0.34) / 0.24)),
+            0.70 * ClampUnit((nr5.MaskSmoothing - 0.28) / 0.16));
+        double nativeLift = ClampUnit((nativeLiftDb - 12.0) / 10.0);
+
+        return ClampUnit(0.42 + 0.38 * Math.Sqrt(ClampUnit(
+            adjacent *
+            Math.Max(gate, 0.35) *
+            Math.Max(continuity, 0.35) *
+            Math.Max(spectral, 0.30) *
+            nativeLift)));
+    }
+
+    private static double Nr5LevelerNativeRecoveredSpeechProof(Nr5SpnrDiagnosticsDto nr5)
+    {
+        double nativeLiftDb = nr5.OutputDbfs - nr5.InputDbfs;
+        if (nativeLiftDb < 8.0 || nr5.OutputDbfs < -38.0)
+        {
+            return 0.0;
+        }
+
+        double spectral = Math.Max(
+            ClampUnit((nr5.SignalConfidence - 0.295) / 0.105),
+            0.78 * ClampUnit((nr5.SignalProbability - 0.145) / 0.105));
+        double agcGate = ClampUnit((nr5.AgcGate - 0.520) / 0.250);
+        double peakBackedGate = nr5.AgcGate >= 0.45
+            ? 0.70 * Math.Sqrt(ClampUnit(
+                ClampUnit((nr5.PeakEvidence - 0.045) / 0.180) *
+                spectral))
+            : 0.0;
+        double gate = Math.Max(agcGate, peakBackedGate);
+        double support = Math.Max(
+            Math.Max(
+                ClampUnit((nr5.PeakEvidence - 0.045) / 0.180),
+                ClampUnit((nr5.SignalProbability - 0.155) / 0.155)),
+            0.62 * ClampUnit((nr5.WeakSignalMemory - 0.330) / 0.280));
+        double nativeLift = ClampUnit((nativeLiftDb - 8.0) / 14.0);
+        double nativeOutput = ClampUnit((nr5.OutputDbfs + 38.0) / 13.0);
+
+        return ClampUnit(
+            Math.Sqrt(ClampUnit(spectral * gate * support)) *
+            (0.76 + 0.24 * nativeLift) *
+            (0.70 + 0.30 * nativeOutput));
+    }
+
+    private static double Nr5LevelerFrontendTopPeakProof(FrontendDspSceneTopPeakDto? topPeak)
+    {
+        if (topPeak is not { Coherent: true })
+            return 0.0;
+
+        double confidence = topPeak.Confidence ?? 0.0;
+        double offset = Math.Abs(topPeak.OffsetHz);
+        if (offset > 3_000.0)
+            return 0.0;
+
+        double offsetProof = 1.0 - ClampUnit((offset - 500.0) / 2_500.0);
+        double snrProof = ClampUnit((topPeak.SnrDb - 12.0) / 14.0);
+        double confidenceProof = ClampUnit((confidence - 0.74) / 0.20);
+        double notBroadFloor = 1.0 - 0.35 * ClampUnit((topPeak.Dbfs + 72.0) / 24.0);
+
+        return ClampUnit(Math.Sqrt(ClampUnit(snrProof * confidenceProof)) * offsetProof * notBroadFloor);
+    }
+
+    private static double Nr5LevelerFrontendHeldTailPeakProof(FrontendDspSceneTopPeakDto? topPeak)
+    {
+        if (topPeak is not { Coherent: true })
+            return 0.0;
+
+        double confidence = topPeak.Confidence ?? 0.0;
+        double offset = Math.Abs(topPeak.OffsetHz);
+        if (offset > 3_000.0)
+            return 0.0;
+
+        double offsetProof = 1.0 - ClampUnit((offset - 1_000.0) / 2_000.0);
+        double snrProof = ClampUnit((topPeak.SnrDb - 9.0) / 9.0);
+        double confidenceProof = ClampUnit((confidence - 0.70) / 0.24);
+        double notBroadFloor = 1.0 - 0.30 * ClampUnit((topPeak.Dbfs + 72.0) / 24.0);
+
+        return ClampUnit(Math.Sqrt(ClampUnit(snrProof * confidenceProof)) * offsetProof * notBroadFloor);
+    }
+
+    private static double Nr5LevelerFrontendDisagreementProof(FrontendDspSceneTopPeakDto? topPeak)
+    {
+        if (topPeak is not { Coherent: true })
+            return 0.0;
+
+        double offset = Math.Abs(topPeak.OffsetHz);
+        if (offset <= 3_000.0)
+            return 0.0;
+
+        double confidence = topPeak.Confidence ?? 0.0;
+        double offsetProof = ClampUnit((offset - 3_000.0) / 18_000.0);
+        double snrProof = ClampUnit((topPeak.SnrDb - 12.0) / 18.0);
+        double confidenceProof = ClampUnit((confidence - 0.74) / 0.20);
+
+        return ClampUnit(Math.Sqrt(ClampUnit(snrProof * confidenceProof)) * (0.45 + 0.55 * offsetProof));
+    }
+
     internal static void ApplyRxAudioLeveler(
         Span<float> samples,
         ref RxAudioLevelerState state,
-        Nr5SpnrDiagnosticsDto? nr5Diagnostics = null)
+        Nr5SpnrDiagnosticsDto? nr5Diagnostics = null,
+        FrontendDspSceneTopPeakDto? frontendTopPeak = null)
     {
         if (samples.Length == 0) return;
 
@@ -384,12 +548,37 @@ public class DspPipelineService : BackgroundService,
         double nr5SpeechEvidence = 0.0;
         double nr5ContinuitySpeechProof = 0.0;
         double nr5NativeWeakSpeechProof = 0.0;
+        double nr5SpeechValleyProof = 0.0;
+        double nr5ProfiledValleyProof = 0.0;
+        double nr5NativeRecoveredSpeechProof = 0.0;
+        double nr5FrontendTopPeakProof = 0.0;
+        double nr5FrontendHeldTailPeakProof = 0.0;
+        double nr5FrontendDisagreementProof = 0.0;
+        double nr5FrontendPeakRecoveredSpeechProof = 0.0;
+        double nr5FrontendPeakContinuitySpeechProof = 0.0;
+        double nr5HeldRecoveredSpeechTailProof = 0.0;
+        double nr5HeldSuppressedSpeechDropoutProof = 0.0;
+        double nr5HeldSuppressedSpeechTailProof = 0.0;
+        double nr5PassbandSuppressedValleyProof = 0.0;
+        double nr5SuppressedWeakOnsetProof = 0.0;
         double nr5StrongSpeechProof = 0.0;
         double nr5SpeechHoldProof = 0.0;
         double nr5SpeechGainHoldLift = 0.0;
         double nr5DeepWeakCurrentProof = 0.0;
         bool nr5DeepWeakSpeechCandidate = false;
+        bool nr5SpeechValleyCandidate = false;
+        bool nr5NativeSpeechValleyCandidate = false;
+        bool nr5NativeRecoveredSpeechCandidate = false;
+        bool nr5FrontendPeakRecoveredSpeechCandidate = false;
+        bool nr5FrontendPeakContinuitySpeechCandidate = false;
+        bool nr5HeldRecoveredSpeechTailCandidate = false;
+        bool nr5HeldSuppressedSpeechDropoutCandidate = false;
+        bool nr5HeldSuppressedSpeechTailCandidate = false;
+        bool nr5PassbandSuppressedValleyCandidate = false;
+        bool nr5SuppressedWeakOnsetCandidate = false;
+        bool nr5ProfiledValleyCandidate = false;
         bool nr5WeakSpeechCrestCandidate = false;
+        bool nr5FrontendDisagreementComfortCap = false;
         if (nr5Diagnostics is { Run: true } nr5)
         {
             nr5LevelerRun = true;
@@ -397,6 +586,201 @@ public class DspPipelineService : BackgroundService,
             nr5SpeechEvidence = Nr5LevelerSpeechEvidence(nr5);
             nr5ContinuitySpeechProof = Nr5LevelerContinuitySpeechProof(nr5);
             nr5NativeWeakSpeechProof = Nr5LevelerNativeWeakSpeechProof(nr5);
+            nr5SpeechValleyProof = Nr5LevelerSpeechValleyProof(nr5);
+            nr5SpeechValleyCandidate =
+                inputRmsDbfs >= -70.0 &&
+                inputRmsDbfs <= -50.0 &&
+                nr5.OutputDbfs >= -44.0 &&
+                nr5SpeechValleyProof >= 0.08;
+            double nr5NativeLiftDb = nr5.OutputDbfs - nr5.InputDbfs;
+            nr5NativeSpeechValleyCandidate =
+                inputRmsDbfs >= -68.0 &&
+                inputRmsDbfs <= -54.0 &&
+                nr5.OutputDbfs >= -40.5 &&
+                nr5.OutputDbfs <= -34.0 &&
+                nr5.SignalConfidence >= 0.285 &&
+                nr5.SignalProbability >= 0.125 &&
+                nr5.AgcGate >= 0.58 &&
+                nr5NativeLiftDb >= 14.0 &&
+                nr5SpeechValleyProof >= 0.12;
+            nr5NativeRecoveredSpeechProof = Nr5LevelerNativeRecoveredSpeechProof(nr5);
+            nr5NativeRecoveredSpeechCandidate =
+                inputRmsDbfs >= -66.0 &&
+                inputRmsDbfs <= -52.0 &&
+                nr5.OutputDbfs >= -37.0 &&
+                nr5NativeRecoveredSpeechProof >= 0.14 &&
+                (nr5.PeakEvidence >= 0.05 ||
+                    nr5.SignalProbability >= 0.17 ||
+                    nr5.WeakSignalMemory >= 0.36);
+            nr5FrontendTopPeakProof = Nr5LevelerFrontendTopPeakProof(frontendTopPeak);
+            nr5FrontendHeldTailPeakProof = Nr5LevelerFrontendHeldTailPeakProof(frontendTopPeak);
+            nr5FrontendDisagreementProof = Nr5LevelerFrontendDisagreementProof(frontendTopPeak);
+            bool nr5FrontendPeakNativeLiftCandidate =
+                nr5.OutputDbfs >= -38.5 &&
+                nr5NativeLiftDb >= 10.0;
+            bool nr5FrontendPeakActiveSpeechCandidate =
+                nr5.OutputDbfs >= -35.5 &&
+                nr5.AgcGate >= 0.62 &&
+                nr5.SignalConfidence >= 0.285 &&
+                nr5.SignalProbability >= 0.145 &&
+                (nr5.WeakSignalMemory >= 0.38 || nr5.RecoveryDrive >= 0.39);
+            nr5FrontendPeakRecoveredSpeechCandidate =
+                inputRmsDbfs >= -66.0 &&
+                inputRmsDbfs <= -44.0 &&
+                nr5FrontendTopPeakProof >= 0.34 &&
+                (nr5FrontendPeakNativeLiftCandidate || nr5FrontendPeakActiveSpeechCandidate);
+            if (nr5FrontendPeakRecoveredSpeechCandidate)
+            {
+                double nativeLift = ClampUnit((nr5NativeLiftDb - 10.0) / 12.0);
+                double continuity = Math.Max(
+                    ClampUnit((nr5.WeakSignalMemory - 0.34) / 0.26),
+                    ClampUnit((nr5.RecoveryDrive - 0.34) / 0.24));
+                nr5FrontendPeakRecoveredSpeechProof = ClampUnit(
+                    nr5FrontendTopPeakProof *
+                    (0.70 + 0.30 * nativeLift) *
+                    (0.72 + 0.28 * continuity));
+            }
+            if (nr5FrontendTopPeakProof >= 0.24 &&
+                inputRmsDbfs >= -72.0 &&
+                inputRmsDbfs <= -44.0 &&
+                nr5.OutputDbfs >= -48.0 &&
+                (nr5SpeechHoldWasActive ||
+                    nr5.OutputPeakDbfs >= -42.0 ||
+                    nr5.AgcGate >= 0.34 ||
+                    nr5.SignalProbability >= 0.115 ||
+                    nr5.PeakEvidence >= 0.012))
+            {
+                double continuitySpectral = Math.Max(
+                    ClampUnit((nr5.SignalConfidence - 0.260) / 0.100),
+                    Math.Max(
+                        0.85 * ClampUnit((nr5.SignalProbability - 0.105) / 0.095),
+                        0.72 * ClampUnit((nr5.PeakEvidence - 0.010) / 0.100)));
+                double continuityOutput = Math.Max(
+                    ClampUnit((nr5.OutputDbfs + 44.0) / 12.0),
+                    0.72 * ClampUnit((nr5.OutputPeakDbfs + 42.0) / 14.0));
+                double continuityHold = nr5SpeechHoldWasActive
+                    ? Math.Max(
+                        ClampUnit(state.Nr5SpeechHoldBlocks / (double)RxLevelerNr5SpeechHoldBlocks),
+                        ClampUnit(state.PauseHoldBlocks / (double)RxLevelerPauseHoldBlocks))
+                    : 0.0;
+                nr5FrontendPeakContinuitySpeechProof = ClampUnit(Math.Sqrt(ClampUnit(
+                    nr5FrontendTopPeakProof *
+                    Math.Max(continuitySpectral, 0.18) *
+                    Math.Max(continuityOutput, 0.20) *
+                    Math.Max(continuityHold, 0.18))));
+                nr5FrontendPeakContinuitySpeechCandidate =
+                    nr5FrontendPeakContinuitySpeechProof >= 0.14 &&
+                    continuityOutput >= 0.16 &&
+                    (continuitySpectral >= 0.10 || nr5SpeechHoldWasActive);
+            }
+            nr5ProfiledValleyProof = Nr5LevelerProfiledValleyProof(nr5);
+            nr5ProfiledValleyCandidate =
+                inputRmsDbfs >= -66.0 &&
+                inputRmsDbfs <= -48.0 &&
+                nr5.OutputDbfs >= -42.0 &&
+                nr5.OutputDbfs <= -34.0 &&
+                nr5ProfiledValleyProof >= 0.42;
+            if (belowGate &&
+                nr5FrontendTopPeakProof >= 0.20 &&
+                inputRmsDbfs >= -112.0 &&
+                nr5.InputDbfs >= -61.0 &&
+                nr5.InputDbfs <= -45.0 &&
+                nr5.OutputDbfs <= -55.0 &&
+                nr5.MaskSmoothing >= 0.30)
+            {
+                double suppressedAdjacent = nr5.AdjacentNoiseUsable
+                    ? Math.Sqrt(ClampUnit(
+                        ClampUnit((nr5.AdjacentNoiseTrust - 0.56) / 0.26) *
+                        ClampUnit((nr5.AdjacentNoiseDrive - 0.42) / 0.36)))
+                    : 0.0;
+                double suppressedSpectral = Math.Max(
+                    ClampUnit((nr5.SignalConfidence - 0.250) / 0.105),
+                    Math.Max(
+                        0.88 * ClampUnit((nr5.SignalProbability - 0.105) / 0.095),
+                        0.66 * ClampUnit((nr5.MaskSmoothing - 0.315) / 0.145)));
+                double suppressedInputAnchor = ClampUnit((nr5.InputDbfs + 61.0) / 12.0);
+                nr5SuppressedWeakOnsetProof = ClampUnit(Math.Sqrt(ClampUnit(
+                    nr5FrontendTopPeakProof *
+                    Math.Max(suppressedAdjacent, 0.22) *
+                    Math.Max(suppressedSpectral, 0.20) *
+                    suppressedInputAnchor)));
+                nr5SuppressedWeakOnsetCandidate =
+                    nr5SuppressedWeakOnsetProof >= 0.10 &&
+                    suppressedSpectral >= 0.14 &&
+                    (suppressedAdjacent >= 0.18 || nr5FrontendTopPeakProof >= 0.30);
+            }
+            if (belowGate &&
+                nr5SpeechHoldWasActive &&
+                state.PauseHoldBlocks > 0 &&
+                nr5FrontendHeldTailPeakProof >= 0.055 &&
+                inputRmsDbfs >= -112.0 &&
+                nr5.InputDbfs >= -61.5 &&
+                nr5.InputDbfs <= -29.0 &&
+                nr5.OutputDbfs <= -55.0 &&
+                nr5.OutputDbfs >= -86.0 &&
+                nr5.SignalConfidence >= 0.235 &&
+                (nr5.SignalProbability >= 0.075 || nr5.RecoveryDrive >= 0.085))
+            {
+                double tailSpectral = Math.Max(
+                    ClampUnit((nr5.SignalConfidence - 0.235) / 0.115),
+                    Math.Max(
+                        0.86 * ClampUnit((nr5.SignalProbability - 0.075) / 0.125),
+                        Math.Max(
+                            0.78 * ClampUnit((nr5.RecoveryDrive - 0.085) / 0.180),
+                            0.66 * ClampUnit((nr5.MaskSmoothing - 0.180) / 0.220))));
+                double tailSuppression = ClampUnit((nr5.InputDbfs - nr5.OutputDbfs - 9.0) / 18.0);
+                double tailHold = Math.Max(
+                    ClampUnit(state.PauseHoldBlocks / 18.0),
+                    ClampUnit(state.Nr5SpeechHoldBlocks / (double)RxLevelerNr5SpeechHoldBlocks));
+                double tailInputAnchor = ClampUnit((nr5.InputDbfs + 61.5) / 32.5);
+                nr5HeldSuppressedSpeechTailProof = ClampUnit(Math.Sqrt(ClampUnit(
+                    nr5FrontendHeldTailPeakProof *
+                    Math.Max(tailSpectral, 0.16) *
+                    Math.Max(tailSuppression, 0.22) *
+                    Math.Max(tailHold, 0.18) *
+                    Math.Max(tailInputAnchor, 0.22))));
+                nr5HeldSuppressedSpeechTailCandidate =
+                    nr5HeldSuppressedSpeechTailProof >= 0.075 &&
+                    (tailSpectral >= 0.12 || nr5FrontendHeldTailPeakProof >= 0.18) &&
+                    (nr5.SignalProbability >= 0.100 ||
+                        nr5.RecoveryDrive >= 0.090 ||
+                        nr5.SignalConfidence >= 0.255 ||
+                        nr5FrontendHeldTailPeakProof >= 0.34) &&
+                    tailSuppression >= 0.18;
+            }
+            if (!belowGate &&
+                nr5SpeechHoldWasActive &&
+                state.PauseHoldBlocks > 0 &&
+                nr5FrontendTopPeakProof >= 0.34 &&
+                inputRmsDbfs >= -62.0 &&
+                inputRmsDbfs <= -50.0 &&
+                nr5.InputDbfs >= -36.0 &&
+                nr5.OutputDbfs >= -60.0 &&
+                nr5.OutputDbfs <= -42.0 &&
+                nr5.AgcGate >= 0.38 &&
+                nr5.SignalConfidence >= 0.19)
+            {
+                double valleySuppression = ClampUnit((nr5.InputDbfs - nr5.OutputDbfs - 10.0) / 16.0);
+                double valleyClassifier = Math.Max(
+                    ClampUnit((nr5.SignalConfidence - 0.19) / 0.12),
+                    Math.Max(
+                        0.72 * ClampUnit((nr5.SignalProbability - 0.045) / 0.115),
+                        0.82 * ClampUnit((nr5.AgcGate - 0.38) / 0.22)));
+                double valleyHold = Math.Max(
+                    ClampUnit(state.PauseHoldBlocks / (double)RxLevelerPauseHoldBlocks),
+                    ClampUnit(state.Nr5SpeechHoldBlocks / (double)RxLevelerNr5SpeechHoldBlocks));
+                double valleyInputAnchor = ClampUnit((nr5.InputDbfs + 36.0) / 14.0);
+                nr5PassbandSuppressedValleyProof = ClampUnit(Math.Sqrt(ClampUnit(
+                    nr5FrontendTopPeakProof *
+                    Math.Max(valleySuppression, 0.18) *
+                    Math.Max(valleyClassifier, 0.16) *
+                    Math.Max(valleyHold, 0.24) *
+                    Math.Max(valleyInputAnchor, 0.24))));
+                nr5PassbandSuppressedValleyCandidate =
+                    nr5PassbandSuppressedValleyProof >= 0.16 &&
+                    valleySuppression >= 0.22 &&
+                    (valleyClassifier >= 0.12 || nr5FrontendTopPeakProof >= 0.55);
+            }
             nr5StrongSpeechProof = Math.Sqrt(ClampUnit(
                 ClampUnit((nr5.InputDbfs + 38.0) / 10.0) *
                 ClampUnit((nr5.SignalConfidence - 0.30) / 0.12) *
@@ -405,8 +789,15 @@ public class DspPipelineService : BackgroundService,
                     ClampUnit((nr5.PeakEvidence - 0.08) / 0.22)) *
                 ClampUnit((nr5.AgcGate - 0.42) / 0.24)));
             nr5SpeechHoldProof = Math.Max(
-                Math.Max(nr5SpeechEvidence, nr5ContinuitySpeechProof),
-                Math.Max(nr5NativeWeakSpeechProof, nr5StrongSpeechProof));
+                Math.Max(nr5SpeechEvidence, Math.Max(nr5ContinuitySpeechProof, nr5SpeechValleyProof)),
+                Math.Max(nr5ProfiledValleyProof,
+                    Math.Max(nr5FrontendPeakRecoveredSpeechProof,
+                        Math.Max(nr5FrontendPeakContinuitySpeechProof,
+                            Math.Max(nr5NativeRecoveredSpeechProof,
+                                Math.Max(nr5SuppressedWeakOnsetProof,
+                                    Math.Max(nr5HeldSuppressedSpeechTailProof,
+                                        Math.Max(nr5PassbandSuppressedValleyProof,
+                                            Math.Max(nr5NativeWeakSpeechProof, nr5StrongSpeechProof)))))))));
             bool nr5HoldSpectralEvidence =
                 nr5.SignalConfidence >= 0.30 ||
                 nr5.SignalProbability >= 0.145 ||
@@ -420,8 +811,119 @@ public class DspPipelineService : BackgroundService,
                     nr5.SignalProbability >= 0.155 &&
                     nr5.OutputDbfs >= -40.0) ||
                 (nr5.SignalProbability >= 0.30 &&
-                    nr5.OutputDbfs >= -36.0);
+                    nr5.OutputDbfs >= -36.0) ||
+                nr5FrontendPeakContinuitySpeechCandidate ||
+                nr5PassbandSuppressedValleyCandidate ||
+                nr5HeldSuppressedSpeechTailCandidate ||
+                nr5SuppressedWeakOnsetCandidate;
             bool nr5SpeechHoldActiveForBlock = nr5SpeechHoldWasActive || nr5SpeechHoldEvidence;
+            bool nr5AdjacentHeldTailGate =
+                nr5SpeechHoldWasActive &&
+                state.PauseHoldBlocks > 0 &&
+                nr5.AdjacentNoiseUsable &&
+                nr5.AdjacentNoiseTrust >= 0.58 &&
+                nr5.AdjacentNoiseDrive >= 0.46;
+            if (nr5SpeechHoldActiveForBlock &&
+                inputRmsDbfs >= -70.0 &&
+                inputRmsDbfs <= -50.0 &&
+                (nr5.AgcGate >= 0.52 || nr5AdjacentHeldTailGate))
+            {
+                bool heldNativeDeepTail =
+                    nr5.InputDbfs <= -51.5 &&
+                    nr5.OutputDbfs >= -40.5;
+                bool heldAdjacentProfiledTailRelaxed =
+                    nr5AdjacentHeldTailGate &&
+                    inputRmsDbfs <= -58.0 &&
+                    nr5.OutputDbfs >= -45.0 &&
+                    nr5.OutputPeakDbfs >= -35.5 &&
+                    nr5.SignalConfidence >= 0.265 &&
+                    nr5.SignalProbability >= 0.115 &&
+                    nr5.MaskSmoothing >= 0.30;
+                bool heldAdjacentProfiledTail =
+                    heldAdjacentProfiledTailRelaxed ||
+                    (inputRmsDbfs <= -58.0 &&
+                        nr5.OutputDbfs >= -43.5 &&
+                        nr5.OutputPeakDbfs >= -35.5 &&
+                        nr5.SignalConfidence >= 0.295 &&
+                        nr5.SignalProbability >= 0.145 &&
+                        nr5.AdjacentNoiseUsable &&
+                        nr5.AdjacentNoiseTrust >= 0.55 &&
+                        nr5.AdjacentNoiseDrive >= 0.40);
+                double heldNativeLift = ClampUnit((nr5NativeLiftDb - 4.0) / 12.0);
+                double heldOutput = ClampUnit((nr5.OutputDbfs + 40.5) / 11.0);
+                double heldAdjacentSupport = heldAdjacentProfiledTail
+                    ? Math.Sqrt(ClampUnit(
+                        ClampUnit((nr5.AdjacentNoiseTrust - 0.52) / 0.24) *
+                        ClampUnit((nr5.AdjacentNoiseDrive - 0.38) / 0.32) *
+                        ClampUnit((nr5.OutputPeakDbfs + 35.5) / 12.0)))
+                    : 0.0;
+                double heldContinuity = Math.Max(
+                    ClampUnit((nr5.WeakSignalMemory - 0.28) / 0.30),
+                    ClampUnit((nr5.RecoveryDrive - 0.28) / 0.24));
+                double heldSpectral = Math.Max(
+                    ClampUnit((nr5.SignalConfidence - 0.265) / 0.105),
+                    Math.Max(
+                        0.85 * ClampUnit((nr5.SignalProbability - 0.125) / 0.105),
+                        0.58 * ClampUnit((nr5.PeakEvidence - 0.010) / 0.120)));
+                double heldGate = ClampUnit((nr5.AgcGate - 0.50) / 0.28);
+                double heldRecoveredSupport = Math.Max(Math.Max(heldNativeLift, heldOutput), heldAdjacentSupport);
+                nr5HeldRecoveredSpeechTailProof = ClampUnit(Math.Sqrt(ClampUnit(
+                    Math.Max(heldGate, heldAdjacentProfiledTail ? 0.22 : 0.0) *
+                    Math.Max(heldContinuity, 0.25) *
+                    Math.Max(heldSpectral, 0.25) *
+                    heldRecoveredSupport)));
+                nr5HeldRecoveredSpeechTailCandidate =
+                    nr5HeldRecoveredSpeechTailProof >= 0.07 &&
+                    ((heldNativeDeepTail && (nr5NativeLiftDb >= 5.0 || nr5.OutputDbfs >= -32.0)) ||
+                        heldAdjacentProfiledTail);
+                if (nr5HeldRecoveredSpeechTailCandidate)
+                {
+                    nr5SpeechHoldEvidence = true;
+                    nr5SpeechHoldProof = Math.Max(nr5SpeechHoldProof, nr5HeldRecoveredSpeechTailProof);
+                }
+            }
+            if (nr5SpeechHoldWasActive &&
+                state.PauseHoldBlocks > 0 &&
+                currentDb >= 10.0 &&
+                inputRmsDbfs >= -72.0 &&
+                inputRmsDbfs <= -63.0 &&
+                nr5.InputDbfs >= -59.5 &&
+                nr5.InputDbfs <= -45.0 &&
+                nr5.OutputDbfs >= -72.0 &&
+                nr5.OutputDbfs <= -44.0 &&
+                nr5.MaskSmoothing >= 0.30)
+            {
+                double dropoutAdjacent = nr5.AdjacentNoiseUsable
+                    ? Math.Sqrt(ClampUnit(
+                        ClampUnit((nr5.AdjacentNoiseTrust - 0.48) / 0.22) *
+                        ClampUnit((nr5.AdjacentNoiseDrive - 0.34) / 0.28)))
+                    : 0.0;
+                double dropoutSpectral = Math.Max(
+                    ClampUnit((nr5.SignalConfidence - 0.245) / 0.105),
+                    Math.Max(
+                        0.90 * ClampUnit((nr5.SignalProbability - 0.105) / 0.095),
+                        ClampUnit((nr5.MaskSmoothing - 0.30) / 0.12)));
+                double dropoutContinuity = Math.Max(
+                    ClampUnit((nr5.WeakSignalMemory - 0.12) / 0.30),
+                    ClampUnit((nr5.RecoveryDrive - 0.22) / 0.24));
+                double dropoutInputAnchor = ClampUnit((nr5.InputDbfs + 59.5) / 8.0);
+                nr5HeldSuppressedSpeechDropoutProof = ClampUnit(Math.Sqrt(ClampUnit(
+                    Math.Max(dropoutAdjacent, 0.18) *
+                    Math.Max(dropoutSpectral, 0.18) *
+                    Math.Max(dropoutContinuity, 0.18) *
+                    dropoutInputAnchor)));
+                nr5HeldSuppressedSpeechDropoutCandidate =
+                    nr5HeldSuppressedSpeechDropoutProof >= 0.10 &&
+                    (dropoutAdjacent >= 0.16 ||
+                        dropoutSpectral >= 0.18 ||
+                        dropoutContinuity >= 0.18);
+                if (nr5HeldSuppressedSpeechDropoutCandidate)
+                {
+                    nr5SpeechHoldProof = Math.Max(
+                        nr5SpeechHoldProof,
+                        Math.Min(0.30, 0.16 + 0.28 * nr5HeldSuppressedSpeechDropoutProof));
+                }
+            }
             if (inputRmsDbfs >= RxLevelerMemoryCatchupGateRmsDb &&
                 inputRmsDbfs <= -52.0 &&
                 nr5.OutputDbfs >= -45.0)
@@ -438,14 +940,17 @@ public class DspPipelineService : BackgroundService,
                             ClampUnit((nr5.MaskSmoothing - 0.30) / 0.12),
                             ClampUnit((nr5.SignalConfidence - 0.285) / 0.08)),
                         ClampUnit((nr5.PeakEvidence - 0.025) / 0.080))));
+                double heldContinuityGateStart = nr5.PeakEvidence >= 0.025 ? 0.58 : 0.62;
                 double highGateContinuityLift = Math.Sqrt(ClampUnit(
-                    ClampUnit((nr5.AgcGate - 0.58) / 0.28) *
+                    ClampUnit((nr5.AgcGate - heldContinuityGateStart) / 0.28) *
                     Math.Max(
                         ClampUnit((nr5.WeakSignalMemory - 0.30) / 0.26),
                         ClampUnit((nr5.RecoveryDrive - 0.30) / 0.24)) *
                     Math.Max(
-                        ClampUnit((nr5.MaskSmoothing - 0.30) / 0.12),
-                        ClampUnit((nr5.SignalConfidence - 0.285) / 0.08))));
+                        Math.Max(
+                            ClampUnit((nr5.MaskSmoothing - 0.30) / 0.12),
+                            ClampUnit((nr5.SignalConfidence - 0.285) / 0.08)),
+                        ClampUnit((nr5.PeakEvidence - 0.025) / 0.080))));
                 double spectralThreadLift = Math.Max(
                     ClampUnit((nr5.SignalProbability - 0.125) / 0.065),
                     ClampUnit((nr5.PeakEvidence - 0.020) / 0.120));
@@ -529,6 +1034,57 @@ public class DspPipelineService : BackgroundService,
                     desiredDb = Math.Clamp(desiredDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
                 }
             }
+            if (nr5SuppressedWeakOnsetCandidate)
+            {
+                belowGate = false;
+                double onsetTargetDbfs = -53.0 + 13.0 * ClampUnit((nr5SuppressedWeakOnsetProof - 0.10) / 0.42);
+                double onsetDesiredDb = Math.Clamp(
+                    onsetTargetDbfs - inputRmsDbfs,
+                    0.0,
+                    RxLevelerMaxBoostDb);
+                if (peak > 1e-9 && double.IsFinite(peakHeadroomDb))
+                {
+                    peakLimited = peakHeadroomDb < onsetDesiredDb - 1.0e-6;
+                    onsetDesiredDb = Math.Min(onsetDesiredDb, peakHeadroomDb);
+                }
+                desiredDb = Math.Max(desiredDb, onsetDesiredDb);
+                desiredDb = Math.Clamp(desiredDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
+            }
+            if (nr5HeldSuppressedSpeechTailCandidate)
+            {
+                belowGate = false;
+                double heldSuppressedTailTargetDbfs =
+                    -56.0 + 14.0 * ClampUnit((nr5HeldSuppressedSpeechTailProof - 0.075) / 0.30);
+                heldSuppressedTailTargetDbfs = Math.Clamp(heldSuppressedTailTargetDbfs, -58.0, -42.0);
+                double heldSuppressedTailDesiredDb = Math.Clamp(
+                    heldSuppressedTailTargetDbfs - inputRmsDbfs,
+                    0.0,
+                    RxLevelerMaxBoostDb);
+                if (peak > 1e-9 && double.IsFinite(peakHeadroomDb))
+                {
+                    peakLimited = peakHeadroomDb < heldSuppressedTailDesiredDb - 1.0e-6;
+                    heldSuppressedTailDesiredDb = Math.Min(heldSuppressedTailDesiredDb, peakHeadroomDb);
+                }
+                desiredDb = Math.Max(desiredDb, heldSuppressedTailDesiredDb);
+                desiredDb = Math.Clamp(desiredDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
+            }
+            if (nr5PassbandSuppressedValleyCandidate)
+            {
+                double passbandValleyTargetDbfs =
+                    -34.0 + 5.0 * ClampUnit((nr5PassbandSuppressedValleyProof - 0.16) / 0.42);
+                passbandValleyTargetDbfs = Math.Clamp(passbandValleyTargetDbfs, -34.0, -29.0);
+                double passbandValleyDesiredDb = Math.Clamp(
+                    passbandValleyTargetDbfs - inputRmsDbfs,
+                    0.0,
+                    RxLevelerMaxBoostDb);
+                if (peak > 1e-9 && double.IsFinite(peakHeadroomDb))
+                {
+                    peakLimited = peakHeadroomDb < passbandValleyDesiredDb - 1.0e-6;
+                    passbandValleyDesiredDb = Math.Min(passbandValleyDesiredDb, peakHeadroomDb);
+                }
+                desiredDb = passbandValleyDesiredDb;
+                desiredDb = Math.Clamp(desiredDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
+            }
             if (desiredDb > 0.0)
             {
                 double evidenceBoostCeilingDb = 16.0 + 10.0 * nr5SpeechEvidence;
@@ -543,6 +1099,72 @@ public class DspPipelineService : BackgroundService,
                     evidenceBoostCeilingDb = Math.Max(
                         evidenceBoostCeilingDb,
                         20.0 + 36.0 * nr5NativeWeakSpeechProof);
+                }
+                if (nr5SpeechValleyCandidate)
+                {
+                    evidenceBoostCeilingDb = Math.Max(
+                        evidenceBoostCeilingDb,
+                        20.0 + 24.0 * nr5SpeechValleyProof);
+                }
+                if (nr5NativeSpeechValleyCandidate)
+                {
+                    evidenceBoostCeilingDb = Math.Max(
+                        evidenceBoostCeilingDb,
+                        34.0 + 10.0 * ClampUnit((nr5SpeechValleyProof - 0.12) / 0.38));
+                }
+                if (nr5NativeRecoveredSpeechCandidate)
+                {
+                    evidenceBoostCeilingDb = Math.Max(
+                        evidenceBoostCeilingDb,
+                        34.0 + 10.0 * ClampUnit((nr5NativeRecoveredSpeechProof - 0.14) / 0.40));
+                }
+                if (nr5FrontendPeakRecoveredSpeechCandidate)
+                {
+                    evidenceBoostCeilingDb = Math.Max(
+                        evidenceBoostCeilingDb,
+                        34.0 + 9.0 * ClampUnit((nr5FrontendPeakRecoveredSpeechProof - 0.34) / 0.46));
+                }
+                if (nr5FrontendPeakContinuitySpeechCandidate)
+                {
+                    evidenceBoostCeilingDb = Math.Max(
+                        evidenceBoostCeilingDb,
+                        24.0 + 14.0 * ClampUnit((nr5FrontendPeakContinuitySpeechProof - 0.14) / 0.50));
+                }
+                if (nr5HeldRecoveredSpeechTailCandidate)
+                {
+                    evidenceBoostCeilingDb = Math.Max(
+                        evidenceBoostCeilingDb,
+                        34.0 + 10.0 * ClampUnit((nr5HeldRecoveredSpeechTailProof - 0.08) / 0.40));
+                }
+                if (nr5HeldSuppressedSpeechDropoutCandidate)
+                {
+                    evidenceBoostCeilingDb = Math.Max(
+                        evidenceBoostCeilingDb,
+                        24.0 + 12.0 * ClampUnit((nr5HeldSuppressedSpeechDropoutProof - 0.10) / 0.42));
+                }
+                if (nr5HeldSuppressedSpeechTailCandidate)
+                {
+                    evidenceBoostCeilingDb = Math.Max(
+                        evidenceBoostCeilingDb,
+                        36.0 + 8.0 * ClampUnit((nr5HeldSuppressedSpeechTailProof - 0.075) / 0.30));
+                }
+                if (nr5PassbandSuppressedValleyCandidate)
+                {
+                    evidenceBoostCeilingDb = Math.Max(
+                        evidenceBoostCeilingDb,
+                        30.0 + 12.0 * ClampUnit((nr5PassbandSuppressedValleyProof - 0.16) / 0.42));
+                }
+                if (nr5ProfiledValleyCandidate)
+                {
+                    evidenceBoostCeilingDb = Math.Max(
+                        evidenceBoostCeilingDb,
+                        32.0 + 8.0 * nr5ProfiledValleyProof);
+                }
+                if (nr5SuppressedWeakOnsetCandidate)
+                {
+                    evidenceBoostCeilingDb = Math.Max(
+                        evidenceBoostCeilingDb,
+                        40.0 + 8.0 * ClampUnit((nr5SuppressedWeakOnsetProof - 0.10) / 0.42));
                 }
                 if (nr5ContinuitySpeechProof > 0.18)
                 {
@@ -584,6 +1206,50 @@ public class DspPipelineService : BackgroundService,
             {
                 mutedFloorDrive *= 0.35;
             }
+            if (nr5SpeechValleyCandidate)
+            {
+                mutedFloorDrive *= 1.0 - 0.86 * ClampUnit((nr5SpeechValleyProof - 0.04) / 0.24);
+            }
+            if (nr5NativeSpeechValleyCandidate)
+            {
+                mutedFloorDrive *= 0.12;
+            }
+            if (nr5NativeRecoveredSpeechCandidate)
+            {
+                mutedFloorDrive *= 0.10;
+            }
+            if (nr5FrontendPeakRecoveredSpeechCandidate)
+            {
+                mutedFloorDrive *= 0.10;
+            }
+            if (nr5FrontendPeakContinuitySpeechCandidate)
+            {
+                mutedFloorDrive *= 0.18;
+            }
+            if (nr5HeldRecoveredSpeechTailCandidate)
+            {
+                mutedFloorDrive *= 0.10;
+            }
+            if (nr5HeldSuppressedSpeechDropoutCandidate)
+            {
+                mutedFloorDrive *= 0.35;
+            }
+            if (nr5HeldSuppressedSpeechTailCandidate)
+            {
+                mutedFloorDrive *= 0.16;
+            }
+            if (nr5PassbandSuppressedValleyCandidate)
+            {
+                mutedFloorDrive *= 0.12;
+            }
+            if (nr5SuppressedWeakOnsetCandidate)
+            {
+                mutedFloorDrive *= 0.22;
+            }
+            if (nr5ProfiledValleyCandidate)
+            {
+                mutedFloorDrive *= 0.10;
+            }
             if (nr5DeepWeakSpeechCandidate)
             {
                 mutedFloorDrive *= 0.20;
@@ -600,6 +1266,66 @@ public class DspPipelineService : BackgroundService,
                     nr5NoiseFloorBoostCeilingDb = Math.Max(
                         nr5NoiseFloorBoostCeilingDb,
                         28.0 + 6.0 * nr5SpeechGainHoldLift);
+                }
+                if (nr5SpeechValleyCandidate)
+                {
+                    nr5NoiseFloorBoostCeilingDb = Math.Max(
+                        nr5NoiseFloorBoostCeilingDb,
+                        20.0 + 24.0 * nr5SpeechValleyProof);
+                }
+                if (nr5NativeSpeechValleyCandidate)
+                {
+                    nr5NoiseFloorBoostCeilingDb = Math.Max(
+                        nr5NoiseFloorBoostCeilingDb,
+                        34.0 + 10.0 * ClampUnit((nr5SpeechValleyProof - 0.12) / 0.38));
+                }
+                if (nr5NativeRecoveredSpeechCandidate)
+                {
+                    nr5NoiseFloorBoostCeilingDb = Math.Max(
+                        nr5NoiseFloorBoostCeilingDb,
+                        34.0 + 10.0 * ClampUnit((nr5NativeRecoveredSpeechProof - 0.14) / 0.40));
+                }
+                if (nr5FrontendPeakRecoveredSpeechCandidate)
+                {
+                    nr5NoiseFloorBoostCeilingDb = Math.Max(
+                        nr5NoiseFloorBoostCeilingDb,
+                        34.0 + 9.0 * ClampUnit((nr5FrontendPeakRecoveredSpeechProof - 0.34) / 0.46));
+                }
+                if (nr5FrontendPeakContinuitySpeechCandidate)
+                {
+                    nr5NoiseFloorBoostCeilingDb = Math.Max(
+                        nr5NoiseFloorBoostCeilingDb,
+                        24.0 + 14.0 * ClampUnit((nr5FrontendPeakContinuitySpeechProof - 0.14) / 0.50));
+                }
+                if (nr5HeldRecoveredSpeechTailCandidate)
+                {
+                    nr5NoiseFloorBoostCeilingDb = Math.Max(
+                        nr5NoiseFloorBoostCeilingDb,
+                        34.0 + 10.0 * ClampUnit((nr5HeldRecoveredSpeechTailProof - 0.08) / 0.40));
+                }
+                if (nr5HeldSuppressedSpeechTailCandidate)
+                {
+                    nr5NoiseFloorBoostCeilingDb = Math.Max(
+                        nr5NoiseFloorBoostCeilingDb,
+                        36.0 + 8.0 * ClampUnit((nr5HeldSuppressedSpeechTailProof - 0.075) / 0.30));
+                }
+                if (nr5PassbandSuppressedValleyCandidate)
+                {
+                    nr5NoiseFloorBoostCeilingDb = Math.Max(
+                        nr5NoiseFloorBoostCeilingDb,
+                        30.0 + 10.0 * ClampUnit((nr5PassbandSuppressedValleyProof - 0.16) / 0.42));
+                }
+                if (nr5ProfiledValleyCandidate)
+                {
+                    nr5NoiseFloorBoostCeilingDb = Math.Max(
+                        nr5NoiseFloorBoostCeilingDb,
+                        32.0 + 8.0 * nr5ProfiledValleyProof);
+                }
+                if (nr5SuppressedWeakOnsetCandidate)
+                {
+                    nr5NoiseFloorBoostCeilingDb = Math.Max(
+                        nr5NoiseFloorBoostCeilingDb,
+                        40.0 + 8.0 * ClampUnit((nr5SuppressedWeakOnsetProof - 0.10) / 0.42));
                 }
                 desiredDb = Math.Min(desiredDb, nr5NoiseFloorBoostCeilingDb);
             }
@@ -654,6 +1380,51 @@ public class DspPipelineService : BackgroundService,
             {
                 lowSpectralProofDrive *= 1.0 - 0.68 * nr5SpeechHoldLift;
             }
+            if (nr5SpeechValleyCandidate)
+            {
+                lowSpectralProofDrive *= 1.0 - 0.90 * ClampUnit(nr5SpeechValleyProof / 0.26);
+            }
+            if (nr5NativeSpeechValleyCandidate)
+            {
+                lowSpectralProofDrive *= 0.12;
+            }
+            if (nr5NativeRecoveredSpeechCandidate)
+            {
+                lowSpectralProofDrive *= 0.10;
+            }
+            if (nr5FrontendPeakRecoveredSpeechCandidate)
+            {
+                lowSpectralProofDrive *= 0.10;
+            }
+            if (nr5FrontendPeakContinuitySpeechCandidate)
+            {
+                lowSpectralProofDrive *= 1.0 -
+                    0.82 * ClampUnit((nr5FrontendPeakContinuitySpeechProof - 0.10) / 0.36);
+            }
+            if (nr5HeldRecoveredSpeechTailCandidate)
+            {
+                lowSpectralProofDrive *= 0.10;
+            }
+            if (nr5HeldSuppressedSpeechDropoutCandidate)
+            {
+                lowSpectralProofDrive *= 0.35;
+            }
+            if (nr5HeldSuppressedSpeechTailCandidate)
+            {
+                lowSpectralProofDrive *= 0.16;
+            }
+            if (nr5PassbandSuppressedValleyCandidate)
+            {
+                lowSpectralProofDrive *= 0.12;
+            }
+            if (nr5SuppressedWeakOnsetCandidate)
+            {
+                lowSpectralProofDrive *= 0.20;
+            }
+            if (nr5ProfiledValleyCandidate)
+            {
+                lowSpectralProofDrive *= 0.05;
+            }
             if (nr5DeepWeakSpeechCandidate)
             {
                 lowSpectralProofDrive *= 0.25;
@@ -697,6 +1468,75 @@ public class DspPipelineService : BackgroundService,
                         lowProofCeilingDbfs,
                         -27.0 + 8.0 * nr5SpeechHoldLift);
                 }
+                if (nr5SpeechValleyCandidate)
+                {
+                    lowProofCeilingDbfs = Math.Max(
+                        lowProofCeilingDbfs,
+                        -36.0 + 28.0 * ClampUnit(nr5SpeechValleyProof / 0.30));
+                }
+                if (nr5NativeSpeechValleyCandidate)
+                {
+                    lowProofCeilingDbfs = Math.Max(
+                        lowProofCeilingDbfs,
+                        -21.0 + 3.0 * ClampUnit((nr5SpeechValleyProof - 0.12) / 0.38));
+                }
+                if (nr5NativeRecoveredSpeechCandidate)
+                {
+                    lowProofCeilingDbfs = Math.Max(
+                        lowProofCeilingDbfs,
+                        -20.0 + 2.0 * ClampUnit((nr5NativeRecoveredSpeechProof - 0.14) / 0.40));
+                }
+                if (nr5FrontendPeakRecoveredSpeechCandidate)
+                {
+                    lowProofCeilingDbfs = Math.Max(
+                        lowProofCeilingDbfs,
+                        -20.5 + 2.5 * ClampUnit((nr5FrontendPeakRecoveredSpeechProof - 0.34) / 0.46));
+                }
+                if (nr5FrontendPeakContinuitySpeechCandidate)
+                {
+                    lowProofCeilingDbfs = Math.Max(
+                        lowProofCeilingDbfs,
+                        -46.0 + 10.0 * ClampUnit((nr5FrontendPeakContinuitySpeechProof - 0.14) / 0.50));
+                }
+                if (nr5HeldRecoveredSpeechTailCandidate)
+                {
+                    lowProofCeilingDbfs = Math.Max(
+                        lowProofCeilingDbfs,
+                        -20.5 + 2.5 * ClampUnit((nr5HeldRecoveredSpeechTailProof - 0.08) / 0.40));
+                }
+                if (nr5HeldSuppressedSpeechDropoutCandidate)
+                {
+                    lowProofCeilingDbfs = Math.Max(
+                        lowProofCeilingDbfs,
+                        -38.0 + 8.0 * ClampUnit((nr5HeldSuppressedSpeechDropoutProof - 0.10) / 0.42));
+                }
+                if (nr5HeldSuppressedSpeechTailCandidate)
+                {
+                    lowProofCeilingDbfs = Math.Max(
+                        lowProofCeilingDbfs,
+                        -56.0 + 14.0 * ClampUnit((nr5HeldSuppressedSpeechTailProof - 0.075) / 0.30));
+                }
+                if (nr5PassbandSuppressedValleyCandidate)
+                {
+                    lowProofCeilingDbfs = Math.Max(
+                        lowProofCeilingDbfs,
+                        Math.Clamp(
+                            -34.0 + 5.0 * ClampUnit((nr5PassbandSuppressedValleyProof - 0.16) / 0.42),
+                            -34.0,
+                            -29.0));
+                }
+                if (nr5SuppressedWeakOnsetCandidate)
+                {
+                    lowProofCeilingDbfs = Math.Max(
+                        lowProofCeilingDbfs,
+                        -40.0 + 12.0 * ClampUnit((nr5SuppressedWeakOnsetProof - 0.10) / 0.42));
+                }
+                if (nr5ProfiledValleyCandidate)
+                {
+                    lowProofCeilingDbfs = Math.Max(
+                        lowProofCeilingDbfs,
+                        -20.0 + 3.0 * ClampUnit((nr5ProfiledValleyProof - 0.42) / 0.38));
+                }
                 if (nr5DeepWeakSpeechCandidate)
                 {
                     lowProofCeilingDbfs = Math.Max(lowProofCeilingDbfs, -30.0);
@@ -705,6 +1545,124 @@ public class DspPipelineService : BackgroundService,
                 desiredDb = Math.Min(
                     desiredDb,
                     desiredDb + lowSpectralProofDrive * (lowProofDesiredDb - desiredDb));
+            }
+            if (nr5NativeSpeechValleyCandidate &&
+                desiredDb > 0.0 &&
+                double.IsFinite(peakHeadroomDb) &&
+                peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+            {
+                double nativeValleyTargetDbfs =
+                    -20.5 + 2.5 * ClampUnit((nr5SpeechValleyProof - 0.12) / 0.38);
+                double nativeValleyDesiredDb = Math.Clamp(
+                    nativeValleyTargetDbfs - inputRmsDbfs,
+                    0.0,
+                    RxLevelerNr5NativeValleyMaxBoostDb);
+                desiredDb = Math.Max(
+                    desiredDb,
+                    Math.Min(nativeValleyDesiredDb, peakHeadroomDb));
+            }
+            if (nr5NativeRecoveredSpeechCandidate &&
+                desiredDb > 0.0 &&
+                double.IsFinite(peakHeadroomDb) &&
+                peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+            {
+                double nativeRecoveredTargetDbfs =
+                    -20.0 + 2.0 * ClampUnit((nr5NativeRecoveredSpeechProof - 0.14) / 0.40);
+                double nativeRecoveredDesiredDb = Math.Clamp(
+                    nativeRecoveredTargetDbfs - inputRmsDbfs,
+                    0.0,
+                    RxLevelerNr5NativeRecoveredMaxBoostDb);
+                desiredDb = Math.Max(
+                    desiredDb,
+                    Math.Min(nativeRecoveredDesiredDb, peakHeadroomDb));
+            }
+            if (nr5FrontendPeakRecoveredSpeechCandidate &&
+                desiredDb > 0.0 &&
+                double.IsFinite(peakHeadroomDb) &&
+                peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+            {
+                double frontendPeakTargetDbfs =
+                    -19.5 + 1.5 * ClampUnit((nr5FrontendPeakRecoveredSpeechProof - 0.34) / 0.46);
+                double frontendPeakDesiredDb = Math.Clamp(
+                    frontendPeakTargetDbfs - inputRmsDbfs,
+                    0.0,
+                    RxLevelerNr5NativeRecoveredMaxBoostDb);
+                desiredDb = Math.Max(
+                    desiredDb,
+                    Math.Min(frontendPeakDesiredDb, peakHeadroomDb));
+            }
+            if (nr5FrontendPeakContinuitySpeechCandidate &&
+                desiredDb > 0.0 &&
+                double.IsFinite(peakHeadroomDb) &&
+                peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+            {
+                double frontendContinuityTargetDbfs =
+                    -43.5 + 8.0 * ClampUnit((nr5FrontendPeakContinuitySpeechProof - 0.14) / 0.50);
+                double frontendContinuityDesiredDb = Math.Clamp(
+                    frontendContinuityTargetDbfs - inputRmsDbfs,
+                    0.0,
+                    RxLevelerMaxBoostDb);
+                desiredDb = Math.Max(
+                    desiredDb,
+                    Math.Min(frontendContinuityDesiredDb, peakHeadroomDb));
+            }
+            if (nr5HeldRecoveredSpeechTailCandidate &&
+                desiredDb > 0.0 &&
+                double.IsFinite(peakHeadroomDb) &&
+                peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+            {
+                double heldTailTargetDbfs =
+                    -20.5 + 2.5 * ClampUnit((nr5HeldRecoveredSpeechTailProof - 0.08) / 0.40);
+                double heldTailDesiredDb = Math.Clamp(
+                    heldTailTargetDbfs - inputRmsDbfs,
+                    0.0,
+                    RxLevelerNr5NativeRecoveredMaxBoostDb);
+                desiredDb = Math.Max(
+                    desiredDb,
+                    Math.Min(heldTailDesiredDb, peakHeadroomDb));
+            }
+            if (nr5HeldSuppressedSpeechDropoutCandidate &&
+                desiredDb > 0.0 &&
+                double.IsFinite(peakHeadroomDb) &&
+                peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+            {
+                double heldDropoutTargetDbfs =
+                    -45.0 + 7.0 * ClampUnit((nr5HeldSuppressedSpeechDropoutProof - 0.10) / 0.42);
+                double heldDropoutDesiredDb = Math.Clamp(
+                    heldDropoutTargetDbfs - inputRmsDbfs,
+                    0.0,
+                    RxLevelerMaxBoostDb);
+                desiredDb = Math.Max(
+                    desiredDb,
+                    Math.Min(heldDropoutDesiredDb, peakHeadroomDb));
+            }
+            if (nr5PassbandSuppressedValleyCandidate &&
+                desiredDb > 0.0 &&
+                double.IsFinite(peakHeadroomDb) &&
+                peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+            {
+                double passbandValleyTargetDbfs =
+                    -34.0 + 5.0 * ClampUnit((nr5PassbandSuppressedValleyProof - 0.16) / 0.42);
+                passbandValleyTargetDbfs = Math.Clamp(passbandValleyTargetDbfs, -34.0, -29.0);
+                double passbandValleyDesiredDb = Math.Clamp(
+                    passbandValleyTargetDbfs - inputRmsDbfs,
+                    0.0,
+                    RxLevelerMaxBoostDb);
+                desiredDb = Math.Min(passbandValleyDesiredDb, peakHeadroomDb);
+            }
+            if (nr5ProfiledValleyCandidate &&
+                desiredDb > 0.0 &&
+                double.IsFinite(peakHeadroomDb) &&
+                peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+            {
+                double profiledTargetDbfs = -19.0 + ClampUnit((nr5ProfiledValleyProof - 0.42) / 0.38);
+                double profiledDesiredDb = Math.Clamp(
+                    profiledTargetDbfs - inputRmsDbfs,
+                    0.0,
+                    RxLevelerNr5ProfiledValleyMaxBoostDb);
+                desiredDb = Math.Max(
+                    desiredDb,
+                    Math.Min(profiledDesiredDb, peakHeadroomDb));
             }
             if (nr5WeakSpeechCrestCandidate &&
                 peakLimited &&
@@ -718,6 +1676,51 @@ public class DspPipelineService : BackgroundService,
                 {
                     desiredDb = crestAllowedDb;
                     peakLimited = true;
+                }
+            }
+            bool nr5MarginalPassbandComfortCap =
+                nr5FrontendTopPeakProof > 0.0 &&
+                nr5FrontendTopPeakProof < 0.18 &&
+                frontendTopPeak is { Coherent: true } marginalTopPeak &&
+                Math.Abs(marginalTopPeak.OffsetHz) >= 2_000 &&
+                nr5.PeakEvidence < 0.025 &&
+                nr5.SignalProbability < 0.180 &&
+                nr5.SignalConfidence < 0.335;
+            if (desiredDb > 0.0 &&
+                (nr5FrontendTopPeakProof <= 0.0 ||
+                    nr5MarginalPassbandComfortCap) &&
+                (nr5FrontendDisagreementProof >= 0.12 ||
+                    nr5MarginalPassbandComfortCap) &&
+                inputRmsDbfs <= -42.0 &&
+                !nr5FrontendPeakRecoveredSpeechCandidate &&
+                !nr5FrontendPeakContinuitySpeechCandidate &&
+                !nr5SuppressedWeakOnsetCandidate &&
+                !nr5PassbandSuppressedValleyCandidate &&
+                !nr5HeldSuppressedSpeechTailCandidate)
+            {
+                double comfortTargetDbfs = RxLevelerNr5FrontendDisagreementComfortCeilingDbfs
+                    + 3.0 * ClampUnit((nr5.SignalProbability - 0.135) / 0.100)
+                    + 2.0 * ClampUnit((nr5.RecoveryDrive - 0.300) / 0.260)
+                    + ClampUnit((nr5.SignalConfidence - 0.300) / 0.100);
+                comfortTargetDbfs = Math.Clamp(
+                    comfortTargetDbfs,
+                    RxLevelerNr5FrontendDisagreementComfortCeilingDbfs,
+                    RxLevelerNr5FrontendDisagreementComfortMaxDbfs);
+                bool weakPreservationFloor =
+                    nr5.InputDbfs >= -55.0 &&
+                    nr5.AgcGate >= 0.48 &&
+                    nr5.SignalConfidence >= 0.255 &&
+                    nr5.SignalProbability >= 0.10 &&
+                    (nr5.MaskSmoothing >= 0.30 || nr5.RecoveryDrive >= 0.17);
+                if (weakPreservationFloor)
+                {
+                    comfortTargetDbfs = Math.Max(comfortTargetDbfs, -45.0);
+                }
+                double comfortDesiredDb = Math.Max(0.0, comfortTargetDbfs - inputRmsDbfs);
+                if (comfortDesiredDb < desiredDb - 1.0e-6)
+                {
+                    desiredDb = comfortDesiredDb;
+                    nr5FrontendDisagreementComfortCap = true;
                 }
             }
         }
@@ -756,12 +1759,22 @@ public class DspPipelineService : BackgroundService,
                 nr5SpeechHoldWasActive &&
                 nr5SpeechGainHoldLift < 0.08 &&
                 nr5DeepWeakCurrentProof < 0.24 &&
-                nr5ContinuitySpeechProof < 0.08 &&
+                    nr5ContinuitySpeechProof < 0.08 &&
+                    nr5SpeechValleyProof < 0.035 &&
+                    nr5NativeRecoveredSpeechProof < 0.10 &&
+                    nr5FrontendPeakRecoveredSpeechProof < 0.20 &&
+                    nr5FrontendPeakContinuitySpeechProof < 0.12 &&
+                    nr5HeldSuppressedSpeechDropoutProof < 0.10 &&
+                    nr5HeldSuppressedSpeechTailProof < 0.075 &&
+                    nr5PassbandSuppressedValleyProof < 0.16 &&
+                    nr5SuppressedWeakOnsetProof < 0.10 &&
+                    nr5ProfiledValleyProof < 0.20 &&
                 nr5StrongSpeechProof < 0.05 &&
                 nr5SpeechEvidence < 0.22;
             bool nr5SpeechRelease =
                 nr5LevelerRun &&
                 !nr5HeldLowProofFloorRelease &&
+                !nr5FrontendDisagreementComfortCap &&
                 !peakSafetyCutNow &&
                 desiredDb > 0.0 &&
                 currentDb > 0.0 &&
@@ -770,6 +1783,17 @@ public class DspPipelineService : BackgroundService,
                 (nr5SpeechEvidence >= 0.18 ||
                     nr5ContinuitySpeechProof >= 0.08 ||
                     nr5NativeWeakSpeechProof >= 0.025 ||
+                    nr5SpeechValleyCandidate ||
+                    nr5NativeSpeechValleyCandidate ||
+                    nr5NativeRecoveredSpeechCandidate ||
+                    nr5FrontendPeakRecoveredSpeechCandidate ||
+                    nr5FrontendPeakContinuitySpeechCandidate ||
+                    nr5HeldRecoveredSpeechTailCandidate ||
+                    nr5HeldSuppressedSpeechDropoutCandidate ||
+                    nr5HeldSuppressedSpeechTailCandidate ||
+                    nr5PassbandSuppressedValleyCandidate ||
+                    nr5SuppressedWeakOnsetCandidate ||
+                    nr5ProfiledValleyCandidate ||
                     nr5SpeechGainHoldLift >= 0.12 ||
                     nr5SpeechHoldWasActive ||
                     nr5SpeechHoldEvidence);
@@ -825,6 +1849,100 @@ public class DspPipelineService : BackgroundService,
                         boostSlewDb,
                         RxLevelerNr5DeepWeakCatchupBoostSlewDbPerBlock);
                 }
+                if (nr5SpeechValleyCandidate &&
+                    gainGapDb >= 4.0 &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+                {
+                    boostSlewDb = Math.Max(boostSlewDb, RxLevelerNr5LiftCatchupBoostSlewDbPerBlock);
+                }
+                if (nr5NativeSpeechValleyCandidate &&
+                    gainGapDb >= 4.0 &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+                {
+                    boostSlewDb = Math.Max(
+                        boostSlewDb,
+                        RxLevelerNr5NativeValleyCatchupBoostSlewDbPerBlock);
+                }
+                if (nr5NativeRecoveredSpeechCandidate &&
+                    gainGapDb >= 4.0 &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+                {
+                    boostSlewDb = Math.Max(
+                        boostSlewDb,
+                        RxLevelerNr5NativeRecoveredCatchupBoostSlewDbPerBlock);
+                }
+                if (nr5FrontendPeakRecoveredSpeechCandidate &&
+                    gainGapDb >= 4.0 &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+                {
+                    boostSlewDb = Math.Max(
+                        boostSlewDb,
+                        RxLevelerNr5NativeRecoveredCatchupBoostSlewDbPerBlock);
+                }
+                if (nr5FrontendPeakContinuitySpeechCandidate &&
+                    gainGapDb >= 4.0 &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+                {
+                    boostSlewDb = Math.Max(
+                        boostSlewDb,
+                        RxLevelerNr5NativeRecoveredCatchupBoostSlewDbPerBlock);
+                }
+                if (nr5HeldRecoveredSpeechTailCandidate &&
+                    gainGapDb >= 4.0 &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+                {
+                    boostSlewDb = Math.Max(
+                        boostSlewDb,
+                        RxLevelerNr5NativeRecoveredCatchupBoostSlewDbPerBlock);
+                }
+                if (nr5HeldSuppressedSpeechDropoutCandidate &&
+                    gainGapDb >= 4.0 &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+                {
+                    boostSlewDb = Math.Max(
+                        boostSlewDb,
+                        RxLevelerNr5NativeRecoveredCatchupBoostSlewDbPerBlock);
+                }
+                if (nr5ProfiledValleyCandidate &&
+                    gainGapDb >= 4.0 &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+                {
+                    boostSlewDb = Math.Max(
+                        boostSlewDb,
+                        RxLevelerNr5ProfiledValleyCatchupBoostSlewDbPerBlock);
+                }
+                if (nr5SuppressedWeakOnsetCandidate &&
+                    gainGapDb >= 4.0 &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+                {
+                    boostSlewDb = Math.Max(
+                        boostSlewDb,
+                        RxLevelerNr5SuppressedOnsetCatchupBoostSlewDbPerBlock);
+                }
+                if (nr5HeldSuppressedSpeechTailCandidate &&
+                    gainGapDb >= 4.0 &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+                {
+                    boostSlewDb = Math.Max(
+                        boostSlewDb,
+                        RxLevelerNr5HeldSuppressedTailCatchupBoostSlewDbPerBlock);
+                }
+                if (nr5PassbandSuppressedValleyCandidate &&
+                    gainGapDb >= 4.0 &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+                {
+                    boostSlewDb = Math.Max(
+                        boostSlewDb,
+                        RxLevelerNr5PassbandSuppressedValleyCatchupBoostSlewDbPerBlock);
+                }
+                if (nr5FrontendDisagreementComfortCap &&
+                    gainGapDb >= 4.0 &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+                {
+                    boostSlewDb = Math.Max(
+                        boostSlewDb,
+                        RxLevelerNr5HeldSuppressedTailCatchupBoostSlewDbPerBlock);
+                }
                 if (nr5Diagnostics is { Run: true } nr5ForSlew &&
                     currentDb >= RxLevelerMemoryCatchupMinGainDb &&
                     inputRmsDbfs >= RxLevelerVeryFastBoostGateRmsDb &&
@@ -853,6 +1971,30 @@ public class DspPipelineService : BackgroundService,
                         !nr5LowProofFloor)
                     {
                         boostSlewDb = Math.Max(boostSlewDb, RxLevelerNr5LiftCatchupBoostSlewDbPerBlock);
+                    }
+                }
+                if (nr5Diagnostics is { Run: true } nr5ForRecoveredOnset &&
+                    inputRmsDbfs >= RxLevelerMemoryCatchupGateRmsDb &&
+                    inputRmsDbfs <= -50.0 &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb &&
+                    gainGapDb >= 12.0)
+                {
+                    bool nr5RecoveredOnset =
+                        nr5ForRecoveredOnset.OutputDbfs >= -28.0 &&
+                        nr5ForRecoveredOnset.SignalConfidence >= 0.32 &&
+                        nr5ForRecoveredOnset.SignalProbability >= 0.18 &&
+                        nr5ForRecoveredOnset.RecoveryDrive >= 0.50 &&
+                        (nr5ForRecoveredOnset.PeakEvidence >= 0.10 ||
+                            nr5FrontendTopPeakProof > 0.0);
+                    bool nr5RecoveredOnsetLowProofFloor =
+                        nr5ForRecoveredOnset.SignalConfidence < 0.30 &&
+                        nr5ForRecoveredOnset.SignalProbability < 0.16 &&
+                        nr5ForRecoveredOnset.PeakEvidence < 0.08;
+                    if (nr5RecoveredOnset && !nr5RecoveredOnsetLowProofFloor)
+                    {
+                        boostSlewDb = Math.Max(
+                            boostSlewDb,
+                            RxLevelerNr5RecoveredOnsetCatchupBoostSlewDbPerBlock);
                     }
                 }
             }
@@ -1148,6 +2290,14 @@ public class DspPipelineService : BackgroundService,
     private IDspEngine? _engine;
     private int _channelId;
     private int _rx2ChannelId = -1;
+    // RX2's hardware DDC centre (the second receiver's analogue of RadioLoHz).
+    // Under CTUN it stays frozen while VFO B roams within the window (dial moves,
+    // panel stays put); with CTUN off it follows VFO B (panel recentres on the
+    // dial). Auto-recentres when the dial would leave the captured DDC bandwidth.
+    // Server-side only — not in StateDto — so RX2 gets RX1's CTUN feel without a
+    // wire-contract change. See UpdateRx2Lo.
+    private long _rx2LoHz;
+    private bool _rx2LoInit;
     private int _sampleRateHz;
 
     // Protocol 2 path (parallel to the RadioService-owned P1 path). Held
@@ -3426,7 +4576,11 @@ public class DspPipelineService : BackgroundService,
         // RX1. SetRx2Enabled is idempotent (only re-sends on a real change);
         // SetVfoBHz no-ops on the wire while RX2 is disabled.
         p2?.SetRx2Enabled(s.Rx2Enabled);
-        p2?.SetVfoBHz(CwOffset.EffectiveLoHz(s.Mode, s.VfoBHz));
+        // Tune RX2's DDC to its (CTUN-frozen) centre, not the raw dial, so the
+        // panel holds still while VFO B roams under CTUN. The WDSP shift in
+        // ApplyStateToRx2Channel moves the dial within that window.
+        UpdateRx2Lo(s);
+        p2?.SetVfoBHz(_rx2LoHz);
 
         // Issue #597 Phase 0: arm the RX display fast-attack when the LO
         // moves. First callback after construction only records the LO
@@ -3943,6 +5097,43 @@ public class DspPipelineService : BackgroundService,
         _log.LogInformation("dsp.pipeline rx2 closed channel={Channel}", rx2Channel);
     }
 
+    /// <summary>
+    /// Recompute RX2's DDC centre (<see cref="_rx2LoHz"/>) for the current state,
+    /// mirroring RX1's RadioLoHz/CTUN model. CTUN off → follow VFO B (recentre);
+    /// CTUN on → freeze, so the dial roams within the window — unless the dial
+    /// would leave the captured DDC bandwidth, in which case recentre (the
+    /// stand-in for RX1's band-button SetRadioLo, which RX2 has no UI for).
+    /// Idempotent and deterministic, so it can run from several tick paths.
+    /// </summary>
+    private void UpdateRx2Lo(StateDto s)
+    {
+        if (!s.Rx2Enabled)
+        {
+            _rx2LoInit = false; // re-enabling recentres from scratch
+            return;
+        }
+        long effB = CwOffset.EffectiveLoHz(s.Mode, s.VfoBHz);
+        long span = Volatile.Read(ref _sampleRateHz);
+        if (span <= 0) span = s.SampleRate > 0 ? s.SampleRate : SyntheticSampleRateHz;
+        long edge = (long)(span * 0.45); // recentre before the dial hits the DDC edge
+        if (!_rx2LoInit || !s.CtunEnabled || Math.Abs(effB - _rx2LoHz) > edge)
+        {
+            _rx2LoHz = effB;
+        }
+        _rx2LoInit = true;
+    }
+
+    internal static int ComputeRx2CtunShiftHz(
+        StateDto s,
+        long rx2LoHz,
+        bool protocol2)
+    {
+        long effectiveVfoBHz = CwOffset.EffectiveLoHz(s.Mode, s.VfoBHz);
+        return protocol2
+            ? (int)(effectiveVfoBHz - rx2LoHz)
+            : (int)(effectiveVfoBHz - s.RadioLoHz);
+    }
+
     private void ApplyStateToRx2Channel(IDspEngine engine, int channelId, StateDto s)
     {
         var nr = s.Nr ?? new NrConfig();
@@ -3951,13 +5142,16 @@ public class DspPipelineService : BackgroundService,
         engine.SetMode(channelId, s.Mode);
         engine.SetFilter(channelId, s.FilterLowHz, s.FilterHighHz);
         engine.SetVfoHz(channelId, s.VfoBHz);
-        // P2 true-DDC: RX2 has its own hardware DDC tuned to VFO B's effective
-        // LO (pushed via Protocol2Client.SetVfoBHz), so the IQ is already
-        // centred there — no software CTUN shift. P1 / synthetic RX2 is a
-        // sub-receiver of RX1's window, so it still shifts by (VfoB - RadioLo).
-        int shiftHz = _p2Client is not null
-            ? 0
-            : (int)(CwOffset.EffectiveLoHz(s.Mode, s.VfoBHz) - s.RadioLoHz);
+        UpdateRx2Lo(s);
+        // P2 true-DDC: RX2's hardware DDC sits at _rx2LoHz, so the WDSP shift
+        // roams the dial within that window — EffectiveLoHz(VfoB) − _rx2LoHz.
+        // Under CTUN off, _rx2LoHz == EffectiveLoHz(VfoB) so the shift is 0 and
+        // the panel recentres on the dial. P1 / synthetic RX2 is a sub-receiver
+        // of RX1's window, so it still shifts against RadioLoHz.
+        int shiftHz = ComputeRx2CtunShiftHz(
+            s,
+            _rx2LoHz,
+            protocol2: _p2Client is not null);
         engine.SetCtunShift(channelId, shiftHz);
         engine.SetAgcTop(channelId, s.AgcTopDb + s.AgcOffsetDb);
         engine.SetRxAfGainDb(channelId, s.Rx2AfGainDb);
@@ -4455,9 +5649,6 @@ public class DspPipelineService : BackgroundService,
             if (engine is not null)
             {
                 engine.FeedIq(channel, frame.InterleavedSamples.Span);
-                int rx2Channel = Volatile.Read(ref _rx2ChannelId);
-                if (rx2Channel >= 0)
-                    engine.FeedIq(rx2Channel, frame.InterleavedSamples.Span);
                 RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
             }
             MaybeTickInline();
@@ -4507,7 +5698,9 @@ public class DspPipelineService : BackgroundService,
                 // frames below, so this path takes no tick.
                 int rx2Channel = Volatile.Read(ref _rx2ChannelId);
                 if (rx2Channel >= 0)
+                {
                     engine.FeedIq(rx2Channel, frame.InterleavedSamples.Span);
+                }
                 return;
             }
             int channel = Volatile.Read(ref _channelId);
@@ -5029,13 +6222,18 @@ public class DspPipelineService : BackgroundService,
                 if (rx2Pan) rx2Flags |= DisplayBodyFlags.PanValid;
                 if (rx2Wf) rx2Flags |= DisplayBodyFlags.WfValid;
 
+                // Stamp the RX2 frame with its DDC centre (CTUN-frozen under
+                // CTUN), so the panel holds still and the dial roams — matching
+                // RX1. UpdateRx2Lo is idempotent; calling it here guarantees the
+                // centre is fresh for this frame regardless of the tick path.
+                UpdateRx2Lo(state);
                 var rx2Frame = new DisplayFrame(
                     Seq: ++_seq,
                     TsUnixMs: nowMs,
                     RxId: 1,
                     BodyFlags: rx2Flags,
                     Width: Width,
-                    CenterHz: CwOffset.EffectiveLoHz(state.Mode, state.VfoBHz),
+                    CenterHz: _rx2LoHz,
                     HzPerPixel: hzPerPixel,
                     PanDb: _rx2PanBuf,
                     WfDb: _rx2WfBuf);
@@ -5144,10 +6342,15 @@ public class DspPipelineService : BackgroundService,
                     (state.Nr?.NrMode == NrMode.Nr5 && engine is WdspDspEngine wdspLeveler)
                         ? wdspLeveler.TryGetNr5SpnrDiagnostics(channel)
                         : null;
+                FrontendDspSceneTopPeakDto? nr5LevelerTopPeak =
+                    state.Nr?.NrMode == NrMode.Nr5
+                        ? _frontendDspScene?.TryGetFreshNr5LevelerTopPeak()
+                        : null;
                 ApplyRxAudioLeveler(
                     audioBuf.AsSpan(0, audioSampleCount),
                     ref _rxAudioLeveler,
-                    nr5LevelerDiagnostics);
+                    nr5LevelerDiagnostics,
+                    nr5LevelerTopPeak);
 
                 // CW sidetone is mixed (+=) into the RX block so every
                 // downstream sink — browser WS, native audio, TCI audio

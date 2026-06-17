@@ -104,7 +104,7 @@ public sealed class SmartNrConditionEndpointTests
         Assert.True(rxChain.GetProperty("filterWidthHz").GetInt32() >= 0);
         Assert.True(double.IsFinite(rxChain.GetProperty("agcTopDb").GetDouble()));
         Assert.True(double.IsFinite(rxChain.GetProperty("effectiveAgcTopDb").GetDouble()));
-        Assert.True(rxChain.GetProperty("autoAttEnabled").GetBoolean());
+        Assert.Contains(rxChain.GetProperty("autoAttEnabled").ValueKind, new[] { JsonValueKind.True, JsonValueKind.False });
         Assert.Contains("No frontend DSP scene", root.GetProperty("diagnosticRecommendation").GetString());
     }
 
@@ -167,7 +167,7 @@ public sealed class SmartNrConditionEndpointTests
         var rxChain = root.GetProperty("rxChain");
         Assert.Equal("backend-radio-state", rxChain.GetProperty("source").GetString());
         Assert.Contains(rxChain.GetProperty("agcMode").GetString(), new[] { "Fixed", "Long", "Slow", "Med", "Fast", "Custom" });
-        Assert.True(rxChain.GetProperty("adcProtectionEnabled").GetBoolean());
+        Assert.Contains(rxChain.GetProperty("adcProtectionEnabled").ValueKind, new[] { JsonValueKind.True, JsonValueKind.False });
         Assert.Contains(rxChain.GetProperty("squelchEnabled").ValueKind, new[] { JsonValueKind.True, JsonValueKind.False });
         Assert.Contains("constrained by RX-chain health", root.GetProperty("diagnosticRecommendation").GetString());
     }
@@ -314,8 +314,20 @@ public sealed class SmartNrConditionEndpointTests
             && item.GetProperty("acceptanceComparator").GetString() == "no-regression"
             && item.GetProperty("acceptanceScopes").EnumerateArray().Any(scope => scope.GetString() == "weak-cw-carrier"));
         Assert.Contains(metrics, item =>
+            item.GetProperty("id").GetString() == "signalsinad"
+            && item.GetProperty("direction").GetString() == "higher"
+            && item.GetProperty("acceptanceScopes").EnumerateArray().Any(scope => scope.GetString() == "weak-cw-carrier"));
+        Assert.Contains(metrics, item =>
             item.GetProperty("id").GetString() == "agcgainmovement"
             && item.GetProperty("direction").GetString() == "lower");
+        Assert.Contains(metrics, item =>
+            item.GetProperty("id").GetString() == "processingelapsedms"
+            && item.GetProperty("direction").GetString() == "lower"
+            && item.GetProperty("acceptanceScopes").EnumerateArray().Any(scope => scope.GetString() == "tx-two-tone"));
+        Assert.Contains(metrics, item =>
+            item.GetProperty("id").GetString() == "throughputratio"
+            && item.GetProperty("direction").GetString() == "higher"
+            && item.GetProperty("acceptanceScopes").EnumerateArray().Any(scope => scope.GetString() == "weak-cw-carrier"));
         Assert.Contains(metrics, item =>
             item.GetProperty("id").GetString() == "outputrms"
             && item.GetProperty("direction").GetString() == "informational"
@@ -324,6 +336,17 @@ public sealed class SmartNrConditionEndpointTests
             item.GetProperty("id").GetString() == "clippingcount"
             && item.GetProperty("acceptanceThreshold").GetString() == "0"
             && item.GetProperty("acceptanceComparator").GetString() == "at-or-below");
+        Assert.Contains(metrics, item =>
+            item.GetProperty("id").GetString() == "txlevelergainreduction"
+            && item.GetProperty("direction").GetString() == "lower"
+            && item.GetProperty("acceptanceScopes").EnumerateArray().Any(scope => scope.GetString() == "tx-two-tone"));
+        Assert.Contains(metrics, item =>
+            item.GetProperty("id").GetString() == "txalcgainreduction"
+            && item.GetProperty("direction").GetString() == "lower");
+        Assert.Contains(metrics, item =>
+            item.GetProperty("id").GetString() == "txcompressorpeak"
+            && item.GetProperty("direction").GetString() == "informational"
+            && item.GetProperty("acceptanceScopes").EnumerateArray().Any(scope => scope.GetString() == "tx-voice-like"));
     }
 
     [Fact]

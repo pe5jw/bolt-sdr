@@ -186,17 +186,109 @@ function ConvertTo-PortablePath {
 function Get-FileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+    $getFileHash = Get-Command Get-FileHash -ErrorAction SilentlyContinue
+    if ($null -ne $getFileHash) {
+        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+    }
+
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return ([System.BitConverter]::ToString($sha256.ComputeHash($stream)) -replace "-", "").ToUpperInvariant()
+        }
+        finally {
+            $sha256.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
 }
 
 function Get-DefaultMetricDirection {
     param([string]$MetricId)
 
     switch ($MetricId) {
-        { $_ -in @("sceneage", "sourceclockskew", "artifactscore", "rmsmovement", "cpu", "latency", "windowedrmsmovement", "agcgainmovement", "postblankerringing", "filterleakage", "agcmovement", "falseopenrate", "noisefloormovement", "settlingtime", "overshoot", "openlatency", "closelatency", "audiodiscontinuity", "clippingcount", "intermodulationproxy", "txmonitorcoupling", "meterescape", "audiodrain", "nativeexceptioncount") } { return "lower" }
-        { $_ -in @("scenefreshness", "runtimealignment", "coherenttonepower", "wantedsnr", "spectralpreservation", "speechbandpreservation", "noisereduction", "coherenttonecontinuity", "impulsesuppression", "wantedadjacentratio", "feedbackstability", "statetransitionsuccess") } { return "higher" }
+        { $_ -in @("sceneage", "sourceclockskew", "artifactscore", "rmsmovement", "cpu", "latency", "processingelapsedms", "windowedrmsmovement", "agcgainmovement", "postblankerringing", "filterleakage", "agcmovement", "falseopenrate", "noisefloormovement", "settlingtime", "overshoot", "openlatency", "closelatency", "audiodiscontinuity", "clippingcount", "intermodulationproxy", "txmonitorcoupling", "txlevelergainreduction", "txalcgainreduction", "txoutputpeak", "meterescape", "audiodrain", "nativeexceptioncount") } { return "lower" }
+        { $_ -in @("scenefreshness", "runtimealignment", "coherenttonepower", "wantedsnr", "signalsinad", "spectralpreservation", "speechbandpreservation", "noisereduction", "coherenttonecontinuity", "impulsesuppression", "wantedadjacentratio", "feedbackstability", "statetransitionsuccess", "throughputratio") } { return "higher" }
         default { return "informational" }
     }
+}
+
+function Expand-CsvValues {
+    param([string[]]$Values)
+
+    $expanded = New-Object System.Collections.Generic.List[string]
+    foreach ($value in @($Values)) {
+        foreach ($item in ([string]$value).Split(',', [System.StringSplitOptions]::RemoveEmptyEntries)) {
+            $trimmed = $item.Trim()
+            if (-not [string]::IsNullOrWhiteSpace($trimmed)) {
+                $expanded.Add($trimmed) | Out-Null
+            }
+        }
+    }
+
+    return @($expanded.ToArray())
+}
+
+function ConvertTo-Db {
+    param([double]$Value)
+
+    if ($Value -le 0.0) {
+        return -300.0
+    }
+
+    return 20.0 * [Math]::Log10($Value)
+}
+
+function Get-SignalSinadDb {
+    param($Descriptor)
+
+    $tones = @($Descriptor.tones)
+    if ($tones.Count -eq 0) {
+        return 0.0
+    }
+
+    $tonePower = [Math]::Pow(10.0, ([double]$tones[0].powerDb) / 10.0)
+    $rms = [double]$Descriptor.rms
+    $totalPower = [Math]::Max($rms * $rms, 1.0e-300)
+    $noisePower = [Math]::Max($totalPower - $tonePower, 1.0e-300)
+    return 10.0 * [Math]::Log10([Math]::Max($tonePower / $noisePower, 1.0e-300))
+}
+
+function Get-ProcessingElapsedMs {
+    param([string]$ScenarioId)
+
+    if ($ScenarioId -like "tx-*") {
+        return 3.5
+    }
+
+    return 8.0
+}
+
+function Get-ThroughputRatio {
+    param(
+        [string]$ScenarioId,
+        $Descriptor
+    )
+
+    $elapsedMs = Get-ProcessingElapsedMs $ScenarioId
+    $sampleRateHz = [double]$Descriptor.sampleRateHz
+    $sampleCount = [double]$Descriptor.sampleCount
+    if ($elapsedMs -le 0.0 -or $sampleRateHz -le 0.0 -or $sampleCount -le 0.0) {
+        return 0.0
+    }
+
+    $fixtureSeconds = $sampleCount / $sampleRateHz
+    $processingSeconds = $elapsedMs / 1000.0
+    return $fixtureSeconds / $processingSeconds
+}
+
+function Test-MetricAllowsNegativeValue {
+    param([string]$MetricId)
+
+    return $MetricId -in @("filterleakage", "txoutputpeak")
 }
 
 function Get-FixtureDescriptor {
@@ -230,6 +322,7 @@ function Get-MetricValue {
     $base = switch ($MetricId) {
         "coherenttonepower" { if (@($Descriptor.tones).Count -gt 0) { [double]$Descriptor.tones[0].powerDb } else { -90.0 } }
         "wantedsnr" { if ($ScenarioId -eq "noise-only-gating" -or $ScenarioId -eq "noise-only") { 0.0 } else { 9.0 } }
+        "signalsinad" { Get-SignalSinadDb $Descriptor }
         "spectralpreservation" { 0.86 }
         "outputrms" { [double]$Descriptor.rms }
         "latency" { 7.5 }
@@ -238,6 +331,8 @@ function Get-MetricValue {
         "artifactscore" { 1.8 }
         "rmsmovement" { [double]$Descriptor.spreadDb }
         "cpu" { 2.5 }
+        "processingelapsedms" { Get-ProcessingElapsedMs $ScenarioId }
+        "throughputratio" { Get-ThroughputRatio $ScenarioId $Descriptor }
         "windowedrmsmovement" { [double]$Descriptor.spreadDb }
         "coherenttonecontinuity" { 0.82 }
         "agcgainmovement" { [Math]::Min(10.0, [double]$Descriptor.spreadDb * 0.55) }
@@ -259,6 +354,12 @@ function Get-MetricValue {
         "intermodulationproxy" { 0.42 }
         "rms" { [double]$Descriptor.rms }
         "spectralbalance" { 0.70 }
+        "txlevelergainreduction" { if ($ScenarioId -like "tx-*") { 1.2 } else { 0.0 } }
+        "txcfcgainreduction" { 0.0 }
+        "txcompressorpeak" { if ($ScenarioId -like "tx-*") { -400.0 } else { -300.0 } }
+        "txalcgainreduction" { if ($ScenarioId -like "tx-*") { 0.4 } else { 0.0 } }
+        "txoutputpeak" { ConvertTo-Db ([double]$Descriptor.peak) }
+        "txoutputaverage" { ConvertTo-Db ([double]$Descriptor.rms) }
         default { 1.0 }
     }
 
@@ -276,14 +377,14 @@ function Get-MetricValue {
         $delta = if ($Direction -eq "higher") { 0.08 } else { -0.08 }
     }
 
-    if ($MetricId -eq "coherenttonepower" -or $MetricId -eq "wantedsnr" -or $MetricId -eq "wantedadjacentratio" -or $MetricId -eq "filterleakage" -or $MetricId -eq "impulsesuppression") {
+    if ($MetricId -eq "coherenttonepower" -or $MetricId -eq "wantedsnr" -or $MetricId -eq "signalsinad" -or $MetricId -eq "wantedadjacentratio" -or $MetricId -eq "filterleakage" -or $MetricId -eq "impulsesuppression") {
         $value = [double]$base + ($delta * 10.0)
     }
     else {
         $value = [double]$base * (1.0 + $delta)
     }
 
-    if ($Direction -eq "lower") {
+    if ($Direction -eq "lower" -and -not (Test-MetricAllowsNegativeValue $MetricId)) {
         $value = [Math]::Max(0.0, $value)
     }
 
@@ -403,8 +504,8 @@ foreach ($path in @($MetricsPath, $AudioIndexPath, $SpectrumIndexPath)) {
     }
 }
 
-$requestedScenarioIds = @($ScenarioIds | ForEach-Object { ConvertTo-Id ([string]$_) } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-$comparisonIdsNormalized = @($ComparisonIds | ForEach-Object { ConvertTo-ComparisonId ([string]$_) } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+$requestedScenarioIds = @(Expand-CsvValues $ScenarioIds | ForEach-Object { ConvertTo-Id ([string]$_) } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$comparisonIdsNormalized = @(Expand-CsvValues $ComparisonIds | ForEach-Object { ConvertTo-ComparisonId ([string]$_) } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
 if ($comparisonIdsNormalized.Count -eq 0) {
     throw "At least one comparison id is required."
 }
@@ -459,6 +560,8 @@ foreach ($scenario in (Get-JsonArray $plan "scenarios")) {
             signalPath = [string](Get-JsonValue $scenario "signalPath")
             sampleRateHz = [int]$descriptor.sampleRateHz
             sampleCount = [int]$descriptor.sampleCount
+            processingElapsedMs = [Math]::Round((Get-ProcessingElapsedMs $scenarioId), 6)
+            throughputRatio = [Math]::Round((Get-ThroughputRatio $scenarioId $descriptor), 6)
             rms = [double]$descriptor.rms
             peak = [double]$descriptor.peak
             windowedRmsSpreadDb = [double]$descriptor.spreadDb
@@ -479,6 +582,8 @@ foreach ($scenario in (Get-JsonArray $plan "scenarios")) {
             signalPath = [string](Get-JsonValue $scenario "signalPath")
             sampleRateHz = [int]$descriptor.sampleRateHz
             bins = @($descriptor.tones)
+            wantedSnrDb = if ($scenarioId -eq "noise-only-gating" -or $scenarioId -eq "noise-only") { 0.0 } else { 9.0 }
+            signalSinadDb = [Math]::Round((Get-SignalSinadDb $descriptor), 6)
             noiseFloorDb = if ($scenarioId -eq "noise-only-gating" -or $scenarioId -eq "noise-only") { -54.0 } else { -60.0 }
             summary = [string]$descriptor.summary
             notes = @(

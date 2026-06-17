@@ -12,6 +12,66 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
+    private static FrontendDspSceneDiagnosticsRequest AdjacentNoiseRequest(DateTimeOffset sourceAt) => new(
+        SourceClientId: "client",
+        Mode: "USB",
+        SignalProfile: "dx",
+        SignalReason: "weak signal with profiled adjacent noise",
+        SmartNrProfile: "NR5",
+        SmartNrReason: "adjacent noise profile",
+        SmartNrRecommendation: "Use NR5 profiled weak-signal recovery",
+        SmartNrHeldByRxChain: false,
+        SmartNrRxChainLabel: "RX chain optimized",
+        SmartNrRxChainRecommendation: "Hold front-end settings",
+        SmartNrRxChainTone: "neutral",
+        SmartNrRxChainScore: 97,
+        MaxSnrDb: 6.8,
+        CoherentMaxSnrDb: 6.2,
+        OccupiedPct: 1.5,
+        CoherentOccupiedPct: 0.9,
+        ImpulsivePct: 0.0,
+        PeakCount: 0,
+        CoherentPeakCount: 0,
+        CoherentSubthresholdSignal: true,
+        SourceAtUtc: sourceAt,
+        AdjacentNoiseUsable: true,
+        AdjacentNoiseBins: 92,
+        AdjacentNoiseLeftBins: 43,
+        AdjacentNoiseRightBins: 49,
+        AdjacentNoiseFloorDb: -103.5,
+        AdjacentNoiseP10Db: -104.0,
+        AdjacentNoiseP50Db: -103.5,
+        AdjacentNoiseP90Db: -102.9,
+        AdjacentNoiseLeftFloorDb: -103.7,
+        AdjacentNoiseRightFloorDb: -103.4,
+        AdjacentNoiseSlopeDbPerKhz: 0.0,
+        AdjacentNoiseRejectedPct: 21.5);
+
+    private static FrontendDspSceneDiagnosticsRequest SceneTopPeaksRequest(
+        params FrontendDspScenePeakDto[] topPeaks) => new(
+            SourceClientId: "client",
+            Mode: "USB",
+            SignalProfile: "dx",
+            SignalReason: "scene top peaks",
+            SmartNrProfile: "NR5",
+            SmartNrReason: "leveler evidence",
+            SmartNrRecommendation: "Use NR5 leveler evidence",
+            SmartNrHeldByRxChain: false,
+            SmartNrRxChainLabel: "RX chain optimized",
+            SmartNrRxChainRecommendation: "Hold front-end settings",
+            SmartNrRxChainTone: "neutral",
+            SmartNrRxChainScore: 100,
+            MaxSnrDb: null,
+            CoherentMaxSnrDb: null,
+            OccupiedPct: null,
+            CoherentOccupiedPct: null,
+            ImpulsivePct: null,
+            PeakCount: topPeaks.Length,
+            CoherentPeakCount: topPeaks.Count(static peak => peak.Coherent),
+            CoherentSubthresholdSignal: null,
+            SourceAtUtc: DateTimeOffset.UtcNow,
+            TopPeaks: topPeaks);
+
     [Fact]
     public void Update_StoresSanitizedFrontendSceneForDiagnosticsSnapshot()
     {
@@ -40,6 +100,23 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
             CoherentPeakCount: 2,
             CoherentSubthresholdSignal: true,
             SourceAtUtc: sourceAt,
+            TopPeaks: new[]
+            {
+                new FrontendDspScenePeakDto(
+                    FrequencyHz: 14_269_234,
+                    OffsetHz: 2_234,
+                    SnrDb: 24.16,
+                    Dbfs: -86.24,
+                    Confidence: 0.7423,
+                    Coherent: true),
+                new FrontendDspScenePeakDto(
+                    FrequencyHz: 99_000_000,
+                    OffsetHz: 0,
+                    SnrDb: 12.0,
+                    Dbfs: -90.0,
+                    Confidence: 0.5,
+                    Coherent: true),
+            },
             AdjacentNoiseUsable: true,
             AdjacentNoiseBins: 84,
             AdjacentNoiseLeftBins: 40,
@@ -77,6 +154,14 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Assert.Equal(91, root.GetProperty("smartNrRxChainScore").GetInt32());
         Assert.Equal(3, root.GetProperty("peakCount").GetInt32());
         Assert.True(root.GetProperty("coherentSubthresholdSignal").GetBoolean());
+        var topPeaks = root.GetProperty("topPeaks").EnumerateArray().ToArray();
+        Assert.Single(topPeaks);
+        Assert.Equal(14_269_234, topPeaks[0].GetProperty("frequencyHz").GetInt64());
+        Assert.Equal(2_234, topPeaks[0].GetProperty("offsetHz").GetInt32());
+        Assert.Equal(24.2, topPeaks[0].GetProperty("snrDb").GetDouble());
+        Assert.Equal(-86.2, topPeaks[0].GetProperty("dbfs").GetDouble());
+        Assert.Equal(0.742, topPeaks[0].GetProperty("confidence").GetDouble());
+        Assert.True(topPeaks[0].GetProperty("coherent").GetBoolean());
         Assert.True(root.GetProperty("adjacentNoiseUsable").GetBoolean());
         Assert.Equal(84, root.GetProperty("adjacentNoiseBins").GetInt32());
         Assert.Equal(40, root.GetProperty("adjacentNoiseLeftBins").GetInt32());
@@ -91,6 +176,72 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Assert.True(root.GetProperty("ageMs").GetInt64() >= 0);
         Assert.True(root.GetProperty("sourceAgeMs").GetInt64() >= 0);
         Assert.Equal(sourceAt, root.GetProperty("sourceAtUtc").GetDateTimeOffset());
+    }
+
+    [Fact]
+    public void TryGetFreshNr5LevelerTopPeak_PrefersNearestPassbandPeak()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        service.Update(SceneTopPeaksRequest(
+            new FrontendDspScenePeakDto(
+                FrequencyHz: 14_342_000,
+                OffsetHz: 52_000,
+                SnrDb: 31.0,
+                Dbfs: -84.0,
+                Confidence: 0.94,
+                Coherent: true),
+            new FrontendDspScenePeakDto(
+                FrequencyHz: 14_291_200,
+                OffsetHz: 1_200,
+                SnrDb: 13.0,
+                Dbfs: -92.0,
+                Confidence: 0.72,
+                Coherent: true),
+            new FrontendDspScenePeakDto(
+                FrequencyHz: 14_292_100,
+                OffsetHz: 2_100,
+                SnrDb: 24.0,
+                Dbfs: -86.0,
+                Confidence: 0.91,
+                Coherent: true)));
+
+        var peak = service.TryGetFreshNr5LevelerTopPeak();
+
+        Assert.NotNull(peak);
+        Assert.Equal(1_200, peak.OffsetHz);
+    }
+
+    [Fact]
+    public void TryGetFreshNr5LevelerTopPeak_UsesDominantOffPassbandPeakWhenPassbandIsEmpty()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        service.Update(SceneTopPeaksRequest(
+            new FrontendDspScenePeakDto(
+                FrequencyHz: 14_294_200,
+                OffsetHz: 4_200,
+                SnrDb: 34.0,
+                Dbfs: -79.0,
+                Confidence: 0.97,
+                Coherent: false),
+            new FrontendDspScenePeakDto(
+                FrequencyHz: 14_293_700,
+                OffsetHz: 3_700,
+                SnrDb: 11.2,
+                Dbfs: -94.0,
+                Confidence: 0.70,
+                Coherent: true),
+            new FrontendDspScenePeakDto(
+                FrequencyHz: 14_240_400,
+                OffsetHz: -49_600,
+                SnrDb: 22.9,
+                Dbfs: -84.4,
+                Confidence: 0.912,
+                Coherent: true)));
+
+        var peak = service.TryGetFreshNr5LevelerTopPeak();
+
+        Assert.NotNull(peak);
+        Assert.Equal(-49_600, peak.OffsetHz);
     }
 
     [Fact]
@@ -169,6 +320,46 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Assert.Equal(-105.4, profile.LeftFloorDb);
         Assert.Equal(-105.1, profile.RightFloorDb);
         Assert.Equal(7.3, profile.RejectedPct);
+    }
+
+    [Fact]
+    public void TryGetFreshAdjacentNoiseProfile_CoastsAgingSourceEvidenceForNr5()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+
+        service.Update(AdjacentNoiseRequest(DateTimeOffset.UtcNow.AddSeconds(-25)));
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(service.Snapshot()));
+        var root = doc.RootElement;
+        Assert.Equal("aging", root.GetProperty("status").GetString());
+        Assert.False(root.GetProperty("fresh").GetBoolean());
+        Assert.False(root.GetProperty("stale").GetBoolean());
+        Assert.True(root.GetProperty("sourceAgeMs").GetInt64() >= 15_000);
+
+        var profile = service.TryGetFreshAdjacentNoiseProfile();
+
+        Assert.NotNull(profile);
+        Assert.Equal(92, profile.Bins);
+        Assert.Equal(-103.5, profile.FloorDb);
+        Assert.True(profile.SourceAgeMs >= 15_000);
+        Assert.True(profile.SourceAgeMs <= 45_000);
+    }
+
+    [Fact]
+    public void TryGetFreshAdjacentNoiseProfile_RejectsStaleSourceEvidencePastCoastWindow()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+
+        service.Update(AdjacentNoiseRequest(DateTimeOffset.UtcNow.AddSeconds(-60)));
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(service.Snapshot()));
+        var root = doc.RootElement;
+        Assert.Equal("stale", root.GetProperty("status").GetString());
+        Assert.False(root.GetProperty("fresh").GetBoolean());
+        Assert.True(root.GetProperty("stale").GetBoolean());
+        Assert.True(root.GetProperty("sourceAgeMs").GetInt64() > 45_000);
+
+        Assert.Null(service.TryGetFreshAdjacentNoiseProfile());
     }
 
     [Fact]

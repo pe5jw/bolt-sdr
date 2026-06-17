@@ -16,6 +16,7 @@ public sealed class FrontendDspSceneDiagnosticsService
     private const int MaxText = 180;
     private const long FreshSceneMs = 15_000;
     private const long StaleSceneMs = 45_000;
+    private const long AdjacentNoiseProfileCoastMs = StaleSceneMs;
     private const long FutureSourceToleranceMs = 5_000;
     private readonly object _sync = new();
     private FrontendDspSceneSnapshot? _latest;
@@ -48,6 +49,7 @@ public sealed class FrontendDspSceneDiagnosticsService
             PeakCount: NonNegative(request.PeakCount),
             CoherentPeakCount: NonNegative(request.CoherentPeakCount),
             CoherentSubthresholdSignal: request.CoherentSubthresholdSignal,
+            TopPeaks: SanitizeTopPeaks(request.TopPeaks),
             AdjacentNoiseUsable: request.AdjacentNoiseUsable,
             AdjacentNoiseBins: NonNegative(request.AdjacentNoiseBins),
             AdjacentNoiseLeftBins: NonNegative(request.AdjacentNoiseLeftBins),
@@ -126,6 +128,7 @@ public sealed class FrontendDspSceneDiagnosticsService
                 peakCount = _latest.PeakCount,
                 coherentPeakCount = _latest.CoherentPeakCount,
                 coherentSubthresholdSignal = _latest.CoherentSubthresholdSignal,
+                topPeaks = ProjectTopPeaksForJson(_latest.TopPeaks),
                 adjacentNoiseUsable = _latest.AdjacentNoiseUsable,
                 adjacentNoiseBins = _latest.AdjacentNoiseBins,
                 adjacentNoiseLeftBins = _latest.AdjacentNoiseLeftBins,
@@ -150,7 +153,7 @@ public sealed class FrontendDspSceneDiagnosticsService
                 return null;
 
             var timing = Timing(_latestAdjacentNoise, DateTimeOffset.UtcNow);
-            if (!timing.Health.Fresh ||
+            if (!AdjacentNoiseProfileUsable(timing) ||
                 _latestAdjacentNoise.AdjacentNoiseUsable != true ||
                 _latestAdjacentNoise.AdjacentNoiseBins is not { } bins ||
                 bins < 24 ||
@@ -183,6 +186,91 @@ public sealed class FrontendDspSceneDiagnosticsService
                 RightFloorDb: rightFloor,
                 SlopeDbPerKhz: slope,
                 RejectedPct: rejected);
+        }
+    }
+
+    public FrontendDspSceneTopPeakDto? TryGetFreshNearestTopPeak(int maxAbsOffsetHz = 3_000)
+    {
+        lock (_sync)
+        {
+            if (_latest is null || _latest.TopPeaks.Count == 0)
+                return null;
+
+            var timing = Timing(_latest, DateTimeOffset.UtcNow);
+            if (!timing.Health.Fresh)
+                return null;
+
+            FrontendDspScenePeakDto? nearest = null;
+            int nearestAbsOffset = int.MaxValue;
+            foreach (var peak in _latest.TopPeaks)
+            {
+                int absOffset = Math.Abs(peak.OffsetHz);
+                if (absOffset > maxAbsOffsetHz || absOffset >= nearestAbsOffset)
+                    continue;
+
+                nearest = peak;
+                nearestAbsOffset = absOffset;
+            }
+
+            if (nearest is null)
+                return null;
+
+            return new FrontendDspSceneTopPeakDto(
+                FrequencyHz: nearest.FrequencyHz,
+                OffsetHz: nearest.OffsetHz,
+                SnrDb: nearest.SnrDb,
+                Dbfs: nearest.Dbfs,
+                Confidence: nearest.Confidence,
+                Coherent: nearest.Coherent);
+        }
+    }
+
+    public FrontendDspSceneTopPeakDto? TryGetFreshNr5LevelerTopPeak(int passbandMaxAbsOffsetHz = 3_000)
+    {
+        lock (_sync)
+        {
+            if (_latest is null || _latest.TopPeaks.Count == 0)
+                return null;
+
+            var timing = Timing(_latest, DateTimeOffset.UtcNow);
+            if (!timing.Health.Fresh)
+                return null;
+
+            FrontendDspScenePeakDto? nearestPassband = null;
+            int nearestPassbandAbsOffset = int.MaxValue;
+            FrontendDspScenePeakDto? strongestOutOfPassband = null;
+            double strongestOutOfPassbandScore = 0.0;
+
+            foreach (var peak in _latest.TopPeaks)
+            {
+                int absOffset = Math.Abs(peak.OffsetHz);
+                if (absOffset <= passbandMaxAbsOffsetHz)
+                {
+                    if (absOffset < nearestPassbandAbsOffset)
+                    {
+                        nearestPassband = peak;
+                        nearestPassbandAbsOffset = absOffset;
+                    }
+
+                    continue;
+                }
+
+                if (!peak.Coherent)
+                    continue;
+
+                double confidence = peak.Confidence ?? 0.0;
+                double snrProof = ClampUnit((peak.SnrDb - 10.0) / 18.0);
+                double confidenceProof = ClampUnit((confidence - 0.68) / 0.24);
+                double offsetProof = 0.45 + 0.55 * ClampUnit((absOffset - passbandMaxAbsOffsetHz) / 18_000.0);
+                double score = snrProof * confidenceProof * offsetProof;
+                if (score > strongestOutOfPassbandScore)
+                {
+                    strongestOutOfPassband = peak;
+                    strongestOutOfPassbandScore = score;
+                }
+            }
+
+            return ToTopPeak(nearestPassband ?? strongestOutOfPassband);
         }
     }
 
@@ -228,6 +316,7 @@ public sealed class FrontendDspSceneDiagnosticsService
                     PeakCount: null,
                     CoherentPeakCount: null,
                     CoherentSubthresholdSignal: null,
+                    TopPeaks: Array.Empty<FrontendDspSceneTopPeakDto>(),
                     AdjacentNoiseUsable: null,
                     AdjacentNoiseBins: null,
                     AdjacentNoiseLeftBins: null,
@@ -290,6 +379,7 @@ public sealed class FrontendDspSceneDiagnosticsService
                 PeakCount: _latest.PeakCount,
                 CoherentPeakCount: _latest.CoherentPeakCount,
                 CoherentSubthresholdSignal: _latest.CoherentSubthresholdSignal,
+                TopPeaks: ProjectTopPeaksForCondition(_latest.TopPeaks),
                 AdjacentNoiseUsable: _latest.AdjacentNoiseUsable,
                 AdjacentNoiseBins: _latest.AdjacentNoiseBins,
                 AdjacentNoiseLeftBins: _latest.AdjacentNoiseLeftBins,
@@ -340,6 +430,100 @@ public sealed class FrontendDspSceneDiagnosticsService
 
     private static int? NonNegative(int? value) =>
         value is { } v && v >= 0 ? v : null;
+
+    private static object[] ProjectTopPeaksForJson(IReadOnlyList<FrontendDspScenePeakDto> peaks)
+    {
+        if (peaks.Count == 0)
+            return Array.Empty<object>();
+
+        var projected = new object[peaks.Count];
+        for (int i = 0; i < peaks.Count; i++)
+        {
+            var peak = peaks[i];
+            projected[i] = new
+            {
+                frequencyHz = peak.FrequencyHz,
+                offsetHz = peak.OffsetHz,
+                snrDb = peak.SnrDb,
+                dbfs = peak.Dbfs,
+                confidence = peak.Confidence,
+                coherent = peak.Coherent,
+            };
+        }
+
+        return projected;
+    }
+
+    private static FrontendDspSceneTopPeakDto[] ProjectTopPeaksForCondition(IReadOnlyList<FrontendDspScenePeakDto> peaks)
+    {
+        if (peaks.Count == 0)
+            return Array.Empty<FrontendDspSceneTopPeakDto>();
+
+        var projected = new FrontendDspSceneTopPeakDto[peaks.Count];
+        for (int i = 0; i < peaks.Count; i++)
+        {
+            var peak = peaks[i];
+            projected[i] = new FrontendDspSceneTopPeakDto(
+                FrequencyHz: peak.FrequencyHz,
+                OffsetHz: peak.OffsetHz,
+                SnrDb: peak.SnrDb,
+                Dbfs: peak.Dbfs,
+                Confidence: peak.Confidence,
+                Coherent: peak.Coherent);
+        }
+
+        return projected;
+    }
+
+    private static FrontendDspSceneTopPeakDto? ToTopPeak(FrontendDspScenePeakDto? peak)
+    {
+        if (peak is null)
+            return null;
+
+        return new FrontendDspSceneTopPeakDto(
+            FrequencyHz: peak.FrequencyHz,
+            OffsetHz: peak.OffsetHz,
+            SnrDb: peak.SnrDb,
+            Dbfs: peak.Dbfs,
+            Confidence: peak.Confidence,
+            Coherent: peak.Coherent);
+    }
+
+    private static double ClampUnit(double value) => Math.Clamp(value, 0.0, 1.0);
+
+    private static FrontendDspScenePeakDto[] SanitizeTopPeaks(IReadOnlyList<FrontendDspScenePeakDto>? peaks)
+    {
+        if (peaks is null || peaks.Count == 0)
+            return Array.Empty<FrontendDspScenePeakDto>();
+
+        var sanitized = new List<FrontendDspScenePeakDto>(Math.Min(peaks.Count, 12));
+        foreach (var peak in peaks)
+        {
+            if (sanitized.Count >= 12)
+                break;
+            if (peak.FrequencyHz < 0 ||
+                peak.FrequencyHz > 60_000_000 ||
+                Math.Abs((long)peak.OffsetHz) > 2_000_000 ||
+                !double.IsFinite(peak.SnrDb) ||
+                !double.IsFinite(peak.Dbfs))
+            {
+                continue;
+            }
+
+            double? confidence = peak.Confidence is { } c && double.IsFinite(c)
+                ? Math.Clamp(Math.Round(c, 3), 0.0, 1.0)
+                : null;
+            sanitized.Add(new FrontendDspScenePeakDto(
+                FrequencyHz: peak.FrequencyHz,
+                OffsetHz: peak.OffsetHz,
+                SnrDb: Math.Round(peak.SnrDb, 1),
+                Dbfs: Math.Round(peak.Dbfs, 1),
+                Confidence: confidence,
+                Coherent: peak.Coherent));
+        }
+
+        return sanitized.ToArray();
+    }
 
     private static int? Score(int? value) =>
         value is { } v ? Math.Clamp(v, 0, 100) : null;
@@ -508,6 +692,15 @@ public sealed class FrontendDspSceneDiagnosticsService
         latest.AdjacentNoiseBins is >= 24 &&
         latest.AdjacentNoiseFloorDb is not null;
 
+    private static bool AdjacentNoiseProfileUsable(FrontendDspSceneTiming timing)
+    {
+        if (timing.Health.Status == "clock-skew")
+            return false;
+
+        long profileAgeMs = Math.Max(timing.AgeMs, timing.SourceAgeMs ?? timing.AgeMs);
+        return profileAgeMs <= AdjacentNoiseProfileCoastMs;
+    }
+
     private static SmartNrRuntimeAlignment NrRuntimeAlignment(
         FrontendDspSceneSnapshot? latest,
         DspNrRuntimeSnapshot nrRuntime)
@@ -637,6 +830,7 @@ public sealed record FrontendDspSceneDiagnosticsRequest(
     int? CoherentPeakCount,
     bool? CoherentSubthresholdSignal,
     DateTimeOffset? SourceAtUtc = null,
+    IReadOnlyList<FrontendDspScenePeakDto>? TopPeaks = null,
     bool? AdjacentNoiseUsable = null,
     int? AdjacentNoiseBins = null,
     int? AdjacentNoiseLeftBins = null,
@@ -674,6 +868,7 @@ public sealed record FrontendDspSceneSnapshot(
     int? PeakCount,
     int? CoherentPeakCount,
     bool? CoherentSubthresholdSignal,
+    IReadOnlyList<FrontendDspScenePeakDto> TopPeaks,
     bool? AdjacentNoiseUsable,
     int? AdjacentNoiseBins,
     int? AdjacentNoiseLeftBins,
@@ -686,6 +881,14 @@ public sealed record FrontendDspSceneSnapshot(
     double? AdjacentNoiseRightFloorDb,
     double? AdjacentNoiseSlopeDbPerKhz,
     double? AdjacentNoiseRejectedPct);
+
+public sealed record FrontendDspScenePeakDto(
+    long FrequencyHz,
+    int OffsetHz,
+    double SnrDb,
+    double Dbfs,
+    double? Confidence,
+    bool Coherent);
 
 public sealed record FrontendAdjacentNoiseProfileSnapshot(
     long AgeMs,

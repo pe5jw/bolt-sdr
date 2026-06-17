@@ -16,7 +16,9 @@ public static class DspBenchmarkCaptureManifestService
         ArgumentNullException.ThrowIfNull(plan);
 
         var generatedUtc = DateTimeOffset.UtcNow;
-        var scenarioIds = Unique(live.NextBenchmarkScenarios.Concat(["wdsp-channel-lifecycle"]));
+        var scenarioIds = Unique(live.NextBenchmarkScenarios
+            .Concat(RequiredSafetyScenarioIds(plan))
+            .Concat(["wdsp-channel-lifecycle"]));
         var constraints = live.Constraints.ToList();
         var actions = live.RecommendedActions.ToList();
         var preflight = new List<string>
@@ -95,6 +97,12 @@ public static class DspBenchmarkCaptureManifestService
         if (live.FrontendSceneStale || !live.FrontendSceneFresh) return "blocked-frontend-scene-not-fresh";
         if (live.RuntimeAligned == false) return "blocked-smart-nr-runtime-misaligned";
         return live.ReadyForLiveBenchmark ? "ready-for-g2-capture" : "capture-preflight-required";
+    }
+
+    private static IEnumerable<string> RequiredSafetyScenarioIds(DspBenchmarkPlanDto plan)
+    {
+        if (plan.Scenarios.Any(scenario => string.Equals(scenario.Id, "tx-puresignal-safe-bypass", StringComparison.Ordinal)))
+            yield return "tx-puresignal-safe-bypass";
     }
 
     private static DspBenchmarkCaptureArtifactDto[] Artifacts(string[] scenarioIds, string[] requiredComparisons)
@@ -230,6 +238,14 @@ public static class DspBenchmarkCaptureManifestService
                 true,
                 all),
             Artifact(
+                "native-stage-timing-report",
+                "native-stage-timing-report-json",
+                "tools/summarize-dsp-native-stage-timing.ps1",
+                "Summarize WDSP fixture stage timing, managed allocation deltas, runtime hash provenance, and the remaining native C instrumentation gap before accepting DSP build-out evidence.",
+                "once-after-wdsp-offline-fixture-matrix",
+                true,
+                all),
+            Artifact(
                 "audio-render-before-after",
                 "audio",
                 "offline-render-and-g2-capture",
@@ -251,6 +267,14 @@ public static class DspBenchmarkCaptureManifestService
                 "g2-tx-feedback",
                 "Prove TX monitor and external DSP paths do not couple into PureSignal feedback correction.",
                 "before-and-after-tx-scenario",
+                pureSignal.Length > 0,
+                pureSignal),
+            Artifact(
+                "puresignal-safe-bypass-report",
+                "puresignal-safe-bypass-report-json",
+                "tools/summarize-dsp-puresignal-bench.ps1",
+                "Summarize G2 PureSignal disabled and enabled bench captures into explicit bypass-state, feedback-stability, TX monitor coupling, and clipping safety gates.",
+                "once-after-puresignal-disabled-and-enabled-bench-captures",
                 pureSignal.Length > 0,
                 pureSignal),
         ]);

@@ -54,6 +54,9 @@ import { hasActiveFrameConsumers, useDisplayStore } from '../state/display-store
 import { AlertKind, useTxStore } from '../state/tx-store';
 import { useBandPlanStore } from '../state/bandPlan';
 import { useRxMetersStore } from '../state/rx-meters-store';
+import { useAudioSuiteStore } from '../state/audio-suite-store';
+import { CW_STATE_FROM_BYTE, useCwStore } from '../state/cw-store';
+import { useSpotStore } from '../state/spot-store';
 import { warnOnce } from '../util/logger';
 import { clampFinite } from '../util/number';
 import { wsUrl as buildWsUrl } from '../serverUrl';
@@ -444,12 +447,7 @@ export function startRealtime(path = '/ws'): () => void {
           const bytes = new Uint8Array(ev.data, 1);
           const csv = new TextDecoder('utf-8').decode(bytes);
           const ids = csv.length === 0 ? [] : csv.split(',');
-          // Lazy import keeps the audio-suite-store out of the ws-client
-          // module graph for clients that never open the Audio Suite
-          // window (e.g. the no-plugins-installed first-run experience).
-          void import('../state/audio-suite-store').then((m) => {
-            m.useAudioSuiteStore.getState().setChainOrderFromServer(ids);
-          });
+          useAudioSuiteStore.getState().setChainOrderFromServer(ids);
           return;
         }
         if (peekType === MSG_TYPE_CW_ENGINE_STATUS) {
@@ -480,18 +478,13 @@ export function startRealtime(path = '/ws'): () => void {
               : new TextDecoder('utf-8').decode(
                   new Uint8Array(ev.data, CW_ENGINE_STATUS_HEADER_BYTES, textLen),
                 );
-          // Lazy import keeps the cw-store off the critical path for
-          // clients that never open the CW panel (the macro pad is
-          // typically closed by default).
-          void import('../state/cw-store').then((m) => {
-            const state = m.CW_STATE_FROM_BYTE[stateByte] ?? 'idle';
-            m.useCwStore.getState().setStatusFromServer({
-              state,
-              text,
-              wpm,
-              queueDepth,
-              receivedAtMs: Date.now(),
-            });
+          const state = CW_STATE_FROM_BYTE[stateByte] ?? 'idle';
+          useCwStore.getState().setStatusFromServer({
+            state,
+            text,
+            wpm,
+            queueDepth,
+            receivedAtMs: Date.now(),
           });
           return;
         }
@@ -508,9 +501,7 @@ export function startRealtime(path = '/ws'): () => void {
             return;
           }
           const bypassed = new DataView(ev.data).getUint8(1) !== 0;
-          void import('../state/audio-suite-store').then((m) => {
-            m.useAudioSuiteStore.getState().setMasterBypassedFromServer(bypassed);
-          });
+          useAudioSuiteStore.getState().setMasterBypassedFromServer(bypassed);
           return;
         }
         if (peekType === MSG_TYPE_PA_TEMP) {
@@ -674,9 +665,7 @@ export function startRealtime(path = '/ws'): () => void {
             offset += commentLen;
             spots.push({ callsign, mode, freqHz, argb, comment });
           }
-          void import('../state/spot-store').then((m) => {
-            m.useSpotStore.getState().setSpots(spots);
-          });
+          useSpotStore.getState().setSpots(spots);
           return;
         }
         warnOnce(

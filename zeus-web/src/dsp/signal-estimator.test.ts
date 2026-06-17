@@ -16,6 +16,7 @@ import {
   enhanceInto,
   enhanceWaterfallTextureInto,
   estimateAdjacentNoiseProfile,
+  estimateSceneTopPeaks,
   findNearestPeakHz,
   findPeakHz,
   getNoiseFloor,
@@ -635,6 +636,42 @@ describe('signal estimator — spatial floor', () => {
     expect(scene.coherentPeakCount).toBe(0);
     expect(scene.impulsiveOccupiedRatio).toBeGreaterThan(0);
     expect(scene.profileId).toBe('voice');
+  });
+
+  it('reports strongest scene peaks with frequency offsets for live window hunting', () => {
+    const floor = new Float32Array(WIDTH).fill(NOISE_DB);
+    const spectrum = new Float32Array(WIDTH).fill(NOISE_DB);
+    spectrum[120] = NOISE_DB + 12;
+    spectrum[150] = NOISE_DB + 24;
+    spectrum[180] = NOISE_DB + 18;
+    const confidence = new Float32Array(WIDTH).fill(0.2);
+    confidence[120] = 0.8;
+    confidence[150] = 0.7;
+    confidence[180] = 0.3;
+
+    const peaks = estimateSceneTopPeaks({
+      spectrum,
+      floor,
+      confidence,
+      centerHz: 14_267_000,
+      hzPerPixel: HZ_PER_PX,
+      dialHz: 14_267_000,
+      limit: 2,
+    });
+
+    expect(peaks).toHaveLength(2);
+    expect(peaks[0]).toMatchObject({
+      frequencyHz: 14_269_200,
+      offsetHz: 2200,
+      snrDb: 24,
+      dbfs: -86,
+      coherent: true,
+    });
+    expect(peaks[1]).toMatchObject({
+      frequencyHz: 14_266_200,
+      offsetHz: -800,
+      coherent: true,
+    });
   });
 
   it('does not give a one-frame isolated impulse a persistent trail', () => {

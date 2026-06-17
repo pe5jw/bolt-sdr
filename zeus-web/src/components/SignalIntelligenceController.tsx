@@ -27,7 +27,13 @@ import {
   type SignalEnhancePersisted,
   type SignalEnhancePresetId,
 } from '../dsp/signal-estimator';
-import { createAutoNotchTracker, detectAutoNotches } from '../dsp/auto-notch';
+import {
+  createAutoNotchTracker,
+  detectAutoNotches,
+  explainAutoNotchAt,
+  explainAutoNotchRejections,
+} from '../dsp/auto-notch';
+import { DIGITAL_PROTECTED_RANGES } from '../dsp/digital-segments';
 import { useConnectionStore } from '../state/connection-store';
 import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useNotchStore } from '../state/notch-store';
@@ -193,6 +199,33 @@ export function SignalIntelligenceController() {
     const releaseDiagnosticsFrames = registerFrameConsumer();
     const releaseDiagnosticsEstimator = registerEstimatorConsumer();
 
+    // Live auto-notch input snapshot, shared by the sync loop and the dev
+    // console diagnostics below.
+    const currentAutoNotchInput = () => {
+      const display = useDisplayStore.getState();
+      return {
+        spectrum: display.panValid ? display.panDb : null,
+        floor: getNoiseFloor(),
+        confidence: getSignalConfidence(),
+        stationarity: getSignalStationarity(),
+        centerHz: display.centerHz,
+        hzPerPixel: display.hzPerPixel,
+        existingNotches: useNotchStore.getState().notches,
+        protectedRanges: DIGITAL_PROTECTED_RANGES,
+      };
+    };
+
+    // Console diagnostics: in the browser, `zeusAnf.explain(14249000)` reports
+    // which gate (if any) rejected the carrier at that frequency, and
+    // `zeusAnf.rejections()` lists the strongest visible peaks that were NOT
+    // notched, with the reason. "Log what's on the wire" — tune from real data.
+    if (typeof window !== 'undefined') {
+      (window as unknown as { zeusAnf?: unknown }).zeusAnf = {
+        explain: (freqHz: number) => explainAutoNotchAt(currentAutoNotchInput(), freqHz),
+        rejections: (limit?: number) => explainAutoNotchRejections(currentAutoNotchInput(), limit),
+      };
+    }
+
     const resetPending = () => {
       pendingProfile = null;
       pendingCount = 0;
@@ -225,17 +258,8 @@ export function SignalIntelligenceController() {
         return;
       }
 
-      const display = useDisplayStore.getState();
       const notch = useNotchStore.getState();
-      const candidates = detectAutoNotches({
-        spectrum: display.panValid ? display.panDb : null,
-        floor: getNoiseFloor(),
-        confidence: getSignalConfidence(),
-        stationarity: getSignalStationarity(),
-        centerHz: display.centerHz,
-        hzPerPixel: display.hzPerPixel,
-        existingNotches: notch.notches,
-      });
+      const candidates = detectAutoNotches(currentAutoNotchInput());
       const tracked = autoNotchTracker.update(candidates, notch.notches).map((n) => ({
         centerHz: Math.round(n.centerHz),
         widthHz: Math.round(n.widthHz),
@@ -319,6 +343,9 @@ export function SignalIntelligenceController() {
       unsubDisplay();
       releaseDiagnosticsFrames();
       releaseDiagnosticsEstimator();
+      if (typeof window !== 'undefined') {
+        delete (window as unknown as { zeusAnf?: unknown }).zeusAnf;
+      }
     };
   }, []);
 

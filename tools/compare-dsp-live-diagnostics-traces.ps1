@@ -491,6 +491,34 @@ function Get-AgcStabilityWatchValue {
     }
 }
 
+function Get-PassbandAudioWatchValue {
+    param(
+        $Report,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $watch = Get-JsonValue $Report "passbandAudioWatch"
+    if ($null -eq $watch) {
+        return $null
+    }
+
+    switch ($Name) {
+        "passbandAudioAverageDbfs" { return Get-StatValue $watch "passbandAudioRmsDbfs" "average" }
+        "passbandAudioMovementDb" { return Get-StatValue $watch "passbandAudioRmsDbfs" "movement" }
+        "offPassbandAudioAverageDbfs" { return Get-StatValue $watch "offPassbandAudioRmsDbfs" "average" }
+        "passbandNoiseSeparationDb" {
+            $passbandAverage = Get-StatValue $watch "passbandAudioRmsDbfs" "average"
+            $offPassbandAverage = Get-StatValue $watch "offPassbandAudioRmsDbfs" "average"
+            if ($null -eq $passbandAverage -or $null -eq $offPassbandAverage) {
+                return $null
+            }
+
+            return [Math]::Round(([double]$passbandAverage - [double]$offPassbandAverage), 3)
+        }
+        default { return Get-NumericValue (Get-JsonValue $watch $Name) }
+    }
+}
+
 function Round-NullableMetric {
     param(
         $Value,
@@ -884,6 +912,69 @@ function Get-TraceMetricDefinitions {
             rationale = "Candidate traces must not introduce the watcher-classified active/voice-like AGC pumping risk."
         },
         [ordered]@{
+            id = "passbandPeakSampleCount"
+            label = "Passband peak evidence samples"
+            direction = "informational"
+            threshold = 0.0
+            safetyClass = "weak-signal"
+            acceptanceScope = "live-diagnostics-trace-comparison"
+            rationale = "Near-passband frontend peak coverage shows whether a trace contains tuned-signal evidence before comparing audio behavior."
+        },
+        [ordered]@{
+            id = "passbandActiveAudioPct"
+            label = "Passband active-audio percent"
+            direction = "higher"
+            threshold = 10.0
+            safetyClass = "weak-signal"
+            acceptanceScope = "live-diagnostics-trace-comparison"
+            rationale = "When the frontend sees tuned passband peaks, candidate DSP should not materially reduce audible tuned-signal occupancy."
+        },
+        [ordered]@{
+            id = "passbandFloorAudioPct"
+            label = "Passband floor-audio percent"
+            direction = "lower"
+            threshold = 10.0
+            safetyClass = "weak-signal"
+            acceptanceScope = "live-diagnostics-trace-comparison"
+            rationale = "Tuned passband peak samples should not be pushed down into the final-audio floor."
+        },
+        [ordered]@{
+            id = "passbandAudioAverageDbfs"
+            label = "Passband audio average dBFS"
+            direction = "higher"
+            threshold = 3.0
+            safetyClass = "weak-signal"
+            acceptanceScope = "live-diagnostics-trace-comparison"
+            rationale = "Weak tuned speech should stay level-normalized instead of being made materially quieter than the baseline passband audio."
+        },
+        [ordered]@{
+            id = "passbandAudioMovementDb"
+            label = "Passband audio movement dB"
+            direction = "lower"
+            threshold = 2.0
+            safetyClass = "pumping"
+            acceptanceScope = "live-diagnostics-trace-comparison"
+            rationale = "Level movement inside tuned passband evidence is the clearest comparator signal for audible fading or pumping."
+        },
+        [ordered]@{
+            id = "offPassbandAudioAverageDbfs"
+            label = "Off-passband audio average dBFS"
+            direction = "lower"
+            threshold = 3.0
+            safetyClass = "noise-gate"
+            acceptanceScope = "live-diagnostics-trace-comparison"
+            rationale = "Noise/no-evidence samples outside the tuned passband should be quieter after candidate DSP processing."
+        },
+        [ordered]@{
+            id = "passbandNoiseSeparationDb"
+            label = "Passband-to-noise separation dB"
+            direction = "higher"
+            threshold = 3.0
+            safetyClass = "noise-gate"
+            acceptanceScope = "live-diagnostics-trace-comparison"
+            rationale = "Candidate DSP should increase the level gap between tuned passband audio and off-passband/no-evidence audio."
+        },
+        [ordered]@{
             id = "nr5WeakDropoutSampleCount"
             label = "NR5 strict weak-input dropout samples"
             direction = "lower"
@@ -1198,6 +1289,13 @@ function Get-MetricValue {
         "agcActiveGainMovementDb" { return Get-AgcStabilityWatchValue $Report "activeAgcMovementDb" }
         "agcVoiceLikeGainMovementDb" { return Get-AgcStabilityWatchValue $Report "voiceLikeAgcMovementDb" }
         "agcPumpingRisk" { return Get-AgcStabilityWatchValue $Report "pumpingRisk" }
+        "passbandPeakSampleCount" { return Get-PassbandAudioWatchValue $Report "passbandPeakSampleCount" }
+        "passbandActiveAudioPct" { return Get-PassbandAudioWatchValue $Report "passbandActiveAudioPct" }
+        "passbandFloorAudioPct" { return Get-PassbandAudioWatchValue $Report "passbandFloorAudioPct" }
+        "passbandAudioAverageDbfs" { return Get-PassbandAudioWatchValue $Report "passbandAudioAverageDbfs" }
+        "passbandAudioMovementDb" { return Get-PassbandAudioWatchValue $Report "passbandAudioMovementDb" }
+        "offPassbandAudioAverageDbfs" { return Get-PassbandAudioWatchValue $Report "offPassbandAudioAverageDbfs" }
+        "passbandNoiseSeparationDb" { return Get-PassbandAudioWatchValue $Report "passbandNoiseSeparationDb" }
         "nr5WeakDropoutSampleCount" { return Get-Nr5WeakSignalValue $Report "weakDropoutSampleCount" }
         "nr5CandidateWeakLossSampleCount" { return Get-Nr5WeakSignalValue $Report "weakDropoutCandidateLossSampleCount" }
         "nr5WeakRecoveryPct" { return Get-Nr5WeakRecoveryPct $Report }

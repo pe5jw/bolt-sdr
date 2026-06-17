@@ -157,6 +157,7 @@ public sealed record SmartNrConditionDto(
     int? PeakCount,
     int? CoherentPeakCount,
     bool? CoherentSubthresholdSignal,
+    FrontendDspSceneTopPeakDto[] TopPeaks,
     bool? AdjacentNoiseUsable,
     int? AdjacentNoiseBins,
     int? AdjacentNoiseLeftBins,
@@ -186,6 +187,14 @@ public sealed record SmartNrConditionDto(
     SmartNrRxChainRuntimeDto RxChain,
     string DiagnosticRecommendation,
     DateTimeOffset GeneratedUtc);
+
+public sealed record FrontendDspSceneTopPeakDto(
+    long FrequencyHz,
+    int OffsetHz,
+    double SnrDb,
+    double Dbfs,
+    double? Confidence,
+    bool Coherent);
 
 // Machine-readable benchmark plan for WDSP modernization. These scenarios are
 // evidence requirements, not runtime DSP behavior.
@@ -391,6 +400,7 @@ public sealed record DspLiveDiagnosticsDto(
     bool FrontendSceneFresh,
     bool FrontendSceneStale,
     long? FrontendSceneAgeMs,
+    FrontendDspSceneTopPeakDto[] FrontendTopPeaks,
     bool? FrontendAdjacentNoiseUsable,
     int? FrontendAdjacentNoiseBins,
     int? FrontendAdjacentNoiseLeftBins,

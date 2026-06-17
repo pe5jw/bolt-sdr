@@ -25,7 +25,12 @@ import { useConnectionStore } from '../state/connection-store';
 import { createEmptyDisplaySlice, useDisplayStore } from '../state/display-store';
 import { maybeUpdateEstimator, resetEstimator, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
-import { resolvePanTuneTarget, usePanTuneGesture, type PanTuneGestureOptions } from './use-pan-tune-gesture';
+import {
+  _resetPanSnapStickyForTest,
+  resolvePanTuneTarget,
+  usePanTuneGesture,
+  type PanTuneGestureOptions,
+} from './use-pan-tune-gesture';
 
 const SNAP_WIDTH = 256;
 const SNAP_HZ_PER_PX = 37;
@@ -39,6 +44,15 @@ function binHz(bin: number): number {
 function voiceBlock(): Float32Array {
   const spec = new Float32Array(SNAP_WIDTH).fill(SNAP_NOISE_DB);
   for (let i = 140; i <= 160; i++) spec[i] = -60 - Math.abs(i - 150) * 0.35;
+  return spec;
+}
+
+// Two closely-spaced carriers — signal A (bins 100..110) and signal B (bins
+// 130..140) with a clear noise gap between them — for exercising snap hysteresis.
+function twoSignals(): Float32Array {
+  const spec = new Float32Array(SNAP_WIDTH).fill(SNAP_NOISE_DB);
+  for (let i = 100; i <= 110; i++) spec[i] = -60 - Math.abs(i - 105) * 0.4;
+  for (let i = 130; i <= 140; i++) spec[i] = -60 - Math.abs(i - 135) * 0.4;
   return spec;
 }
 
@@ -155,6 +169,7 @@ describe('usePanTuneGesture mobile touch mode', () => {
 
   afterEach(() => {
     resetEstimator();
+    _resetPanSnapStickyForTest();
     useSignalEnhanceStore.setState({
       popEnabled: false,
       snapEnabled: false,
@@ -203,27 +218,71 @@ describe('usePanTuneGesture mobile touch mode', () => {
     unmount();
   });
 
-  it('resolves snap-mode hover target to the measured signal edge without toolbar-step rounding', () => {
+  it('quantizes the snap-mode hover target (USB low edge) onto the toolbar tuning step', () => {
     useConnectionStore.setState({ mode: 'USB' });
     useSignalEnhanceStore.setState({ snapEnabled: true, snapRadiusHz: 3000, snapMinSnrDb: 5 });
     useToolbarFavoritesStore.setState({ stepHz: 5000 });
     const spec = voiceBlock();
     for (let k = 0; k < 5; k++) pushSnapFrame(spec, k + 1);
 
+    // Signal occupies bins 140..160; USB tunes the low edge (bin 140). With a
+    // 5 kHz step the edge frequency is rounded onto the grid so the preview
+    // holds a stable value instead of chasing the breathing edge.
     const target = resolvePanTuneTarget(binHz(152));
 
     expect(target.snappedToSignal).toBe(true);
     expect(target.fromLive).toBe(true);
-    expect(target.tuneHz).toBe(Math.round(binHz(140)));
-    expect(target.tuneHz % 5000).not.toBe(0);
+    expect(target.tuneHz).toBe(Math.round(binHz(140) / 5000) * 5000);
+    expect(target.tuneHz % 5000).toBe(0);
   });
 
-  it('click snap posts the same exact signal target that hover resolves', async () => {
+  it('snaps to a finer step grid when the operator picks a small tuning step', () => {
+    useConnectionStore.setState({ mode: 'USB' });
+    useSignalEnhanceStore.setState({ snapEnabled: true, snapRadiusHz: 3000, snapMinSnrDb: 5 });
+    useToolbarFavoritesStore.setState({ stepHz: 100 });
+    const spec = voiceBlock();
+    for (let k = 0; k < 5; k++) pushSnapFrame(spec, k + 1);
+
+    const target = resolvePanTuneTarget(binHz(152));
+
+    expect(target.snappedToSignal).toBe(true);
+    expect(target.tuneHz).toBe(Math.round(binHz(140) / 100) * 100);
+    expect(target.tuneHz % 100).toBe(0);
+  });
+
+  it('holds the snapped signal between two close carriers, switching only when the cursor reaches the other', () => {
+    useConnectionStore.setState({ mode: 'USB' });
+    useSignalEnhanceStore.setState({ snapEnabled: true, snapRadiusHz: 3000, snapMinSnrDb: 5 });
+    useToolbarFavoritesStore.setState({ stepHz: 1 });
+    const spec = twoSignals();
+    for (let k = 0; k < 5; k++) pushSnapFrame(spec, k + 1);
+
+    // Lock onto signal A (USB low edge at bin 100).
+    const onA = resolvePanTuneTarget(binHz(105));
+    expect(onA.tuneHz).toBe(Math.round(binHz(100)));
+
+    // Cursor drifts into the gap and is now NEARER signal B (bin 124: 222 Hz to
+    // B vs 518 Hz to A) — but hysteresis keeps the snap on A, no flip-flop.
+    const stillA = resolvePanTuneTarget(binHz(124));
+    expect(stillA.tuneHz).toBe(Math.round(binHz(100)));
+
+    // Cursor reaches signal B's body — now the snap switches cleanly to B.
+    const onB = resolvePanTuneTarget(binHz(135));
+    expect(onB.tuneHz).toBe(Math.round(binHz(130)));
+
+    // And once on B it stays on B back across the midpoint (symmetric hold).
+    const stillB = resolvePanTuneTarget(binHz(116));
+    expect(stillB.tuneHz).toBe(Math.round(binHz(130)));
+  });
+
+  it('click snap posts the same step-quantized signal target that hover resolves', async () => {
     useConnectionStore.setState({ mode: 'USB', ctunEnabled: true });
     useSignalEnhanceStore.setState({ snapEnabled: true, snapRadiusHz: 3000, snapMinSnrDb: 5 });
     useToolbarFavoritesStore.setState({ stepHz: 5000 });
     const spec = voiceBlock();
     for (let k = 0; k < 5; k++) pushSnapFrame(spec, k + 1);
+
+    const hoverTarget = resolvePanTuneTarget(binHz(152));
 
     const { container, unmount } = render(createElement(GestureProbe, { touchMode: 'normal' }));
     const canvas = container.querySelector('canvas') as HTMLCanvasElement;
@@ -235,7 +294,9 @@ describe('usePanTuneGesture mobile touch mode', () => {
       await flush();
     });
 
-    expect(setVfoMock).toHaveBeenCalledWith(Math.round(binHz(140)), undefined);
+    // Click commits exactly what hover previewed — both go through the shared
+    // resolver, so they cannot advertise one frequency and tune another.
+    expect(setVfoMock).toHaveBeenCalledWith(hoverTarget.tuneHz, undefined);
 
     unmount();
   });

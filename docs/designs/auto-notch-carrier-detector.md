@@ -85,6 +85,25 @@ The verification/locking tracker (`createAutoNotchTracker`) is unchanged; it now
 operates on narrow carrier candidates, so emitted notches are surgical (tens to a
 few hundred Hz) instead of wide slabs. `MAX_WIDTH_HZ` was lowered to 600 Hz.
 
+## Protected digital segments (FT8/FT4)
+
+FT8 and FT4 sub-bands are wall-to-wall narrow steady carriers — the detector's
+ideal prey, and exactly where it must NOT fire (the operator is decoding there).
+`digital-segments.ts` holds an authoritative table of FT8 + FT4 dial frequencies
+across every supported band and exports `DIGITAL_PROTECTED_RANGES`
+(`[dial − 300, dial + 3300]` per segment). The detector skips any candidate whose
+center lands in a protected range. This is kept separate from the user-editable
+band plan, which only carries coarse "digital" markers, not the precise 3 kHz
+windows.
+
+## Zoom-aware narrowness
+
+The narrowness gate was a fixed 500 Hz, but at a full-band span one FFT bin is
+hundreds of Hz, so a genuine carrier smears across 2–3 bins and was rejected —
+the "missing carriers" symptom on a wide view. The limit is now
+`max(MAX_CARRIER_WIDTH_HZ, CARRIER_MAX_BINS × hzPerPixel)` (≈4 bins), so it stays
+"a few bins wide" at any zoom while still rejecting multi-kHz voice humps.
+
 ## Files
 
 - `zeus-web/src/dsp/signal-estimator.ts` — per-bin amplitude stationarity +
@@ -92,8 +111,9 @@ few hundred Hz) instead of wide slabs. `MAX_WIDTH_HZ` was lowered to 600 Hz.
 - `zeus-web/src/dsp/auto-notch.ts` — `detectAutoNotches` rewritten as a
   prominence + narrowness + stationarity carrier-line detector; `saddleProminenceDb`,
   `widthAtDropHz` helpers; wide-blocker path removed.
+- `zeus-web/src/dsp/digital-segments.ts` — FT8/FT4 protected-range table.
 - `zeus-web/src/components/SignalIntelligenceController.tsx` — feeds the
-  stationarity map into the detector.
+  stationarity map and `DIGITAL_PROTECTED_RANGES` into the detector.
 
 ## Tuning notes / maintainer review
 

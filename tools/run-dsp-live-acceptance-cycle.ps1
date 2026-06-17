@@ -121,6 +121,21 @@ function Get-JsonArray {
     return @($value)
 }
 
+function Get-AcceptanceActionById {
+    param(
+        $Report,
+        [Parameter(Mandatory = $true)][string]$ActionId
+    )
+
+    foreach ($action in @(Get-JsonArray $Report "acceptanceActionPlan")) {
+        if ([string](Get-JsonValue $action "actionId") -eq $ActionId) {
+            return $action
+        }
+    }
+
+    return $null
+}
+
 function Test-Truthy {
     param($Value)
 
@@ -308,7 +323,7 @@ $acceptanceArtifacts = @(Get-AcceptanceArtifacts)
 
 if ($PlanOnly) {
     [ordered]@{
-        schemaVersion = 7
+        schemaVersion = 8
         tool = "run-dsp-live-acceptance-cycle"
         mode = "plan-only"
         baseUrl = $base
@@ -332,7 +347,9 @@ if ($PlanOnly) {
         advisoryEvidenceSignals = @(
             "live-matrix-mixed-weak-strong-hunt",
             "live-matrix-artifact-control",
-            "live-history-artifact-control"
+            "live-history-artifact-control",
+            "external-engine-first-safe-bakeoff",
+            "puresignal-safe-bypass-bench"
         )
         acceptanceCommandStepCount = $acceptanceCommandSteps.Count
         acceptanceCommandSteps = @($acceptanceCommandSteps)
@@ -347,6 +364,7 @@ if ($PlanOnly) {
             "Schema v5 copies validation-triage primaryAcceptance* fields into the wrapper summary so a blocked one-command run carries its next action.",
             "Schema v6 copies liveDiagnosticsHistoryArtifactControlSignalCount into the wrapper summary as an advisory speech-artifact review signal.",
             "Schema v7 copies liveMatrixArtifactControl* into the wrapper summary so matrix speech-artifact advisories stay visible in blocked one-command runs.",
+            "Schema v8 copies advisory external DSP/ML first-safe bakeoff and PureSignal safe-bypass bench actions into the wrapper summary when validation triage generated them.",
             "Use -AllowCapturePreflight, -AllowRegression, or -AllowValidationPreflight only for exploratory evidence, not acceptance claims.",
             "No DSP runtime behavior or operator defaults are changed by this tool."
         )
@@ -578,6 +596,40 @@ $triagePrimaryAcceptanceExpectedArtifact = if ($null -ne $triageReport) { [strin
 $triagePrimaryAcceptanceExpectedArtifactCount = if ($null -ne $triageReport) { [int](Get-JsonValue $triageReport "primaryAcceptanceExpectedArtifactCount") } else { $null }
 $triagePrimaryAcceptanceExpectedArtifacts = if ($null -ne $triageReport) { @(Get-JsonArray $triageReport "primaryAcceptanceExpectedArtifacts") } else { @() }
 $triagePrimaryAcceptanceFollowUp = if ($null -ne $triageReport) { [string](Get-JsonValue $triageReport "primaryAcceptanceFollowUp") } else { "" }
+$triageExternalEngineBakeoffAction = if ($null -ne $triageReport) { Get-AcceptanceActionById -Report $triageReport -ActionId "run-first-safe-external-engine-bakeoff" } else { $null }
+$triageExternalEngineBakeoffActionPresent = $null -ne $triageExternalEngineBakeoffAction
+$triageExternalEngineBakeoffActionId = if ($triageExternalEngineBakeoffActionPresent) { [string](Get-JsonValue $triageExternalEngineBakeoffAction "actionId") } else { "" }
+$triageExternalEngineBakeoffActionPriority = if ($triageExternalEngineBakeoffActionPresent) { Get-JsonValue $triageExternalEngineBakeoffAction "priority" } else { $null }
+$triageExternalEngineBakeoffActionStageId = if ($triageExternalEngineBakeoffActionPresent) { [string](Get-JsonValue $triageExternalEngineBakeoffAction "stageId") } else { "" }
+$triageExternalEngineBakeoffActionGateId = if ($triageExternalEngineBakeoffActionPresent) { [string](Get-JsonValue $triageExternalEngineBakeoffAction "gateId") } else { "" }
+$triageExternalEngineBakeoffActionCategory = if ($triageExternalEngineBakeoffActionPresent) { [string](Get-JsonValue $triageExternalEngineBakeoffAction "category") } else { "" }
+$triageExternalEngineBakeoffActionRequired = if ($triageExternalEngineBakeoffActionPresent) { Test-Truthy (Get-JsonValue $triageExternalEngineBakeoffAction "requiredForAcceptance") } else { $false }
+$triageExternalEngineBakeoffCommandTemplate = if ($triageExternalEngineBakeoffActionPresent) { [string](Get-JsonValue $triageExternalEngineBakeoffAction "commandTemplate") } else { "" }
+$triageExternalEngineBakeoffCommandStepCount = if ($triageExternalEngineBakeoffActionPresent) { [int](Get-JsonValue $triageExternalEngineBakeoffAction "commandStepCount") } else { 0 }
+$triageExternalEngineBakeoffCommandSteps = if ($triageExternalEngineBakeoffActionPresent) { @(Get-JsonArray $triageExternalEngineBakeoffAction "commandSteps") } else { @() }
+$triageExternalEngineBakeoffManualAction = if ($triageExternalEngineBakeoffActionPresent) { [string](Get-JsonValue $triageExternalEngineBakeoffAction "manualAction") } else { "" }
+$triageExternalEngineBakeoffActionManual = -not [string]::IsNullOrWhiteSpace($triageExternalEngineBakeoffManualAction)
+$triageExternalEngineBakeoffExpectedArtifact = if ($triageExternalEngineBakeoffActionPresent) { [string](Get-JsonValue $triageExternalEngineBakeoffAction "expectedArtifact") } else { "" }
+$triageExternalEngineBakeoffExpectedArtifactCount = if ($triageExternalEngineBakeoffActionPresent) { [int](Get-JsonValue $triageExternalEngineBakeoffAction "expectedArtifactCount") } else { 0 }
+$triageExternalEngineBakeoffExpectedArtifacts = if ($triageExternalEngineBakeoffActionPresent) { @(Get-JsonArray $triageExternalEngineBakeoffAction "expectedArtifacts") } else { @() }
+$triageExternalEngineBakeoffFollowUp = if ($triageExternalEngineBakeoffActionPresent) { [string](Get-JsonValue $triageExternalEngineBakeoffAction "followUp") } else { "" }
+$triagePureSignalSafeBypassAction = if ($null -ne $triageReport) { Get-AcceptanceActionById -Report $triageReport -ActionId "capture-puresignal-safe-bypass-bench" } else { $null }
+$triagePureSignalSafeBypassActionPresent = $null -ne $triagePureSignalSafeBypassAction
+$triagePureSignalSafeBypassActionId = if ($triagePureSignalSafeBypassActionPresent) { [string](Get-JsonValue $triagePureSignalSafeBypassAction "actionId") } else { "" }
+$triagePureSignalSafeBypassActionPriority = if ($triagePureSignalSafeBypassActionPresent) { Get-JsonValue $triagePureSignalSafeBypassAction "priority" } else { $null }
+$triagePureSignalSafeBypassActionStageId = if ($triagePureSignalSafeBypassActionPresent) { [string](Get-JsonValue $triagePureSignalSafeBypassAction "stageId") } else { "" }
+$triagePureSignalSafeBypassActionGateId = if ($triagePureSignalSafeBypassActionPresent) { [string](Get-JsonValue $triagePureSignalSafeBypassAction "gateId") } else { "" }
+$triagePureSignalSafeBypassActionCategory = if ($triagePureSignalSafeBypassActionPresent) { [string](Get-JsonValue $triagePureSignalSafeBypassAction "category") } else { "" }
+$triagePureSignalSafeBypassActionRequired = if ($triagePureSignalSafeBypassActionPresent) { Test-Truthy (Get-JsonValue $triagePureSignalSafeBypassAction "requiredForAcceptance") } else { $false }
+$triagePureSignalSafeBypassCommandTemplate = if ($triagePureSignalSafeBypassActionPresent) { [string](Get-JsonValue $triagePureSignalSafeBypassAction "commandTemplate") } else { "" }
+$triagePureSignalSafeBypassCommandStepCount = if ($triagePureSignalSafeBypassActionPresent) { [int](Get-JsonValue $triagePureSignalSafeBypassAction "commandStepCount") } else { 0 }
+$triagePureSignalSafeBypassCommandSteps = if ($triagePureSignalSafeBypassActionPresent) { @(Get-JsonArray $triagePureSignalSafeBypassAction "commandSteps") } else { @() }
+$triagePureSignalSafeBypassManualAction = if ($triagePureSignalSafeBypassActionPresent) { [string](Get-JsonValue $triagePureSignalSafeBypassAction "manualAction") } else { "" }
+$triagePureSignalSafeBypassActionManual = -not [string]::IsNullOrWhiteSpace($triagePureSignalSafeBypassManualAction)
+$triagePureSignalSafeBypassExpectedArtifact = if ($triagePureSignalSafeBypassActionPresent) { [string](Get-JsonValue $triagePureSignalSafeBypassAction "expectedArtifact") } else { "" }
+$triagePureSignalSafeBypassExpectedArtifactCount = if ($triagePureSignalSafeBypassActionPresent) { [int](Get-JsonValue $triagePureSignalSafeBypassAction "expectedArtifactCount") } else { 0 }
+$triagePureSignalSafeBypassExpectedArtifacts = if ($triagePureSignalSafeBypassActionPresent) { @(Get-JsonArray $triagePureSignalSafeBypassAction "expectedArtifacts") } else { @() }
+$triagePureSignalSafeBypassFollowUp = if ($triagePureSignalSafeBypassActionPresent) { [string](Get-JsonValue $triagePureSignalSafeBypassAction "followUp") } else { "" }
 $liveAcceptanceEvidenceReady = ($matrixAcceptanceReady -and $comparisonReady -and $thetisComparisonReady -and $comparisonMetricCatalogAlignmentReady -and $thetisComparisonMetricCatalogAlignmentReady -and $validationOk -and $requiredLiveProblemCount -eq 0 -and $hardwareEvidenceReady -and $liveHistoryAgcStabilityReady -and $liveHistoryMixedWeakStrongReady)
 $blockers = New-Object System.Collections.Generic.List[object]
 if (-not $matrixAcceptanceReady) {
@@ -627,7 +679,7 @@ if ($requiredLiveProblemCount -gt 0) {
 }
 
 $summary = [ordered]@{
-    schemaVersion = 7
+    schemaVersion = 8
     tool = "run-dsp-live-acceptance-cycle"
     generatedUtc = $completedUtc
     startedUtc = $startedUtc
@@ -746,6 +798,38 @@ $summary = [ordered]@{
     triagePrimaryAcceptanceExpectedArtifactCount = $triagePrimaryAcceptanceExpectedArtifactCount
     triagePrimaryAcceptanceExpectedArtifacts = @($triagePrimaryAcceptanceExpectedArtifacts)
     triagePrimaryAcceptanceFollowUp = $triagePrimaryAcceptanceFollowUp
+    triageExternalEngineBakeoffActionPresent = $triageExternalEngineBakeoffActionPresent
+    triageExternalEngineBakeoffActionId = $triageExternalEngineBakeoffActionId
+    triageExternalEngineBakeoffActionPriority = $triageExternalEngineBakeoffActionPriority
+    triageExternalEngineBakeoffActionStageId = $triageExternalEngineBakeoffActionStageId
+    triageExternalEngineBakeoffActionGateId = $triageExternalEngineBakeoffActionGateId
+    triageExternalEngineBakeoffActionCategory = $triageExternalEngineBakeoffActionCategory
+    triageExternalEngineBakeoffActionRequired = $triageExternalEngineBakeoffActionRequired
+    triageExternalEngineBakeoffActionManual = $triageExternalEngineBakeoffActionManual
+    triageExternalEngineBakeoffCommandTemplate = $triageExternalEngineBakeoffCommandTemplate
+    triageExternalEngineBakeoffCommandStepCount = $triageExternalEngineBakeoffCommandStepCount
+    triageExternalEngineBakeoffCommandSteps = @($triageExternalEngineBakeoffCommandSteps)
+    triageExternalEngineBakeoffManualAction = $triageExternalEngineBakeoffManualAction
+    triageExternalEngineBakeoffExpectedArtifact = $triageExternalEngineBakeoffExpectedArtifact
+    triageExternalEngineBakeoffExpectedArtifactCount = $triageExternalEngineBakeoffExpectedArtifactCount
+    triageExternalEngineBakeoffExpectedArtifacts = @($triageExternalEngineBakeoffExpectedArtifacts)
+    triageExternalEngineBakeoffFollowUp = $triageExternalEngineBakeoffFollowUp
+    triagePureSignalSafeBypassActionPresent = $triagePureSignalSafeBypassActionPresent
+    triagePureSignalSafeBypassActionId = $triagePureSignalSafeBypassActionId
+    triagePureSignalSafeBypassActionPriority = $triagePureSignalSafeBypassActionPriority
+    triagePureSignalSafeBypassActionStageId = $triagePureSignalSafeBypassActionStageId
+    triagePureSignalSafeBypassActionGateId = $triagePureSignalSafeBypassActionGateId
+    triagePureSignalSafeBypassActionCategory = $triagePureSignalSafeBypassActionCategory
+    triagePureSignalSafeBypassActionRequired = $triagePureSignalSafeBypassActionRequired
+    triagePureSignalSafeBypassActionManual = $triagePureSignalSafeBypassActionManual
+    triagePureSignalSafeBypassCommandTemplate = $triagePureSignalSafeBypassCommandTemplate
+    triagePureSignalSafeBypassCommandStepCount = $triagePureSignalSafeBypassCommandStepCount
+    triagePureSignalSafeBypassCommandSteps = @($triagePureSignalSafeBypassCommandSteps)
+    triagePureSignalSafeBypassManualAction = $triagePureSignalSafeBypassManualAction
+    triagePureSignalSafeBypassExpectedArtifact = $triagePureSignalSafeBypassExpectedArtifact
+    triagePureSignalSafeBypassExpectedArtifactCount = $triagePureSignalSafeBypassExpectedArtifactCount
+    triagePureSignalSafeBypassExpectedArtifacts = @($triagePureSignalSafeBypassExpectedArtifacts)
+    triagePureSignalSafeBypassFollowUp = $triagePureSignalSafeBypassFollowUp
     requiredLiveAcceptanceArtifactProblemCount = $requiredLiveProblemCount
     liveAcceptanceEvidenceReady = $liveAcceptanceEvidenceReady
     liveAcceptanceEvidenceStatus = if ($liveAcceptanceEvidenceReady) { "ready" } else { "blocked" }
@@ -784,6 +868,32 @@ else {
         }
         if (-not [string]::IsNullOrWhiteSpace([string]$summary.triagePrimaryAcceptanceFollowUp)) {
             Write-Host "Primary triage follow-up: $($summary.triagePrimaryAcceptanceFollowUp)"
+        }
+    }
+    if (Test-Truthy $summary.triageExternalEngineBakeoffActionPresent) {
+        Write-Host "External DSP/ML bakeoff action: $($summary.triageExternalEngineBakeoffActionId) [$($summary.triageExternalEngineBakeoffActionCategory)]"
+        $externalCommandOrManual = [string]$summary.triageExternalEngineBakeoffCommandTemplate
+        if ([string]::IsNullOrWhiteSpace($externalCommandOrManual)) {
+            $externalCommandOrManual = [string]$summary.triageExternalEngineBakeoffManualAction
+        }
+        if (-not [string]::IsNullOrWhiteSpace($externalCommandOrManual)) {
+            Write-Host "External DSP/ML bakeoff command/manual action: $externalCommandOrManual"
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$summary.triageExternalEngineBakeoffFollowUp)) {
+            Write-Host "External DSP/ML bakeoff follow-up: $($summary.triageExternalEngineBakeoffFollowUp)"
+        }
+    }
+    if (Test-Truthy $summary.triagePureSignalSafeBypassActionPresent) {
+        Write-Host "PureSignal safe-bypass action: $($summary.triagePureSignalSafeBypassActionId) [$($summary.triagePureSignalSafeBypassActionCategory)]"
+        $pureSignalCommandOrManual = [string]$summary.triagePureSignalSafeBypassCommandTemplate
+        if ([string]::IsNullOrWhiteSpace($pureSignalCommandOrManual)) {
+            $pureSignalCommandOrManual = [string]$summary.triagePureSignalSafeBypassManualAction
+        }
+        if (-not [string]::IsNullOrWhiteSpace($pureSignalCommandOrManual)) {
+            Write-Host "PureSignal safe-bypass command/manual action: $pureSignalCommandOrManual"
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$summary.triagePureSignalSafeBypassFollowUp)) {
+            Write-Host "PureSignal safe-bypass follow-up: $($summary.triagePureSignalSafeBypassFollowUp)"
         }
     }
 }

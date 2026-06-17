@@ -37,7 +37,9 @@ import { useConnectionStore } from '../state/connection-store';
 import { type DisplayState, registerFrameConsumer, subscribeFrames } from '../state/display-store';
 import { measureSnapLock, type SnapLockMeasure, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { useTxStore } from '../state/tx-store';
+import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import * as viewCenter from '../state/view-center';
+import { roundToStep } from './number';
 
 // Capture window for re-finding the locked signal each frame. Must stay well
 // under the spacing to the neighbour you're trying not to grab.
@@ -244,6 +246,11 @@ function onFrame(s: DisplayState): void {
       anchorLevelDb === undefined
         ? measure.levelDb
         : anchorLevelDb + SNAP_LOCK_LEVEL_EMA * (measure.levelDb - anchorLevelDb);
+    // Quantize the re-measured tuning edge onto the operator's step grid — the
+    // SAME grid the snap commit landed on (resolvePanTuneTarget). Without this
+    // the tracker would chase the raw sub-step edge and slowly walk the dial off
+    // the committed grid value. Body stays raw (it's the centroid we follow).
+    measure.dialHz = roundToStep(measure.dialHz, useToolbarFavoritesStore.getState().stepHz);
   }
   const res = snapLockStep({ dialHz, bodyHz, originDialHz, originBodyHz, missFrames }, measure);
   missFrames = res.missFrames;

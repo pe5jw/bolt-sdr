@@ -941,6 +941,41 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
       weak_recovery_drive,
       0.080 + 0.235 * borderline_speech_relief);
   }
+  double adjacent_suppressed_relief = 0.0;
+  if (a->adjacent_noise_usable && a->learned_frames >= 24) {
+    double adjacent_context = sqrt(spnr_clip(
+      spnr_clip((a->adjacent_noise_trust - 0.58) / 0.28, 0.0, 1.0)
+        * spnr_clip((a->diag_adjacent_noise_drive - 0.46) / 0.36, 0.0, 1.0),
+      0.0, 1.0));
+    double suppressed_texture = max(
+      spnr_clip((a->diag_mask_smoothing - 0.315) / 0.150, 0.0, 1.0),
+      max(
+        0.82 * spnr_clip((a->diag_signal_probability - 0.105) / 0.115, 0.0, 1.0),
+        0.62 * spnr_clip((a->diag_signal_confidence - 0.255) / 0.115, 0.0, 1.0)));
+    double suppressed_input = a->target_rms > 1.0e-9
+      ? spnr_clip((a->diag_input_rms - a->target_rms * 0.010) / (a->target_rms * 0.075), 0.0, 1.0)
+      : 0.0;
+    double weak_input_guard = a->target_rms > 1.0e-9
+      ? spnr_clip((a->target_rms * 0.90 - a->diag_input_rms) / (a->target_rms * 0.80), 0.0, 1.0)
+      : 0.0;
+    adjacent_suppressed_relief = adjacent_context
+      * suppressed_texture
+      * suppressed_input
+      * weak_input_guard
+      * spnr_clip((gate_confidence - 0.210) / 0.170, 0.0, 1.0);
+    adjacent_suppressed_relief *= 1.0 - 0.62 * spnr_clip(
+      (low_evidence_noise_drive - 0.82) / 0.18,
+      0.0, 1.0);
+    if (adjacent_suppressed_relief > 0.0) {
+      low_evidence_noise_drive *= 1.0 - 0.36 * adjacent_suppressed_relief;
+      weak_recovery_drive = max(
+        weak_recovery_drive,
+        0.070 + 0.260 * adjacent_suppressed_relief);
+      gate_inst = max(
+        gate_inst,
+        0.115 + 0.285 * adjacent_suppressed_relief);
+    }
+  }
   if (low_evidence_noise_drive > 0.0) {
     double low_evidence_hold = 1.0 - 0.70 * low_evidence_noise_drive;
     gate_inst *= 1.0 - 0.45 * low_evidence_noise_drive;
@@ -1341,6 +1376,32 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
         out[2 * i + 0] *= blackout_gain;
       }
       out_rms *= blackout_gain;
+    }
+  }
+
+  double adjacent_suppressed_floor_drive = adjacent_suppressed_relief
+    * spnr_clip((a->target_rms * 0.185 - out_rms) / (a->target_rms * 0.170), 0.0, 1.0)
+    * max(
+      spnr_clip((a->diag_signal_probability - 0.115) / 0.120, 0.0, 1.0),
+      0.72 * spnr_clip((a->diag_mask_smoothing - 0.335) / 0.135, 0.0, 1.0));
+  adjacent_suppressed_floor_drive *= 1.0 - 0.56 * spnr_clip(
+    (low_evidence_noise_drive - 0.70) / 0.24,
+    0.0, 1.0);
+  if (a->agc_run && adjacent_suppressed_floor_drive > 0.006 && out_rms > 1.0e-9) {
+    double adjacent_floor_rms = max(
+      0.46 * a->diag_input_rms,
+      a->target_rms * (0.018 + 0.045 * adjacent_suppressed_floor_drive));
+    adjacent_floor_rms = min(adjacent_floor_rms, a->target_rms * 0.160);
+    double adjacent_floor_lift = spnr_clip(adjacent_floor_rms / out_rms, 1.0, 24.00);
+    double adjacent_floor_blend = spnr_clip(
+      0.32 + 0.30 * adjacent_suppressed_floor_drive,
+      0.0, 0.62);
+    double adjacent_floor_gain = 1.0 + adjacent_floor_blend * (adjacent_floor_lift - 1.0);
+    if (adjacent_floor_gain > 1.001) {
+      for (int i = 0; i < n; i++) {
+        out[2 * i + 0] *= adjacent_floor_gain;
+      }
+      out_rms *= adjacent_floor_gain;
     }
   }
 

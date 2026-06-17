@@ -41,6 +41,14 @@ export const WORKSPACE_TILE_MIN_H = 2;
  *  current (schema-v8) 24×48 grid. Legacy persisted layouts have every
  *  x/y/w/h scaled by this on load so they render identically. */
 export const GRID_SCALE = 2;
+/** Rows beyond this are not operator-authored layouts in practice: at that
+ *  density rowHeight collapses to a couple pixels and panel min-heights can
+ *  no longer keep the workspace readable. Treat them as corrupted saves. */
+export const WORKSPACE_OVERSIZED_LAYOUT_ROW_THRESHOLD =
+  WORKSPACE_TARGET_ROWS * 5;
+/** Preserve the relative vertical arrangement of a corrupted layout, but bring
+ *  it back into the dense-dashboard range used by real saved workspaces. */
+export const WORKSPACE_OVERSIZED_LAYOUT_NORMALIZED_ROWS = 120;
 
 /** A single workspace tile. The same panelId may appear on multiple tiles
  *  for multi-instance panels (just `meters` today); the per-tile uid is the
@@ -183,5 +191,17 @@ export function parseWorkspaceLayout(raw: unknown): WorkspaceLayout {
         : {}),
     });
   }
-  return { schemaVersion: 8, tiles };
+  return { schemaVersion: 8, tiles: normalizeOversizedRows(tiles) };
+}
+
+function normalizeOversizedRows(tiles: WorkspaceTile[]): WorkspaceTile[] {
+  const rows = tiles.reduce((max, t) => Math.max(max, t.y + t.h), 0);
+  if (rows <= WORKSPACE_OVERSIZED_LAYOUT_ROW_THRESHOLD) return tiles;
+
+  const scale = WORKSPACE_OVERSIZED_LAYOUT_NORMALIZED_ROWS / rows;
+  return tiles.map((tile) => ({
+    ...tile,
+    y: Math.max(0, Math.round(tile.y * scale)),
+    h: Math.max(1, Math.round(tile.h * scale)),
+  }));
 }

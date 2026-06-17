@@ -43,6 +43,7 @@
 // License for details.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
 import { currentDetachedWorkspaceLayoutId } from './layout/workspace-windows';
@@ -173,6 +174,44 @@ export default function App() {
   useKeyboardShortcuts();
   useMicUplink();
   useFilterRibbonOpenSync();
+
+  const topbarControlsRef = useRef<HTMLDivElement | null>(null);
+  const [topbarScroll, setTopbarScroll] = useState({ canLeft: false, canRight: false });
+  const syncTopbarScroll = useCallback(() => {
+    const el = topbarControlsRef.current;
+    if (!el) return;
+    const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+    const next = {
+      canLeft: el.scrollLeft > 1,
+      canRight: maxScroll > 1 && el.scrollLeft < maxScroll - 1,
+    };
+    setTopbarScroll((prev) =>
+      prev.canLeft === next.canLeft && prev.canRight === next.canRight ? prev : next,
+    );
+  }, []);
+  const scrollTopbarControls = useCallback((direction: -1 | 1) => {
+    const el = topbarControlsRef.current;
+    if (!el) return;
+    const amount = Math.max(220, Math.floor(el.clientWidth * 0.75));
+    el.scrollBy({ left: direction * amount, behavior: 'smooth' });
+    window.setTimeout(syncTopbarScroll, 180);
+  }, [syncTopbarScroll]);
+  useEffect(() => {
+    syncTopbarScroll();
+  });
+  useEffect(() => {
+    const el = topbarControlsRef.current;
+    if (!el) return;
+    window.addEventListener('resize', syncTopbarScroll);
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(syncTopbarScroll)
+      : null;
+    resizeObserver?.observe(el);
+    return () => {
+      window.removeEventListener('resize', syncTopbarScroll);
+      resizeObserver?.disconnect();
+    };
+  }, [syncTopbarScroll]);
 
   // Register service worker and handle updates
   useEffect(() => {
@@ -761,10 +800,16 @@ export default function App() {
       <header className="topbar" style={{ position: 'relative', zIndex: 300 }}>
         <div className="brand">
           <div className="brand-mark">
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden>
-              <circle cx="12" cy="12" r="3" fill="var(--accent)" />
-              <circle cx="12" cy="12" r="7" fill="none" stroke="var(--accent)" strokeWidth="1" opacity="0.5" />
-              <circle cx="12" cy="12" r="11" fill="none" stroke="var(--accent)" strokeWidth="1" opacity="0.25" />
+            <svg className="brand-mark-logo" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path
+                className="brand-mark-wave brand-mark-wave--top"
+                d="M3.2 8.2c1.55-1.2 3.1-1.2 4.65 0l.75.58c1.55 1.2 3.1 1.2 4.65 0l.75-.58c1.55-1.2 3.1-1.2 4.65 0l1.15.88"
+              />
+              <path
+                className="brand-mark-wave brand-mark-wave--bottom"
+                d="M3.2 15.8c1.55 1.2 3.1 1.2 4.65 0l.75-.58c1.55-1.2 3.1-1.2 4.65 0l.75.58c1.55 1.2 3.1 1.2 4.65 0l1.15-.88"
+              />
+              <path className="brand-mark-bolt" d="M13.4 2.5 7 12.1h4.15l-1.2 9.4L17 10.55h-4.25l.65-8.05Z" />
             </svg>
           </div>
           <div className="brand-text">
@@ -775,43 +820,76 @@ export default function App() {
 
         <span className="topbar-divider hide-mobile" aria-hidden />
 
-        <div className="topbar-controls hide-mobile" aria-label="Primary radio controls">
-          <ModeFavorites />
-          <span className="strip-divider" aria-hidden />
-          <FilterPanel />
-          <span className="strip-divider" aria-hidden />
-          <BandFavorites />
-          <span className="strip-divider" aria-hidden />
-          <StepFavorites />
-          <span className="strip-divider" aria-hidden />
-          <div className="ctrl-group topbar-control topbar-control--front-end">
-            <div className="label-xs ctrl-lbl">FRONT-END</div>
-            <div className="btn-row" style={{ gap: 6, alignItems: 'center' }}>
-              <PreampButton />
-              <AttenuatorSlider />
+        <div className="topbar-controls-shell hide-mobile">
+          <button
+            type="button"
+            className="btn sm topbar-scroll-btn"
+            onClick={() => scrollTopbarControls(-1)}
+            disabled={!topbarScroll.canLeft}
+            title="Previous topbar controls"
+            aria-label="Previous topbar controls"
+          >
+            <ChevronLeft size={14} aria-hidden />
+          </button>
+          <div
+            ref={topbarControlsRef}
+            className="topbar-controls"
+            role="group"
+            aria-label="Primary radio controls"
+            tabIndex={0}
+            onScroll={syncTopbarScroll}
+          >
+            <ModeFavorites />
+            <span className="strip-divider" aria-hidden />
+            <FilterPanel />
+            <span className="strip-divider" aria-hidden />
+            <BandFavorites />
+            <span className="strip-divider" aria-hidden />
+            <StepFavorites />
+            <span className="strip-divider" aria-hidden />
+            <div className="ctrl-group topbar-control topbar-control--front-end">
+              <div className="label-xs ctrl-lbl">FRONT-END</div>
+              <div className="btn-row" style={{ gap: 6, alignItems: 'center' }}>
+                <PreampButton />
+                <AttenuatorSlider />
+              </div>
+            </div>
+            <div className="ctrl-group topbar-control topbar-control--agc">
+              <div className="label-xs ctrl-lbl">AGC</div>
+              <AgcSlider />
+            </div>
+            <div className="ctrl-group topbar-control topbar-control--sql">
+              <div className="label-xs ctrl-lbl">SQL</div>
+              <SquelchSlider />
+            </div>
+            <div className="ctrl-group topbar-control topbar-control--af">
+              <div className="label-xs ctrl-lbl">AF</div>
+              <AfGainSlider />
             </div>
           </div>
-          <div className="ctrl-group topbar-control topbar-control--agc">
-            <div className="label-xs ctrl-lbl">AGC</div>
-            <AgcSlider />
-          </div>
-          <div className="ctrl-group topbar-control topbar-control--sql">
-            <div className="label-xs ctrl-lbl">SQL</div>
-            <SquelchSlider />
-          </div>
-          <div className="ctrl-group topbar-control topbar-control--af">
-            <div className="label-xs ctrl-lbl">AF</div>
-            <AfGainSlider />
-          </div>
+          <button
+            type="button"
+            className="btn sm topbar-scroll-btn"
+            onClick={() => scrollTopbarControls(1)}
+            disabled={!topbarScroll.canRight}
+            title="Next topbar controls"
+            aria-label="Next topbar controls"
+          >
+            <ChevronRight size={14} aria-hidden />
+          </button>
         </div>
 
-        <div className="spacer" style={{ flex: 1 }} />
+        <div className="spacer topbar-spacer" style={{ flex: 1 }} />
 
         {/* Settings is reached from the LeftLayoutBar (bottom slot). The
             top bar is now reserved for Disconnect when connected; while
             disconnected the centre overlay owns Discover so we mount only
             one ConnectPanel at a time. */}
-        {connected && <ConnectPanel compact />}
+        {connected && (
+          <div className="topbar-connect">
+            <ConnectPanel compact />
+          </div>
+        )}
       </header>
 
       {/* Workspace area — alert banner + active layout (or settings view).

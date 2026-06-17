@@ -32,6 +32,8 @@ export type AutoNotchInput = {
   centerHz: bigint | number;
   hzPerPixel: number;
   existingNotches?: readonly Notch[];
+  /** Absolute-Hz windows the detector must never notch (e.g. FT8/FT4 segments). */
+  protectedRanges?: readonly { lowHz: number; highHz: number }[];
 };
 
 export type AutoNotchTrackerOptions = {
@@ -65,12 +67,22 @@ export type AutoNotchTracker = {
 //   • STATIONARITY — amplitude steadiness over time (signal-estimator). A
 //     carrier's level is constant; voice swings with the 2–10 Hz syllabic
 //     envelope. This is the decisive carrier-vs-voice discriminant.
-const MIN_SNR_DB = 9; // light prefilter — prominence is the real level gate
-const MIN_PROMINENCE_DB = 10; // peak must stand this far above its local saddle
+const MIN_SNR_DB = 6; // light prefilter — prominence is the real level gate
+const MIN_PROMINENCE_DB = 8; // peak must stand this far above its local saddle
 const PROMINENCE_WINDOW_HZ = 3_000; // ± window the saddle reference is taken over
 const WIDTH_DROP_DB = 6; // carrier width is measured at −6 dB from the peak
 const MAX_CARRIER_WIDTH_HZ = 500; // wider than this is a signal/voice, not a carrier
-const MIN_STEADINESS = 0.6; // amplitude-stationarity gate (0..1; carriers ≳ 0.85)
+// At a wide display span one FFT bin can be hundreds of Hz, so a genuine narrow
+// carrier smears across 2–3 bins and would blow the fixed Hz limit above — which
+// is why strong carriers were missed on a full-band view. Allow the narrowness
+// limit to grow to a few bins so the gate stays "a few bins wide", not "≤ 500 Hz
+// regardless of zoom". Voice still spans far more bins than this, so it is still
+// rejected at every zoom.
+const CARRIER_MAX_BINS = 4;
+const MIN_STEADINESS = 0.45; // amplitude-stationarity floor (0..1). Real EMF/RFI
+// is narrow + persistent but not always dead-steady (line-harmonic buzz, QSB),
+// so this is a low floor that only sheds wildly fluctuating bins — narrowness +
+// prominence are the real voice rejectors. Carriers typically read ≳ 0.7.
 const NOTCH_PAD_HZ = 30; // pad each side of the measured carrier width
 const MIN_WIDTH_HZ = 45;
 const NARROW_MAX_WIDTH_HZ = 750; // tracker required-hits boundary
@@ -317,6 +329,8 @@ export function detectAutoNotches(input: AutoNotchInput): AutoNotchCandidate[] {
   if (!finite(centerHz)) return [];
 
   const windowBins = Math.max(2, Math.round(PROMINENCE_WINDOW_HZ / hzPerPixel));
+  const maxCarrierWidthHz = Math.max(MAX_CARRIER_WIDTH_HZ, CARRIER_MAX_BINS * hzPerPixel);
+  const protectedRanges = input.protectedRanges ?? [];
   const raw: AutoNotchCandidate[] = [];
 
   for (let i = 1; i < n - 1; i++) {
@@ -342,12 +356,21 @@ export function detectAutoNotches(input: AutoNotchInput): AutoNotchCandidate[] {
     if (prominence < MIN_PROMINENCE_DB) continue;
 
     // Gate 4 — narrowness. A carrier collapses within a couple of bins; a voice
-    // hump stays above the −6 dB line for hundreds of Hz.
+    // hump stays above the −6 dB line for hundreds of Hz. The limit scales with
+    // zoom so wide-span views don't reject carriers smeared across a few bins.
     const widthHz = widthAtDropHz(spec, i, here - WIDTH_DROP_DB, hzPerPixel);
-    if (widthHz > MAX_CARRIER_WIDTH_HZ) continue;
+    if (widthHz > maxCarrierWidthHz) continue;
+
+    const candidateCenterHz = binToHz(i, n, centerHz, hzPerPixel);
+
+    // Gate 5 — never notch inside a protected digital segment (FT8/FT4): those
+    // sub-bands are wall-to-wall steady carriers the operator wants to decode.
+    if (protectedRanges.some((r) => candidateCenterHz >= r.lowHz && candidateCenterHz <= r.highHz)) {
+      continue;
+    }
 
     const candidate: AutoNotchCandidate = {
-      centerHz: binToHz(i, n, centerHz, hzPerPixel),
+      centerHz: candidateCenterHz,
       widthHz: clampWidth(widthHz + 2 * NOTCH_PAD_HZ),
       snrDb: prominence,
       confidence: steadiness,
@@ -365,4 +388,127 @@ export function detectAutoNotches(input: AutoNotchInput): AutoNotchCandidate[] {
     accepted.push(c);
   }
   return accepted.sort((a, b) => a.centerHz - b.centerHz);
+}
+
+// ── Diagnostics ──────────────────────────────────────────────────────────────
+// "Log what's on the wire." When a carrier the operator can see is NOT being
+// notched, these explain exactly which gate rejected it, with the live values,
+// so thresholds are tuned from real data instead of guessed. Wired to a dev
+// console hook in SignalIntelligenceController (window.zeusAnf).
+
+export type AutoNotchGateReport = {
+  freqHz: number;
+  bin: number;
+  isLocalMax: boolean;
+  snrDb: number;
+  prominenceDb: number;
+  widthHz: number;
+  maxCarrierWidthHz: number;
+  steadiness: number;
+  inProtectedRange: boolean;
+  /** First gate that failed, or 'pass' when every gate is satisfied. */
+  verdict: 'pass' | 'localMax' | 'snr' | 'stationarity' | 'prominence' | 'narrowness' | 'protected' | 'nodata';
+  thresholds: { minSnrDb: number; minProminenceDb: number; minSteadiness: number };
+};
+
+function freqToBin(freqHz: number, n: number, centerHz: number, hzPerPixel: number): number {
+  return Math.round((freqHz - centerHz) / hzPerPixel + n / 2);
+}
+
+function reportAtBin(input: AutoNotchInput, i: number, n: number, centerHz: number): AutoNotchGateReport {
+  const spec = input.spectrum!;
+  const floor = input.floor!;
+  const steady = input.stationarity!;
+  const hzPerPixel = input.hzPerPixel;
+  const windowBins = Math.max(2, Math.round(PROMINENCE_WINDOW_HZ / hzPerPixel));
+  const maxCarrierWidthHz = Math.max(MAX_CARRIER_WIDTH_HZ, CARRIER_MAX_BINS * hzPerPixel);
+  const here = spec[i]!;
+  const isLocalMax = i > 0 && i < n - 1 && here >= spec[i - 1]! && here > spec[i + 1]!;
+  const snr = here - floor[i]!;
+  const steadiness = steady[i]!;
+  const prominence = saddleProminenceDb(spec, i, windowBins);
+  const widthHz = widthAtDropHz(spec, i, here - WIDTH_DROP_DB, hzPerPixel);
+  const freqHz = binToHz(i, n, centerHz, hzPerPixel);
+  const inProtectedRange = (input.protectedRanges ?? []).some(
+    (r) => freqHz >= r.lowHz && freqHz <= r.highHz,
+  );
+
+  let verdict: AutoNotchGateReport['verdict'] = 'pass';
+  if (!isLocalMax) verdict = 'localMax';
+  else if (!(snr >= MIN_SNR_DB)) verdict = 'snr';
+  else if (!(steadiness >= MIN_STEADINESS)) verdict = 'stationarity';
+  else if (!(prominence >= MIN_PROMINENCE_DB)) verdict = 'prominence';
+  else if (widthHz > maxCarrierWidthHz) verdict = 'narrowness';
+  else if (inProtectedRange) verdict = 'protected';
+
+  return {
+    freqHz,
+    bin: i,
+    isLocalMax,
+    snrDb: Math.round(snr * 10) / 10,
+    prominenceDb: Math.round(prominence * 10) / 10,
+    widthHz: Math.round(widthHz),
+    maxCarrierWidthHz: Math.round(maxCarrierWidthHz),
+    steadiness: Math.round(steadiness * 100) / 100,
+    inProtectedRange,
+    verdict,
+    thresholds: {
+      minSnrDb: MIN_SNR_DB,
+      minProminenceDb: MIN_PROMINENCE_DB,
+      minSteadiness: MIN_STEADINESS,
+    },
+  };
+}
+
+/** Explain the gate decision for the bin nearest `freqHz`. Searches ±3 bins for
+ *  the strongest local maximum so a click that lands a bin or two off the peak
+ *  still reports the carrier. Returns null if the frame/estimator isn't ready. */
+export function explainAutoNotchAt(input: AutoNotchInput, freqHz: number): AutoNotchGateReport | null {
+  const spec = input.spectrum;
+  const floor = input.floor;
+  const steady = input.stationarity;
+  const hzPerPixel = input.hzPerPixel;
+  if (!spec || !floor || !steady || spec.length < 8) return null;
+  const n = spec.length;
+  if (floor.length !== n || steady.length !== n || !finite(hzPerPixel) || hzPerPixel <= 0) return null;
+  const centerHz = Number(input.centerHz);
+  if (!finite(freqHz) || !finite(centerHz)) return null;
+
+  const target = freqToBin(freqHz, n, centerHz, hzPerPixel);
+  if (target < 1 || target > n - 2) {
+    return { ...reportAtBin(input, Math.max(1, Math.min(n - 2, target)), n, centerHz), verdict: 'nodata' };
+  }
+  let best = target;
+  let bestVal = -Infinity;
+  for (let i = Math.max(1, target - 3); i <= Math.min(n - 2, target + 3); i++) {
+    if (spec[i]! > bestVal) {
+      bestVal = spec[i]!;
+      best = i;
+    }
+  }
+  return reportAtBin(input, best, n, centerHz);
+}
+
+/** The strongest local maxima that FAILED a gate, with the reason — so you can
+ *  see which gate is over-rejecting visible carriers. `limit` caps the list. */
+export function explainAutoNotchRejections(input: AutoNotchInput, limit = 20): AutoNotchGateReport[] {
+  const spec = input.spectrum;
+  const floor = input.floor;
+  const steady = input.stationarity;
+  const hzPerPixel = input.hzPerPixel;
+  if (!spec || !floor || !steady || spec.length < 8) return [];
+  const n = spec.length;
+  if (floor.length !== n || steady.length !== n || !finite(hzPerPixel) || hzPerPixel <= 0) return [];
+  const centerHz = Number(input.centerHz);
+  if (!finite(centerHz)) return [];
+
+  const out: AutoNotchGateReport[] = [];
+  for (let i = 1; i < n - 1; i++) {
+    const here = spec[i]!;
+    if (!finite(here) || !(here >= spec[i - 1]! && here > spec[i + 1]!)) continue;
+    if (here - floor[i]! < 3) continue; // ignore deep-noise local maxima
+    const r = reportAtBin(input, i, n, centerHz);
+    if (r.verdict !== 'pass') out.push(r);
+  }
+  return out.sort((a, b) => b.prominenceDb - a.prominenceDb).slice(0, limit);
 }

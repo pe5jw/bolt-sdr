@@ -47,7 +47,25 @@ function Write-JsonFile {
 function Get-FileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $getFileHash = Get-Command Get-FileHash -ErrorAction SilentlyContinue
+    if ($null -ne $getFileHash) {
+        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $hashBytes = $sha256.ComputeHash($stream)
+            return ([System.BitConverter]::ToString($hashBytes) -replace "-", "").ToLowerInvariant()
+        }
+        finally {
+            $sha256.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
 }
 
 function Get-JsonValue {
@@ -104,6 +122,38 @@ function Get-JsonArray {
     }
 
     return @($value)
+}
+
+function Test-Truthy {
+    param($Value)
+
+    if ($null -eq $Value) {
+        return $false
+    }
+    if ($Value -is [bool]) {
+        return [bool]$Value
+    }
+
+    $text = ([string]$Value).Trim()
+    return ($text -ieq "true" -or $text -eq "1" -or $text -ieq "yes")
+}
+
+function Get-NumericValueOrDefault {
+    param(
+        $Value,
+        [double]$Default = 0
+    )
+
+    if ($null -eq $Value) {
+        return $Default
+    }
+
+    $parsed = 0.0
+    if ([double]::TryParse([string]$Value, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$parsed)) {
+        return $parsed
+    }
+
+    return $Default
 }
 
 function ConvertTo-CandidateId {
@@ -487,13 +537,82 @@ function New-CandidateBakeoffPlan {
     }
 }
 
-function New-ExternalBakeoffPlan {
+function Get-ExternalBakeoffEvaluationOrder {
     param($CandidateSummaries)
+
+    $orderedCandidates = @($CandidateSummaries | Sort-Object `
+            @{ Expression = { if (Test-Truthy (Get-JsonValue $_ "safeForBakeoff")) { 0 } else { 1 } } }, `
+            @{ Expression = { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "combinedRiskScore") 999999) } }, `
+            @{ Expression = { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "blockerCount") 999999) } }, `
+            @{ Expression = { @(Get-JsonArray $_ "issues").Count } }, `
+            @{ Expression = { ConvertTo-CandidateId ([string](Get-JsonValue $_ "id")) } })
+
+    $records = New-Object System.Collections.Generic.List[object]
+    $priority = 1
+    foreach ($candidate in @($orderedCandidates)) {
+        $candidateId = ConvertTo-CandidateId ([string](Get-JsonValue $candidate "id"))
+        if ([string]::IsNullOrWhiteSpace($candidateId)) {
+            continue
+        }
+
+        $readyForBakeoff = Test-Truthy (Get-JsonValue $candidate "safeForBakeoff")
+        $blockedForIntegration = Test-Truthy (Get-JsonValue $candidate "integrationBlocked")
+        $combinedRiskScore = [int](Get-NumericValueOrDefault (Get-JsonValue $candidate "combinedRiskScore") 999999)
+        $blockerCount = [int](Get-NumericValueOrDefault (Get-JsonValue $candidate "blockerCount") 999999)
+        $issueCount = @(Get-JsonArray $candidate "issues").Count
+
+        $records.Add([ordered]@{
+                priority = $priority
+                candidateId = $candidateId
+                readyForBakeoff = $readyForBakeoff
+                blockedForIntegration = $blockedForIntegration
+                combinedRiskScore = $combinedRiskScore
+                blockerCount = $blockerCount
+                issueCount = $issueCount
+                runtimeRiskTier = [string](Get-JsonValue $candidate "runtimeRiskTier")
+                latencyRiskTier = [string](Get-JsonValue $candidate "latencyRiskTier")
+                radioSafetyRiskTier = [string](Get-JsonValue $candidate "radioSafetyRiskTier")
+                rationale = if ($readyForBakeoff) {
+                    "safe opt-in post-demod candidate; evaluate lower-risk entries first"
+                }
+                else {
+                    "unsafe catalog entry; fix issues before bakeoff"
+                }
+            }) | Out-Null
+        $priority++
+    }
+
+    return @($records.ToArray())
+}
+
+function Get-ExternalBakeoffFirstSafeCandidateId {
+    param($EvaluationOrder)
+
+    foreach ($record in @($EvaluationOrder)) {
+        if (Test-Truthy (Get-JsonValue $record "readyForBakeoff")) {
+            return ConvertTo-CandidateId ([string](Get-JsonValue $record "candidateId"))
+        }
+    }
+
+    return ""
+}
+
+function New-ExternalBakeoffPlan {
+    param(
+        $CandidateSummaries,
+        $EvaluationOrder = @()
+    )
 
     $candidatePlans = New-Object System.Collections.Generic.List[object]
     foreach ($candidate in @($CandidateSummaries)) {
         $candidatePlans.Add((New-CandidateBakeoffPlan -CandidateSummary $candidate)) | Out-Null
     }
+
+    $evaluationOrderRecords = @($EvaluationOrder)
+    if ($evaluationOrderRecords.Count -eq 0 -and @($CandidateSummaries).Count -gt 0) {
+        $evaluationOrderRecords = @(Get-ExternalBakeoffEvaluationOrder -CandidateSummaries $CandidateSummaries)
+    }
+    $firstSafeCandidateId = Get-ExternalBakeoffFirstSafeCandidateId -EvaluationOrder $evaluationOrderRecords
 
     $allScenarioIds = @($candidatePlans.ToArray() | ForEach-Object {
         foreach ($scenario in @(Get-JsonArray $_ "scenarios")) {
@@ -509,6 +628,15 @@ function New-ExternalBakeoffPlan {
         requiredComparisons = @("current-zeus", "nr5-spnr", "candidate-external-engine-opt-in")
         requiredHardwareEvidence = @("G2 first-pass live evidence", "non-G2 cross-radio validation before graduation")
         requiredOperatorEvidence = @("speech artifact notes", "weak-signal readability notes", "noise-only artifact notes")
+        firstSafeBakeoffCandidateId = $firstSafeCandidateId
+        firstSafeBakeoffRationale = if ([string]::IsNullOrWhiteSpace($firstSafeCandidateId)) {
+            "No external engine candidate is safe for bakeoff; fix unsafe catalog entries before evaluation."
+        }
+        else {
+            "Start with '$firstSafeCandidateId' because it is safe-for-bakeoff and lowest risk in the deterministic opt-in order."
+        }
+        evaluationOrderCandidateIds = @($evaluationOrderRecords | ForEach-Object { ConvertTo-CandidateId ([string](Get-JsonValue $_ "candidateId")) } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        evaluationOrder = @($evaluationOrderRecords)
         candidatePlanCount = $candidatePlans.Count
         scenarioCount = $allScenarioIds.Count
         scenarioIds = @($allScenarioIds)
@@ -535,6 +663,8 @@ function Build-MarkdownReport {
     $candidateSummaries = @(Get-JsonArray $Report "candidateSummaries")
     $requiredCandidateIds = @(Get-JsonArray $Report "requiredCandidateIds")
     $bakeoffPlan = Get-JsonValue $Report "externalBakeoffPlan"
+    $evaluationOrder = @(Get-JsonArray $Report "externalBakeoffEvaluationOrder")
+    $evaluationOrderCandidateIds = @(Get-JsonArray $Report "externalBakeoffEvaluationOrderCandidateIds")
 
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add("# DSP External Engine Bakeoff Report") | Out-Null
@@ -542,6 +672,8 @@ function Build-MarkdownReport {
     $lines.Add("- Ready for review: $(Get-JsonValue $Report "readyForReview")") | Out-Null
     $lines.Add("- Candidates: $(Get-JsonValue $Report "candidateCount")") | Out-Null
     $lines.Add("- Safe for bakeoff: $(Get-JsonValue $Report "safeForBakeoffCount")") | Out-Null
+    $lines.Add("- First safe bakeoff candidate: $(Format-MarkdownCell (Get-JsonValue $Report "firstSafeBakeoffCandidateId"))") | Out-Null
+    $lines.Add("- Evaluation order: $(Format-MarkdownCell ($evaluationOrderCandidateIds -join ', '))") | Out-Null
     $lines.Add("- Unsafe catalog entries: $(Get-JsonValue $Report "unsafeCandidateCount")") | Out-Null
     $lines.Add("- Missing required candidates: $(Get-JsonValue $Report "missingCandidateCount")") | Out-Null
     $missingCandidateIds = @(Get-JsonArray $Report "missingCandidateIds")
@@ -560,6 +692,16 @@ function Build-MarkdownReport {
         $lines.Add("| $(Format-MarkdownCell (Get-JsonValue $candidate "id")) | $(Format-MarkdownCell (Get-JsonValue $candidate "integrationStatus")) | $(Get-JsonValue $candidate "combinedRiskScore") | $(Get-JsonValue $candidate "requiredBenchmarkCount") | $(Get-JsonValue $candidate "requiredEvidenceCount") | $(Get-JsonValue $candidate "requiredControlCount") | $(Get-JsonValue $candidate "forbiddenSignalPathCount") | $(Get-JsonValue $candidate "blockerCount") | $(Format-MarkdownCell $fallbackText) | $(Format-MarkdownCell $issueText) |") | Out-Null
     }
     $lines.Add("") | Out-Null
+    if ($evaluationOrder.Count -gt 0) {
+        $lines.Add("## Evaluation Order") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("| Priority | Candidate | Ready | Risk | Blockers | Issues | Rationale |") | Out-Null
+        $lines.Add("|---:|---|---:|---:|---:|---:|---|") | Out-Null
+        foreach ($record in $evaluationOrder) {
+            $lines.Add("| $(Get-JsonValue $record "priority") | $(Format-MarkdownCell (Get-JsonValue $record "candidateId")) | $(Get-JsonValue $record "readyForBakeoff") | $(Get-JsonValue $record "combinedRiskScore") | $(Get-JsonValue $record "blockerCount") | $(Get-JsonValue $record "issueCount") | $(Format-MarkdownCell (Get-JsonValue $record "rationale")) |") | Out-Null
+        }
+        $lines.Add("") | Out-Null
+    }
     $lines.Add("## Required External Candidates") | Out-Null
     $lines.Add("") | Out-Null
     $lines.Add(($requiredCandidateIds -join ", ")) | Out-Null
@@ -658,10 +800,12 @@ $readyForReview = ($candidateEntries.Count -gt 0 -and
     $missingCandidateIds.Count -eq 0 -and
     $unsafeCandidateCount -eq 0 -and
     $snapshotMismatchCount -eq 0)
-$externalBakeoffPlan = New-ExternalBakeoffPlan -CandidateSummaries @($candidateSummaries.ToArray())
+$externalBakeoffEvaluationOrder = @(Get-ExternalBakeoffEvaluationOrder -CandidateSummaries @($candidateSummaries.ToArray()))
+$firstSafeBakeoffCandidateId = Get-ExternalBakeoffFirstSafeCandidateId -EvaluationOrder $externalBakeoffEvaluationOrder
+$externalBakeoffPlan = New-ExternalBakeoffPlan -CandidateSummaries @($candidateSummaries.ToArray()) -EvaluationOrder $externalBakeoffEvaluationOrder
 
 $report = [ordered]@{
-    schemaVersion = 3
+    schemaVersion = 4
     tool = "summarize-dsp-external-engine-candidates"
     generatedUtc = [DateTimeOffset]::UtcNow
     bundleRelativePaths = (-not [string]::IsNullOrWhiteSpace($bundlePath))
@@ -681,6 +825,9 @@ $report = [ordered]@{
     missingCandidateIds = @($missingCandidateIds.ToArray())
     unsafeCandidateCount = $unsafeCandidateCount
     snapshotMismatchCount = $snapshotMismatchCount
+    firstSafeBakeoffCandidateId = $firstSafeBakeoffCandidateId
+    externalBakeoffEvaluationOrderCandidateIds = @($externalBakeoffEvaluationOrder | ForEach-Object { ConvertTo-CandidateId ([string](Get-JsonValue $_ "candidateId")) } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    externalBakeoffEvaluationOrder = @($externalBakeoffEvaluationOrder)
     candidateSummaries = @($candidateSummaries.ToArray())
     externalBakeoffPlan = $externalBakeoffPlan
     recommendations = if ($readyForReview) {

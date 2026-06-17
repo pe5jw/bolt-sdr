@@ -9,7 +9,14 @@
 // type, and controls are the existing Zeus surface (tokens.css + the
 // component library) per the maintainer's brief.
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react';
 import {
   fetchTxFidelityPolicy,
   fetchTxStationProfiles,
@@ -19,7 +26,6 @@ import {
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { applyTxStationProfile } from '../audio/apply-tx-station-profile';
-import { useMicUplinkDiagnosticsStore } from '../audio/mic-uplink-diagnostics-store';
 import {
   formatTxStationProfileSummary,
   getTxStationProfile,
@@ -56,6 +62,11 @@ import { RotatorDialPanel } from '../layout/panels/RotatorDialPanel';
 import { QrzPanel } from '../layout/panels/QrzPanel';
 import { DspFlexPanel } from '../layout/panels/DspFlexPanel';
 import { useRotatorStore } from '../state/rotator-store';
+import {
+  clampSplit,
+  readInitialSplit,
+  writeLegacySplit,
+} from '../layout/spectrum-split';
 import './mobile.css';
 
 const MODES: readonly RxMode[] = ['LSB', 'USB', 'CWL', 'CWU', 'AM', 'FM', 'DIGU'];
@@ -177,11 +188,19 @@ export function MobileApp() {
     <div className="m-app">
       <header className="m-topbar">
         <div className="m-brand">
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden>
-            <circle cx="12" cy="12" r="3" fill="var(--accent)" />
-            <circle cx="12" cy="12" r="7" fill="none" stroke="var(--accent)" strokeWidth="1" opacity="0.5" />
-            <circle cx="12" cy="12" r="11" fill="none" stroke="var(--accent)" strokeWidth="1" opacity="0.25" />
-          </svg>
+          <span className="brand-mark m-brand-mark">
+            <svg className="brand-mark-logo" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path
+                className="brand-mark-wave brand-mark-wave--top"
+                d="M3.2 8.2c1.55-1.2 3.1-1.2 4.65 0l.75.58c1.55 1.2 3.1 1.2 4.65 0l.75-.58c1.55-1.2 3.1-1.2 4.65 0l1.15.88"
+              />
+              <path
+                className="brand-mark-wave brand-mark-wave--bottom"
+                d="M3.2 15.8c1.55 1.2 3.1 1.2 4.65 0l.75-.58c1.55-1.2 3.1-1.2 4.65 0l.75.58c1.55 1.2 3.1 1.2 4.65 0l1.15-.88"
+              />
+              <path className="brand-mark-bolt" d="M13.4 2.5 7 12.1h4.15l-1.2 9.4L17 10.55h-4.25l.65-8.05Z" />
+            </svg>
+          </span>
           <span className="m-brand-text">
             <span className="m-brand-pre">OpenHpsdr</span>
             <span className="m-brand-name">Zeus</span>
@@ -279,42 +298,13 @@ export function MobileApp() {
 
 
             <Section label="Panadapter" meta={`${freqMHz} MHz · ${bandLabel}`}>
-              <div className={`m-pan-stack${imageMode ? ' image-mode' : ''}`}>
-                {imageMode && (
-                  <div
-                    className={`image-layer ${backgroundImageFit}`}
-                    style={{ backgroundImage: `url(${backgroundImage})` }}
-                  />
-                )}
-                {terminatorActive && effectiveHome && (
-                  // The "map-layer visible" pair pulls in the desktop sizing
-                  // chain in layout.css:451-470 — without it the inner Leaflet
-                  // .leaflet-container collapses to 0×0 and tiles never paint.
-                  // .m-map-layer still applies for any mobile-only tweaks.
-                  <div className="m-map-layer map-layer visible">
-                    <LeafletMapErrorBoundary fallback={null} onError={() => undefined}>
-                      <LeafletWorldMap
-                        home={effectiveHome}
-                        target={null}
-                        active
-                        interactive={false}
-                      />
-                    </LeafletMapErrorBoundary>
-                  </div>
-                )}
-                <div className="m-pan-spectrum">
-                  <div className="m-pan">
-                    <Panadapter touchMode="pinch-only" />
-                  </div>
-                  <div className="m-wf">
-                    {/* Opaque under beam-map: dark Esri tiles + near-black
-                        noise floor blended and the waterfall read as solid
-                        black. Transparent under imageMode so the user's
-                        picture shows through both halves (matches desktop). */}
-                    <WaterfallSurface transparent={imageMode} touchMode="pinch-only" />
-                  </div>
-                </div>
-              </div>
+              <MobileSpectrumStack
+                imageMode={imageMode}
+                terminatorActive={terminatorActive}
+                effectiveHome={effectiveHome}
+                backgroundImage={backgroundImage}
+                backgroundImageFit={backgroundImageFit}
+              />
             </Section>
 
             <div className="m-mox-block">
@@ -324,7 +314,6 @@ export function MobileApp() {
                 <MobilePttButton />
                 <div className="m-ptt-tun"><TunButton /></div>
               </div>
-              <MicUplinkDiagnostics />
             </div>
 
             <Section label="Mode · Band">
@@ -358,6 +347,117 @@ export function MobileApp() {
         )}
       </main>
       <MobileFrequencyTrackpad />
+    </div>
+  );
+}
+
+type MobileSpectrumHome = {
+  call: string;
+  lat: number;
+  lon: number;
+  grid: string;
+  imageUrl: string | null;
+};
+
+// Panadapter + waterfall stack with a draggable divider, mirroring the desktop
+// HeroPanel splitter. Lifted into its own component so the pointermove storm
+// during a drag re-renders only this subtree, not the whole MobileApp (which
+// subscribes to many stores). The split fraction shares the desktop's
+// localStorage mirror via spectrum-split, so a balance chosen on either
+// surface follows the operator to the other.
+function MobileSpectrumStack({
+  imageMode,
+  terminatorActive,
+  effectiveHome,
+  backgroundImage,
+  backgroundImageFit,
+}: {
+  imageMode: boolean;
+  terminatorActive: boolean;
+  effectiveHome: MobileSpectrumHome | null;
+  backgroundImage: string | null;
+  backgroundImageFit: string;
+}) {
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const [split, setSplit] = useState(() => readInitialSplit(null));
+  const [dragging, setDragging] = useState(false);
+
+  // Drag the divider to rebalance panadapter vs. waterfall. Window-level
+  // pointer listeners keep tracking when the finger outruns the slim hit area;
+  // touch-action:none on the handle (mobile.css) stops the page from scrolling
+  // under the gesture. preventDefault suppresses the synthetic mouse / text
+  // selection that would otherwise fire on some touch stacks.
+  const onSplitterPointerDown = useCallback(
+    (e: ReactPointerEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const grid = gridRef.current;
+      if (!grid) return;
+      const rect = grid.getBoundingClientRect();
+      if (rect.height <= 0) return;
+      setDragging(true);
+      let latest = split;
+      const onMove = (ev: PointerEvent) => {
+        latest = clampSplit((ev.clientY - rect.top) / rect.height);
+        setSplit(latest);
+      };
+      const onEnd = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onEnd);
+        window.removeEventListener('pointercancel', onEnd);
+        setDragging(false);
+        writeLegacySplit(latest);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onEnd);
+      window.addEventListener('pointercancel', onEnd);
+    },
+    [split],
+  );
+
+  return (
+    <div className={`m-pan-stack${imageMode ? ' image-mode' : ''}`}>
+      {imageMode && (
+        <div
+          className={`image-layer ${backgroundImageFit}`}
+          style={{ backgroundImage: `url(${backgroundImage})` }}
+        />
+      )}
+      {terminatorActive && effectiveHome && (
+        // The "map-layer visible" pair pulls in the desktop sizing
+        // chain in layout.css:451-470 — without it the inner Leaflet
+        // .leaflet-container collapses to 0×0 and tiles never paint.
+        // .m-map-layer still applies for any mobile-only tweaks.
+        <div className="m-map-layer map-layer visible">
+          <LeafletMapErrorBoundary fallback={null} onError={() => undefined}>
+            <LeafletWorldMap home={effectiveHome} target={null} active interactive={false} />
+          </LeafletMapErrorBoundary>
+        </div>
+      )}
+      <div
+        ref={gridRef}
+        className="m-pan-spectrum"
+        style={{ gridTemplateRows: `${split}fr 10px ${1 - split}fr` }}
+      >
+        <div className="m-pan">
+          <Panadapter touchMode="pinch-only" />
+        </div>
+        <div
+          className={`m-spectrum-splitter${dragging ? ' dragging' : ''}`}
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize panadapter and waterfall"
+          title="Drag to resize panadapter / waterfall"
+          onPointerDown={onSplitterPointerDown}
+        />
+        <div className="m-wf">
+          {/* Opaque under beam-map: dark Esri tiles + near-black
+              noise floor blended and the waterfall read as solid
+              black. Transparent under imageMode so the user's
+              picture shows through both halves (matches desktop). */}
+          <WaterfallSurface transparent={imageMode} touchMode="pinch-only" />
+        </div>
+      </div>
     </div>
   );
 }
@@ -533,31 +633,6 @@ function MobileTxProfileSelect() {
       >
         {displayedMessage}
       </div>
-    </div>
-  );
-}
-
-function MicUplinkDiagnostics() {
-  const micDbfs = useTxStore((s) => s.micDbfs);
-  const localBlocks = useMicUplinkDiagnosticsStore((s) => s.localBlocks);
-  const sentBlocks = useMicUplinkDiagnosticsStore((s) => s.sentBlocks);
-  const droppedBlocks = useMicUplinkDiagnosticsStore((s) => s.droppedBlocks);
-  const transportReady = useMicUplinkDiagnosticsStore((s) => s.transportReady);
-  const txForced = useMicUplinkDiagnosticsStore((s) => s.txForced);
-  const lastDropReason = useMicUplinkDiagnosticsStore((s) => s.lastDropReason);
-  const moxOn = useTxStore((s) => s.moxOn);
-  const localMicArmed = useTxStore((s) => s.localMicArmed);
-
-  return (
-    <div className="m-uplink-diag" aria-label="Mic uplink diagnostics">
-      <span>MIC {micDbfs.toFixed(0)} dBfs</span>
-      <span>{transportReady ? 'WS open' : 'WS closed'}</span>
-      <span>{moxOn ? 'MOX on' : 'MOX off'}</span>
-      <span>{localMicArmed ? 'armed' : 'disarmed'}</span>
-      <span>{txForced ? 'force on' : 'force off'}</span>
-      <span>local {localBlocks}</span>
-      <span>sent {sentBlocks}</span>
-      {droppedBlocks > 0 && <span>drop {droppedBlocks}{lastDropReason ? ` ${lastDropReason}` : ''}</span>}
     </div>
   );
 }

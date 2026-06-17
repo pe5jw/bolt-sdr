@@ -13,6 +13,8 @@ param(
 
     [string]$RuntimeAuditPath = "",
 
+    [string]$StageTimingReportPath = "",
+
     [string]$ComparisonReportPath = "",
 
     [string]$ComparisonMarkdownPath = "",
@@ -263,6 +265,13 @@ else {
     $RuntimeAuditPath = Resolve-BundlePath $bundlePath $RuntimeAuditPath
 }
 
+if ([string]::IsNullOrWhiteSpace($StageTimingReportPath)) {
+    $StageTimingReportPath = Join-Path $bundlePath "artifacts\native-stage-timing-report.json"
+}
+else {
+    $StageTimingReportPath = Resolve-BundlePath $bundlePath $StageTimingReportPath
+}
+
 if ([string]::IsNullOrWhiteSpace($ComparisonReportPath)) {
     $ComparisonReportPath = Join-Path $bundlePath "artifacts\dsp-fixture-metric-comparison.json"
 }
@@ -298,9 +307,10 @@ if (-not (Test-Path -LiteralPath $BenchmarkPlanPath -PathType Leaf)) {
 $scriptRoot = $PSScriptRoot
 $fixtureScript = Join-Path $scriptRoot "run-dsp-wdsp-fixture-evidence.ps1"
 $runtimeAuditScript = Join-Path $scriptRoot "audit-wdsp-runtime-artifacts.ps1"
+$stageTimingScript = Join-Path $scriptRoot "summarize-dsp-native-stage-timing.ps1"
 $comparisonScript = Join-Path $scriptRoot "compare-dsp-fixture-metrics.ps1"
 $validationScript = Join-Path $scriptRoot "validate-dsp-modernization-bundle.ps1"
-$requiredScripts = @($fixtureScript, $runtimeAuditScript, $comparisonScript)
+$requiredScripts = @($fixtureScript, $runtimeAuditScript, $stageTimingScript, $comparisonScript)
 if ($ValidateBundle) {
     $requiredScripts += $validationScript
 }
@@ -327,6 +337,14 @@ if ($IncludeNonFixtureScenarios) { Add-CliArg $fixtureArgs "-IncludeNonFixtureSc
 if ($Force) { Add-CliArg $fixtureArgs "-Force" }
 if ($JsonOnly) { Add-CliArg $fixtureArgs "-JsonOnly" }
 Invoke-ToolScript -ScriptPath $fixtureScript -Arguments @($fixtureArgs.ToArray()) -Quiet:$JsonOnly
+
+$stageTimingArgs = New-Object System.Collections.Generic.List[string]
+Add-CliArg $stageTimingArgs "-BundleDir" $bundlePath
+Add-CliArg $stageTimingArgs "-MetricsPath" $MetricsPath
+Add-CliArg $stageTimingArgs "-ReportPath" $StageTimingReportPath
+if ($Force) { Add-CliArg $stageTimingArgs "-Force" }
+if ($JsonOnly) { Add-CliArg $stageTimingArgs "-JsonOnly" }
+Invoke-ToolScript -ScriptPath $stageTimingScript -Arguments @($stageTimingArgs.ToArray()) -Quiet:$JsonOnly
 
 $runtimeArgs = New-Object System.Collections.Generic.List[string]
 Add-CliArg $runtimeArgs "-ReportPath" $RuntimeAuditPath
@@ -356,6 +374,7 @@ if ($JsonOnly) { Add-CliArg $comparisonArgs "-JsonOnly" }
 Invoke-ToolScript -ScriptPath $comparisonScript -Arguments @($comparisonArgs.ToArray()) -Quiet:$JsonOnly
 
 $metrics = Read-JsonFile $MetricsPath
+$stageTiming = Read-JsonFile $StageTimingReportPath
 $runtimeAudit = Read-JsonFile $RuntimeAuditPath
 $comparison = Read-JsonFile $ComparisonReportPath
 
@@ -394,14 +413,18 @@ else {
 }
 
 $completedUtc = [DateTimeOffset]::UtcNow
+$stageTimingReady = Test-Truthy (Get-JsonValue $stageTiming "readyForReview")
 $readyForOfflineReview = ((Test-Truthy (Get-JsonValue $comparison "readyForReview")) -and
     (Test-Truthy (Get-JsonValue $runtimeAudit "readyForWinX64Package")) -and
+    $stageTimingReady -and
     [string]::Equals($runtimeHashStatus, "match", [StringComparison]::OrdinalIgnoreCase))
 $validationOk = if ($null -ne $validation) { Test-Truthy (Get-JsonValue $validation "ok") } else { $null }
 $validationMetricComparisonReady = if ($null -ne $validation) { Test-Truthy (Get-JsonValue $validation "metricComparisonReady") } else { $null }
 $validationSourceHashStatus = if ($null -ne $validation) { [string](Get-JsonValue $validation "metricComparisonSourceMetricsHashStatus") } else { $null }
 $validationRuntimeHashStatus = if ($null -ne $validation) { [string](Get-JsonValue $validation "metricComparisonWdspRuntimeHashStatus") } else { $null }
 $validationRuntimeArtifactHashStatus = if ($null -ne $validation) { [string](Get-JsonValue $validation "offlineFixtureMetricsRuntimeArtifactHashStatus") } else { $null }
+$validationNativeStageTimingReady = if ($null -ne $validation) { Test-Truthy (Get-JsonValue $validation "nativeStageTimingReportReady") } else { $null }
+$validationNativeStageTimingStatus = if ($null -ne $validation) { [string](Get-JsonValue $validation "nativeStageTimingReportStatus") } else { $null }
 $validationRequireArtifactFiles = if ($null -ne $validation) { Test-Truthy (Get-JsonValue $validation "requireArtifactFiles") } else { $false }
 $validationReferencedFileRecords = if ($null -ne $validation) { @(Get-JsonArray $validation "artifactReferencedFiles") } else { @() }
 $validationReferencedFileProblemCount = @($validationReferencedFileRecords | Where-Object { Test-ReferencedFileProblem $_ }).Count
@@ -413,6 +436,9 @@ $strictBundleValidationReady = if ($null -ne $validation) {
 $acceptanceEvidenceBlockers = New-Object System.Collections.Generic.List[object]
 if (-not $readyForOfflineReview) {
     Add-ReadinessBlocker -Blockers $acceptanceEvidenceBlockers -Code "offline-review-not-ready" -Message "Fixture comparison, runtime audit, and runtime hashes are not all ready for offline review."
+}
+if (-not $stageTimingReady) {
+    Add-ReadinessBlocker -Blockers $acceptanceEvidenceBlockers -Code "native-stage-timing-not-ready" -Message "Native stage timing/allocation report is not ready for review."
 }
 if (-not $ValidateBundle) {
     Add-ReadinessBlocker -Blockers $acceptanceEvidenceBlockers -Code "strict-validation-not-run" -Message "Run with -ValidateBundle before treating fixture output as acceptance evidence."
@@ -426,6 +452,9 @@ else {
     }
     if (-not $validationMetricComparisonReady) {
         Add-ReadinessBlocker -Blockers $acceptanceEvidenceBlockers -Code "metric-comparison-validation-not-ready" -Message "Strict validation did not accept the fixture metric comparison evidence."
+    }
+    if ($null -ne $validationNativeStageTimingReady -and -not $validationNativeStageTimingReady) {
+        Add-ReadinessBlocker -Blockers $acceptanceEvidenceBlockers -Code "native-stage-timing-validation-not-ready" -Message "Strict validation did not accept the native stage timing/allocation report."
     }
     if (-not $validationRequireArtifactFiles -or -not $RequireArtifactFiles) {
         Add-ReadinessBlocker -Blockers $acceptanceEvidenceBlockers -Code "artifact-file-validation-not-required" -Message "Run with -RequireArtifactFiles so artifact paths, hashes, and referenced evidence are checked."
@@ -481,6 +510,7 @@ $summary = [ordered]@{
     audioIndexPath = $AudioIndexPath
     spectrumIndexPath = $SpectrumIndexPath
     runtimeAuditPath = $RuntimeAuditPath
+    stageTimingReportPath = $StageTimingReportPath
     comparisonReportPath = $ComparisonReportPath
     comparisonMarkdownPath = if ($NoMarkdown) { $null } else { $ComparisonMarkdownPath }
     summaryPath = $SummaryPath
@@ -491,6 +521,8 @@ $summary = [ordered]@{
     validationWarningCount = if ($null -ne $validation) { [int](Get-JsonValue $validation "warningCount") } else { $null }
     validationRequireArtifactFiles = $validationRequireArtifactFiles
     validationMetricComparisonReady = $validationMetricComparisonReady
+    validationNativeStageTimingReady = $validationNativeStageTimingReady
+    validationNativeStageTimingStatus = $validationNativeStageTimingStatus
     validationMetricComparisonSourceHashStatus = $validationSourceHashStatus
     validationMetricComparisonRuntimeHashStatus = $validationRuntimeHashStatus
     validationRuntimeArtifactHashStatus = $validationRuntimeArtifactHashStatus
@@ -506,6 +538,13 @@ $summary = [ordered]@{
     wdspRuntimeStatus = [string](Get-JsonValue $metrics "wdspRuntimeStatus")
     wdspRuntimeSha256 = $sourceRuntimeSha
     runtimeAuditReadyForWinX64Package = Test-Truthy (Get-JsonValue $runtimeAudit "readyForWinX64Package")
+    nativeStageTimingReadyForReview = Test-Truthy (Get-JsonValue $stageTiming "readyForReview")
+    nativeStageTimingStatus = [string](Get-JsonValue $stageTiming "status")
+    nativeStageTimingRunCount = [int](Get-JsonValue $stageTiming "runCount")
+    nativeStageTimingStageRecordCount = [int](Get-JsonValue $stageTiming "stageRecordCount")
+    nativeStageTimingBudgetFailureCount = [int](Get-JsonValue $stageTiming "budgetFailureCount")
+    nativeStageTimingMissingStageRunCount = [int](Get-JsonValue $stageTiming "missingStageTimingRunCount")
+    nativeStageTimingMissingAllocationRunCount = [int](Get-JsonValue $stageTiming "missingAllocationProbeRunCount")
     runtimeAuditWinX64NativeSha256 = $auditRuntimeSha
     runtimeHashStatus = $runtimeHashStatus
     metricComparisonReady = Test-Truthy (Get-JsonValue $comparison "readyForReview")
@@ -540,6 +579,7 @@ if ($JsonOnly) {
 else {
     Write-Host "WDSP fixture matrix complete."
     Write-Host "Metrics: $MetricsPath"
+    Write-Host "Stage timing: $StageTimingReportPath"
     Write-Host "Comparison: $ComparisonReportPath"
     Write-Host "Runtime audit: $RuntimeAuditPath"
     Write-Host "Summary: $SummaryPath"

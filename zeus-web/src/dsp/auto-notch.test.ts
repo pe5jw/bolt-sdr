@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 import { describe, expect, it } from 'vitest';
-import { createAutoNotchTracker, detectAutoNotches, type AutoNotchCandidate } from './auto-notch';
+import {
+  createAutoNotchTracker,
+  detectAutoNotches,
+  explainAutoNotchAt,
+  explainAutoNotchRejections,
+  type AutoNotchCandidate,
+} from './auto-notch';
 
 const WIDTH = 128;
 const CENTER_HZ = 14_200_000;
@@ -146,6 +152,93 @@ describe('auto notch carrier detector', () => {
     });
 
     expect(notches).toEqual([]);
+  });
+
+  it('skips carriers inside a protected digital segment (FT8/FT4)', () => {
+    const { spectrum, floor, stationarity } = arrays();
+    paintCarrier(spectrum, stationarity, 64, 30, 0.9); // center = CENTER_HZ
+
+    const notches = detectAutoNotches({
+      spectrum,
+      floor,
+      confidence: null,
+      stationarity,
+      centerHz: CENTER_HZ,
+      hzPerPixel: HZ_PER_PIXEL,
+      protectedRanges: [{ lowHz: CENTER_HZ - 1_000, highHz: CENTER_HZ + 1_000 }],
+    });
+
+    expect(notches).toEqual([]);
+  });
+
+  it('still detects a carrier outside the protected segments', () => {
+    const { spectrum, floor, stationarity } = arrays();
+    paintCarrier(spectrum, stationarity, 64, 30, 0.9);
+
+    const notches = detectAutoNotches({
+      spectrum,
+      floor,
+      confidence: null,
+      stationarity,
+      centerHz: CENTER_HZ,
+      hzPerPixel: HZ_PER_PIXEL,
+      protectedRanges: [{ lowHz: CENTER_HZ + 50_000, highHz: CENTER_HZ + 60_000 }],
+    });
+
+    expect(notches).toHaveLength(1);
+  });
+
+  it('detects a carrier smeared across a few bins at a wide display span', () => {
+    const { spectrum, floor, stationarity } = arrays();
+    // 3-bin-wide peak (≈600 Hz) at 200 Hz/bin: the old fixed 500 Hz narrowness
+    // limit would have rejected it; the zoom-aware limit (≈4 bins) keeps it.
+    for (let i = 63; i <= 65; i++) {
+      spectrum[i] = NOISE_DB + 42;
+      stationarity[i] = 0.9;
+    }
+
+    const notches = detectAutoNotches({
+      spectrum,
+      floor,
+      confidence: null,
+      stationarity,
+      centerHz: CENTER_HZ,
+      hzPerPixel: 200,
+    });
+
+    expect(notches).toHaveLength(1);
+  });
+
+  it('explains a passing carrier via the diagnostic hook', () => {
+    const { spectrum, floor, stationarity } = arrays();
+    paintCarrier(spectrum, stationarity, 64, 28, 0.9);
+
+    const report = explainAutoNotchAt(
+      { spectrum, floor, confidence: null, stationarity, centerHz: CENTER_HZ, hzPerPixel: HZ_PER_PIXEL },
+      CENTER_HZ,
+    );
+
+    expect(report).not.toBeNull();
+    expect(report!.verdict).toBe('pass');
+    expect(report!.isLocalMax).toBe(true);
+    expect(report!.prominenceDb).toBeGreaterThanOrEqual(8);
+  });
+
+  it('reports the gate that rejected a fluctuating peak', () => {
+    const { spectrum, floor, stationarity } = arrays();
+    paintCarrier(spectrum, stationarity, 64, 30, 0.2); // low steadiness
+
+    const rejections = explainAutoNotchRejections({
+      spectrum,
+      floor,
+      confidence: null,
+      stationarity,
+      centerHz: CENTER_HZ,
+      hzPerPixel: HZ_PER_PIXEL,
+    });
+
+    expect(rejections.length).toBeGreaterThanOrEqual(1);
+    expect(rejections[0]!.verdict).toBe('stationarity');
   });
 
   it('does not replace a manual notch already covering the carrier', () => {

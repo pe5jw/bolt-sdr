@@ -51,6 +51,7 @@ import { armSnapLock } from './snap-lock';
 import { useNotchStore } from '../state/notch-store';
 import * as viewCenter from '../state/view-center';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
+import { roundToStep } from './number';
 
 const MAX_HZ = 60_000_000;
 const CLICK_SLOP_PX = 3;
@@ -63,6 +64,14 @@ const PAN_STEP_HZ = 500;
 // (converted to Hz at the live scale). Past it, the click tunes normally — so
 // clicking empty spectrum still lands where you clicked.
 const SNAP_RADIUS_PX = 80;
+// Close-neighbour hysteresis: once the snap has locked onto a signal, a second
+// carrier must be this many screen pixels NEARER the cursor before the snap
+// jumps to it. Sized to swallow the few-bin edge breathing that caused the
+// preview to flip-flop when the cursor sat between two closely-spaced signals,
+// while staying small enough that moving the cursor onto the other signal still
+// switches cleanly. Converted to Hz at the live scale so it feels the same at
+// every zoom.
+const SNAP_HYSTERESIS_PX = 12;
 // Notch painting (NOTCH armed): a drag narrower than this is treated as a
 // click and drops a default-width notch on the carrier under the cursor.
 const NOTCH_MIN_DRAG_HZ = 50;
@@ -83,6 +92,17 @@ export function snapHz(hz: number): number {
   if (!Number.isFinite(hz)) return 0;
   const snapped = Math.round(hz / PAN_STEP_HZ) * PAN_STEP_HZ;
   return Math.min(MAX_HZ, Math.max(0, snapped));
+}
+
+// Snap-to-signal lands on the measured signal edge, which breathes a few tens of
+// Hz frame-to-frame as the noise floor moves under a stationary cursor — that
+// jitter is what makes the hover preview "go all over the place". Quantizing the
+// edge to the operator's tuning step (TuningStepWidget → stepHz) collapses that
+// wobble onto a stable grid value, so the preview (and the committed dial) holds
+// still instead of chasing the edge. A non-positive step degrades to whole-Hz
+// rounding.
+export function quantizeToStepHz(hz: number, stepHz: number): number {
+  return clampHz(roundToStep(hz, stepHz));
 }
 
 function clampHz(hz: number): number {
@@ -112,6 +132,19 @@ export type PanTuneTarget = {
   anchorBodyHz: number;
 };
 
+// The signal each receiver's snap last locked onto (the un-quantized edge),
+// kept so the next resolve can apply close-neighbour hysteresis. Hover refreshes
+// this every frame and the click handler reads the same value, so the committed
+// dial matches whichever signal the preview was showing — they never diverge.
+// Cleared when the cursor leaves every signal so a fresh hover starts unbiased.
+const lastSnapHz: Record<SpectrumReceiver, number | null> = { A: null, B: null };
+
+/** Test-only: forget the snap hysteresis anchor for both receivers. */
+export function _resetPanSnapStickyForTest(): void {
+  lastSnapHz.A = null;
+  lastSnapHz.B = null;
+}
+
 export function resolvePanTuneTarget(
   lineHz: number,
   includeHistory = true,
@@ -127,14 +160,20 @@ export function resolvePanTuneTarget(
   if (!Number.isFinite(lineHz)) return fallback;
 
   const enhance = useSignalEnhanceStore.getState();
-  if (!enhance.snapEnabled) return fallback;
+  if (!enhance.snapEnabled) {
+    lastSnapHz[receiver] = null;
+    return fallback;
+  }
 
   const ds = selectDisplaySlice(useDisplayStore.getState(), receiver);
   if (!ds.panDb || ds.hzPerPixel <= 0) return fallback;
 
   const maxRadiusHz = Math.min(ds.hzPerPixel * SNAP_RADIUS_PX, enhance.snapRadiusHz);
+  const hysteresisHz = ds.hzPerPixel * SNAP_HYSTERESIS_PX;
+  const sticky = lastSnapHz[receiver];
   const mode = useConnectionStore.getState().mode;
   const centerHz = Number(ds.centerHz);
+  const stepHz = useToolbarFavoritesStore.getState().stepHz;
   const liveHz = computeSnapToLineHz(
     ds.panDb,
     centerHz,
@@ -142,10 +181,13 @@ export function resolvePanTuneTarget(
     mode,
     lineHz,
     maxRadiusHz,
+    sticky,
+    hysteresisHz,
   );
   if (liveHz != null) {
+    lastSnapHz[receiver] = liveHz;
     return {
-      tuneHz: clampHz(Math.round(liveHz)),
+      tuneHz: quantizeToStepHz(liveHz, stepHz),
       snappedToSignal: true,
       fromLive: true,
       anchorBodyHz: lineHz,
@@ -155,10 +197,20 @@ export function resolvePanTuneTarget(
   if (includeHistory && receiver === 'A') {
     const history = getSnapHistorySpectrum();
     if (history) {
-      const historyHz = computeSnapToLineHz(history, centerHz, ds.hzPerPixel, mode, lineHz, maxRadiusHz);
+      const historyHz = computeSnapToLineHz(
+        history,
+        centerHz,
+        ds.hzPerPixel,
+        mode,
+        lineHz,
+        maxRadiusHz,
+        sticky,
+        hysteresisHz,
+      );
       if (historyHz != null) {
+        lastSnapHz[receiver] = historyHz;
         return {
-          tuneHz: clampHz(Math.round(historyHz)),
+          tuneHz: quantizeToStepHz(historyHz, stepHz),
           snappedToSignal: true,
           fromLive: false,
           anchorBodyHz: lineHz,
@@ -167,6 +219,7 @@ export function resolvePanTuneTarget(
     }
   }
 
+  lastSnapHz[receiver] = null;
   return fallback;
 }
 
@@ -350,11 +403,11 @@ export function usePanTuneGesture(
     // optimistically — the gesture leads the frames, which then reconcile.
     const vc = viewCenter.viewCenterFor(tuneReceiver);
     // "CTUN sweep" — absolute cursor→dial mapping over a FROZEN window — applies
-    // ONLY to RX1 with CTUN enabled. RX2 is never frozen (the backend recentres
-    // the RX2 window on VfoB every frame — DspPipelineService stamps the RX2
-    // CenterHz = VfoB and applies a matching CTUN shift to the RX2 DDC), so it
-    // pans with a relative drag exactly like RX1 with CTUN off.
-    const ctunSweep = () => !receiverIsB && useConnectionStore.getState().ctunEnabled;
+    // whenever CTUN is enabled, on EITHER receiver. RX2 now mirrors RX1: under
+    // CTUN the backend freezes the RX2 DDC centre (_rx2LoHz) and roams the dial
+    // via the WDSP shift, so the B panel holds still and the dial slides. With
+    // CTUN off, both receivers pan with a relative drag (the DDC recentres).
+    const ctunSweep = () => useConnectionStore.getState().ctunEnabled;
 
     const commandedHz = () => pendingHz ?? readVfo();
 
