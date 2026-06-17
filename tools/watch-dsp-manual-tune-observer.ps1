@@ -253,6 +253,62 @@ function Get-FrontendPeakFilterDistanceHz {
     return 0.0
 }
 
+function Get-FrontendTuningHint {
+    param(
+        $Peak,
+        $OffsetHz,
+        $FilterDistanceHz,
+        $StateVfoHz,
+        $FilterLowHz,
+        $FilterHighHz
+    )
+
+    $offset = Get-NullableDoubleValue $OffsetHz
+    $distance = Get-NullableDoubleValue $FilterDistanceHz
+    $vfo = Get-NullableLongValue $StateVfoHz
+    $low = Get-NullableDoubleValue $FilterLowHz
+    $high = Get-NullableDoubleValue $FilterHighHz
+    if ($null -eq $offset -or $null -eq $distance -or $null -eq $vfo -or $null -eq $low -or $null -eq $high) {
+        return $null
+    }
+
+    $passLow = [Math]::Min([double]$low, [double]$high)
+    $passHigh = [Math]::Max([double]$low, [double]$high)
+    if ($passHigh -le $passLow) {
+        return $null
+    }
+
+    $targetOffset = [Math]::Round(($passLow + $passHigh) / 2.0, 3)
+    $shiftHz = [Math]::Round([double]$offset - $targetOffset, 3)
+    $suggestedVfoHz = [long][Math]::Round([double]$vfo + $shiftHz)
+    $reason = if ([double]$distance -le 0.0) {
+        "already-in-filter"
+    }
+    elseif ([double]$offset -lt $passLow) {
+        "below-filter"
+    }
+    else {
+        "above-filter"
+    }
+
+    return [ordered]@{
+        reason = $reason
+        peakFrequencyHz = Get-NullableLongValue (Get-JsonValue $Peak "frequencyHz")
+        peakOffsetHz = $offset
+        peakSnrDb = Get-NullableDoubleValue (Get-JsonValue $Peak "snrDb")
+        peakDbfs = Get-NullableDoubleValue (Get-JsonValue $Peak "dbfs")
+        peakConfidence = Get-NullableDoubleValue (Get-JsonValue $Peak "confidence")
+        filterLowHz = $passLow
+        filterHighHz = $passHigh
+        filterCenterOffsetHz = $targetOffset
+        filterDistanceHz = $distance
+        currentVfoHz = $vfo
+        suggestedDialShiftHz = $shiftHz
+        suggestedVfoHz = $suggestedVfoHz
+        suggestedVfoMhz = [Math]::Round([double]$suggestedVfoHz / 1000000.0, 6)
+    }
+}
+
 function Test-Truthy {
     param($Value)
     if ($null -eq $Value) {
@@ -553,6 +609,7 @@ try {
         $frontendBestTopPeakSnrDb = $null
         $frontendBestTopPeakDbfs = $null
         $frontendBestTopPeakConfidence = $null
+        $frontendBestTuningHint = $null
         $filterLowHz = Get-NullableDoubleValue (Get-JsonValue $state "filterLowHz")
         $filterHighHz = Get-NullableDoubleValue (Get-JsonValue $state "filterHighHz")
         $frontendFilterPassbandKnown = ($null -ne $filterLowHz -and $null -ne $filterHighHz)
@@ -606,6 +663,27 @@ try {
                 if ($offsetConsistent -and [double]$filterDistance -le 0.0) {
                     $frontendFilterPassbandTopPeakCount++
                 }
+
+                if ($offsetConsistent) {
+                    $hint = Get-FrontendTuningHint `
+                        -Peak $peak `
+                        -OffsetHz $offset `
+                        -FilterDistanceHz $filterDistance `
+                        -StateVfoHz $vfo `
+                        -FilterLowHz $filterLowHz `
+                        -FilterHighHz $filterHighHz
+                    if ($null -ne $hint) {
+                        $hintDistance = Get-NullableDoubleValue (Get-JsonValue $hint "filterDistanceHz")
+                        $bestHintDistance = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "filterDistanceHz")
+                        $hintSnr = Get-NullableDoubleValue (Get-JsonValue $hint "peakSnrDb")
+                        $bestHintSnr = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "peakSnrDb")
+                        if ($null -eq $frontendBestTuningHint -or
+                            ($null -ne $hintDistance -and ($null -eq $bestHintDistance -or [double]$hintDistance -lt [double]$bestHintDistance)) -or
+                            ($null -ne $hintDistance -and $null -ne $bestHintDistance -and [double]$hintDistance -eq [double]$bestHintDistance -and $null -ne $hintSnr -and ($null -eq $bestHintSnr -or [double]$hintSnr -gt [double]$bestHintSnr))) {
+                            $frontendBestTuningHint = $hint
+                        }
+                    }
+                }
             }
         }
         $frontendNearPassbandQualified = ($frontendNearPassbandTopPeakCount -gt 0)
@@ -656,6 +734,15 @@ try {
             frontendBestTopPeakSnrDb = $frontendBestTopPeakSnrDb
             frontendBestTopPeakDbfs = $frontendBestTopPeakDbfs
             frontendBestTopPeakConfidence = $frontendBestTopPeakConfidence
+            frontendTuningHint = $frontendBestTuningHint
+            frontendSuggestedDialShiftHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "suggestedDialShiftHz")
+            frontendSuggestedVfoHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoHz")
+            frontendSuggestedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoMhz")
+            frontendSuggestedPeakOffsetHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "peakOffsetHz")
+            frontendSuggestedPeakFrequencyHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "peakFrequencyHz")
+            frontendSuggestedFilterCenterOffsetHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "filterCenterOffsetHz")
+            frontendSuggestedFilterDistanceHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "filterDistanceHz")
+            frontendSuggestedTuneReason = [string](Get-JsonValue $frontendBestTuningHint "reason")
             frontendNearPassbandQualified = $frontendNearPassbandQualified
             frontendFilterPassbandQualified = $frontendFilterPassbandQualified
             frontendPassbandEvidenceQualified = $frontendPassbandEvidenceQualified
@@ -772,6 +859,15 @@ try {
                     frontendBestTopPeakSnrDb = $frontendBestTopPeakSnrDb
                     frontendBestTopPeakDbfs = $frontendBestTopPeakDbfs
                     frontendBestTopPeakConfidence = $frontendBestTopPeakConfidence
+                    frontendTuningHint = $frontendBestTuningHint
+                    frontendSuggestedDialShiftHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "suggestedDialShiftHz")
+                    frontendSuggestedVfoHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoHz")
+                    frontendSuggestedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoMhz")
+                    frontendSuggestedPeakOffsetHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "peakOffsetHz")
+                    frontendSuggestedPeakFrequencyHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "peakFrequencyHz")
+                    frontendSuggestedFilterCenterOffsetHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "filterCenterOffsetHz")
+                    frontendSuggestedFilterDistanceHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "filterDistanceHz")
+                    frontendSuggestedTuneReason = [string](Get-JsonValue $frontendBestTuningHint "reason")
                     frontendNearPassbandQualified = $frontendNearPassbandQualified
                     frontendFilterPassbandQualified = $frontendFilterPassbandQualified
                     frontendPassbandEvidenceQualified = $frontendPassbandEvidenceQualified
@@ -801,6 +897,15 @@ try {
                         frontendBestTopPeakSnrDb = $frontendBestTopPeakSnrDb
                         frontendBestTopPeakDbfs = $frontendBestTopPeakDbfs
                         frontendBestTopPeakConfidence = $frontendBestTopPeakConfidence
+                        frontendTuningHint = $frontendBestTuningHint
+                        frontendSuggestedDialShiftHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "suggestedDialShiftHz")
+                        frontendSuggestedVfoHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoHz")
+                        frontendSuggestedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoMhz")
+                        frontendSuggestedPeakOffsetHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "peakOffsetHz")
+                        frontendSuggestedPeakFrequencyHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "peakFrequencyHz")
+                        frontendSuggestedFilterCenterOffsetHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "filterCenterOffsetHz")
+                        frontendSuggestedFilterDistanceHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "filterDistanceHz")
+                        frontendSuggestedTuneReason = [string](Get-JsonValue $frontendBestTuningHint "reason")
                         audioStatus = [string](Get-JsonValue $runtime "audioStatus")
                         audioRmsDbfs = Get-NullableDoubleValue (Get-JsonValue $runtime "audioRmsDbfs")
                         audioPeakDbfs = Get-NullableDoubleValue (Get-JsonValue $runtime "audioPeakDbfs")
@@ -912,6 +1017,8 @@ $frontendOffPassbandPollCount = 0
 $frontendFilterPassbandPollCount = 0
 $frontendFilterOffPassbandPollCount = 0
 $frontendOffsetMismatchPollCount = 0
+$frontendTuningHintPollCount = 0
+$frontendBestTuningHint = $null
 $captureQualifiedPollCount = 0
 $triggerAudioActivePollCount = 0
 $triggerMaxAudioRmsDbfs = $null
@@ -938,6 +1045,23 @@ foreach ($pollRecord in $pollArray) {
     }
     if (Test-Truthy $pollRecord.captureQualified) {
         $captureQualifiedPollCount++
+    }
+
+    $pollTuningHint = Get-JsonValue $pollRecord "frontendTuningHint"
+    if ($null -ne $pollTuningHint) {
+        $frontendTuningHintPollCount++
+        $hintDistance = Get-NullableDoubleValue (Get-JsonValue $pollTuningHint "filterDistanceHz")
+        $bestHintDistance = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "filterDistanceHz")
+        $hintShift = Get-NullableDoubleValue (Get-JsonValue $pollTuningHint "suggestedDialShiftHz")
+        $bestHintShift = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "suggestedDialShiftHz")
+        $hintSnr = Get-NullableDoubleValue (Get-JsonValue $pollTuningHint "peakSnrDb")
+        $bestHintSnr = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "peakSnrDb")
+        if ($null -eq $frontendBestTuningHint -or
+            ($null -ne $hintDistance -and ($null -eq $bestHintDistance -or [double]$hintDistance -lt [double]$bestHintDistance)) -or
+            ($null -ne $hintDistance -and $null -ne $bestHintDistance -and [double]$hintDistance -eq [double]$bestHintDistance -and $null -ne $hintShift -and $null -ne $bestHintShift -and [Math]::Abs([double]$hintShift) -lt [Math]::Abs([double]$bestHintShift)) -or
+            ($null -ne $hintDistance -and $null -ne $bestHintDistance -and [double]$hintDistance -eq [double]$bestHintDistance -and $null -ne $hintSnr -and ($null -eq $bestHintSnr -or [double]$hintSnr -gt [double]$bestHintSnr))) {
+            $frontendBestTuningHint = $pollTuningHint
+        }
     }
 
     $pollAudio = Get-NullableDoubleValue $pollRecord.audioRmsDbfs
@@ -972,6 +1096,14 @@ if ($captureArray.Count -le 0) {
     }
     if ($RequireFrontendNearPassband -and $frontendFilterPassbandPollCount -le 0 -and $frontendFilterOffPassbandPollCount -gt 0) {
         $recommendations.Add("Frontend peaks were present but none were inside the signed RX filter passband; tune the signal into the active filter window before capturing acceptance evidence.") | Out-Null
+    }
+    if ($RequireFrontendNearPassband -and $frontendFilterPassbandPollCount -le 0 -and $frontendFilterOffPassbandPollCount -gt 0 -and $null -ne $frontendBestTuningHint) {
+        $hintShift = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "suggestedDialShiftHz")
+        $hintVfoMhz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoMhz")
+        $hintCenter = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "filterCenterOffsetHz")
+        if ($null -ne $hintShift -and $null -ne $hintVfoMhz -and $null -ne $hintCenter) {
+            $recommendations.Add(("Read-only manual tuning hint: shift VFO by {0:+0;-0;0} Hz to about {1:N6} MHz to place the nearest consistent frontend peak at the active filter center ({2:N0} Hz)." -f [double]$hintShift, [double]$hintVfoMhz, [double]$hintCenter)) | Out-Null
+        }
     }
     if ($RequireFrontendNearPassband -and $frontendOffsetMismatchPollCount -gt 0) {
         $recommendations.Add("Some frontend peak offsets disagreed with frequencyHz minus VFO beyond $FrontendOffsetMismatchToleranceHz Hz; strict passband capture ignored those inconsistent peaks.") | Out-Null
@@ -1066,6 +1198,8 @@ $report = [ordered]@{
     frontendFilterPassbandPollCount = $frontendFilterPassbandPollCount
     frontendFilterOffPassbandPollCount = $frontendFilterOffPassbandPollCount
     frontendOffsetMismatchPollCount = $frontendOffsetMismatchPollCount
+    frontendTuningHintPollCount = $frontendTuningHintPollCount
+    frontendBestTuningHint = $frontendBestTuningHint
     captureQualifiedPollCount = $captureQualifiedPollCount
     triggerAudioActivePollCount = $triggerAudioActivePollCount
     triggerMaxAudioRmsDbfs = $triggerMaxAudioRmsDbfs
