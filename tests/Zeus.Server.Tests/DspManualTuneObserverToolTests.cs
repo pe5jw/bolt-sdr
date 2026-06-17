@@ -213,6 +213,82 @@ public sealed class DspManualTuneObserverToolTests
         }
     }
 
+    [SkippableFact]
+    public async Task ManualTuneObserverDefaultProfilePatternCapturesDxSignals()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell manual-tune observer smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-manual-tune-observer-dx-default-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            using var server = JsonRouteServer.Start(new Dictionary<string, string>
+            {
+                ["/api/state"] = Json(new
+                {
+                    status = "Connected",
+                    vfoHz = 14_249_000,
+                    radioLoHz = 14_249_000,
+                    mode = "USB",
+                    filterLowHz = 100,
+                    filterHighHz = 3_100
+                }),
+                ["/api/radio/diagnostics/dsp-scene"] = Json(new
+                {
+                    status = "fresh",
+                    fresh = true,
+                    signalProfile = "dx",
+                    coherentMaxSnrDb = 26.0,
+                    maxSnrDb = 26.0,
+                    topPeaks = new object[]
+                    {
+                        FrontendTopPeak(14_249_938, 938, 15.5, -88.3)
+                    }
+                }),
+                ["/api/dsp/live-diagnostics"] = Json(ManualTuneObserverLiveDiagnostics())
+            });
+
+            var reportPath = Path.Combine(bundleDir, "manual-observer-dx-default.json");
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-manual-tune-observer.ps1"),
+                "-BaseUrl", server.BaseUrl,
+                "-ReportPath", reportPath,
+                "-OutputRoot", Path.Combine(bundleDir, "captures"),
+                "-PollCount", "3",
+                "-PollIntervalSec", "0",
+                "-StablePolls", "1",
+                "-MinCoherentSnrDb", "6",
+                "-MaxCaptures", "0",
+                "-RequireFrontendNearPassband",
+                "-JsonOnly");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+            using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = doc.RootElement;
+            Assert.Equal("voice|speech|phone|dx", root.GetProperty("sceneProfilePattern").GetString());
+            Assert.Equal(3, root.GetProperty("captureQualifiedPollCount").GetInt32());
+            Assert.Equal("capture-qualified", root.GetProperty("bestObservedVfoStatus").GetString());
+            Assert.Equal(3, root.GetProperty("frontendFilterPassbandPollCount").GetInt32());
+            Assert.DoesNotContain(
+                root.GetProperty("recommendations").EnumerateArray().Select(item => item.GetString() ?? ""),
+                value => value.Contains("No stable voice-like manual-tune VFO met the capture threshold", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
     private static object FrontendTopPeak(long frequencyHz, int offsetHz, double snrDb, double dbfs) => new
     {
         frequencyHz,

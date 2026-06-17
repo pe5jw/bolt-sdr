@@ -9,7 +9,7 @@ param(
 
     [double]$MinCoherentSnrDb = 12.0,
 
-    [string]$SceneProfilePattern = "voice|speech|phone",
+    [string]$SceneProfilePattern = "voice|speech|phone|dx",
 
     [switch]$RequireFrontendNearPassband,
 
