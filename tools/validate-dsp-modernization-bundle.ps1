@@ -12979,6 +12979,7 @@ else {
                 $safetyRadioLoWriteAttemptCount = [int](Get-NumericValueOrDefault (Get-JsonValue $safety "radioLoWriteAttemptCount"))
                 $safetyTxEndpointsTouched = Test-Truthy (Get-JsonValue $safety "txEndpointsTouched")
                 $captures = @(Get-JsonArray $artifactJson "captures")
+                $polls = @(Get-JsonArray $artifactJson "polls")
 
                 $bestCapture = $null
                 foreach ($capture in $captures) {
@@ -13120,6 +13121,70 @@ else {
                 }
                 if ($agcPumpingRiskCaptureCount -gt 0) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-agc-pumping-risk" "Artifact '$artifactId' reports AGC pumping risk in $agcPumpingRiskCaptureCount capture(s); reject those windows for tuning promotion."
+                    $artifactValidationOk = $false
+                }
+
+                $computedVfoCaptureCounts = @{}
+                $computedStaleSceneCaptureCount = 0
+                foreach ($capture in $captures) {
+                    $captureVfoKey = [string](Get-JsonValue $capture "vfoHz")
+                    if (-not [string]::IsNullOrWhiteSpace($captureVfoKey)) {
+                        if (-not $computedVfoCaptureCounts.ContainsKey($captureVfoKey)) {
+                            $computedVfoCaptureCounts[$captureVfoKey] = 0
+                        }
+                        $computedVfoCaptureCounts[$captureVfoKey] = [int]$computedVfoCaptureCounts[$captureVfoKey] + 1
+                    }
+
+                    $captureIndex = [int](Get-NumericValueOrDefault (Get-JsonValue $capture "vfoCaptureIndex"))
+                    $captureMaxPerVfo = [int](Get-NumericValueOrDefault (Get-JsonValue $capture "maxCapturesPerVfo"))
+                    if ($maxCapturesPerVfo -gt 0 -and $captureIndex -gt $maxCapturesPerVfo) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-capture-index-exceeds-max" "Artifact '$artifactId' capture vfoHz='$captureVfoKey' has vfoCaptureIndex=$captureIndex greater than maxCapturesPerVfo=$maxCapturesPerVfo."
+                        $artifactValidationOk = $false
+                    }
+                    if ($maxCapturesPerVfo -gt 0 -and $captureMaxPerVfo -gt 0 -and $captureMaxPerVfo -ne $maxCapturesPerVfo) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-capture-max-per-vfo-mismatch" "Artifact '$artifactId' capture vfoHz='$captureVfoKey' has maxCapturesPerVfo=$captureMaxPerVfo but report maxCapturesPerVfo=$maxCapturesPerVfo."
+                        $artifactValidationOk = $false
+                    }
+
+                    if (Test-Truthy (Get-JsonValue $capture "staleSceneCapture")) {
+                        $computedStaleSceneCaptureCount++
+                        if (-not $allowStaleSceneCapture) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-stale-scene-capture-without-allow" "Artifact '$artifactId' capture vfoHz='$captureVfoKey' reports staleSceneCapture=true but allowStaleSceneCapture is false."
+                            $artifactValidationOk = $false
+                        }
+                    }
+                }
+
+                $computedUniqueCapturedVfoCount = $computedVfoCaptureCounts.Count
+                $computedRecapturedVfoCount = 0
+                foreach ($entry in $computedVfoCaptureCounts.GetEnumerator()) {
+                    if ([int]$entry.Value -gt 1) {
+                        $computedRecapturedVfoCount++
+                    }
+                }
+
+                $computedStaleScenePollCount = 0
+                foreach ($poll in $polls) {
+                    $sceneFreshValue = Get-JsonValue $poll "sceneFresh"
+                    if ($null -ne $sceneFreshValue -and -not (Test-Truthy $sceneFreshValue)) {
+                        $computedStaleScenePollCount++
+                    }
+                }
+
+                if ($uniqueCapturedVfoCount -ne $computedUniqueCapturedVfoCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-unique-vfo-count-mismatch" "Artifact '$artifactId' uniqueCapturedVfoCount=$uniqueCapturedVfoCount but captures imply $computedUniqueCapturedVfoCount unique VFO(s)."
+                    $artifactValidationOk = $false
+                }
+                if ($recapturedVfoCount -ne $computedRecapturedVfoCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-recaptured-vfo-count-mismatch" "Artifact '$artifactId' recapturedVfoCount=$recapturedVfoCount but captures imply $computedRecapturedVfoCount recaptured VFO(s)."
+                    $artifactValidationOk = $false
+                }
+                if ($staleSceneCaptureCount -ne $computedStaleSceneCaptureCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-stale-scene-capture-count-mismatch" "Artifact '$artifactId' staleSceneCaptureCount=$staleSceneCaptureCount but captures imply $computedStaleSceneCaptureCount stale-scene capture(s)."
+                    $artifactValidationOk = $false
+                }
+                if ($staleScenePollCount -ne $computedStaleScenePollCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-stale-scene-poll-count-mismatch" "Artifact '$artifactId' staleScenePollCount=$staleScenePollCount but polls imply $computedStaleScenePollCount stale-scene poll(s)."
                     $artifactValidationOk = $false
                 }
 

@@ -6690,6 +6690,67 @@ public sealed class DspModernizationValidationToolTests
         }
     }
 
+    [SkippableFact]
+    public async Task ManualTuneObserverReportRejectsInconsistentRecaptureMetadata()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell manual-tune observer validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-manual-tune-observer-metadata-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteManualTuneObserverArtifactManifest(bundleDir);
+            WriteManualTuneObserverReport(bundleDir, inconsistentCaptureMetadata: true);
+
+            var validationReport = Path.Combine(bundleDir, "validation-manual-tune-observer-metadata.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.True(validationRoot.GetProperty("manualTuneObserverReportPresent").GetBoolean());
+            Assert.False(validationRoot.GetProperty("manualTuneObserverReportReady").GetBoolean());
+            Assert.False(validationRoot.GetProperty("manualTuneObserverReportValid").GetBoolean());
+            Assert.Equal("invalid", validationRoot.GetProperty("manualTuneObserverReportStatus").GetString());
+
+            var issueCodes = validationRoot.GetProperty("warnings")
+                .EnumerateArray()
+                .Concat(validationRoot.GetProperty("errors").EnumerateArray())
+                .Select(issue => issue.GetProperty("code").GetString() ?? "")
+                .ToArray();
+            Assert.Contains("manual-tune-observer-unique-vfo-count-mismatch", issueCodes);
+            Assert.Contains("manual-tune-observer-recaptured-vfo-count-mismatch", issueCodes);
+            Assert.Contains("manual-tune-observer-stale-scene-capture-count-mismatch", issueCodes);
+            Assert.Contains("manual-tune-observer-stale-scene-poll-count-mismatch", issueCodes);
+            Assert.Contains("manual-tune-observer-stale-scene-capture-without-allow", issueCodes);
+            Assert.Contains("manual-tune-observer-capture-index-exceeds-max", issueCodes);
+            Assert.Contains("manual-tune-observer-capture-max-per-vfo-mismatch", issueCodes);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
     private static void WriteManualTuneObserverArtifactManifest(string bundleDir)
     {
         Directory.CreateDirectory(Path.Combine(bundleDir, "artifacts"));
@@ -6719,7 +6780,8 @@ public sealed class DspModernizationValidationToolTests
     private static void WriteManualTuneObserverReport(
         string bundleDir,
         bool nonPortableCapturePaths = false,
-        bool bundleRelativePaths = true)
+        bool bundleRelativePaths = true,
+        bool inconsistentCaptureMetadata = false)
     {
         var nonPortableRoot = Path.Combine(Path.GetTempPath(), $"zeus-manual-tune-observer-outside-{Guid.NewGuid():N}");
         var weakCaptureReportPath = nonPortableCapturePaths
@@ -6774,9 +6836,9 @@ public sealed class DspModernizationValidationToolTests
             },
             pollSampleCount = 8,
             captureCount = 2,
-            uniqueCapturedVfoCount = 2,
-            recapturedVfoCount = 0,
-            staleScenePollCount = 0,
+            uniqueCapturedVfoCount = inconsistentCaptureMetadata ? 1 : 2,
+            recapturedVfoCount = inconsistentCaptureMetadata ? 1 : 0,
+            staleScenePollCount = inconsistentCaptureMetadata ? 1 : 0,
             staleSceneCaptureCount = 0,
             readyCaptureCount = 2,
             mixedWeakStrongReady = true,
@@ -6797,13 +6859,13 @@ public sealed class DspModernizationValidationToolTests
                     exitCode = 0,
                     error = "",
                     vfoHz = 14240000L,
-                    vfoCaptureIndex = 1,
-                    maxCapturesPerVfo = 2,
+                    vfoCaptureIndex = inconsistentCaptureMetadata ? 3 : 1,
+                    maxCapturesPerVfo = inconsistentCaptureMetadata ? 1 : 2,
                     recaptureReason = "first-vfo-capture",
                     radioLoHz = 14240000L,
                     mode = "USB",
                     sceneFresh = true,
-                    staleSceneCapture = false,
+                    staleSceneCapture = inconsistentCaptureMetadata,
                     signalProfile = "voice-like",
                     coherentMaxSnrDb = 10.0,
                     reportPath = weakCaptureReportPath,
@@ -6865,6 +6927,7 @@ public sealed class DspModernizationValidationToolTests
                     radioLoHz = 14240000L,
                     mode = "USB",
                     stablePollCount = 2,
+                    sceneFresh = true,
                     signalProfile = "voice-like",
                     captureQualified = true
                 },
@@ -6875,6 +6938,7 @@ public sealed class DspModernizationValidationToolTests
                     radioLoHz = 14277000L,
                     mode = "USB",
                     stablePollCount = 2,
+                    sceneFresh = true,
                     signalProfile = "speech-with-adjacent-strong",
                     captureQualified = true
                 }
