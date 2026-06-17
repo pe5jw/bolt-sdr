@@ -3532,6 +3532,14 @@ else {
     Write-Host "Samples: $($report["okSampleCount"]) ok, $($report["failedSampleCount"]) failed, $($report["hardBlockerSampleCount"]) with hard blockers"
     Write-Host "AGC movement dB: $($report["agcGainDb"]["movement"]) ($($report["agcStabilityWatch"]["status"])), audio RMS movement dB: $($report["audioRmsDbfs"]["movement"]), min ADC headroom dB: $($report["adcHeadroomDb"]["min"])"
     Write-Host "NR5 normalization: input movement dB $($report["nr5InputDbfs"]["movement"]), output movement dB $($report["nr5OutputDbfs"]["movement"]), weak/strong output gap dB $($report["nr5WeakSignalWatch"]["weakStrongOutputGapDb"]), weak/strong final-audio gap dB $($report["nr5WeakSignalWatch"]["weakStrongFinalAudioGapDb"]), mixed weak/strong status $($report["nr5WeakSignalWatch"]["mixedWeakStrongEvidenceStatus"])"
+    $weakWatch = $report["nr5WeakSignalWatch"]
+    if ($null -ne $weakWatch) {
+        Write-Host "NR5 weak outcome: weak=$($weakWatch["weakInputSampleCount"]), recovered=$($weakWatch["weakRecoveredSampleCount"]), dropouts=$($weakWatch["weakDropoutSampleCount"]), finalAudible=$($weakWatch["weakDropoutFinalAudibleSampleCount"]), candidateLoss=$($weakWatch["weakDropoutCandidateLossSampleCount"]), hotMakeup=$($weakWatch["hotMakeupSampleCount"])"
+    }
+    $levelerWatch = $report["rxAudioLevelerWatch"]
+    if ($null -ne $levelerWatch) {
+        Write-Host "RX leveler safety: constrained=$($levelerWatch["constrainedSampleCount"]), boostSlew=$($levelerWatch["boostSlewLimitedSampleCount"]), peakLimited=$($levelerWatch["peakLimitedSampleCount"]), outputLimited=$($levelerWatch["outputLimitedSampleCount"])"
+    }
 }
 
 $hardGatePass = Test-Truthy $report["captureReadinessWatch"]["hardGatePass"]
