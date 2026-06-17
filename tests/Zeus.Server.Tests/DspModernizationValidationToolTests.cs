@@ -1858,6 +1858,178 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task ValidationTriagePromotesMixedReadyManualObserverWindow()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validation triage smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-manual-observer-mixed-action-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var validationReport = Path.Combine(bundleDir, "validation-report.json");
+            var validation = new
+            {
+                ok = true,
+                errorCount = 0,
+                warningCount = 0,
+                errors = Array.Empty<object>(),
+                warnings = Array.Empty<object>(),
+                artifactReferencedFiles = Array.Empty<object>(),
+                hardwareEvidenceStatus = "g2-hardware-evidence-ready",
+                hardwareTarget = "G2",
+                captureHardwareTarget = "G2",
+                hardwareDiagnosticsPresent = true,
+                liveMatrixMixedWeakStrongHuntReady = false,
+                liveMatrixMixedWeakStrongStatus = "missing-mixed-weak-strong",
+                liveMatrixMixedWeakStrongReportCount = 0,
+                liveMatrixMixedWeakStrongSchemaV2ReportCount = 0,
+                liveMatrixMixedWeakStrongReadyReportCount = 0,
+                liveMatrixMixedWeakStrongTraceCount = 0,
+                liveMatrixMixedWeakStrongReadyTraceCount = 0,
+                liveMatrixMixedWeakStrongMissingRunCount = 0,
+                liveMatrixMixedWeakStrongGapWatchRunCount = 0,
+                liveMatrixMixedWeakStrongWeakInputSampleCount = 0,
+                liveMatrixMixedWeakStrongStrongInputSampleCount = 0,
+                liveMatrixMixedWeakStrongBestRun = (object?)null,
+                manualTuneObserverReportPresent = true,
+                manualTuneObserverReportReady = true,
+                manualTuneObserverReportValid = true,
+                manualTuneObserverReportStatus = "mixed-ready",
+                manualTuneObserverOk = true,
+                manualTuneObserverScanError = "",
+                manualTuneObserverBaseUrl = "http://127.0.0.1:6060",
+                manualTuneObserverBundleRelativePaths = true,
+                manualTuneObserverScenarioId = "rx-ssb-voice-like-manual",
+                manualTuneObserverComparisonId = "nr5-spnr",
+                manualTuneObserverPollCount = 8,
+                manualTuneObserverPollSampleCount = 8,
+                manualTuneObserverCaptureCount = 2,
+                manualTuneObserverMaxCapturesPerVfo = 2,
+                manualTuneObserverUniqueCapturedVfoCount = 2,
+                manualTuneObserverRecapturedVfoCount = 0,
+                manualTuneObserverAllowStaleSceneCapture = false,
+                manualTuneObserverStaleScenePollCount = 0,
+                manualTuneObserverStaleSceneCaptureCount = 0,
+                manualTuneObserverReadyCaptureCount = 2,
+                manualTuneObserverMixedWeakStrongReady = true,
+                manualTuneObserverMixedWeakStrongReadyCaptureCount = 1,
+                manualTuneObserverWeakInputSampleCount = 14,
+                manualTuneObserverStrongInputSampleCount = 9,
+                manualTuneObserverNearStrongInputSampleCount = 3,
+                manualTuneObserverSpeechQualifiedWeakInputSampleCount = 10,
+                manualTuneObserverSpeechQualifiedStrongInputSampleCount = 7,
+                manualTuneObserverPassbandQualifiedWeakInputSampleCount = 8,
+                manualTuneObserverPassbandQualifiedStrongInputSampleCount = 5,
+                manualTuneObserverAgcPumpingRiskCaptureCount = 0,
+                manualTuneObserverSafetyRxOnly = true,
+                manualTuneObserverSafetyReadOnly = true,
+                manualTuneObserverSafetyApiWrites = false,
+                manualTuneObserverSafetyRetune = false,
+                manualTuneObserverSafetyVfoWriteAttemptCount = 0,
+                manualTuneObserverSafetyRadioLoWriteAttemptCount = 0,
+                manualTuneObserverSafetyTxEndpointsTouched = false,
+                manualTuneObserverBestFrequencyHz = 14277000L,
+                manualTuneObserverBestStatus = "ready",
+                manualTuneObserverBestReportPath = "artifacts/manual-tune-observer/14277000/live-diagnostics-watch.json",
+                manualTuneObserverBestJsonlPath = "artifacts/manual-tune-observer/14277000/live-diagnostics-watch.jsonl",
+                manualTuneObserverReferencedCaptureCount = 2,
+                manualTuneObserverReferencedCaptureReadyCount = 2,
+                manualTuneObserverReferencedCaptureProblemCount = 0,
+                liveDiagnosticsHistoryPresent = true,
+                liveDiagnosticsHistoryReady = true,
+                liveDiagnosticsHistoryTraceSourceStatus = "hash-ready",
+                liveDiagnosticsHistoryTraceSourceCheckedCount = 1,
+                liveDiagnosticsHistoryLiveExperimentCoverageStatus = "complete",
+                liveDiagnosticsHistoryLiveExperimentCoverageMissingComparisonCount = 0,
+                liveDiagnosticsHistoryLiveExperimentCoverageMissingComparisonIds = Array.Empty<string>(),
+                liveDiagnosticsHistoryAgcStabilityStatus = "agc-stability-ready",
+                liveDiagnosticsHistoryMixedWeakStrongEvidenceReady = false,
+                liveDiagnosticsHistoryMixedWeakStrongEvidenceStatus = "missing-mixed-weak-strong",
+                liveDiagnosticsHistoryMixedWeakStrongTraceCount = 0,
+                liveDiagnosticsHistoryMixedWeakStrongReadyTraceCount = 0,
+                liveDiagnosticsHistoryMixedWeakStrongMissingTraceCount = 1,
+                liveDiagnosticsHistoryMixedWeakStrongGapWatchTraceCount = 0
+            };
+            await File.WriteAllTextAsync(validationReport, JsonSerializer.Serialize(validation, CamelCaseJson));
+
+            var summaryReport = Path.Combine(bundleDir, "validation-summary.json");
+            var summaryMarkdown = Path.Combine(bundleDir, "validation-summary.md");
+            var summary = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-modernization-validation-report.ps1"),
+                "-ValidationReportPath", validationReport,
+                "-ReportPath", summaryReport,
+                "-MarkdownPath", summaryMarkdown,
+                "-JsonOnly");
+
+            Assert.Equal(0, summary.ExitCode);
+            Assert.True(File.Exists(summaryReport), summary.CombinedOutput);
+            Assert.True(File.Exists(summaryMarkdown), summary.CombinedOutput);
+
+            using var summaryDoc = JsonDocument.Parse(await File.ReadAllTextAsync(summaryReport));
+            var action = summaryDoc.RootElement
+                .GetProperty("acceptanceActionPlan")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("actionId").GetString() == "promote-manual-observer-mixed-weak-strong-window");
+
+            Assert.Equal("live-history-mixed-weak-strong", action.GetProperty("gateId").GetString());
+            Assert.Equal("live-diagnostics", action.GetProperty("category").GetString());
+            Assert.True(action.GetProperty("requiredForAcceptance").GetBoolean());
+            Assert.True(action.GetProperty("blocksDefaultBehaviorChange").GetBoolean());
+
+            var reason = action.GetProperty("reason").GetString() ?? "";
+            Assert.Contains("read-only manual-tune observer", reason, StringComparison.Ordinal);
+            Assert.Contains("bestFrequencyHz=14277000", reason, StringComparison.Ordinal);
+            Assert.Contains("readOnly=True", reason, StringComparison.Ordinal);
+            Assert.Contains("apiWrites=False", reason, StringComparison.Ordinal);
+            Assert.Contains("retune=False", reason, StringComparison.Ordinal);
+            Assert.Contains("vfoWrites=0", reason, StringComparison.Ordinal);
+            Assert.Contains("radioLoWrites=0", reason, StringComparison.Ordinal);
+
+            var steps = ReadStringArray(action, "commandSteps");
+            Assert.Equal(3, action.GetProperty("commandStepCount").GetInt32());
+            Assert.Contains(steps, step => step.Contains("summarize-dsp-live-diagnostics-history.ps1", StringComparison.Ordinal)
+                && step.Contains("-BundleDir \"$bundleDir\"", StringComparison.Ordinal)
+                && step.Contains("artifacts\\live-diagnostics-history.json", StringComparison.Ordinal));
+            Assert.DoesNotContain(steps, step => step.Contains("-InputPath", StringComparison.Ordinal));
+            Assert.Contains(steps, step => step.Contains("validate-dsp-modernization-bundle.ps1", StringComparison.Ordinal)
+                && step.Contains("-RequireArtifactFiles", StringComparison.Ordinal));
+            Assert.Contains(steps, step => step.Contains("summarize-dsp-modernization-validation-report.ps1", StringComparison.Ordinal)
+                && step.Contains("-FailOnIssues", StringComparison.Ordinal));
+            Assert.DoesNotContain(steps, step => step.Contains("run-dsp-g2-rx-peak-hunt.ps1", StringComparison.Ordinal));
+            Assert.DoesNotContain(steps, step => step.Contains("run-dsp-live-diagnostics-matrix.ps1", StringComparison.Ordinal));
+
+            var manualAction = action.GetProperty("manualAction").GetString() ?? "";
+            Assert.Contains("validated read-only manual observer capture", manualAction, StringComparison.Ordinal);
+            Assert.Contains("do not use retune/VFO-writing tools", manualAction, StringComparison.Ordinal);
+
+            var expectedArtifacts = ReadStringArray(action, "expectedArtifacts");
+            Assert.Contains("artifacts/manual-tune-observer-report.json", expectedArtifacts);
+            Assert.Contains("artifacts/manual-tune-observer/14277000/live-diagnostics-watch.json", expectedArtifacts);
+            Assert.Contains("artifacts/manual-tune-observer/14277000/live-diagnostics-watch.jsonl", expectedArtifacts);
+            Assert.Contains("artifacts/live-diagnostics-history.json", expectedArtifacts);
+
+            var markdown = await File.ReadAllTextAsync(summaryMarkdown);
+            Assert.Contains("### promote-manual-observer-mixed-weak-strong-window", markdown, StringComparison.Ordinal);
+            Assert.Contains("14277000", markdown, StringComparison.Ordinal);
+            Assert.Contains("manual-tune-observer/14277000/live-diagnostics-watch.json", markdown, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task ValidationTriageExplainsWeakOnlyG2PeakHuntBeforeMixedWeakStrongRecapture()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validation triage smoke runs on Windows.");

@@ -1935,6 +1935,83 @@ function Add-AcceptanceActionForGate {
                             -FollowUp "Acceptance remains blocked until strict validation reports liveDiagnosticsHistoryMixedWeakStrongEvidenceReady=true and the G2/Thetis/current-Zeus comparisons still pass.")) | Out-Null
             }
             else {
+                $manualObserverPresent = Test-Truthy (Get-JsonValue $Validation "manualTuneObserverReportPresent")
+                $manualObserverReady = Test-Truthy (Get-JsonValue $Validation "manualTuneObserverReportReady")
+                $manualObserverValid = Test-Truthy (Get-JsonValue $Validation "manualTuneObserverReportValid")
+                $manualObserverMixedReady = Test-Truthy (Get-JsonValue $Validation "manualTuneObserverMixedWeakStrongReady")
+                $manualObserverBundleRelativePaths = Test-Truthy (Get-JsonValue $Validation "manualTuneObserverBundleRelativePaths")
+                $manualObserverSafetyReadOnly = Test-Truthy (Get-JsonValue $Validation "manualTuneObserverSafetyReadOnly")
+                $manualObserverSafetyApiWrites = Test-Truthy (Get-JsonValue $Validation "manualTuneObserverSafetyApiWrites")
+                $manualObserverSafetyRetune = Test-Truthy (Get-JsonValue $Validation "manualTuneObserverSafetyRetune")
+                $manualObserverSafetyTxTouched = Test-Truthy (Get-JsonValue $Validation "manualTuneObserverSafetyTxEndpointsTouched")
+                $manualObserverVfoWrites = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverSafetyVfoWriteAttemptCount")
+                $manualObserverRadioLoWrites = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverSafetyRadioLoWriteAttemptCount")
+                $manualObserverReferencedCaptureCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverReferencedCaptureCount")
+                $manualObserverReferencedCaptureReadyCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverReferencedCaptureReadyCount")
+                $manualObserverReferencedCaptureProblemCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverReferencedCaptureProblemCount")
+                $manualObserverAgcPumpingRiskCaptureCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverAgcPumpingRiskCaptureCount")
+                $manualBestReportPath = [string](Get-JsonValue $Validation "manualTuneObserverBestReportPath")
+                $manualBestJsonlPath = [string](Get-JsonValue $Validation "manualTuneObserverBestJsonlPath")
+                $manualObserverPromotionReady =
+                    $manualObserverPresent -and
+                    $manualObserverReady -and
+                    $manualObserverValid -and
+                    $manualObserverMixedReady -and
+                    $manualObserverBundleRelativePaths -and
+                    $manualObserverSafetyReadOnly -and
+                    (-not $manualObserverSafetyApiWrites) -and
+                    (-not $manualObserverSafetyRetune) -and
+                    (-not $manualObserverSafetyTxTouched) -and
+                    $manualObserverVfoWrites -eq 0 -and
+                    $manualObserverRadioLoWrites -eq 0 -and
+                    $manualObserverReferencedCaptureReadyCount -gt 0 -and
+                    $manualObserverReferencedCaptureProblemCount -eq 0 -and
+                    $manualObserverAgcPumpingRiskCaptureCount -eq 0 -and
+                    -not [string]::IsNullOrWhiteSpace($manualBestReportPath)
+
+                if ($manualObserverPromotionReady) {
+                    $manualObserverStatus = [string](Get-JsonValue $Validation "manualTuneObserverReportStatus")
+                    $manualBestFrequencyHz = Get-JsonValue $Validation "manualTuneObserverBestFrequencyHz"
+                    $manualBestStatus = [string](Get-JsonValue $Validation "manualTuneObserverBestStatus")
+                    $manualWeakSamples = Get-JsonValue $Validation "manualTuneObserverWeakInputSampleCount"
+                    $manualStrongSamples = Get-JsonValue $Validation "manualTuneObserverStrongInputSampleCount"
+                    $manualNearStrongSamples = Get-JsonValue $Validation "manualTuneObserverNearStrongInputSampleCount"
+                    $manualSpeechWeakSamples = Get-JsonValue $Validation "manualTuneObserverSpeechQualifiedWeakInputSampleCount"
+                    $manualSpeechStrongSamples = Get-JsonValue $Validation "manualTuneObserverSpeechQualifiedStrongInputSampleCount"
+                    $manualPassbandWeakSamples = Get-JsonValue $Validation "manualTuneObserverPassbandQualifiedWeakInputSampleCount"
+                    $manualPassbandStrongSamples = Get-JsonValue $Validation "manualTuneObserverPassbandQualifiedStrongInputSampleCount"
+                    $manualObserverReason = "Live history mixed weak/strong evidence is not ready, but the read-only manual-tune observer captured a safe mixed-ready G2 window: status='$manualObserverStatus', bestFrequencyHz=$manualBestFrequencyHz, bestStatus='$manualBestStatus', reportPath='$manualBestReportPath', jsonlPath='$manualBestJsonlPath', weakSamples=$manualWeakSamples, strongSamples=$manualStrongSamples, nearStrongSamples=$manualNearStrongSamples, speechWeakStrong=$manualSpeechWeakSamples/$manualSpeechStrongSamples, passbandWeakStrong=$manualPassbandWeakSamples/$manualPassbandStrongSamples, referencedCaptures=$manualObserverReferencedCaptureReadyCount/$manualObserverReferencedCaptureCount, readOnly=$manualObserverSafetyReadOnly, apiWrites=$manualObserverSafetyApiWrites, retune=$manualObserverSafetyRetune, vfoWrites=$manualObserverVfoWrites, radioLoWrites=$manualObserverRadioLoWrites, txTouched=$manualObserverSafetyTxTouched. Promote that validated watcher summary into schema-v14 live history before tuning DSP behavior."
+                    $manualExpectedArtifacts = @(
+                        'artifacts/manual-tune-observer-report.json',
+                        $manualBestReportPath,
+                        $manualBestJsonlPath,
+                        'artifacts/live-diagnostics-history.json',
+                        'validation-report.json',
+                        'validation-triage-report.json',
+                        'validation-triage-report.md'
+                    ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+                    $manualCommandSteps = @(
+                        'powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-live-diagnostics-history.ps1 -BundleDir "$bundleDir" -ReportPath "$bundleDir\artifacts\live-diagnostics-history.json"',
+                        'powershell -NoProfile -ExecutionPolicy Bypass -File tools\validate-dsp-modernization-bundle.ps1 -BundleDir "$bundleDir" -RequireArtifactFiles -ReportPath "$bundleDir\validation-report.json"',
+                        'powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-modernization-validation-report.ps1 -BundleDir "$bundleDir" -ReportPath "$bundleDir\validation-triage-report.json" -MarkdownPath "$bundleDir\validation-triage-report.md" -FailOnIssues'
+                    )
+
+                    $Actions.Add((New-AcceptanceActionRecord `
+                                -ActionId "promote-manual-observer-mixed-weak-strong-window" `
+                                -Priority 78 `
+                                -StageId "opt-in-candidate-comparison" `
+                                -GateId $gateId `
+                                -Category "live-diagnostics" `
+                                -RequiredForAcceptance:$gateRequired `
+                                -BlocksDefaultChange:$true `
+                                -Reason $manualObserverReason `
+                                -CommandSteps $manualCommandSteps `
+                                -ManualAction "Use the validated read-only manual observer capture at $manualBestFrequencyHz Hz as the live-history source. If the signal has moved and recapture is needed, keep manually tuning and rerun watch-dsp-manual-tune-observer; do not use retune/VFO-writing tools for this manual-observer promotion path." `
+                                -ExpectedArtifact 'artifacts/live-diagnostics-history.json' `
+                                -ExpectedArtifacts $manualExpectedArtifacts `
+                                -FollowUp "Acceptance remains blocked until strict validation reports liveDiagnosticsHistoryMixedWeakStrongEvidenceReady=true and the G2/Thetis/current-Zeus comparisons still pass.")) | Out-Null
+                }
+                else {
                 $peakHuntReason = ""
                 $peakHuntManualContext = ""
                 if (Test-Truthy (Get-JsonValue $Validation "g2RxPeakHuntReportPresent")) {
@@ -1989,6 +2066,7 @@ function Add-AcceptanceActionForGate {
                                 'validation-triage-report.md'
                             ) `
                             -FollowUp "Do not treat weak-only or quiet/intermittent captures as volume-normalization proof; they remain useful for weak-signal tuning but not for acceptance.")) | Out-Null
+                }
             }
         }
         "live-history-provenance" {
