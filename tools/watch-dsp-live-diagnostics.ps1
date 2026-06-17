@@ -639,7 +639,7 @@ function Normalize-TuneStepHz {
     param($Value)
 
     $numeric = Get-NumericValue $Value
-    if ($null -eq $numeric -or -not [double]::IsFinite([double]$numeric)) {
+    if ($null -eq $numeric -or [double]::IsNaN([double]$numeric) -or [double]::IsInfinity([double]$numeric)) {
         return 1000
     }
 

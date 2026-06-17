@@ -614,7 +614,9 @@ public static class ZeusEndpoints
             log.LogInformation("api.connect.p2 endpoint={Ep} rate={Rate}", req.Endpoint, req.SampleRate);
 
             if (wisdom.Phase != WisdomPhase.Ready)
-                log.LogWarning("api.connect.p2 proceeding before wisdom ready; WDSP may fall back to synthetic");
+                return Results.Json(
+                    new { error = "DSP is preparing FFTW plans — try again in a moment." },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
 
             if (!TryParseIpEndpoint(req.Endpoint, out var ipEndpoint))
                 return Results.BadRequest(new { error = $"Invalid endpoint '{req.Endpoint}'." });
