@@ -1,26 +1,53 @@
 #!/bin/sh
 set -eu
 
+expected="Christian Suarez (N9WAR) <christiantsuarez@gmail.com>"
+
+is_expected_identity() {
+  case "$1" in
+    *"christiantsuarez@gmail.com"*|*"iamexemplar"*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+reject_old_identity() {
+  case "$1" in
+    *"Ramon"*|*"ramon"*|*"RAMON"*|*"rampa"*|*"Rampa"*|*"RAMPA"*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 author_ident="$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)"
 committer_ident="$(git var GIT_COMMITTER_IDENT 2>/dev/null || true)"
 
-case "$author_ident
-$committer_ident" in
-  *"Ramon Martinez"*|*"rampa@encomix.org"*)
-    echo "Refusing commit with old Ramon/rampa identity." >&2
-    echo "Use: Christian Suarez (N9WAR) <christiantsuarez@gmail.com>" >&2
+for ident in "$author_ident" "$committer_ident"
+do
+  if reject_old_identity "$ident"; then
+    echo "Refusing commit with old Ramon/rampa identity:" >&2
+    echo "  $ident" >&2
+    echo "Use: $expected" >&2
     exit 1
-    ;;
-esac
+  fi
+done
 
-case "$author_ident" in
-  *"Christian Suarez (N9WAR)"*"<christiantsuarez@gmail.com>"*|*"iamexemplar"*)
-    exit 0
-    ;;
-  *)
-    echo "Refusing commit with unexpected author identity:" >&2
-    echo "  $author_ident" >&2
-    echo "Expected Christian Suarez (N9WAR) <christiantsuarez@gmail.com> or iamexemplar." >&2
-    exit 1
-    ;;
-esac
+if ! is_expected_identity "$author_ident"; then
+  echo "Refusing commit with unexpected author identity:" >&2
+  echo "  $author_ident" >&2
+  echo "Expected $expected or iamexemplar." >&2
+  exit 1
+fi
+
+if ! is_expected_identity "$committer_ident"; then
+  echo "Refusing commit with unexpected committer identity:" >&2
+  echo "  $committer_ident" >&2
+  echo "Expected $expected or iamexemplar." >&2
+  exit 1
+fi
