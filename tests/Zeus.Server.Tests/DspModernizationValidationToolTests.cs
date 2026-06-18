@@ -4753,6 +4753,108 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task CompareLiveDiagnosticsTraceRequiresRmNoiseCandidateActivation()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics comparator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-rmnoise-activation-compare-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var baselineReport = Path.Combine(bundleDir, "baseline.summary.json");
+            await File.WriteAllTextAsync(
+                baselineReport,
+                JsonSerializer.Serialize(NoiseOnlyGatingSummary("noise-only-gating", -83.0), CamelCaseJson));
+
+            var inactiveCandidateReport = Path.Combine(bundleDir, "inactive-candidate.summary.json");
+            await File.WriteAllTextAsync(
+                inactiveCandidateReport,
+                JsonSerializer.Serialize(
+                    NoiseOnlyGatingSummary(
+                        "noise-only-gating",
+                        -87.2,
+                        nr5RmNoiseGateEnabledSampleCount: 3,
+                        nr5RmNoiseGateSampleCount: 0),
+                    CamelCaseJson));
+
+            var inactiveComparisonReport = Path.Combine(bundleDir, "inactive-comparison.json");
+            var inactiveComparison = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "compare-dsp-live-diagnostics-traces.ps1"),
+                "-BaselinePath", baselineReport,
+                "-CandidatePath", inactiveCandidateReport,
+                "-BaselineLabel", "current-zeus",
+                "-CandidateLabel", "nr5-rmnoise-optin",
+                "-ReportPath", inactiveComparisonReport,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.True(inactiveComparison.ExitCode == 0, inactiveComparison.CombinedOutput);
+            using var inactiveDoc = JsonDocument.Parse(await File.ReadAllTextAsync(inactiveComparisonReport));
+            var inactiveRoot = inactiveDoc.RootElement;
+            Assert.False(inactiveRoot.GetProperty("readyForReview").GetBoolean());
+            Assert.Equal(1, inactiveRoot.GetProperty("candidateActivationFailureCount").GetInt32());
+            Assert.Equal(0, inactiveRoot.GetProperty("regressionCount").GetInt32());
+            Assert.Equal(0, inactiveRoot.GetProperty("gateFailureCount").GetInt32());
+            Assert.Equal(0, inactiveRoot.GetProperty("missingMetricValueCount").GetInt32());
+
+            var inactiveActivation = inactiveRoot.GetProperty("candidateActivationComparison");
+            Assert.Equal("nr5-rmnoise", inactiveActivation.GetProperty("candidateKind").GetString());
+            Assert.Equal("candidate-enabled-inactive", inactiveActivation.GetProperty("status").GetString());
+            Assert.True(inactiveActivation.GetProperty("readinessBlocking").GetBoolean());
+            Assert.Equal(3.0, inactiveActivation.GetProperty("candidateEnabledSampleCount").GetDouble(), precision: 3);
+            Assert.Equal(0.0, inactiveActivation.GetProperty("candidateGateSampleCount").GetDouble(), precision: 3);
+            Assert.Contains(
+                inactiveRoot.GetProperty("recommendations").EnumerateArray(),
+                recommendation => (recommendation.GetString() ?? "").Contains("no samples actually used", StringComparison.Ordinal));
+
+            var activeCandidateReport = Path.Combine(bundleDir, "active-candidate.summary.json");
+            await File.WriteAllTextAsync(
+                activeCandidateReport,
+                JsonSerializer.Serialize(
+                    NoiseOnlyGatingSummary(
+                        "noise-only-gating",
+                        -87.2,
+                        nr5RmNoiseGateEnabledSampleCount: 3,
+                        nr5RmNoiseGateSampleCount: 2),
+                    CamelCaseJson));
+
+            var activeComparisonReport = Path.Combine(bundleDir, "active-comparison.json");
+            var activeComparison = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "compare-dsp-live-diagnostics-traces.ps1"),
+                "-BaselinePath", baselineReport,
+                "-CandidatePath", activeCandidateReport,
+                "-BaselineLabel", "current-zeus",
+                "-CandidateLabel", "nr5-rmnoise-optin",
+                "-ReportPath", activeComparisonReport,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.True(activeComparison.ExitCode == 0, activeComparison.CombinedOutput);
+            using var activeDoc = JsonDocument.Parse(await File.ReadAllTextAsync(activeComparisonReport));
+            var activeRoot = activeDoc.RootElement;
+            Assert.True(activeRoot.GetProperty("readyForReview").GetBoolean());
+            Assert.Equal(0, activeRoot.GetProperty("candidateActivationFailureCount").GetInt32());
+            Assert.Equal("candidate-active", activeRoot.GetProperty("candidateActivationComparison").GetProperty("status").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task CompareLiveDiagnosticsTraceFlagsNr5ArtifactControlRegression()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics comparator smoke runs on Windows.");
@@ -11500,7 +11602,11 @@ public sealed class DspModernizationValidationToolTests
         };
     }
 
-    private static object NoiseOnlyGatingSummary(string scenarioId, double offPassbandAudioAverageDbfs)
+    private static object NoiseOnlyGatingSummary(
+        string scenarioId,
+        double offPassbandAudioAverageDbfs,
+        int nr5RmNoiseGateEnabledSampleCount = 0,
+        int nr5RmNoiseGateSampleCount = 0)
     {
         return new
         {
@@ -11570,6 +11676,11 @@ public sealed class DspModernizationValidationToolTests
                 diagnosticSampleCount = 3,
                 constrainedSampleCount = 0,
                 constrainedPct = 0.0,
+                nr5RmNoiseGateKnownSampleCount = nr5RmNoiseGateEnabledSampleCount > 0 ? 3 : 0,
+                nr5RmNoiseGateEnabledSampleCount,
+                nr5RmNoiseGateDisabledSampleCount = nr5RmNoiseGateEnabledSampleCount > 0 ? 0 : 3,
+                nr5RmNoiseGateSampleCount,
+                nr5RmNoiseGateHoldSampleCount = nr5RmNoiseGateSampleCount,
                 boostSlewLimitedSampleCount = 0,
                 peakLimitedSampleCount = 0,
                 outputLimitedSampleCount = 0

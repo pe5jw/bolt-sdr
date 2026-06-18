@@ -1389,6 +1389,95 @@ function Get-ComparisonScenarioId {
     return $candidateScenarioId
 }
 
+function Test-RmNoiseCandidateLabel {
+    param(
+        [string]$Label,
+        [string]$ComparisonId
+    )
+
+    $combined = "$Label $ComparisonId"
+    return $combined -match "(?i)rmnoise"
+}
+
+function New-CandidateActivationComparison {
+    param(
+        $BaselineReport,
+        $CandidateReport,
+        [string]$CandidateLabel
+    )
+
+    $candidateComparisonId = [string](Get-JsonValue $CandidateReport "comparisonId")
+    $candidateRxLevelerWatch = Get-JsonValue $CandidateReport "rxAudioLevelerWatch"
+    $baselineRxLevelerWatch = Get-JsonValue $BaselineReport "rxAudioLevelerWatch"
+    $candidateKnownCount = Get-NumericValue (Get-JsonValue $candidateRxLevelerWatch "nr5RmNoiseGateKnownSampleCount")
+    $candidateEnabledCount = Get-NumericValue (Get-JsonValue $candidateRxLevelerWatch "nr5RmNoiseGateEnabledSampleCount")
+    $candidateGateCount = Get-NumericValue (Get-JsonValue $candidateRxLevelerWatch "nr5RmNoiseGateSampleCount")
+    $candidateHoldCount = Get-NumericValue (Get-JsonValue $candidateRxLevelerWatch "nr5RmNoiseGateHoldSampleCount")
+    $baselineGateCount = Get-NumericValue (Get-JsonValue $baselineRxLevelerWatch "nr5RmNoiseGateSampleCount")
+    $isRmNoiseCandidate =
+        (Test-RmNoiseCandidateLabel -Label $CandidateLabel -ComparisonId $candidateComparisonId) -or
+        ($null -ne $candidateEnabledCount -and [double]$candidateEnabledCount -gt 0.0) -or
+        ($null -ne $candidateGateCount -and [double]$candidateGateCount -gt 0.0)
+
+    if (-not $isRmNoiseCandidate) {
+        return [ordered]@{
+            candidateKind = "unspecified"
+            status = "not-applicable"
+            readinessBlocking = $false
+            reason = "No RMNoise candidate label, comparison id, enabled samples, or gate samples were detected."
+            candidateComparisonId = $candidateComparisonId
+            candidateKnownSampleCount = Round-NullableMetric $candidateKnownCount
+            candidateEnabledSampleCount = Round-NullableMetric $candidateEnabledCount
+            candidateGateSampleCount = Round-NullableMetric $candidateGateCount
+            candidateGateHoldSampleCount = Round-NullableMetric $candidateHoldCount
+            baselineGateSampleCount = Round-NullableMetric $baselineGateCount
+        }
+    }
+
+    if ($null -eq $candidateEnabledCount -or [double]$candidateEnabledCount -le 0.0) {
+        return [ordered]@{
+            candidateKind = "nr5-rmnoise"
+            status = "candidate-not-enabled"
+            readinessBlocking = $true
+            reason = "The comparison is labelled as an RMNoise candidate, but the candidate trace never reported the NR5 RMNoise gate as enabled."
+            candidateComparisonId = $candidateComparisonId
+            candidateKnownSampleCount = Round-NullableMetric $candidateKnownCount
+            candidateEnabledSampleCount = Round-NullableMetric $candidateEnabledCount
+            candidateGateSampleCount = Round-NullableMetric $candidateGateCount
+            candidateGateHoldSampleCount = Round-NullableMetric $candidateHoldCount
+            baselineGateSampleCount = Round-NullableMetric $baselineGateCount
+        }
+    }
+
+    if ($null -eq $candidateGateCount -or [double]$candidateGateCount -le 0.0) {
+        return [ordered]@{
+            candidateKind = "nr5-rmnoise"
+            status = "candidate-enabled-inactive"
+            readinessBlocking = $true
+            reason = "The candidate trace had the NR5 RMNoise gate enabled, but no samples actually used the gate; treat metric changes as band-condition evidence, not RMNoise DSP behavior."
+            candidateComparisonId = $candidateComparisonId
+            candidateKnownSampleCount = Round-NullableMetric $candidateKnownCount
+            candidateEnabledSampleCount = Round-NullableMetric $candidateEnabledCount
+            candidateGateSampleCount = Round-NullableMetric $candidateGateCount
+            candidateGateHoldSampleCount = Round-NullableMetric $candidateHoldCount
+            baselineGateSampleCount = Round-NullableMetric $baselineGateCount
+        }
+    }
+
+    return [ordered]@{
+        candidateKind = "nr5-rmnoise"
+        status = "candidate-active"
+        readinessBlocking = $false
+        reason = "The candidate trace enabled and exercised the NR5 RMNoise gate; metric changes can be reviewed as opt-in RMNoise behavior."
+        candidateComparisonId = $candidateComparisonId
+        candidateKnownSampleCount = Round-NullableMetric $candidateKnownCount
+        candidateEnabledSampleCount = Round-NullableMetric $candidateEnabledCount
+        candidateGateSampleCount = Round-NullableMetric $candidateGateCount
+        candidateGateHoldSampleCount = Round-NullableMetric $candidateHoldCount
+        baselineGateSampleCount = Round-NullableMetric $baselineGateCount
+    }
+}
+
 function Test-MetricNotApplicableForScenario {
     param(
         [Parameter(Mandatory = $true)][string]$MetricId,
@@ -1862,6 +1951,7 @@ function Build-MarkdownReport {
     $lines.Add("- Baseline: $($Report.baselineLabel)") | Out-Null
     $lines.Add("- Regressions: $($Report.regressionCount)") | Out-Null
     $lines.Add("- Gate failures: $($Report.gateFailureCount)") | Out-Null
+    $lines.Add("- Candidate activation failures: $($Report.candidateActivationFailureCount)") | Out-Null
     $lines.Add("- Missing values: $($Report.missingMetricValueCount)") | Out-Null
     $lines.Add("- Not applicable values: $($Report.notApplicableMetricValueCount)") | Out-Null
     $lines.Add("") | Out-Null
@@ -1878,6 +1968,16 @@ function Build-MarkdownReport {
         $lines.Add("| Top constraint | $($captureReadiness.baselineTopConstraintName) ($($captureReadiness.baselineTopConstraintCount)) | $($captureReadiness.candidateTopConstraintName) ($($captureReadiness.candidateTopConstraintCount)) | $($captureReadiness.topConstraintCountDelta) |") | Out-Null
         $lines.Add("| Top hard gate | $($captureReadiness.baselineTopHardConstraintName) ($($captureReadiness.baselineTopHardConstraintCount)) | $($captureReadiness.candidateTopHardConstraintName) ($($captureReadiness.candidateTopHardConstraintCount)) | $($captureReadiness.topHardConstraintCountDelta) |") | Out-Null
         $lines.Add("| Top status | $($captureReadiness.baselineTopStatusName) ($($captureReadiness.baselineTopStatusCount)) | $($captureReadiness.candidateTopStatusName) ($($captureReadiness.candidateTopStatusCount)) | |") | Out-Null
+        $lines.Add("") | Out-Null
+    }
+
+    $activation = Get-JsonValue $Report "candidateActivationComparison"
+    if ($null -ne $activation -and [string](Get-JsonValue $activation "status") -ne "not-applicable") {
+        $lines.Add("## Candidate Activation") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("| Candidate kind | Status | Blocking | Enabled samples | Gate samples | Reason |") | Out-Null
+        $lines.Add("|---|---|---|---:|---:|---|") | Out-Null
+        $lines.Add("| $($activation.candidateKind) | $($activation.status) | $($activation.readinessBlocking) | $($activation.candidateEnabledSampleCount) | $($activation.candidateGateSampleCount) | $($activation.reason) |") | Out-Null
         $lines.Add("") | Out-Null
     }
 
@@ -2009,6 +2109,7 @@ $traceMetricDefinitions = @(Get-TraceMetricDefinitions)
 $baselineScenarioId = Get-ReportScenarioId $baselineReport
 $candidateScenarioId = Get-ReportScenarioId $candidateReport
 $comparisonScenarioId = Get-ComparisonScenarioId $baselineReport $candidateReport
+$candidateActivationComparison = New-CandidateActivationComparison $baselineReport $candidateReport $CandidateLabel
 $metricComparisons = Compare-Metrics $baselineReport $candidateReport $Tolerance $traceMetricDefinitions $comparisonScenarioId
 $hardConstraintComparisons = Compare-HardConstraints $baselineReport $candidateReport
 
@@ -2033,10 +2134,12 @@ if ($candidateOkSamples -le 0) { $gateFailureCount++ }
 if ($candidateFailedSamples -gt 0) { $gateFailureCount++ }
 if ($candidateHardBlockers -gt 0) { $gateFailureCount++ }
 if (-not $candidateReadyTrace) { $gateFailureCount++ }
+$candidateActivationFailureCount = if (Test-Truthy (Get-JsonValue $candidateActivationComparison "readinessBlocking")) { 1 } else { 0 }
 
 $readyForReview = ($regressionCount -eq 0 -and
     $hardConstraintRegressionCount -eq 0 -and
     $gateFailureCount -eq 0 -and
+    $candidateActivationFailureCount -eq 0 -and
     $missingCount -eq 0)
 
 if ([string]::IsNullOrWhiteSpace($ReportPath)) {
@@ -2067,8 +2170,15 @@ $recommendations = if ($readyForReview -and $notApplicableCount -gt 0) {
 elseif ($readyForReview) {
     @("Store this comparison with the candidate trace, offline fixture metrics, audio renders, spectrum captures, and operator notes before considering any DSP default change.")
 }
-elseif ($regressionCount -gt 0 -or $hardConstraintRegressionCount -gt 0 -or $gateFailureCount -gt 0) {
+elseif ($candidateActivationFailureCount -gt 0 -or $regressionCount -gt 0 -or $hardConstraintRegressionCount -gt 0 -or $gateFailureCount -gt 0) {
     $items = New-Object System.Collections.Generic.List[string]
+    if ($candidateActivationFailureCount -gt 0) {
+        $activationReason = [string](Get-JsonValue $candidateActivationComparison "reason")
+        if (-not [string]::IsNullOrWhiteSpace($activationReason)) {
+            $items.Add($activationReason) | Out-Null
+        }
+        $items.Add("Capture an RMNoise-on noise/no-proof window with nr5RmNoiseGateSampleCount > 0 before treating this as opt-in RMNoise DSP evidence.") | Out-Null
+    }
     if (-not (Test-Truthy (Get-JsonValue $captureReadinessComparison "candidateHardGatePass"))) {
         $topHardName = [string](Get-JsonValue $captureReadinessComparison "candidateTopHardConstraintName")
         if (-not [string]::IsNullOrWhiteSpace($topHardName)) {
@@ -2129,11 +2239,13 @@ $report = [ordered]@{
     regressionCount = $regressionCount
     hardConstraintRegressionCount = $hardConstraintRegressionCount
     gateFailureCount = $gateFailureCount
+    candidateActivationFailureCount = $candidateActivationFailureCount
     tieCount = $tieCount
     informationalMetricCount = $informationalCount
     missingMetricValueCount = $missingCount
     notApplicableMetricValueCount = $notApplicableCount
     captureReadinessComparison = $captureReadinessComparison
+    candidateActivationComparison = $candidateActivationComparison
     nr5WeakSignalComparison = $nr5WeakSignalComparison
     rxAudioLevelerComparison = $rxAudioLevelerComparison
     metricRegressionSafetyClassCounts = @($metricRegressionSafetyClassCounts)
@@ -2165,7 +2277,7 @@ else {
     if (-not $NoMarkdown) {
         Write-Host "Markdown: $MarkdownPath"
     }
-    Write-Host "Regressions: $regressionCount, Hard constraint regressions: $hardConstraintRegressionCount, Gate failures: $gateFailureCount, Missing values: $missingCount"
+    Write-Host "Regressions: $regressionCount, Hard constraint regressions: $hardConstraintRegressionCount, Gate failures: $gateFailureCount, Candidate activation failures: $candidateActivationFailureCount, Missing values: $missingCount"
 }
 
 if ($FailOnRegression -and -not $readyForReview) {
