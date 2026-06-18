@@ -4348,9 +4348,11 @@ public sealed class DspPipelineAudioSanitizerTests
     [InlineData("1")]
     [InlineData("true")]
     [InlineData("on")]
-    public void ApplyRxAudioLeveler_RmNoiseGateAcceptsOptInValues(string optInValue)
+    public void ApplyRxAudioLeveler_RmNoiseGateAcceptsExplicitOnValues(string optInValue)
     {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
+        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
+        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
+        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", null);
         Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", optInValue);
         try
         {
@@ -4373,15 +4375,49 @@ public sealed class DspPipelineAudioSanitizerTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previous);
+            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
+            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
         }
     }
 
     [Fact]
-    public void ApplyRxAudioLeveler_RmNoiseGateIsDefaultOff()
+    public void ApplyRxAudioLeveler_RmNoiseGateIsDefaultOn()
     {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
+        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
+        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
+        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", null);
         Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
+        try
+        {
+            var state = StableNoSignalRmNoiseState();
+            float[] block = StableNoSignalRmNoiseBlock();
+
+            DspPipelineService.ApplyRxAudioLeveler(block, ref state, StableNoSignalRmNoiseDiagnostics());
+
+            Assert.True(state.Nr5RmNoiseGate);
+            Assert.InRange(state.Nr5RmNoiseSuppressionDb, 12.0, 80.0);
+            Assert.True(state.Nr5NoSignalNoiseCap);
+            Assert.True(state.Nr5NoProofNoiseCap);
+            Assert.True(state.OutputRmsDbfs <= -50.0);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
+            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
+        }
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("false")]
+    [InlineData("off")]
+    [InlineData("no")]
+    public void ApplyRxAudioLeveler_RmNoiseGateAcceptsExplicitOffValues(string offValue)
+    {
+        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
+        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
+        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", offValue);
+        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", "1");
         try
         {
             var state = StableNoSignalRmNoiseState();
@@ -4397,7 +4433,8 @@ public sealed class DspPipelineAudioSanitizerTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previous);
+            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
+            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
         }
     }
 

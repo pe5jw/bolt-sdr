@@ -310,10 +310,14 @@ public class DspPipelineService : BackgroundService,
 
     private static bool IsNr5RmNoiseGateEnabled()
     {
-        string? value = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
+        string? value = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE")
+            ?? Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
+        if (string.IsNullOrWhiteSpace(value))
+            return true;
+        return !(string.Equals(value, "0", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "false", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "off", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "no", StringComparison.OrdinalIgnoreCase));
     }
 
     private static double UpdateNr5NoiseProfilePrior(double current, double observed, bool speechLike)
