@@ -8566,6 +8566,143 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task G2RxPeakHuntSnapsAndBoundsOperatorRetunesBeforeVfoPost()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell G2 peak-hunt retune smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"zeus-g2-rx-peak-hunt-operator-guard-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var reportPath = Path.Combine(tempRoot, "g2-rx-peak-hunt-report.json");
+            var watcherPath = Path.Combine(tempRoot, "fake-watch-dsp-live-diagnostics.ps1");
+            await WriteReadyG2PeakHuntWatcherAsync(watcherPath);
+
+            using var server = JsonRouteServer.Start(new Dictionary<string, string>
+            {
+                ["/api/radio/diagnostics"] = JsonSerializer.Serialize(new
+                {
+                    connectionStatus = "Connected",
+                    endpoint = "192.168.1.25:1024",
+                    effectiveBoard = "OrionMkII",
+                    orionMkIIVariant = "G2",
+                    vfoHz = 7_335_000L,
+                    mode = "LSB",
+                    sampleRate = 384_000
+                }, CamelCaseJson),
+                ["/api/state"] = JsonSerializer.Serialize(new
+                {
+                    vfoHz = 7_335_000L,
+                    radioLoHz = 7_335_000L,
+                    mode = "LSB"
+                }, CamelCaseJson),
+                ["/api/radio/diagnostics/dsp-scene"] = JsonSerializer.Serialize(new
+                {
+                    status = "fresh",
+                    fresh = true,
+                    signalProfile = "quiet",
+                    maxSnrDb = 0.0,
+                    coherentMaxSnrDb = 0.0,
+                    topPeaks = Array.Empty<object>()
+                }, CamelCaseJson),
+                ["/api/dsp/live-diagnostics"] = JsonSerializer.Serialize(new
+                {
+                    status = "ready",
+                    readyForLiveBenchmark = true,
+                    wdspActive = true,
+                    wdspNativeLoadable = true,
+                    requestedNrMode = "Nr5",
+                    effectiveNrMode = "Nr5",
+                    readyForNr5Tuning = true,
+                    frontendSceneFresh = true
+                }, CamelCaseJson),
+                ["/api/vfo"] = "{}",
+                ["/api/radio/lo"] = "{}",
+                ["/api/mode"] = "{}"
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "run-dsp-g2-rx-peak-hunt.ps1"),
+                "-BaseUrl", server.BaseUrl,
+                "-AllowRetune",
+                "-SkipCurrentVfo",
+                "-SamplesPerWindow", "1",
+                "-IntervalMs", "1",
+                "-WindowsPerPeak", "1",
+                "-PassCount", "1",
+                "-SettleMs", "0",
+                "-CandidateFrequencyHz", "7130125,7500125",
+                "-PeakRetuneLowHz", "7128000",
+                "-PeakRetuneHighHz", "7132000",
+                "-MaxPeaks", "0",
+                "-TuneStepHz", "1000",
+                "-WatchScriptPath", watcherPath,
+                "-OutputRoot", tempRoot,
+                "-ReportPath", reportPath,
+                "-JsonOnly",
+                "-ContinueOnError");
+
+            var failureDetail = run.CombinedOutput;
+            if (File.Exists(reportPath))
+            {
+                failureDetail = $"{failureDetail}{Environment.NewLine}{await File.ReadAllTextAsync(reportPath)}";
+            }
+
+            Assert.True(run.ExitCode == 0, failureDetail);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+            Assert.True(root.GetProperty("ok").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("scanError").ValueKind);
+
+            var retune = Assert.Single(root.GetProperty("retuneAttempts").EnumerateArray());
+            Assert.True(retune.GetProperty("ok").GetBoolean());
+            Assert.Equal("operator-frequency", retune.GetProperty("source").GetString());
+            Assert.Equal(7_130_000L, retune.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(7_130_125L, retune.GetProperty("exactFrequencyHz").GetInt64());
+            Assert.Equal(1000, retune.GetProperty("tuneStepHz").GetInt32());
+            Assert.Equal(-125L, retune.GetProperty("tuneSnapDeltaHz").GetInt64());
+            Assert.Equal(7_130_125L, retune.GetProperty("exactRetuneVfoHz").GetInt64());
+            Assert.Equal(125L, retune.GetProperty("peakToRetunedVfoOffsetHz").GetInt64());
+            Assert.Equal("retune-to-stepped-candidate", retune.GetProperty("retuneReason").GetString());
+
+            Assert.Equal(1, root.GetProperty("rejectedRetuneCandidateCount").GetInt32());
+            Assert.Equal(1, root.GetProperty("rejectedRetuneCandidateReasonCounts").GetProperty("outside-retune-span-high").GetInt32());
+            var rejected = Assert.Single(root.GetProperty("rejectedRetuneCandidates").EnumerateArray());
+            Assert.Equal("operator-frequency", rejected.GetProperty("source").GetString());
+            Assert.Equal(7_500_000L, rejected.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(7_500_125L, rejected.GetProperty("exactFrequencyHz").GetInt64());
+            Assert.Equal(-125L, rejected.GetProperty("tuneSnapDeltaHz").GetInt64());
+            Assert.Equal("outside-retune-span-high", rejected.GetProperty("rejectionReason").GetString());
+            Assert.Equal(7_128_000L, rejected.GetProperty("retuneLowHz").GetInt64());
+            Assert.Equal(7_132_000L, rejected.GetProperty("retuneHighHz").GetInt64());
+
+            var vfoPosts = server.Requests
+                .Where(request => request.Path == "/api/vfo")
+                .Select(request => JsonDocument.Parse(request.Body).RootElement.GetProperty("hz").GetInt64())
+                .ToArray();
+            Assert.Contains(7_130_000L, vfoPosts);
+            Assert.DoesNotContain(7_130_125L, vfoPosts);
+            Assert.DoesNotContain(7_500_000L, vfoPosts);
+            Assert.DoesNotContain(7_500_125L, vfoPosts);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task G2RxPeakHuntCompactsLongArtifactPaths()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell G2 peak-hunt path compaction smoke runs on Windows.");
@@ -11307,6 +11444,80 @@ public sealed class DspModernizationValidationToolTests
         Assert.Equal(new[] { "candidate-external-engine-opt-in" }, ReadStringArray(artifact, "comparisonIds"));
     }
 
+    private static Task WriteReadyG2PeakHuntWatcherAsync(string watcherPath) =>
+        File.WriteAllTextAsync(
+            watcherPath,
+            string.Join(
+                Environment.NewLine,
+                "param(",
+                "    [string]$BaseUrl,",
+                "    [int]$Samples = 1,",
+                "    [int]$IntervalMs = 1,",
+                "    [int]$TimeoutSec = 5,",
+                "    [string]$Label,",
+                "    [string]$ScenarioId,",
+                "    [string]$ComparisonId,",
+                "    [string]$ReportPath,",
+                "    [string]$JsonlPath,",
+                "    [switch]$JsonOnly",
+                ")",
+                "$report = [ordered]@{",
+                "    readyForBenchmarkTrace = $true",
+                "    trendStatus = 'ready-trace'",
+                "    okSampleCount = $Samples",
+                "    failedSampleCount = 0",
+                "    readySampleCount = $Samples",
+                "    hardBlockerSampleCount = 0",
+                "    nr5TuningTraceStatus = 'ready'",
+                "    nr5TuningReadySampleCount = $Samples",
+                "    agcGainDb = @{ movement = 0.0 }",
+                "    audioRmsDbfs = @{ movement = 0.0 }",
+                "    adcHeadroomDb = @{ min = 30.0 }",
+                "    agcStabilityWatch = @{ status = 'stable'; pumpingRisk = $false }",
+                "    rxAudioLevelerWatch = @{ constrainedSampleCount = 0 }",
+                "    rxAudioLevelerBoostSlewLimitedSampleCount = 0",
+                "    rxAudioLevelerPeakLimitedSampleCount = 0",
+                "    rxAudioLevelerOutputLimitedSampleCount = 0",
+                "    frontendTopPeakWatch = @{ sampleCount = $Samples; nearPassbandSampleCount = $Samples; nearPassbandThresholdHz = 3000; topNearPassbandSamples = @() }",
+                "    nr5WeakSignalWatch = @{",
+                "        weakInputSampleCount = 1",
+                "        strongInputSampleCount = 1",
+                "        nearStrongInputSampleCount = 0",
+                "        weakRecoveredSampleCount = 1",
+                "        weakDropoutSampleCount = 0",
+                "        weakDropoutCandidateLossSampleCount = 0",
+                "        hotMakeupSampleCount = 0",
+                "        weakStrongOutputGapDb = 0.0",
+                "        weakStrongFinalAudioGapDb = 0.0",
+                "        speechQualifiedWeakInputSampleCount = 1",
+                "        speechQualifiedStrongInputSampleCount = 1",
+                "        speechQualifiedNearStrongInputSampleCount = 0",
+                "        passbandQualifiedWeakInputSampleCount = 1",
+                "        passbandQualifiedStrongInputSampleCount = 1",
+                "        passbandQualifiedNearStrongInputSampleCount = 0",
+                "        mixedWeakStrongEvidenceReady = $true",
+                "        weakStrongOutputParityReady = $true",
+                "        weakStrongFinalAudioParityReady = $true",
+                "        mixedWeakStrongEvidenceStatus = 'ready-final-audio'",
+                "        mixedWeakStrongTuningFocus = @{",
+                "            status = 'ready-final-audio'",
+                "            preferredAction = 'post-leveler-final-audio-parity-ready'",
+                "            outputGapDirection = 'balanced'",
+                "            finalAudioGapDirection = 'balanced'",
+                "            topWeakInputs = @()",
+                "            topStrongInputs = @()",
+                "            topSpeechQualifiedWeakInputs = @()",
+                "            topSpeechQualifiedStrongInputs = @()",
+                "            topPassbandQualifiedWeakInputs = @()",
+                "            topPassbandQualifiedStrongInputs = @()",
+                "        }",
+                "    }",
+                "}",
+                "$json = $report | ConvertTo-Json -Depth 16",
+                "Set-Content -LiteralPath $ReportPath -Value $json -Encoding UTF8",
+                "Set-Content -LiteralPath $JsonlPath -Value '{\"ok\":true}' -Encoding UTF8",
+                "if ($JsonOnly) { $json }"));
+
     private static string[] ReadStringArray(JsonElement element, string propertyName)
     {
         return element.GetProperty(propertyName)
@@ -11323,6 +11534,8 @@ public sealed class DspModernizationValidationToolTests
         private readonly IReadOnlyDictionary<string, string> _routes;
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _loop;
+        private readonly object _requestsLock = new();
+        private readonly List<RecordedRequest> _requests = new();
 
         private JsonRouteServer(TcpListener listener, IReadOnlyDictionary<string, string> routes)
         {
@@ -11334,6 +11547,17 @@ public sealed class DspModernizationValidationToolTests
         }
 
         public string BaseUrl { get; }
+
+        public IReadOnlyList<RecordedRequest> Requests
+        {
+            get
+            {
+                lock (_requestsLock)
+                {
+                    return _requests.ToArray();
+                }
+            }
+        }
 
         public static JsonRouteServer Start(IReadOnlyDictionary<string, string> routes)
         {
@@ -11397,6 +11621,7 @@ public sealed class DspModernizationValidationToolTests
                 }
             }
 
+            var requestBody = "";
             if (contentLength > 0)
             {
                 var buffer = new char[contentLength];
@@ -11411,13 +11636,21 @@ public sealed class DspModernizationValidationToolTests
 
                     read += count;
                 }
+
+                requestBody = new string(buffer, 0, read);
             }
 
             var path = "/";
             var parts = (requestLine ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var method = parts.Length >= 1 ? parts[0] : "";
             if (parts.Length >= 2 && Uri.TryCreate(parts[1], UriKind.RelativeOrAbsolute, out var uri))
             {
                 path = uri.IsAbsoluteUri ? uri.AbsolutePath : uri.OriginalString.Split('?', 2)[0];
+            }
+
+            lock (_requestsLock)
+            {
+                _requests.Add(new RecordedRequest(method, path, requestBody));
             }
 
             var found = _routes.TryGetValue(path, out var json);
@@ -11430,6 +11663,8 @@ public sealed class DspModernizationValidationToolTests
             await stream.WriteAsync(bytes);
         }
     }
+
+    private sealed record RecordedRequest(string Method, string Path, string Body);
 
     private sealed record ToolResult(int ExitCode, string StandardOutput, string StandardError)
     {
