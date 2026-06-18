@@ -113,6 +113,69 @@ describe('analyzeTxFidelity', () => {
     expect(a.recommendation).toBe('Reduce drive or ALC max gain for TX output headroom');
   });
 
+  it('prioritizes VST chain headroom when plugin output is pinned', () => {
+    const a = analyzeTxFidelity({
+      ...BASE,
+      wdspMicPk: -6,
+      micAv: -18,
+      lvlrGr: 3,
+      cfcGr: 0,
+      compPk: -6,
+      compAv: -17,
+      alcGr: 3,
+      outPk: -6.1,
+      outAv: -17,
+      audioSuiteMode: 'vst',
+      audioSuiteBypassed: false,
+      vstEngineActive: true,
+      audioSuiteInputDbfs: -14.4,
+      audioSuiteOutputDbfs: -0.1,
+    });
+
+    expect(a.state).toBe('hot');
+    expect(a.label).toBe('Too hot');
+    expect(a.audioSuiteLabel).toBe('VST chain');
+    expect(a.audioSuiteOutputDbfs).toBeCloseTo(-0.1, 1);
+    expect(a.detail).toContain('VST chain output has almost no headroom');
+    expect(a.detail).toContain('VST chain is adding excessive gain');
+    expect(a.recommendation).toBe('Lower VST/plugin output trim before raising mic or drive');
+    expect(a.actionTone).toBe('reduce');
+    expect(a.densityStatus).toBe('forced');
+  });
+
+  it('treats a full-scale VST chain meter as a clipping risk', () => {
+    const a = analyzeTxFidelity({
+      ...BASE,
+      wdspMicPk: -6,
+      outPk: -6,
+      audioSuiteMode: 'vst',
+      audioSuiteBypassed: false,
+      vstEngineActive: true,
+      audioSuiteInputDbfs: -14,
+      audioSuiteOutputDbfs: 0,
+    });
+
+    expect(a.state).toBe('clip');
+    expect(a.detail).toBe('VST chain output is reaching full scale.');
+    expect(a.recommendation).toBe('Lower VST/plugin output trim before raising mic or drive');
+    expect(a.actionTone).toBe('protect');
+  });
+
+  it('ignores stale Audio Suite meter values while master bypassed', () => {
+    const a = analyzeTxFidelity({
+      ...BASE,
+      audioSuiteMode: 'vst',
+      audioSuiteBypassed: true,
+      vstEngineActive: true,
+      audioSuiteInputDbfs: -14,
+      audioSuiteOutputDbfs: 0,
+    });
+
+    expect(a.state).toBe('sweet');
+    expect(a.audioSuiteOutputDbfs).toBeNull();
+    expect(a.recommendation).toBe('Hold levels; PureSignal is correcting the PA');
+  });
+
   it('matches live density against the station profile target', () => {
     const a = analyzeTxFidelity({ ...BASE, targetSpectralDensity: 100 });
     expect(a.state).toBe('under');

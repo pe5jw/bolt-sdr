@@ -389,6 +389,39 @@ public class WdspDspEngineTests
     }
 
     [SkippableFact]
+    public void OpenSecondRxChannel_DoesNotReusePsFeedbackAnalyzerSlot()
+    {
+        Skip.IfNot(WdspAvailable(), "libwdsp not available");
+
+        using var engine = new WdspDspEngine();
+        int rx1 = engine.OpenChannel(48_000, 1024);
+        try
+        {
+            int tx = engine.OpenTxChannel(outputRateHz: 48_000);
+            Assert.Equal(1, tx);
+
+            engine.SetPsEnabled(true);
+
+            int rx2 = engine.OpenChannel(48_000, 1024);
+            try
+            {
+                Assert.Equal(3, rx2);
+                engine.SetZoom(rx2, 2);
+                engine.SetPsEnabled(false);
+            }
+            finally
+            {
+                engine.CloseChannel(rx2);
+            }
+        }
+        finally
+        {
+            engine.SetPsEnabled(false);
+            engine.CloseChannel(rx1);
+        }
+    }
+
+    [SkippableFact]
     public void SetMox_DoesNotThrow_AfterOpenTxChannel()
     {
         Skip.IfNot(WdspAvailable(), "libwdsp not available");

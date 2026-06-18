@@ -113,10 +113,17 @@ public static class ZeusEndpoints
             return Results.Ok(new { supported = true, enabled = radio.Snapshot().TxMonitorEnabled });
         }
 
-        static IResult SetAudioSuitePreview(PreviewSetRequest body, RadioService radio)
+        static IResult SetAudioSuitePreview(PreviewSetRequest body, RadioService radio, DspPipelineService pipe)
         {
+            // Meter-only is requested by Auto Tune so it can run the chain for
+            // metering without the operator hearing the demodulated monitor.
+            // Apply it before flipping the monitor on so the first monitor tick
+            // already honours suppression; clearing on disable is handled by the
+            // monitor latch in DspPipelineService.
+            bool meterOnly = body.Enabled && (body.MeterOnly ?? false);
+            pipe.SetTxMonitorMeterOnly(meterOnly);
             var state = radio.SetTxMonitor(new TxMonitorSetRequest(body.Enabled));
-            return Results.Ok(new { supported = true, enabled = state.TxMonitorEnabled });
+            return Results.Ok(new { supported = true, enabled = state.TxMonitorEnabled, meterOnly });
         }
 
         // Audio Suite Preview toggle — operator-facing alias for TX Monitor.
@@ -1143,8 +1150,16 @@ public static class ZeusEndpoints
         // an optional PresetName to track which chip is active.
         app.MapPost("/api/filter", (FilterSetRequest req, RadioService r) =>
         {
-            log.LogInformation("api.filter low={L} high={H} preset={P}", req.LowHz, req.HighHz, req.PresetName);
-            return r.SetFilter(req.LowHz, req.HighHz, req.PresetName);
+            if (req.Receiver is not (0 or 1))
+                return Results.BadRequest(new { error = $"unknown receiver {req.Receiver}" });
+            var receiver = req.Receiver == 1 ? TxVfo.B : TxVfo.A;
+            log.LogInformation(
+                "api.filter low={L} high={H} preset={P} receiver={Receiver}",
+                req.LowHz,
+                req.HighHz,
+                req.PresetName,
+                receiver);
+            return Results.Ok(r.SetFilter(req.LowHz, req.HighHz, req.PresetName, receiver));
         });
 
         app.MapGet("/api/filter/presets", (string? mode, RadioService r) =>
@@ -2511,6 +2526,15 @@ public static class ZeusEndpoints
             return Results.Ok(response);
         });
 
+        app.MapGet("/api/log/worked", async (LogService logService, HttpContext ctx, string callsign, int recent = 5) =>
+        {
+            if (string.IsNullOrWhiteSpace(callsign))
+                return Results.BadRequest(new { error = "callsign required" });
+
+            var response = await logService.GetWorkedCallsignSummaryAsync(callsign, recent, ctx.RequestAborted);
+            return Results.Ok(response);
+        });
+
         app.MapPost("/api/log/entry", async (CreateLogEntryRequest req, LogService logService, HttpContext ctx) =>
         {
             if (string.IsNullOrWhiteSpace(req.Callsign))
@@ -3656,7 +3680,7 @@ public static class ZeusEndpoints
 }
 
 internal sealed record NativeMuteRequest(bool Muted);
-internal sealed record PreviewSetRequest(bool Enabled);
+internal sealed record PreviewSetRequest(bool Enabled, bool? MeterOnly = null);
 internal sealed record ChainOrderSetRequest(List<string> PluginIds);
 internal sealed record ChainMembershipSetRequest(bool Active);
 internal sealed record ScanVstDirectoryRequest(string Directory, string? Route = null);

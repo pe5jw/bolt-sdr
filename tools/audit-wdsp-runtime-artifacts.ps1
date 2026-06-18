@@ -1,7 +1,7 @@
 param(
     [string]$RuntimeRoot = "Zeus.Dsp/runtimes",
     [string]$ReportPath = "",
-    [switch]$FailOnMissingWinX64Nr5,
+    [switch]$FailOnMissingWinX64CurrentNr,
     [switch]$JsonOnly
 )
 
@@ -39,7 +39,24 @@ function Get-FileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "" }
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $getFileHash = Get-Command Get-FileHash -ErrorAction SilentlyContinue
+    if ($null -ne $getFileHash) {
+        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return ([System.BitConverter]::ToString($sha256.ComputeHash($stream)) -replace "-", "").ToLowerInvariant()
+        }
+        finally {
+            $sha256.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
 }
 
 function Get-ExpectedNativeName {
@@ -70,20 +87,6 @@ if (-not (Test-Path -LiteralPath $runtimeRootPath -PathType Container)) {
 }
 
 $nr4Symbols = @("SetRXASBNRRun")
-$nr5Symbols = @(
-    "SetRXASPNRRun",
-    "SetRXASPNRPosition",
-    "SetRXASPNRAggressiveness",
-    "SetRXASPNRAgcRun",
-    "SetRXASPNRAgcTarget",
-    "GetRXASPNRDiagnostics",
-    "GetRXASPNRAdvancedDiagnostics",
-    "GetRXASPNRDeepDiagnostics",
-    "GetRXASPNRProbabilityDiagnostics",
-    "GetRXASPNRPeakDiagnostics",
-    "GetRXASPNRAgcDiagnostics",
-    "GetRXASPNRMemoryDiagnostics"
-)
 
 $artifacts = New-Object System.Collections.Generic.List[object]
 foreach ($ridDir in (Get-ChildItem -LiteralPath $runtimeRootPath -Directory | Sort-Object Name)) {
@@ -98,11 +101,6 @@ foreach ($ridDir in (Get-ChildItem -LiteralPath $runtimeRootPath -Directory | So
     $nr4Present = @{}
     foreach ($symbol in $nr4Symbols) {
         $nr4Present[$symbol] = if ($nativePresent) { Test-BinaryContainsAscii $nativePath $symbol } else { $false }
-    }
-
-    $nr5Present = @{}
-    foreach ($symbol in $nr5Symbols) {
-        $nr5Present[$symbol] = if ($nativePresent) { Test-BinaryContainsAscii $nativePath $symbol } else { $false }
     }
 
     $expectedDeps = @(Get-ExpectedSideBySideDependencies $rid)
@@ -124,14 +122,11 @@ foreach ($ridDir in (Get-ChildItem -LiteralPath $runtimeRootPath -Directory | So
     }
 
     $nr4Ready = -not ($nr4Present.Values -contains $false)
-    $nr5Ready = -not ($nr5Present.Values -contains $false)
     $depsReady = $missingDeps.Count -eq 0
     $status = if (-not $nativePresent) {
         "missing-native-artifact"
     } elseif (-not $nr4Ready) {
         "missing-nr4-symbols"
-    } elseif (-not $nr5Ready) {
-        "pending-nr5-rebuild"
     } elseif (-not $depsReady) {
         "missing-side-by-side-dependencies"
     } else {
@@ -145,11 +140,9 @@ foreach ($ridDir in (Get-ChildItem -LiteralPath $runtimeRootPath -Directory | So
         nativeLength = $nativeLength
         nativeSha256 = $nativeSha256
         nr4Ready = $nr4Ready
-        nr5Ready = $nr5Ready
         sideBySideDependenciesReady = $depsReady
         status = $status
         nr4Symbols = $nr4Present
-        nr5Symbols = $nr5Present
         sideBySideDependencies = @($dependencyFiles.ToArray())
         missingSideBySideDependencies = @($missingDeps.ToArray())
     }) | Out-Null
@@ -163,8 +156,7 @@ $report = [ordered]@{
     generatedUtc = (Get-Date).ToUniversalTime().ToString("o")
     runtimeRoot = ConvertTo-RelativePath $runtimeRootPath
     requiredNr4Symbols = $nr4Symbols
-    requiredNr5Symbols = $nr5Symbols
-    readyForWinX64Package = ($winX64.Count -gt 0 -and [bool]$winX64[0].nativePresent -and [bool]$winX64[0].nr4Ready -and [bool]$winX64[0].nr5Ready -and [bool]$winX64[0].sideBySideDependenciesReady)
+    readyForWinX64Package = ($winX64.Count -gt 0 -and [bool]$winX64[0].nativePresent -and [bool]$winX64[0].nr4Ready -and [bool]$winX64[0].sideBySideDependenciesReady)
     winX64NativePath = if ($winX64.Count -gt 0) { [string]$winX64[0].nativePath } else { "" }
     winX64NativeLength = if ($winX64.Count -gt 0) { [long]$winX64[0].nativeLength } else { 0 }
     winX64NativeSha256 = if ($winX64.Count -gt 0) { [string]$winX64[0].nativeSha256 } else { "" }
@@ -173,15 +165,15 @@ $report = [ordered]@{
     artifacts = @($artifacts.ToArray())
     recommendations = @(
         "Run tools/audit-wdsp-native-symbols.ps1 -BinaryPath Zeus.Dsp/runtimes/win-x64/native/wdsp.dll -RequireBinaryExports for PE export-table verification.",
-        "Rebuild pending RIDs through the normal native artifact workflow before advertising NR5/SPNR support on those platforms.",
+        "Rebuild pending RIDs through the normal native artifact workflow before advertising current WDSP noise-reduction support on those platforms.",
         "Keep FFTW side-by-side runtime libraries in each packaged native directory when WDSP is dynamically linked."
     )
 }
 
-if ($FailOnMissingWinX64Nr5 -and -not [bool]$report.readyForWinX64Package) {
+if ($FailOnMissingWinX64CurrentNr -and -not [bool]$report.readyForWinX64Package) {
     $json = $report | ConvertTo-Json -Depth 10
     if (-not $JsonOnly) { Write-Host $json }
-    throw "win-x64 WDSP runtime artifact is not package-ready for NR4/NR5."
+    throw "win-x64 WDSP runtime artifact is not package-ready for current noise-reduction modes."
 }
 
 if (-not [string]::IsNullOrWhiteSpace($ReportPath)) {

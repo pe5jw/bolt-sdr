@@ -79,9 +79,13 @@ export type ConnectionState = {
   txVfo: TxVfo;
   rxFocus: TxVfo;
   mode: RxMode;
+  modeB: RxMode;
   filterLowHz: number;
   filterHighHz: number;
+  filterLowHzB: number;
+  filterHighHzB: number;
   filterPresetName: string | null;
+  filterPresetNameB: string | null;
   filterAdvancedPaneOpen: boolean;
   txFilterLowHz: number;
   txFilterHighHz: number;
@@ -163,9 +167,13 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   txVfo: 'A',
   rxFocus: 'A',
   mode: 'USB',
+  modeB: 'USB',
   filterLowHz: 150,
   filterHighHz: 2850,
+  filterLowHzB: 150,
+  filterHighHzB: 2850,
   filterPresetName: 'VAR1',
+  filterPresetNameB: 'VAR1',
   filterAdvancedPaneOpen: false,
   txFilterLowHz: 150,
   txFilterHighHz: 2850,
@@ -215,9 +223,13 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         txVfo: s.txVfo,
         rxFocus: s.rx2Enabled ? prev.rxFocus : 'A',
         mode: s.mode,
+        modeB: s.modeB,
         filterLowHz: s.filterLowHz,
         filterHighHz: s.filterHighHz,
+        filterLowHzB: s.filterLowHzB,
+        filterHighHzB: s.filterHighHzB,
         filterPresetName: s.filterPresetName,
+        filterPresetNameB: s.filterPresetNameB,
         filterAdvancedPaneOpen: s.filterAdvancedPaneOpen,
         txFilterLowHz: s.txFilterLowHz,
         txFilterHighHz: s.txFilterHighHz,

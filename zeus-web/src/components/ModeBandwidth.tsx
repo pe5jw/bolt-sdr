@@ -43,7 +43,7 @@
 // License for details.
 
 import { useCallback } from 'react';
-import { setMode, type RxMode } from '../api/client';
+import { setMode, type RxMode, type TxVfo } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { toolbarFavDragMime } from './toolbar/ToolbarFavorites';
 
@@ -64,19 +64,24 @@ const MODES: readonly ModeEntry[] = [
 
 export function ModeBandwidth() {
   const mode = useConnectionStore((s) => s.mode);
+  const modeB = useConnectionStore((s) => s.modeB);
+  const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
+  const rxFocus = useConnectionStore((s) => s.rxFocus);
   const applyState = useConnectionStore((s) => s.applyState);
+  const activeReceiver: TxVfo = rxFocus === 'B' && rx2Enabled ? 'B' : 'A';
+  const activeMode = activeReceiver === 'B' ? modeB : mode;
 
   const selectMode = useCallback(
     (m: RxMode) => {
-      if (m === mode) return;
-      useConnectionStore.setState({ mode: m });
-      setMode(m)
+      if (m === activeMode) return;
+      useConnectionStore.setState(activeReceiver === 'B' ? { modeB: m } : { mode: m });
+      setMode(m, undefined, activeReceiver)
         .then(applyState)
         .catch(() => {
           /* next state poll will reconcile */
         });
     },
-    [mode, applyState],
+    [activeReceiver, activeMode, applyState],
   );
 
   return (
@@ -96,7 +101,7 @@ export function ModeBandwidth() {
                 e.dataTransfer.effectAllowed = 'move';
               }}
               onClick={() => selectMode(m.value)}
-              className={`btn sm ${mode === m.value ? 'active' : ''}`}
+              className={`btn sm ${activeMode === m.value ? 'active' : ''}`}
               title={`${m.label} — drag onto a toolbar favorite slot to pin`}
             >
               {m.label}
@@ -108,7 +113,7 @@ export function ModeBandwidth() {
       {/* Mobile: dropdown for mode selection */}
       <div className="ctrl-group show-mobile" style={{ display: 'none' }}>
         <select
-          value={mode}
+          value={activeMode}
           onChange={(e) => selectMode(e.target.value as RxMode)}
           className="mode-select"
           style={{

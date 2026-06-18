@@ -24,6 +24,11 @@ if (git status --porcelain) {
 Write-Host "==> git pull --ff-only"
 git pull --ff-only
 
+# 1b. Sync submodules — the DeepCW model and VST3 SDK live in submodules, and
+#     the web build fails if the model isn't checked out at the pulled commit.
+Write-Host "==> git submodule update --init --recursive"
+git submodule update --init --recursive
+
 # 2. Rebuild the web UI into Zeus.Server.Hosting/wwwroot. A plain 'dotnet build'
 #    only regenerates wwwroot when it's cold, so after a pull we rebuild it
 #    explicitly to guarantee the served SPA matches the new source.

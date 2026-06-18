@@ -16,7 +16,7 @@ ceremonial gates.
 Zeus is a cross-platform, web-frontend HPSDR client for original-protocol
 (Protocol 1) and Protocol-2 radios — Hermes, Mercury/Penelope/Metis,
 ANAN-class boards, Hermes-Lite 2, and the OrionMkII / Saturn family. The
-backend is .NET 8 (`Zeus.Server*`), the frontend is Vite + React
+backend is .NET 10 (`Zeus.Server*`), the frontend is Vite + React
 (`zeus-web/`), and the DSP engine is WDSP, loaded via P/Invoke. **Thetis is
 the sole authoritative reference for protocol and DSP behaviour** — when
 Zeus and Thetis disagree, Thetis is right by default unless there's a
@@ -50,6 +50,13 @@ Three things to know before you write a line of code:
 The repo's README has full details; the short version:
 
 ```bash
+# Clone WITH submodules — the DeepCW model (zeus-web/external/deepcw-engine)
+# and the VST3 SDK (native/zeus-vst-bridge/third_party/vst3sdk) live in
+# submodules, and the web build fails without the DeepCW model present.
+git clone --recurse-submodules https://github.com/Kb2uka/openhpsdr-zeus.git
+# Already cloned without it? Run:
+git submodule update --init --recursive
+
 # Backend (listens on :6060). OpenhpsdrZeus is the executable host;
 # Zeus.Server.Hosting next to it is a class library — don't pass it to dotnet run.
 dotnet run --project OpenhpsdrZeus

@@ -24,21 +24,23 @@ const MODE_OPTIONS: readonly ToolbarOption[] = [
 
 export function ModeFavorites() {
   const mode = useConnectionStore((s) => s.mode);
+  const modeB = useConnectionStore((s) => s.modeB);
   const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
   const rxFocus = useConnectionStore((s) => s.rxFocus);
   const applyState = useConnectionStore((s) => s.applyState);
   const activeReceiver: TxVfo = rxFocus === 'B' && rx2Enabled ? 'B' : 'A';
+  const activeMode = activeReceiver === 'B' ? modeB : mode;
 
   const onSelect = useCallback(
     (key: string) => {
       const m = key as RxMode;
-      if (m === mode) return;
-      useConnectionStore.setState({ mode: m });
+      if (m === activeMode) return;
+      useConnectionStore.setState(activeReceiver === 'B' ? { modeB: m } : { mode: m });
       setMode(m, undefined, activeReceiver).then(applyState).catch(() => {
         /* next state poll reconciles */
       });
     },
-    [activeReceiver, mode, applyState],
+    [activeReceiver, activeMode, applyState],
   );
 
   return (
@@ -46,7 +48,7 @@ export function ModeFavorites() {
       kind="mode"
       label="MODE"
       options={MODE_OPTIONS}
-      currentKey={mode}
+      currentKey={activeMode}
       onSelect={onSelect}
       minWidth={142}
     />

@@ -47,7 +47,7 @@ public static class DspBenchmarkCaptureManifestService
         }
         else
         {
-            actions.Add("Run the listed scenarios on G2 and compare against off, Thetis-parity, current Zeus, and candidate-under-test baselines.");
+            actions.Add("Run the listed scenarios on G2 and compare against off, Thetis-parity, current Zeus, and comparison-under-test baselines.");
         }
 
         var status = Status(live);
@@ -121,7 +121,7 @@ public static class DspBenchmarkCaptureManifestService
                 "live-diagnostics-json",
                 "endpoint-json",
                 "/api/dsp/live-diagnostics",
-                "Capture live readiness, constraints, next scenarios, NR runtime alignment, and candidate gates.",
+                "Capture live readiness, constraints, next scenarios, NR runtime alignment, and comparison preflight gates.",
                 "before-and-after-each-scenario",
                 true,
                 all),
@@ -153,7 +153,7 @@ public static class DspBenchmarkCaptureManifestService
                 "live-diagnostics-history",
                 "diagnostics-history-json",
                 "tools/summarize-dsp-live-diagnostics-history.ps1",
-                "Summarize captured non-NR5 and legacy live diagnostics attempts, rank best weak-signal and lowest-pumping traces, and preserve safety-class rollups before selecting the next candidate comparison.",
+                "Summarize captured under-test and baseline live diagnostics attempts, rank best weak-signal and lowest-pumping traces, and preserve safety-class rollups before selecting the next comparison.",
                 "once-after-several-live-diagnostics-attempts",
                 false,
                 all),
@@ -225,7 +225,7 @@ public static class DspBenchmarkCaptureManifestService
                 "wdsp-runtime-artifact-audit",
                 "runtime-audit-json",
                 "tools/audit-wdsp-runtime-artifacts.ps1",
-                "Audit packaged WDSP runtime artifacts by RID for NR4/NR5 symbol presence and side-by-side native dependencies.",
+                "Audit packaged WDSP runtime artifacts by RID for NR4 symbol presence and side-by-side native dependencies.",
                 "once-per-native-build-and-candidate",
                 true,
                 all),

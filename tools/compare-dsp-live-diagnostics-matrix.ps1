@@ -410,7 +410,7 @@ function Add-Entry {
     $Map[$scenario].Add($Entry) | Out-Null
 }
 
-function New-Nr5WeakSignalAccumulator {
+function New-CandidateWeakSignalAccumulator {
     return [ordered]@{
         baselineWeakInputSampleCount = 0.0
         candidateWeakInputSampleCount = 0.0
@@ -483,7 +483,7 @@ function New-RxAudioLevelerAccumulator {
     }
 }
 
-function Add-Nr5NumericPairToAccumulator {
+function Add-CandidateNumericPairToAccumulator {
     param(
         [System.Collections.Specialized.OrderedDictionary]$Accumulator,
         $Comparison,
@@ -505,7 +505,7 @@ function Add-Nr5NumericPairToAccumulator {
     $Accumulator[$CountName] = [double]$Accumulator[$CountName] + 1.0
 }
 
-function Add-Nr5NumericMaxPairToAccumulator {
+function Add-CandidateNumericMaxPairToAccumulator {
     param(
         [System.Collections.Specialized.OrderedDictionary]$Accumulator,
         $Comparison,
@@ -539,7 +539,7 @@ function Add-Nr5NumericMaxPairToAccumulator {
     $Accumulator[$CountName] = [double]$Accumulator[$CountName] + 1.0
 }
 
-function Add-Nr5RegressionFlagToAccumulator {
+function Add-CandidateRegressionFlagToAccumulator {
     param(
         [System.Collections.Specialized.OrderedDictionary]$Accumulator,
         $Comparison,
@@ -552,7 +552,7 @@ function Add-Nr5RegressionFlagToAccumulator {
     }
 }
 
-function Add-Nr5WeakSignalComparison {
+function Add-CandidateWeakSignalComparison {
     param(
         [System.Collections.Specialized.OrderedDictionary]$Accumulator,
         $Comparison
@@ -580,7 +580,7 @@ function Add-Nr5WeakSignalComparison {
         }
     }
 
-    Add-Nr5NumericPairToAccumulator `
+    Add-CandidateNumericPairToAccumulator `
         -Accumulator $Accumulator `
         -Comparison $Comparison `
         -BaselineName "baselineOutputMovementDb" `
@@ -588,7 +588,7 @@ function Add-Nr5WeakSignalComparison {
         -BaselineTotalName "baselineOutputMovementDbTotal" `
         -CandidateTotalName "candidateOutputMovementDbTotal" `
         -CountName "outputMovementComparisonCount"
-    Add-Nr5NumericPairToAccumulator `
+    Add-CandidateNumericPairToAccumulator `
         -Accumulator $Accumulator `
         -Comparison $Comparison `
         -BaselineName "baselineMakeupMovementDb" `
@@ -596,7 +596,7 @@ function Add-Nr5WeakSignalComparison {
         -BaselineTotalName "baselineMakeupMovementDbTotal" `
         -CandidateTotalName "candidateMakeupMovementDbTotal" `
         -CountName "makeupMovementComparisonCount"
-    Add-Nr5NumericMaxPairToAccumulator `
+    Add-CandidateNumericMaxPairToAccumulator `
         -Accumulator $Accumulator `
         -Comparison $Comparison `
         -BaselineName "baselineMakeupMaxDb" `
@@ -604,7 +604,7 @@ function Add-Nr5WeakSignalComparison {
         -BaselineMaxName "baselineMakeupMaxDbMax" `
         -CandidateMaxName "candidateMakeupMaxDbMax" `
         -CountName "makeupMaxComparisonCount"
-    Add-Nr5NumericPairToAccumulator `
+    Add-CandidateNumericPairToAccumulator `
         -Accumulator $Accumulator `
         -Comparison $Comparison `
         -BaselineName "baselineRecoveryDriveMovement" `
@@ -612,7 +612,7 @@ function Add-Nr5WeakSignalComparison {
         -BaselineTotalName "baselineRecoveryDriveMovementTotal" `
         -CandidateTotalName "candidateRecoveryDriveMovementTotal" `
         -CountName "recoveryDriveMovementComparisonCount"
-    Add-Nr5NumericPairToAccumulator `
+    Add-CandidateNumericPairToAccumulator `
         -Accumulator $Accumulator `
         -Comparison $Comparison `
         -BaselineName "baselineTextureFillAverage" `
@@ -620,7 +620,7 @@ function Add-Nr5WeakSignalComparison {
         -BaselineTotalName "baselineTextureFillAverageTotal" `
         -CandidateTotalName "candidateTextureFillAverageTotal" `
         -CountName "textureFillComparisonCount"
-    Add-Nr5NumericMaxPairToAccumulator `
+    Add-CandidateNumericMaxPairToAccumulator `
         -Accumulator $Accumulator `
         -Comparison $Comparison `
         -BaselineName "baselineLowEvidenceLiftedPct" `
@@ -628,7 +628,7 @@ function Add-Nr5WeakSignalComparison {
         -BaselineMaxName "baselineLowEvidenceLiftedPctMax" `
         -CandidateMaxName "candidateLowEvidenceLiftedPctMax" `
         -CountName "lowEvidenceLiftedPctComparisonCount"
-    Add-Nr5NumericMaxPairToAccumulator `
+    Add-CandidateNumericMaxPairToAccumulator `
         -Accumulator $Accumulator `
         -Comparison $Comparison `
         -BaselineName "baselineAudioAlignmentMismatchPct" `
@@ -636,7 +636,7 @@ function Add-Nr5WeakSignalComparison {
         -BaselineMaxName "baselineAudioAlignmentMismatchPctMax" `
         -CandidateMaxName "candidateAudioAlignmentMismatchPctMax" `
         -CountName "audioAlignmentMismatchComparisonCount"
-    Add-Nr5NumericMaxPairToAccumulator `
+    Add-CandidateNumericMaxPairToAccumulator `
         -Accumulator $Accumulator `
         -Comparison $Comparison `
         -BaselineName "baselineArtifactRiskScore" `
@@ -645,14 +645,14 @@ function Add-Nr5WeakSignalComparison {
         -CandidateMaxName "candidateArtifactRiskScoreMax" `
         -CountName "artifactRiskScoreComparisonCount"
 
-    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "outputMovementRegression" -CountName "outputMovementRegressionCount"
-    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "makeupMovementRegression" -CountName "makeupMovementRegressionCount"
-    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "makeupMaxRegression" -CountName "makeupMaxRegressionCount"
-    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "recoveryDriveMovementRegression" -CountName "recoveryDriveMovementRegressionCount"
-    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "lowEvidenceLiftedRegression" -CountName "lowEvidenceLiftedRegressionCount"
-    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "lowEvidenceLiftedPctRegression" -CountName "lowEvidenceLiftedPctRegressionCount"
-    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "audioAlignmentMismatchRegression" -CountName "audioAlignmentMismatchRegressionCount"
-    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "artifactRiskRegression" -CountName "artifactRiskRegressionCount"
+    Add-CandidateRegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "outputMovementRegression" -CountName "outputMovementRegressionCount"
+    Add-CandidateRegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "makeupMovementRegression" -CountName "makeupMovementRegressionCount"
+    Add-CandidateRegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "makeupMaxRegression" -CountName "makeupMaxRegressionCount"
+    Add-CandidateRegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "recoveryDriveMovementRegression" -CountName "recoveryDriveMovementRegressionCount"
+    Add-CandidateRegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "lowEvidenceLiftedRegression" -CountName "lowEvidenceLiftedRegressionCount"
+    Add-CandidateRegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "lowEvidenceLiftedPctRegression" -CountName "lowEvidenceLiftedPctRegressionCount"
+    Add-CandidateRegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "audioAlignmentMismatchRegression" -CountName "audioAlignmentMismatchRegressionCount"
+    Add-CandidateRegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "artifactRiskRegression" -CountName "artifactRiskRegressionCount"
 }
 
 function Add-RxAudioLevelerComparison {
@@ -683,7 +683,7 @@ function Add-RxAudioLevelerComparison {
         }
     }
 
-    Add-Nr5NumericPairToAccumulator `
+    Add-CandidateNumericPairToAccumulator `
         -Accumulator $Accumulator `
         -Comparison $Comparison `
         -BaselineName "baselineOutputRmsMovementDb" `
@@ -691,7 +691,7 @@ function Add-RxAudioLevelerComparison {
         -BaselineTotalName "baselineOutputRmsMovementDbTotal" `
         -CandidateTotalName "candidateOutputRmsMovementDbTotal" `
         -CountName "outputRmsMovementComparisonCount"
-    Add-Nr5NumericPairToAccumulator `
+    Add-CandidateNumericPairToAccumulator `
         -Accumulator $Accumulator `
         -Comparison $Comparison `
         -BaselineName "baselineAppliedGainMovementDb" `
@@ -700,14 +700,14 @@ function Add-RxAudioLevelerComparison {
         -CandidateTotalName "candidateAppliedGainMovementDbTotal" `
         -CountName "appliedGainMovementComparisonCount"
 
-    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "constrainedRegression" -CountName "constrainedRegressionCount"
-    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "constrainedPctRegression" -CountName "constrainedPctRegressionCount"
-    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "boostSlewRegression" -CountName "boostSlewRegressionCount"
-    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "peakLimitedRegression" -CountName "peakLimitedRegressionCount"
-    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "outputLimitedRegression" -CountName "outputLimitedRegressionCount"
+    Add-CandidateRegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "constrainedRegression" -CountName "constrainedRegressionCount"
+    Add-CandidateRegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "constrainedPctRegression" -CountName "constrainedPctRegressionCount"
+    Add-CandidateRegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "boostSlewRegression" -CountName "boostSlewRegressionCount"
+    Add-CandidateRegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "peakLimitedRegression" -CountName "peakLimitedRegressionCount"
+    Add-CandidateRegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "outputLimitedRegression" -CountName "outputLimitedRegressionCount"
 }
 
-function Get-Nr5AccumulatorAverage {
+function Get-CandidateAccumulatorAverage {
     param(
         [System.Collections.Specialized.OrderedDictionary]$Accumulator,
         [Parameter(Mandatory = $true)][string]$TotalName,
@@ -722,7 +722,7 @@ function Get-Nr5AccumulatorAverage {
     return [Math]::Round([double]$Accumulator[$TotalName] / $count, 3)
 }
 
-function Get-Nr5AccumulatorValueOrZero {
+function Get-CandidateAccumulatorValueOrZero {
     param(
         [System.Collections.Specialized.OrderedDictionary]$Accumulator,
         [Parameter(Mandatory = $true)][string]$Name
@@ -735,7 +735,7 @@ function Get-Nr5AccumulatorValueOrZero {
     return [Math]::Round([double]$Accumulator[$Name], 3)
 }
 
-function Complete-Nr5WeakSignalSummary {
+function Complete-CandidateWeakSignalSummary {
     param([System.Collections.Specialized.OrderedDictionary]$Accumulator)
 
     $baselineWeakInput = [double]$Accumulator["baselineWeakInputSampleCount"]
@@ -748,24 +748,24 @@ function Complete-Nr5WeakSignalSummary {
     $candidateHotMakeup = [double]$Accumulator["candidateHotMakeupSampleCount"]
     $baselineRecoveryPct = if ($baselineWeakInput -le 0.0) { 100.0 } else { [Math]::Round(100.0 * $baselineWeakRecovered / $baselineWeakInput, 3) }
     $candidateRecoveryPct = if ($candidateWeakInput -le 0.0) { 100.0 } else { [Math]::Round(100.0 * $candidateWeakRecovered / $candidateWeakInput, 3) }
-    $baselineOutputMovement = Get-Nr5AccumulatorAverage $Accumulator "baselineOutputMovementDbTotal" "outputMovementComparisonCount"
-    $candidateOutputMovement = Get-Nr5AccumulatorAverage $Accumulator "candidateOutputMovementDbTotal" "outputMovementComparisonCount"
-    $baselineMakeupMovement = Get-Nr5AccumulatorAverage $Accumulator "baselineMakeupMovementDbTotal" "makeupMovementComparisonCount"
-    $candidateMakeupMovement = Get-Nr5AccumulatorAverage $Accumulator "candidateMakeupMovementDbTotal" "makeupMovementComparisonCount"
-    $baselineMakeupMax = Get-Nr5AccumulatorValueOrZero $Accumulator "baselineMakeupMaxDbMax"
-    $candidateMakeupMax = Get-Nr5AccumulatorValueOrZero $Accumulator "candidateMakeupMaxDbMax"
-    $baselineRecoveryMovement = Get-Nr5AccumulatorAverage $Accumulator "baselineRecoveryDriveMovementTotal" "recoveryDriveMovementComparisonCount"
-    $candidateRecoveryMovement = Get-Nr5AccumulatorAverage $Accumulator "candidateRecoveryDriveMovementTotal" "recoveryDriveMovementComparisonCount"
-    $baselineTextureAverage = Get-Nr5AccumulatorAverage $Accumulator "baselineTextureFillAverageTotal" "textureFillComparisonCount"
-    $candidateTextureAverage = Get-Nr5AccumulatorAverage $Accumulator "candidateTextureFillAverageTotal" "textureFillComparisonCount"
+    $baselineOutputMovement = Get-CandidateAccumulatorAverage $Accumulator "baselineOutputMovementDbTotal" "outputMovementComparisonCount"
+    $candidateOutputMovement = Get-CandidateAccumulatorAverage $Accumulator "candidateOutputMovementDbTotal" "outputMovementComparisonCount"
+    $baselineMakeupMovement = Get-CandidateAccumulatorAverage $Accumulator "baselineMakeupMovementDbTotal" "makeupMovementComparisonCount"
+    $candidateMakeupMovement = Get-CandidateAccumulatorAverage $Accumulator "candidateMakeupMovementDbTotal" "makeupMovementComparisonCount"
+    $baselineMakeupMax = Get-CandidateAccumulatorValueOrZero $Accumulator "baselineMakeupMaxDbMax"
+    $candidateMakeupMax = Get-CandidateAccumulatorValueOrZero $Accumulator "candidateMakeupMaxDbMax"
+    $baselineRecoveryMovement = Get-CandidateAccumulatorAverage $Accumulator "baselineRecoveryDriveMovementTotal" "recoveryDriveMovementComparisonCount"
+    $candidateRecoveryMovement = Get-CandidateAccumulatorAverage $Accumulator "candidateRecoveryDriveMovementTotal" "recoveryDriveMovementComparisonCount"
+    $baselineTextureAverage = Get-CandidateAccumulatorAverage $Accumulator "baselineTextureFillAverageTotal" "textureFillComparisonCount"
+    $candidateTextureAverage = Get-CandidateAccumulatorAverage $Accumulator "candidateTextureFillAverageTotal" "textureFillComparisonCount"
     $baselineLowEvidenceLifted = [double]$Accumulator["baselineLowEvidenceLiftedSampleCount"]
     $candidateLowEvidenceLifted = [double]$Accumulator["candidateLowEvidenceLiftedSampleCount"]
-    $baselineLowEvidenceLiftedPct = Get-Nr5AccumulatorValueOrZero $Accumulator "baselineLowEvidenceLiftedPctMax"
-    $candidateLowEvidenceLiftedPct = Get-Nr5AccumulatorValueOrZero $Accumulator "candidateLowEvidenceLiftedPctMax"
-    $baselineAudioAlignmentMismatchPct = Get-Nr5AccumulatorValueOrZero $Accumulator "baselineAudioAlignmentMismatchPctMax"
-    $candidateAudioAlignmentMismatchPct = Get-Nr5AccumulatorValueOrZero $Accumulator "candidateAudioAlignmentMismatchPctMax"
-    $baselineArtifactRiskScore = Get-Nr5AccumulatorValueOrZero $Accumulator "baselineArtifactRiskScoreMax"
-    $candidateArtifactRiskScore = Get-Nr5AccumulatorValueOrZero $Accumulator "candidateArtifactRiskScoreMax"
+    $baselineLowEvidenceLiftedPct = Get-CandidateAccumulatorValueOrZero $Accumulator "baselineLowEvidenceLiftedPctMax"
+    $candidateLowEvidenceLiftedPct = Get-CandidateAccumulatorValueOrZero $Accumulator "candidateLowEvidenceLiftedPctMax"
+    $baselineAudioAlignmentMismatchPct = Get-CandidateAccumulatorValueOrZero $Accumulator "baselineAudioAlignmentMismatchPctMax"
+    $candidateAudioAlignmentMismatchPct = Get-CandidateAccumulatorValueOrZero $Accumulator "candidateAudioAlignmentMismatchPctMax"
+    $baselineArtifactRiskScore = Get-CandidateAccumulatorValueOrZero $Accumulator "baselineArtifactRiskScoreMax"
+    $candidateArtifactRiskScore = Get-CandidateAccumulatorValueOrZero $Accumulator "candidateArtifactRiskScoreMax"
 
     return [ordered]@{
         baselineWeakInputSampleCount = [int][Math]::Round($baselineWeakInput)
@@ -841,10 +841,10 @@ function Complete-RxAudioLevelerSummary {
     $candidateConstrained = [double]$Accumulator["candidateConstrainedSampleCount"]
     $baselineConstrainedPct = if ($baselineDiagnostics -le 0.0) { 0.0 } else { [Math]::Round(100.0 * $baselineConstrained / $baselineDiagnostics, 3) }
     $candidateConstrainedPct = if ($candidateDiagnostics -le 0.0) { 0.0 } else { [Math]::Round(100.0 * $candidateConstrained / $candidateDiagnostics, 3) }
-    $baselineOutputMovement = Get-Nr5AccumulatorAverage $Accumulator "baselineOutputRmsMovementDbTotal" "outputRmsMovementComparisonCount"
-    $candidateOutputMovement = Get-Nr5AccumulatorAverage $Accumulator "candidateOutputRmsMovementDbTotal" "outputRmsMovementComparisonCount"
-    $baselineGainMovement = Get-Nr5AccumulatorAverage $Accumulator "baselineAppliedGainMovementDbTotal" "appliedGainMovementComparisonCount"
-    $candidateGainMovement = Get-Nr5AccumulatorAverage $Accumulator "candidateAppliedGainMovementDbTotal" "appliedGainMovementComparisonCount"
+    $baselineOutputMovement = Get-CandidateAccumulatorAverage $Accumulator "baselineOutputRmsMovementDbTotal" "outputRmsMovementComparisonCount"
+    $candidateOutputMovement = Get-CandidateAccumulatorAverage $Accumulator "candidateOutputRmsMovementDbTotal" "outputRmsMovementComparisonCount"
+    $baselineGainMovement = Get-CandidateAccumulatorAverage $Accumulator "baselineAppliedGainMovementDbTotal" "appliedGainMovementComparisonCount"
+    $candidateGainMovement = Get-CandidateAccumulatorAverage $Accumulator "candidateAppliedGainMovementDbTotal" "appliedGainMovementComparisonCount"
 
     return [ordered]@{
         baselineDiagnosticSampleCount = [int][Math]::Round($baselineDiagnostics)
@@ -1230,13 +1230,13 @@ function Build-MarkdownReport {
         }
     }
 
-    $weakSignal = Get-JsonValue $Report "nr5WeakSignalComparisonSummary"
+    $weakSignal = Get-JsonValue $Report "candidateWeakSignalComparisonSummary"
     if ($null -ne $weakSignal -and
         ([int](Get-JsonValue $weakSignal "baselineWeakInputSampleCount") -gt 0 -or
             [int](Get-JsonValue $weakSignal "candidateWeakInputSampleCount") -gt 0 -or
             [double](Get-NumericValue (Get-JsonValue $weakSignal "baselineArtifactRiskScoreMax")) -gt 0.0 -or
             [double](Get-NumericValue (Get-JsonValue $weakSignal "candidateArtifactRiskScoreMax")) -gt 0.0)) {
-        $lines.Add("## NR5 Weak-Signal Aggregate") | Out-Null
+        $lines.Add("## Candidate Weak-Signal Aggregate") | Out-Null
         $lines.Add("") | Out-Null
         $lines.Add("| Metric | Baseline | Candidate | Delta |") | Out-Null
         $lines.Add("|---|---:|---:|---:|") | Out-Null
@@ -1404,7 +1404,7 @@ $gateFailureDetails = New-Object System.Collections.Generic.List[object]
 $metricDefinitions = New-Object System.Collections.Generic.List[object]
 $metricDefinitionIds = @{}
 $metricDefinitionSource = ""
-$nr5WeakSignalAccumulator = New-Nr5WeakSignalAccumulator
+$candidateWeakSignalAccumulator = New-CandidateWeakSignalAccumulator
 $rxAudioLevelerAccumulator = New-RxAudioLevelerAccumulator
 $captureReadinessComparisonCount = 0
 $candidateHardGatePassCount = 0
@@ -1470,7 +1470,7 @@ foreach ($scenarioId in $scenarioIds) {
             gateFailureCount = 0
             missingMetricValueCount = 0
             captureReadinessComparison = $null
-            nr5WeakSignalComparison = $null
+            candidateWeakSignalComparison = $null
             rxAudioLevelerComparison = $null
             error = $null
         }
@@ -1500,7 +1500,7 @@ foreach ($scenarioId in $scenarioIds) {
                 -Comparison (Get-JsonValue $scenarioReport "captureReadinessComparison") `
                 -BaselineEntry $baselineEntry `
                 -CandidateEntry $candidateEntry
-            $scenarioRecord["nr5WeakSignalComparison"] = Get-JsonValue $scenarioReport "nr5WeakSignalComparison"
+            $scenarioRecord["candidateWeakSignalComparison"] = Get-JsonValue $scenarioReport "candidateWeakSignalComparison"
             $scenarioRecord["rxAudioLevelerComparison"] = Get-JsonValue $scenarioReport "rxAudioLevelerComparison"
             foreach ($metricDefinition in @(Get-JsonArray $scenarioReport "metricDefinitions")) {
                 $definitionId = [string](Get-JsonValue $metricDefinition "id")
@@ -1555,7 +1555,7 @@ foreach ($scenarioId in $scenarioIds) {
                 }
                 Add-CountMapValue -Map $candidateTopCaptureHardConstraintCounts -Name $topHardConstraintName -Count $topHardConstraintCount
             }
-            Add-Nr5WeakSignalComparison -Accumulator $nr5WeakSignalAccumulator -Comparison $scenarioRecord["nr5WeakSignalComparison"]
+            Add-CandidateWeakSignalComparison -Accumulator $candidateWeakSignalAccumulator -Comparison $scenarioRecord["candidateWeakSignalComparison"]
             Add-RxAudioLevelerComparison -Accumulator $rxAudioLevelerAccumulator -Comparison $scenarioRecord["rxAudioLevelerComparison"]
 
             foreach ($metric in (Get-JsonArray $scenarioReport "metricComparisons")) {
@@ -1647,7 +1647,7 @@ $readyForReview = ($comparisonCount -gt 0 -and
     $gateFailureCount -eq 0 -and
     $missingMetricValueCount -eq 0)
 
-$nr5WeakSignalComparisonSummary = Complete-Nr5WeakSignalSummary $nr5WeakSignalAccumulator
+$candidateWeakSignalComparisonSummary = Complete-CandidateWeakSignalSummary $candidateWeakSignalAccumulator
 $rxAudioLevelerComparisonSummary = Complete-RxAudioLevelerSummary $rxAudioLevelerAccumulator
 $captureReadinessComparisonSummary = [ordered]@{
     scenarioComparisonCount = $captureReadinessComparisonCount
@@ -1706,7 +1706,7 @@ $report = [ordered]@{
     metricDefinitionCount = @($metricDefinitions.ToArray()).Count
     metricDefinitions = @($metricDefinitions.ToArray())
     captureReadinessComparisonSummary = $captureReadinessComparisonSummary
-    nr5WeakSignalComparisonSummary = $nr5WeakSignalComparisonSummary
+    candidateWeakSignalComparisonSummary = $candidateWeakSignalComparisonSummary
     rxAudioLevelerComparisonSummary = $rxAudioLevelerComparisonSummary
     metricRegressionSafetyClassCounts = @($metricRegressionSafetyClassCounts)
     metricMissingSafetyClassCounts = @($metricMissingSafetyClassCounts)

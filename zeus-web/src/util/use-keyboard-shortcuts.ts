@@ -57,7 +57,7 @@ import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import { useTxStore } from '../state/tx-store';
 import { ACTIVE_MAP_REF } from '../state/active-map-ref';
 import { ensureTxStationProfileActivated } from '../audio/tx-station-profile-activation';
-import { runTxBandPreflight } from '../tx/tx-band-preflight';
+import { applyCtunZoomCenterAfterState, centerCtunForZoomIn } from './ctun-zoom-center';
 
 // The arrow-key tune step follows the operator's TuningStepWidget choice
 // (toolbar-favorites-store.stepHz). Read at event time inside bumpTune so
@@ -146,9 +146,13 @@ export function useKeyboardShortcuts() {
       zoomAbort?.abort();
       const ctrl = new AbortController();
       zoomAbort = ctrl;
+      const centeredLoHz = centerCtunForZoomIn(store.zoomLevel, next, ctrl.signal);
       setZoom(next, ctrl.signal)
         .then((s) => {
-          if (!ctrl.signal.aborted) useConnectionStore.getState().applyState(s);
+          if (!ctrl.signal.aborted) {
+            useConnectionStore.getState().applyState(s);
+            applyCtunZoomCenterAfterState(centeredLoHz);
+          }
         })
         .catch(() => {});
     };
@@ -164,8 +168,6 @@ export function useKeyboardShortcuts() {
         if (on) {
           try {
             await ensureTxStationProfileActivated();
-            const ready = await runTxBandPreflight();
-            if (!ready) return;
           } catch {
             return;
           }

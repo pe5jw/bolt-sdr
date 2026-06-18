@@ -2020,7 +2020,7 @@ if ($PlanOnly) {
                 "With -AllowRetune the tool posts only RX tuning endpoints, waits for RX settling, delegates evidence capture to watch-dsp-live-diagnostics, then restores the original VFO and radio LO in a verified finally block.",
                 "Frontend peak and operator-style retunes are passband-centered for LSB/USB when mode/filter data is available, then snapped to -TuneStepHz; exact signal targets remain in exactFrequencyHz, exactRetuneVfoHz, peakToRetunedVfoOffsetHz, and tuneSnapDeltaHz fields.",
                 "Frontend peak retunes are bounded by -PeakRetuneLowHz/-PeakRetuneHighHz when supplied, otherwise by the candidate-frequency span plus -PeakRetunePaddingHz when operator/cluster candidates exist.",
-                "The tool does not approve DSP default changes; it only hunts for the missing G2 mixed weak+strong NR5/SPNR evidence window."
+                "The tool does not approve DSP default changes; it only hunts for the missing G2 mixed weak+strong candidate DSP evidence window."
             )
         }
         example = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-g2-rx-peak-hunt.ps1 -BaseUrl auto -SamplesPerWindow 24 -IntervalMs 250 -MaxPeaks 6"
@@ -2190,7 +2190,7 @@ catch {
             wdspNativeLoadable = $false
             requestedNrMode = ""
             effectiveNrMode = ""
-            readyForNr5Tuning = $false
+            readyForCandidateTuning = $false
             frontendSceneFresh = $false
         }
         frontendScene = [ordered]@{
@@ -2414,7 +2414,7 @@ try {
             liveDiagnostics = [ordered]@{
                 status = [string](Get-JsonValue $live "status")
                 effectiveNrMode = [string](Get-JsonValue $live "effectiveNrMode")
-                readyForNr5Tuning = Test-Truthy (Get-JsonValue $live "readyForNr5Tuning")
+                readyForCandidateTuning = Test-Truthy (Get-JsonValue $live "readyForCandidateTuning")
                 frontendSceneFresh = Test-Truthy (Get-JsonValue $live "frontendSceneFresh")
             }
             frontendScene = [ordered]@{
@@ -2557,7 +2557,7 @@ try {
                 }
 
                 $report = $watch.report
-                $weak = Get-JsonValue $report "nr5WeakSignalWatch"
+                $weak = Get-JsonValue $report "candidateWeakSignalWatch"
                 $weakInput = Get-IntValue (Get-JsonValue $weak "weakInputSampleCount")
                 $strongInput = Get-IntValue (Get-JsonValue $weak "strongInputSampleCount")
                 $nearStrongInput = Get-IntValue (Get-JsonValue $weak "nearStrongInputSampleCount")
@@ -2630,8 +2630,8 @@ try {
                     failedSampleCount = Get-IntValue (Get-JsonValue $report "failedSampleCount")
                     readySampleCount = Get-IntValue (Get-JsonValue $report "readySampleCount")
                     hardBlockerSampleCount = Get-IntValue (Get-JsonValue $report "hardBlockerSampleCount")
-                    nr5TuningTraceStatus = [string](Get-JsonValue $report "nr5TuningTraceStatus")
-                    nr5TuningReadySampleCount = Get-IntValue (Get-JsonValue $report "nr5TuningReadySampleCount")
+                    candidateTuningTraceStatus = [string](Get-JsonValue $report "candidateTuningTraceStatus")
+                    candidateTuningReadySampleCount = Get-IntValue (Get-JsonValue $report "candidateTuningReadySampleCount")
                     agcStabilityStatus = [string](Get-JsonValue $agc "status")
                     agcPumpingRisk = Test-Truthy (Get-JsonValue $agc "pumpingRisk")
                     agcMovementDb = Get-NullableDoubleValue (Get-JsonValue (Get-JsonValue $report "agcGainDb") "movement")
@@ -2881,34 +2881,34 @@ if ($rejectedRetuneCandidateArray.Count -gt 0) {
     $recommendations.Add("One or more retune candidates were rejected before VFO movement; inspect rejectedRetuneCandidates before widening span bounds or adding new candidate frequencies.") | Out-Null
 }
 if ($mixedReadyRunCount -gt 0 -and $null -ne $bestRun) {
-    $recommendations.Add("A mixed weak+strong NR5/SPNR run was found; promote '$($bestRun.reportPath)' into live history and compare it against current-Zeus/Thetis-parity windows before tuning defaults.") | Out-Null
+    $recommendations.Add("A mixed weak+strong candidate DSP run was found; promote '$($bestRun.reportPath)' into live history and compare it against current-Zeus/Thetis-parity windows before tuning defaults.") | Out-Null
 }
 elseif ($weakTotal -gt 0 -and $strongTotal -le 0 -and $nearStrongTotal -gt 0) {
-    $recommendations.Add("The hunt found weak NR5/SPNR input plus near-strong samples but no strict strong-input speech; extend dwell or retune around the best near-strong run before calling the frequency neighborhood exhausted.") | Out-Null
+    $recommendations.Add("The hunt found weak candidate DSP input plus near-strong samples but no strict strong-input speech; extend dwell or retune around the best near-strong run before calling the frequency neighborhood exhausted.") | Out-Null
 }
 elseif ($weakTotal -gt 0 -and $strongTotal -le 0) {
-    $recommendations.Add("The hunt found weak NR5/SPNR input but no strong-input speech; continue scanning active SSB windows or retune manually before calling mixed weak+strong acceptance ready.") | Out-Null
+    $recommendations.Add("The hunt found weak candidate DSP input but no strong-input speech; continue scanning active SSB windows or retune manually before calling mixed weak+strong acceptance ready.") | Out-Null
 }
 elseif ($strongTotal -gt 0 -and $weakTotal -le 0) {
     $recommendations.Add("The hunt found strong input but no weak-input samples; include edge-of-readability or fading speech before using the run for weak-signal preservation evidence.") | Out-Null
 }
 elseif ($weakTotal -le 0 -and $strongTotal -le 0) {
-    $recommendations.Add("No weak or strong NR5/SPNR input was captured; keep the panadapter/frontend scene fresh and retry during active band conditions.") | Out-Null
+    $recommendations.Add("No weak or strong candidate DSP input was captured; keep the panadapter/frontend scene fresh and retry during active band conditions.") | Out-Null
 }
 if ($weakTotal -gt 0 -and $strongTotal -gt 0 -and $speechQualifiedStrongTotal -le 0) {
     $recommendations.Add("The hunt found raw strong-input samples but none were speech-qualified; inspect frontend/passband evidence before treating this as mixed weak+strong speech.") | Out-Null
 }
 if ($strongTotal -le 0 -and $speechQualifiedNearStrongTotal -gt 0) {
-    $recommendations.Add("One or more near-strong samples were speech-qualified; inspect per-window nr5WeakSignalWatch.topNearStrongInputs and rerun with longer dwell before changing NR5 thresholds.") | Out-Null
+    $recommendations.Add("One or more near-strong samples were speech-qualified; inspect per-window candidateWeakSignalWatch.topNearStrongInputs and rerun with longer dwell before changing Candidate thresholds.") | Out-Null
 }
 if ($frontendNearPassbandTotal -le 0) {
     $recommendations.Add("No near-passband frontend peak samples were captured; this scan may be off-signal even if raw weak-input counters moved.") | Out-Null
 }
 if ($candidateWeakLossTotal -gt 0) {
-    $recommendations.Add("Candidate weak-loss samples appeared; inspect the per-window nr5WeakSignalWatch.topCandidateWeakLosses before increasing global makeup or changing defaults.") | Out-Null
+    $recommendations.Add("Candidate weak-loss samples appeared; inspect the per-window candidateWeakSignalWatch.topCandidateWeakLosses before increasing global makeup or changing defaults.") | Out-Null
 }
 if ($hotMakeupTotal -gt 0) {
-    $recommendations.Add("Hot makeup samples appeared; inspect nr5WeakSignalWatch.topHotMakeup before changing recovery attack/release.") | Out-Null
+    $recommendations.Add("Hot makeup samples appeared; inspect candidateWeakSignalWatch.topHotMakeup before changing recovery attack/release.") | Out-Null
 }
 if ($pumpingRiskRunCount -gt 0) {
     $recommendations.Add("One or more windows reported AGC pumping risk; reject those windows for promotion until AGC movement is explained.") | Out-Null
@@ -2917,10 +2917,10 @@ if ($hardBlockerTotal -gt 0) {
     $recommendations.Add("One or more windows had hard blockers; recapture after clearing endpoint/runtime blockers.") | Out-Null
 }
 if ($null -ne $bestRun -and -not [string]::IsNullOrWhiteSpace($bestRun.mixedWeakStrongTuningAction)) {
-    $recommendations.Add("Best-run mixed focus action is '$($bestRun.mixedWeakStrongTuningAction)' (output gap excess $(Format-NullableDbText $bestRun.mixedWeakStrongOutputGapExcessDb), final-audio gap excess $(Format-NullableDbText $bestRun.mixedWeakStrongFinalAudioGapExcessDb)); use it to choose retune/longer dwell versus bounded NR5 weak-speech lift before changing defaults.") | Out-Null
+    $recommendations.Add("Best-run mixed focus action is '$($bestRun.mixedWeakStrongTuningAction)' (output gap excess $(Format-NullableDbText $bestRun.mixedWeakStrongOutputGapExcessDb), final-audio gap excess $(Format-NullableDbText $bestRun.mixedWeakStrongFinalAudioGapExcessDb)); use it to choose retune/longer dwell versus bounded Candidate weak-speech lift before changing defaults.") | Out-Null
 }
 if ($runArray | Where-Object { [string]::Equals([string]$_.mixedWeakStrongTuningAction, "tune-bounded-weak-speech-lift-from-top-weak-and-strong-input-rows", [StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1) {
-    $recommendations.Add("At least one window requests bounded weak-speech lift; inspect that window's nr5WeakSignalWatch.mixedWeakStrongTuningFocus top weak/strong rows before changing NR5 or RX leveler thresholds.") | Out-Null
+    $recommendations.Add("At least one window requests bounded weak-speech lift; inspect that window's candidateWeakSignalWatch.mixedWeakStrongTuningFocus top weak/strong rows before changing Candidate or RX leveler thresholds.") | Out-Null
 }
 
 $scanOk = ([string]::IsNullOrWhiteSpace($scanError) -and $null -eq $restoreError -and $runArray.Count -gt 0)
@@ -2947,7 +2947,7 @@ elseif ($mixedReadyRunCount -gt 0) {
     else {
         $evidenceAcceptanceStatus = "mixed-ready"
         $evidenceAcceptanceReady = $true
-        $evidenceAcceptanceReason = "At least one mixed weak+strong NR5/SPNR window is ready for promotion into live comparison history."
+        $evidenceAcceptanceReason = "At least one mixed weak+strong candidate DSP window is ready for promotion into live comparison history."
     }
 }
 elseif ($weakTotal -gt 0 -and $strongTotal -le 0) {
@@ -2971,7 +2971,7 @@ elseif ($weakTotal -gt 0 -and $strongTotal -le 0) {
     }
     else {
         $evidenceAcceptanceStatus = "weak-only-off-passband"
-        $evidenceAcceptanceReason = "Weak NR5/SPNR input was observed, but no strong-input or passband-qualified evidence was captured."
+        $evidenceAcceptanceReason = "Weak candidate DSP input was observed, but no strong-input or passband-qualified evidence was captured."
     }
 }
 elseif ($strongTotal -gt 0 -and $weakTotal -le 0) {
@@ -2980,7 +2980,7 @@ elseif ($strongTotal -gt 0 -and $weakTotal -le 0) {
 }
 else {
     $evidenceAcceptanceStatus = "no-weak-or-strong-evidence"
-    $evidenceAcceptanceReason = "No weak or strong NR5/SPNR input was captured."
+    $evidenceAcceptanceReason = "No weak or strong candidate DSP input was captured."
 }
 
 $wdspV2GraduationReason = "A G2 peak-hunt report is scouting evidence only; WDSP v2 graduation still requires matrix comparisons, offline fixture coverage, Thetis/current-Zeus parity review, on-air approval, and cross-radio validation."
@@ -3093,7 +3093,7 @@ $reportObject = [ordered]@{
         wdspNativeLoadable = Test-Truthy (Get-JsonValue $latestLive "wdspNativeLoadable")
         requestedNrMode = [string](Get-JsonValue $latestLive "requestedNrMode")
         effectiveNrMode = [string](Get-JsonValue $latestLive "effectiveNrMode")
-        readyForNr5Tuning = Test-Truthy (Get-JsonValue $latestLive "readyForNr5Tuning")
+        readyForCandidateTuning = Test-Truthy (Get-JsonValue $latestLive "readyForCandidateTuning")
         frontendSceneFresh = Test-Truthy (Get-JsonValue $latestLive "frontendSceneFresh")
     }
     frontendScene = [ordered]@{

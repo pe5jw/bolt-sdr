@@ -179,7 +179,7 @@ function Get-SymbolCategory {
     if ($name -match "^(XCreateAnalyzer|DestroyAnalyzer|SetAnalyzer|Spectrum0|GetPixels|SetDisplay)") {
         return "analyzer-display"
     }
-    if ($name -match "^(SetRXA(?:ANR|ANF|EMNR|SBNR|SPNR|SNB)|GetRXASPNR)") {
+    if ($name -match "^(SetRXA(?:ANR|ANF|EMNR|SBNR|SNB))") {
         return "rx-noise-reduction"
     }
     if ($name -match "^(CreateAnbEXT|DestroyAnbEXT|FlushAnbEXT|XanbEXT|CreateNobEXT|DestroyNobEXT|FlushNobEXT|XnobEXT|SetEXTNOB)") {
@@ -207,7 +207,7 @@ function Get-SymbolCriticality {
     )
 
     $name = if ([string]::IsNullOrWhiteSpace($SymbolName)) { $ManagedName } else { $SymbolName }
-    if ($name -match "^(SetRXASBNR|SetRXASPNR|GetRXASPNR)") {
+    if ($name -match "^(SetRXASBNR)") {
         return "experimental-required"
     }
     if ($name -match "^(SetRXAEMNR|SetRXAANR|SetRXAANF)") {
@@ -298,7 +298,7 @@ function Resolve-WdspBinaryPath {
 
     $repo = Get-RepoRoot
     $candidates = @(
-        "native/build-nr5-live-ninja/wdsp.dll",
+        "native/build-candidate-live-ninja/wdsp.dll",
         "OpenhpsdrZeus/bin/Debug/net10.0/runtimes/win-x64/native/wdsp.dll",
         "OpenhpsdrZeus/bin/Release/net10.0/runtimes/win-x64/native/wdsp.dll",
         "OpenhpsdrZeus/bin/Debug/net10.0/runtimes/linux-x64/native/libwdsp.so",
@@ -714,7 +714,7 @@ $report = [pscustomobject][ordered]@{
     categorySummary = @($categorySummary)
     symbols = @($symbols.ToArray())
     recommendations = if ($readyForReview) {
-        @("Store this report with DSP modernization evidence before changing WDSP imports, native exports, NR5/SPNR, TXA, or PureSignal behavior.")
+        @("Store this report with DSP modernization evidence before changing WDSP imports, native exports, candidate DSP, TXA, or PureSignal behavior.")
     }
     else {
         @(

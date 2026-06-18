@@ -100,9 +100,9 @@ function ConvertTo-ComparisonId {
         "current-zeus" { return "current-zeus" }
         "zeus-current" { return "current-zeus" }
         "zeus" { return "current-zeus" }
-        "nr5" { return "nr5-spnr" }
-        "spnr" { return "nr5-spnr" }
-        "nr5-spnr" { return "nr5-spnr" }
+        "candidate" { return "candidate-under-test" }
+        "candidate" { return "candidate-under-test" }
+        "candidate-under-test" { return "candidate-under-test" }
         "candidate" { return "candidate-under-test" }
         "candidate-under-test" { return "candidate-under-test" }
         "external" { return "candidate-external-engine-opt-in" }
@@ -321,7 +321,7 @@ function Test-StrictComparisonStateId {
     param([string]$ComparisonId)
 
     $id = ([string]$ComparisonId).Trim().ToLowerInvariant()
-    return ($id -eq "nr5-spnr" -or $id -eq "off-baseline")
+    return ($id -eq "candidate-under-test" -or $id -eq "off-baseline")
 }
 
 function Resolve-RelativePath {
@@ -542,10 +542,10 @@ if ($PlanOnly) {
         'powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ComparisonId off-baseline -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.off-baseline.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.off-baseline.json -Samples 60 -IntervalMs 1000',
         'powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ComparisonId thetis-parity -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.thetis-parity.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.thetis-parity.json -Samples 60 -IntervalMs 1000',
         'powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ComparisonId current-zeus -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.baseline.json -Samples 60 -IntervalMs 1000',
-        'powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ComparisonId nr5-spnr -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.candidate.json -Samples 60 -IntervalMs 1000',
+        'powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ComparisonId candidate-under-test -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.candidate.json -Samples 60 -IntervalMs 1000',
         'powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-live-diagnostics-history.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-history.json',
-        'powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -BaselineComparisonId current-zeus -CandidateComparisonId nr5-spnr -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.json -FailOnRegression',
-        'powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.thetis-parity.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -BaselineComparisonId thetis-parity -CandidateComparisonId nr5-spnr -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.thetis-parity.json -FailOnRegression',
+        'powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -BaselineComparisonId current-zeus -CandidateComparisonId candidate-under-test -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.json -FailOnRegression',
+        'powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.thetis-parity.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -BaselineComparisonId thetis-parity -CandidateComparisonId candidate-under-test -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.thetis-parity.json -FailOnRegression',
         'powershell -NoProfile -ExecutionPolicy Bypass -File tools\new-dsp-artifact-manifest.ps1 -BundleDir captures\dsp-modernization\<timestamp> -AcceptanceManifest -RequireLiveAcceptanceArtifacts -Force',
         'powershell -NoProfile -ExecutionPolicy Bypass -File tools\validate-dsp-modernization-bundle.ps1 -BundleDir captures\dsp-modernization\<timestamp> -RequireArtifactFiles -ReportPath captures\dsp-modernization\<timestamp>\validation-report.json',
         'powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-modernization-validation-report.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ReportPath captures\dsp-modernization\<timestamp>\validation-triage-report.json -MarkdownPath captures\dsp-modernization\<timestamp>\validation-triage-report.md -FailOnIssues'
@@ -585,11 +585,11 @@ if ($PlanOnly) {
             "watch-dsp-live-diagnostics summary per scenario",
             "bundle-compatible trace index JSON",
             "matrix summary JSON with capture-readiness preflight rollups",
-            "NR5 mixed weak/strong hunt scoring and best-window recommendation fields",
-            "NR5 speech-artifact advisory rollups from low-evidence lift, audio alignment, and texture fill"
+            "Candidate mixed weak/strong hunt scoring and best-window recommendation fields",
+            "Candidate speech-artifact advisory rollups from low-evidence lift, audio alignment, and texture fill"
         )
         example = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ComparisonId current-zeus -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.baseline.json -Samples 60 -IntervalMs 1000"
-        candidateExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ComparisonId nr5-spnr -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.candidate.json -Samples 60 -IntervalMs 1000"
+        candidateExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ComparisonId candidate-under-test -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.candidate.json -Samples 60 -IntervalMs 1000"
         desktopExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BaseUrl https://localhost:6443 -SkipCertificateCheck -BundleDir captures\dsp-modernization\<timestamp> -ComparisonId current-zeus -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.baseline.json -Samples 60 -IntervalMs 500"
         acceptanceCommandStepCount = $acceptanceCommandSteps.Count
         acceptanceCommandSteps = @($acceptanceCommandSteps)
@@ -600,7 +600,7 @@ if ($PlanOnly) {
             "When BundleDir is reused, pass separate IndexPath and ReportPath values for baseline and candidate runs to avoid overwriting evidence.",
             "Matrix runs copy captureReadinessWatch status, hardGatePass, strictPreflightPass, and top constraints into the trace index and matrix summary.",
             "Matrix schema v2 also copies strong-input counts, weak/strong output gap, mixedWeakStrongEvidenceStatus, and a mixed weak/strong hunt score into each run and trace-index entry.",
-            "Matrix schema v3 also copies NR5 artifact-control advisory fields so operators can avoid selecting mixed weak+strong windows with low-evidence lift or unsupported texture-fill artifacts.",
+            "Matrix schema v3 also copies Candidate artifact-control advisory fields so operators can avoid selecting mixed weak+strong windows with low-evidence lift or unsupported texture-fill artifacts.",
             "The trace index is suitable for artifact-manifest entries with kind=trace.",
             "For G2 acceptance evidence, run the acceptanceCommandSteps after choosing the bundle directory and keep every acceptanceExpectedArtifacts path."
         )
@@ -721,74 +721,74 @@ foreach ($scenarioId in $scenarios) {
         $topCaptureConstraintCount = Get-IntValue (Get-JsonValue $topCaptureConstraint "count")
         $topCaptureHardConstraintCount = Get-IntValue (Get-JsonValue $topCaptureHardConstraint "count")
         $topCaptureStatusCount = Get-IntValue (Get-JsonValue $topCaptureStatus "count")
-        $nr5Samples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "nr5SampleCount") }
-        $nr5Weak = if ($null -eq $report) { $null } else { Get-JsonValue $report "nr5WeakSignalWatch" }
-        $nr5WeakInputs = Get-IntValue (Get-JsonValue $nr5Weak "weakInputSampleCount")
-        $nr5WeakRecovered = Get-IntValue (Get-JsonValue $nr5Weak "weakRecoveredSampleCount")
-        $nr5WeakDropouts = Get-IntValue (Get-JsonValue $nr5Weak "weakDropoutSampleCount")
-        $nr5HotMakeup = Get-IntValue (Get-JsonValue $nr5Weak "hotMakeupSampleCount")
-        $nr5StrongInputs = Get-IntValue (Get-JsonValue $nr5Weak "strongInputSampleCount")
-        $nr5WeakStrongOutputGap = Get-NullableDoubleValue (Get-JsonValue $nr5Weak "weakStrongOutputGapDb")
-        $nr5MixedWeakStrongEvidenceReady = Test-Truthy (Get-JsonValue $nr5Weak "mixedWeakStrongEvidenceReady")
-        $nr5WeakStrongOutputParityReady = Test-Truthy (Get-JsonValue $nr5Weak "weakStrongOutputParityReady")
-        $nr5MixedWeakStrongEvidenceStatus = [string](Get-JsonValue $nr5Weak "mixedWeakStrongEvidenceStatus")
-        if ([string]::IsNullOrWhiteSpace($nr5MixedWeakStrongEvidenceStatus)) {
-            $nr5MixedWeakStrongEvidenceStatus = if ($nr5Samples -le 0) {
-                "no-nr5-samples"
+        $candidateSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "candidateSampleCount") }
+        $candidateWeak = if ($null -eq $report) { $null } else { Get-JsonValue $report "candidateWeakSignalWatch" }
+        $candidateWeakInputs = Get-IntValue (Get-JsonValue $candidateWeak "weakInputSampleCount")
+        $candidateWeakRecovered = Get-IntValue (Get-JsonValue $candidateWeak "weakRecoveredSampleCount")
+        $candidateWeakDropouts = Get-IntValue (Get-JsonValue $candidateWeak "weakDropoutSampleCount")
+        $candidateHotMakeup = Get-IntValue (Get-JsonValue $candidateWeak "hotMakeupSampleCount")
+        $candidateStrongInputs = Get-IntValue (Get-JsonValue $candidateWeak "strongInputSampleCount")
+        $candidateWeakStrongOutputGap = Get-NullableDoubleValue (Get-JsonValue $candidateWeak "weakStrongOutputGapDb")
+        $candidateMixedWeakStrongEvidenceReady = Test-Truthy (Get-JsonValue $candidateWeak "mixedWeakStrongEvidenceReady")
+        $candidateWeakStrongOutputParityReady = Test-Truthy (Get-JsonValue $candidateWeak "weakStrongOutputParityReady")
+        $candidateMixedWeakStrongEvidenceStatus = [string](Get-JsonValue $candidateWeak "mixedWeakStrongEvidenceStatus")
+        if ([string]::IsNullOrWhiteSpace($candidateMixedWeakStrongEvidenceStatus)) {
+            $candidateMixedWeakStrongEvidenceStatus = if ($candidateSamples -le 0) {
+                "no-candidate-samples"
             }
-            elseif ($nr5WeakInputs -le 0 -and $nr5StrongInputs -le 0) {
+            elseif ($candidateWeakInputs -le 0 -and $candidateStrongInputs -le 0) {
                 "missing-weak-and-strong-input"
             }
-            elseif ($nr5WeakInputs -le 0) {
+            elseif ($candidateWeakInputs -le 0) {
                 "missing-weak-input"
             }
-            elseif ($nr5StrongInputs -le 0) {
+            elseif ($candidateStrongInputs -le 0) {
                 "missing-strong-input"
             }
-            elseif ($null -eq $nr5WeakStrongOutputGap) {
+            elseif ($null -eq $candidateWeakStrongOutputGap) {
                 "missing-output-gap"
             }
-            elseif (-not $nr5WeakStrongOutputParityReady) {
+            elseif (-not $candidateWeakStrongOutputParityReady) {
                 "weak-strong-output-gap-watch"
             }
             else {
                 "ready"
             }
         }
-        $nr5MixedWeakStrongHuntScore = Get-MixedWeakStrongHuntScore `
-            -WeakInputSampleCount $nr5WeakInputs `
-            -StrongInputSampleCount $nr5StrongInputs `
-            -WeakStrongOutputGapDb $nr5WeakStrongOutputGap `
+        $candidateMixedWeakStrongHuntScore = Get-MixedWeakStrongHuntScore `
+            -WeakInputSampleCount $candidateWeakInputs `
+            -StrongInputSampleCount $candidateStrongInputs `
+            -WeakStrongOutputGapDb $candidateWeakStrongOutputGap `
             -ReadyForBenchmarkTrace $readyTrace `
-            -WeakStrongOutputParityReady $nr5WeakStrongOutputParityReady `
+            -WeakStrongOutputParityReady $candidateWeakStrongOutputParityReady `
             -ExpectedSampleCount $okSamples
-        $nr5TextureFillAverage = if ($null -eq $report) { $null } else { Get-NullableDoubleValue (Get-JsonValue (Get-JsonValue $report "nr5TextureFill") "average") }
-        $nr5SignalProbabilityAverage = if ($null -eq $report) { $null } else { Get-NullableDoubleValue (Get-JsonValue (Get-JsonValue $report "nr5SignalProbability") "average") }
-        $nr5LowEvidenceLiftWatch = if ($null -eq $report) { $null } else { Get-JsonValue $report "nr5LowEvidenceLiftWatch" }
-        $nr5LowEvidenceLiftedSampleCount = Get-IntValue (Get-JsonValue $nr5LowEvidenceLiftWatch "liftedSampleCount")
-        $nr5LowEvidenceLiftedPct = Get-NullableDoubleValue (Get-JsonValue $nr5LowEvidenceLiftWatch "liftedPct")
-        $nr5LowEvidenceAlignmentMismatchPct = Get-NullableDoubleValue (Get-JsonValue $nr5LowEvidenceLiftWatch "alignmentMismatchPct")
-        $nr5AudioAlignmentWatch = if ($null -eq $report) { $null } else { Get-JsonValue $report "nr5AudioAlignmentWatch" }
-        $nr5AudioAlignmentMismatchPct = Get-NullableDoubleValue (Get-JsonValue $nr5AudioAlignmentWatch "mismatchPct")
-        $nr5ArtifactRiskScore = 0.0
-        if ($nr5LowEvidenceLiftedSampleCount -gt 0) {
-            $nr5ArtifactRiskScore += 1.0
+        $candidateTextureFillAverage = if ($null -eq $report) { $null } else { Get-NullableDoubleValue (Get-JsonValue (Get-JsonValue $report "candidateTextureFill") "average") }
+        $candidateSignalProbabilityAverage = if ($null -eq $report) { $null } else { Get-NullableDoubleValue (Get-JsonValue (Get-JsonValue $report "candidateSignalProbability") "average") }
+        $candidateLowEvidenceLiftWatch = if ($null -eq $report) { $null } else { Get-JsonValue $report "candidateLowEvidenceLiftWatch" }
+        $candidateLowEvidenceLiftedSampleCount = Get-IntValue (Get-JsonValue $candidateLowEvidenceLiftWatch "liftedSampleCount")
+        $candidateLowEvidenceLiftedPct = Get-NullableDoubleValue (Get-JsonValue $candidateLowEvidenceLiftWatch "liftedPct")
+        $candidateLowEvidenceAlignmentMismatchPct = Get-NullableDoubleValue (Get-JsonValue $candidateLowEvidenceLiftWatch "alignmentMismatchPct")
+        $candidateAudioAlignmentWatch = if ($null -eq $report) { $null } else { Get-JsonValue $report "candidateAudioAlignmentWatch" }
+        $candidateAudioAlignmentMismatchPct = Get-NullableDoubleValue (Get-JsonValue $candidateAudioAlignmentWatch "mismatchPct")
+        $candidateArtifactRiskScore = 0.0
+        if ($candidateLowEvidenceLiftedSampleCount -gt 0) {
+            $candidateArtifactRiskScore += 1.0
         }
-        if ($null -ne $nr5LowEvidenceLiftedPct -and [double]$nr5LowEvidenceLiftedPct -gt 5.0) {
-            $nr5ArtifactRiskScore += 1.0
+        if ($null -ne $candidateLowEvidenceLiftedPct -and [double]$candidateLowEvidenceLiftedPct -gt 5.0) {
+            $candidateArtifactRiskScore += 1.0
         }
-        if ($null -ne $nr5AudioAlignmentMismatchPct -and [double]$nr5AudioAlignmentMismatchPct -gt 10.0) {
-            $nr5ArtifactRiskScore += 1.0
+        if ($null -ne $candidateAudioAlignmentMismatchPct -and [double]$candidateAudioAlignmentMismatchPct -gt 10.0) {
+            $candidateArtifactRiskScore += 1.0
         }
-        if ($null -ne $nr5TextureFillAverage -and [double]$nr5TextureFillAverage -gt 0.65 -and
-            ($null -eq $nr5SignalProbabilityAverage -or [double]$nr5SignalProbabilityAverage -lt 0.30)) {
-            $nr5ArtifactRiskScore += 1.0
+        if ($null -ne $candidateTextureFillAverage -and [double]$candidateTextureFillAverage -gt 0.65 -and
+            ($null -eq $candidateSignalProbabilityAverage -or [double]$candidateSignalProbabilityAverage -lt 0.30)) {
+            $candidateArtifactRiskScore += 1.0
         }
-        $nr5ArtifactRiskScore = [Math]::Round($nr5ArtifactRiskScore, 3)
-        $nr5ArtifactRiskStatus = if ($nr5Samples -le 0) {
-            "no-nr5-samples"
+        $candidateArtifactRiskScore = [Math]::Round($candidateArtifactRiskScore, 3)
+        $candidateArtifactRiskStatus = if ($candidateSamples -le 0) {
+            "no-candidate-samples"
         }
-        elseif ($nr5ArtifactRiskScore -gt 0.0) {
+        elseif ($candidateArtifactRiskScore -gt 0.0) {
             "artifact-review"
         }
         else {
@@ -804,12 +804,12 @@ foreach ($scenarioId in $scenarios) {
             [string](Get-JsonValue $comparisonState "status")
         }
         $comparisonStateNextAction = if ($null -eq $comparisonState) { "" } else { [string](Get-JsonValue $comparisonState "nextAction") }
-        $nr5AlignedSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "nr5AlignedSampleCount") }
-        $nr5AgcDiagnosticSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "nr5AgcDiagnosticSampleCount") }
-        $nr5ProbabilityDiagnosticSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "nr5ProbabilityDiagnosticSampleCount") }
-        $nr5PeakDiagnosticSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "nr5PeakDiagnosticSampleCount") }
-        $nr5RequestedSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "nr5RequestedSampleCount") }
-        $nr5EffectiveSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "nr5EffectiveSampleCount") }
+        $candidateAlignedSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "candidateAlignedSampleCount") }
+        $candidateAgcDiagnosticSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "candidateAgcDiagnosticSampleCount") }
+        $candidateProbabilityDiagnosticSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "candidateProbabilityDiagnosticSampleCount") }
+        $candidatePeakDiagnosticSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "candidatePeakDiagnosticSampleCount") }
+        $candidateRequestedSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "candidateRequestedSampleCount") }
+        $candidateEffectiveSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "candidateEffectiveSampleCount") }
         $nrOffRequestedSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "nrOffRequestedSampleCount") }
         $nrOffEffectiveSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "nrOffEffectiveSampleCount") }
         $nrModeMismatchSamples = if ($null -eq $report) { 0 } else { Get-IntValue (Get-JsonValue $report "nrModeMismatchSampleCount") }
@@ -829,24 +829,24 @@ foreach ($scenarioId in $scenarios) {
             summaryPath = $summaryRelative
             sha256 = Get-FileSha256 $jsonlPath
             summarySha256 = Get-FileSha256 $summaryPath
-            nr5WeakInputSampleCount = $nr5WeakInputs
-            nr5WeakRecoveredSampleCount = $nr5WeakRecovered
-            nr5WeakDropoutSampleCount = $nr5WeakDropouts
-            nr5HotMakeupSampleCount = $nr5HotMakeup
-            nr5StrongInputSampleCount = $nr5StrongInputs
-            nr5WeakStrongOutputGapDb = $nr5WeakStrongOutputGap
-            nr5MixedWeakStrongEvidenceReady = $nr5MixedWeakStrongEvidenceReady
-            nr5WeakStrongOutputParityReady = $nr5WeakStrongOutputParityReady
-            nr5MixedWeakStrongEvidenceStatus = $nr5MixedWeakStrongEvidenceStatus
-            nr5MixedWeakStrongHuntScore = $nr5MixedWeakStrongHuntScore
-            nr5TextureFillAverage = $nr5TextureFillAverage
-            nr5SignalProbabilityAverage = $nr5SignalProbabilityAverage
-            nr5LowEvidenceLiftedSampleCount = $nr5LowEvidenceLiftedSampleCount
-            nr5LowEvidenceLiftedPct = $nr5LowEvidenceLiftedPct
-            nr5LowEvidenceAlignmentMismatchPct = $nr5LowEvidenceAlignmentMismatchPct
-            nr5AudioAlignmentMismatchPct = $nr5AudioAlignmentMismatchPct
-            nr5ArtifactRiskScore = $nr5ArtifactRiskScore
-            nr5ArtifactRiskStatus = $nr5ArtifactRiskStatus
+            candidateWeakInputSampleCount = $candidateWeakInputs
+            candidateWeakRecoveredSampleCount = $candidateWeakRecovered
+            candidateWeakDropoutSampleCount = $candidateWeakDropouts
+            candidateHotMakeupSampleCount = $candidateHotMakeup
+            candidateStrongInputSampleCount = $candidateStrongInputs
+            candidateWeakStrongOutputGapDb = $candidateWeakStrongOutputGap
+            candidateMixedWeakStrongEvidenceReady = $candidateMixedWeakStrongEvidenceReady
+            candidateWeakStrongOutputParityReady = $candidateWeakStrongOutputParityReady
+            candidateMixedWeakStrongEvidenceStatus = $candidateMixedWeakStrongEvidenceStatus
+            candidateMixedWeakStrongHuntScore = $candidateMixedWeakStrongHuntScore
+            candidateTextureFillAverage = $candidateTextureFillAverage
+            candidateSignalProbabilityAverage = $candidateSignalProbabilityAverage
+            candidateLowEvidenceLiftedSampleCount = $candidateLowEvidenceLiftedSampleCount
+            candidateLowEvidenceLiftedPct = $candidateLowEvidenceLiftedPct
+            candidateLowEvidenceAlignmentMismatchPct = $candidateLowEvidenceAlignmentMismatchPct
+            candidateAudioAlignmentMismatchPct = $candidateAudioAlignmentMismatchPct
+            candidateArtifactRiskScore = $candidateArtifactRiskScore
+            candidateArtifactRiskStatus = $candidateArtifactRiskStatus
             captureReadinessStatus = $captureReadinessStatus
             hardGatePass = $hardGatePass
             strictPreflightPass = $strictPreflightPass
@@ -860,13 +860,13 @@ foreach ($scenarioId in $scenarios) {
             comparisonStateReady = $comparisonStateReady
             comparisonStateStatus = $comparisonStateStatus
             comparisonStateNextAction = $comparisonStateNextAction
-            nr5SampleCount = $nr5Samples
-            nr5AlignedSampleCount = $nr5AlignedSamples
-            nr5AgcDiagnosticSampleCount = $nr5AgcDiagnosticSamples
-            nr5ProbabilityDiagnosticSampleCount = $nr5ProbabilityDiagnosticSamples
-            nr5PeakDiagnosticSampleCount = $nr5PeakDiagnosticSamples
-            nr5RequestedSampleCount = $nr5RequestedSamples
-            nr5EffectiveSampleCount = $nr5EffectiveSamples
+            candidateSampleCount = $candidateSamples
+            candidateAlignedSampleCount = $candidateAlignedSamples
+            candidateAgcDiagnosticSampleCount = $candidateAgcDiagnosticSamples
+            candidateProbabilityDiagnosticSampleCount = $candidateProbabilityDiagnosticSamples
+            candidatePeakDiagnosticSampleCount = $candidatePeakDiagnosticSamples
+            candidateRequestedSampleCount = $candidateRequestedSamples
+            candidateEffectiveSampleCount = $candidateEffectiveSamples
             nrOffRequestedSampleCount = $nrOffRequestedSamples
             nrOffEffectiveSampleCount = $nrOffEffectiveSamples
             nrModeMismatchSampleCount = $nrModeMismatchSamples
@@ -899,34 +899,34 @@ foreach ($scenarioId in $scenarios) {
             comparisonStateReady = $comparisonStateReady
             comparisonStateStatus = $comparisonStateStatus
             comparisonStateNextAction = $comparisonStateNextAction
-            nr5SampleCount = $nr5Samples
-            nr5AlignedSampleCount = $nr5AlignedSamples
-            nr5AgcDiagnosticSampleCount = $nr5AgcDiagnosticSamples
-            nr5ProbabilityDiagnosticSampleCount = $nr5ProbabilityDiagnosticSamples
-            nr5PeakDiagnosticSampleCount = $nr5PeakDiagnosticSamples
-            nr5RequestedSampleCount = $nr5RequestedSamples
-            nr5EffectiveSampleCount = $nr5EffectiveSamples
+            candidateSampleCount = $candidateSamples
+            candidateAlignedSampleCount = $candidateAlignedSamples
+            candidateAgcDiagnosticSampleCount = $candidateAgcDiagnosticSamples
+            candidateProbabilityDiagnosticSampleCount = $candidateProbabilityDiagnosticSamples
+            candidatePeakDiagnosticSampleCount = $candidatePeakDiagnosticSamples
+            candidateRequestedSampleCount = $candidateRequestedSamples
+            candidateEffectiveSampleCount = $candidateEffectiveSamples
             nrOffRequestedSampleCount = $nrOffRequestedSamples
             nrOffEffectiveSampleCount = $nrOffEffectiveSamples
             nrModeMismatchSampleCount = $nrModeMismatchSamples
-            nr5WeakInputSampleCount = $nr5WeakInputs
-            nr5WeakRecoveredSampleCount = $nr5WeakRecovered
-            nr5WeakDropoutSampleCount = $nr5WeakDropouts
-            nr5HotMakeupSampleCount = $nr5HotMakeup
-            nr5StrongInputSampleCount = $nr5StrongInputs
-            nr5WeakStrongOutputGapDb = $nr5WeakStrongOutputGap
-            nr5MixedWeakStrongEvidenceReady = $nr5MixedWeakStrongEvidenceReady
-            nr5WeakStrongOutputParityReady = $nr5WeakStrongOutputParityReady
-            nr5MixedWeakStrongEvidenceStatus = $nr5MixedWeakStrongEvidenceStatus
-            nr5MixedWeakStrongHuntScore = $nr5MixedWeakStrongHuntScore
-            nr5TextureFillAverage = $nr5TextureFillAverage
-            nr5SignalProbabilityAverage = $nr5SignalProbabilityAverage
-            nr5LowEvidenceLiftedSampleCount = $nr5LowEvidenceLiftedSampleCount
-            nr5LowEvidenceLiftedPct = $nr5LowEvidenceLiftedPct
-            nr5LowEvidenceAlignmentMismatchPct = $nr5LowEvidenceAlignmentMismatchPct
-            nr5AudioAlignmentMismatchPct = $nr5AudioAlignmentMismatchPct
-            nr5ArtifactRiskScore = $nr5ArtifactRiskScore
-            nr5ArtifactRiskStatus = $nr5ArtifactRiskStatus
+            candidateWeakInputSampleCount = $candidateWeakInputs
+            candidateWeakRecoveredSampleCount = $candidateWeakRecovered
+            candidateWeakDropoutSampleCount = $candidateWeakDropouts
+            candidateHotMakeupSampleCount = $candidateHotMakeup
+            candidateStrongInputSampleCount = $candidateStrongInputs
+            candidateWeakStrongOutputGapDb = $candidateWeakStrongOutputGap
+            candidateMixedWeakStrongEvidenceReady = $candidateMixedWeakStrongEvidenceReady
+            candidateWeakStrongOutputParityReady = $candidateWeakStrongOutputParityReady
+            candidateMixedWeakStrongEvidenceStatus = $candidateMixedWeakStrongEvidenceStatus
+            candidateMixedWeakStrongHuntScore = $candidateMixedWeakStrongHuntScore
+            candidateTextureFillAverage = $candidateTextureFillAverage
+            candidateSignalProbabilityAverage = $candidateSignalProbabilityAverage
+            candidateLowEvidenceLiftedSampleCount = $candidateLowEvidenceLiftedSampleCount
+            candidateLowEvidenceLiftedPct = $candidateLowEvidenceLiftedPct
+            candidateLowEvidenceAlignmentMismatchPct = $candidateLowEvidenceAlignmentMismatchPct
+            candidateAudioAlignmentMismatchPct = $candidateAudioAlignmentMismatchPct
+            candidateArtifactRiskScore = $candidateArtifactRiskScore
+            candidateArtifactRiskStatus = $candidateArtifactRiskStatus
         }) | Out-Null
     }
 }
@@ -976,91 +976,91 @@ $comparisonStateStatusSummary = @(ConvertTo-CountArray $comparisonStateStatusCou
 $comparisonStateStrictRunCount = @($runArray | Where-Object { Test-Truthy $_.comparisonStateStrict }).Count
 $comparisonStateReadyRunCount = @($runArray | Where-Object { Test-Truthy $_.comparisonStateReady }).Count
 $comparisonStateStrictFailureCount = @($runArray | Where-Object { (Test-Truthy $_.comparisonStateStrict) -and -not (Test-Truthy $_.comparisonStateReady) }).Count
-$nr5WeakInputSampleCount = 0
-$nr5WeakRecoveredSampleCount = 0
-$nr5WeakDropoutSampleCount = 0
-$nr5HotMakeupSampleCount = 0
-$nr5StrongInputSampleCount = 0
-$nr5MixedWeakStrongTraceCount = 0
-$nr5MixedWeakStrongReadyTraceCount = 0
-$nr5MixedWeakStrongGapWatchRunCount = 0
-$nr5MixedWeakStrongMissingRunCount = 0
-$nr5MixedWeakStrongStatusCounts = @{}
-$nr5ArtifactReviewRunCount = 0
-$nr5ArtifactRiskScoreMax = 0.0
-$nr5LowEvidenceLiftedSampleCount = 0
-$nr5LowEvidenceLiftedPctMax = $null
-$nr5AudioAlignmentMismatchPctMax = $null
-$nr5ArtifactRiskStatusCounts = @{}
+$candidateWeakInputSampleCount = 0
+$candidateWeakRecoveredSampleCount = 0
+$candidateWeakDropoutSampleCount = 0
+$candidateHotMakeupSampleCount = 0
+$candidateStrongInputSampleCount = 0
+$candidateMixedWeakStrongTraceCount = 0
+$candidateMixedWeakStrongReadyTraceCount = 0
+$candidateMixedWeakStrongGapWatchRunCount = 0
+$candidateMixedWeakStrongMissingRunCount = 0
+$candidateMixedWeakStrongStatusCounts = @{}
+$candidateArtifactReviewRunCount = 0
+$candidateArtifactRiskScoreMax = 0.0
+$candidateLowEvidenceLiftedSampleCount = 0
+$candidateLowEvidenceLiftedPctMax = $null
+$candidateAudioAlignmentMismatchPctMax = $null
+$candidateArtifactRiskStatusCounts = @{}
 foreach ($run in $runArray) {
-    $nr5WeakInputSampleCount += Get-IntValue $run.nr5WeakInputSampleCount
-    $nr5WeakRecoveredSampleCount += Get-IntValue $run.nr5WeakRecoveredSampleCount
-    $nr5WeakDropoutSampleCount += Get-IntValue $run.nr5WeakDropoutSampleCount
-    $nr5HotMakeupSampleCount += Get-IntValue $run.nr5HotMakeupSampleCount
-    $nr5StrongInputSampleCount += Get-IntValue $run.nr5StrongInputSampleCount
+    $candidateWeakInputSampleCount += Get-IntValue $run.candidateWeakInputSampleCount
+    $candidateWeakRecoveredSampleCount += Get-IntValue $run.candidateWeakRecoveredSampleCount
+    $candidateWeakDropoutSampleCount += Get-IntValue $run.candidateWeakDropoutSampleCount
+    $candidateHotMakeupSampleCount += Get-IntValue $run.candidateHotMakeupSampleCount
+    $candidateStrongInputSampleCount += Get-IntValue $run.candidateStrongInputSampleCount
 
-    $mixedStatus = [string]$run.nr5MixedWeakStrongEvidenceStatus
+    $mixedStatus = [string]$run.candidateMixedWeakStrongEvidenceStatus
     if ([string]::IsNullOrWhiteSpace($mixedStatus)) {
         $mixedStatus = "not-evaluated"
     }
-    Add-Count $nr5MixedWeakStrongStatusCounts $mixedStatus
+    Add-Count $candidateMixedWeakStrongStatusCounts $mixedStatus
 
-    if ((Get-IntValue $run.nr5WeakInputSampleCount) -gt 0 -and (Get-IntValue $run.nr5StrongInputSampleCount) -gt 0) {
-        $nr5MixedWeakStrongTraceCount++
+    if ((Get-IntValue $run.candidateWeakInputSampleCount) -gt 0 -and (Get-IntValue $run.candidateStrongInputSampleCount) -gt 0) {
+        $candidateMixedWeakStrongTraceCount++
     }
     else {
-        $nr5MixedWeakStrongMissingRunCount++
+        $candidateMixedWeakStrongMissingRunCount++
     }
 
-    if (Test-Truthy $run.nr5WeakStrongOutputParityReady) {
-        $nr5MixedWeakStrongReadyTraceCount++
+    if (Test-Truthy $run.candidateWeakStrongOutputParityReady) {
+        $candidateMixedWeakStrongReadyTraceCount++
     }
 
     if ([string]::Equals($mixedStatus, "weak-strong-output-gap-watch", [StringComparison]::OrdinalIgnoreCase)) {
-        $nr5MixedWeakStrongGapWatchRunCount++
+        $candidateMixedWeakStrongGapWatchRunCount++
     }
 
-    $artifactStatus = [string]$run.nr5ArtifactRiskStatus
+    $artifactStatus = [string]$run.candidateArtifactRiskStatus
     if ([string]::IsNullOrWhiteSpace($artifactStatus)) {
         $artifactStatus = "not-evaluated"
     }
-    Add-Count $nr5ArtifactRiskStatusCounts $artifactStatus
+    Add-Count $candidateArtifactRiskStatusCounts $artifactStatus
     if ([string]::Equals($artifactStatus, "artifact-review", [StringComparison]::OrdinalIgnoreCase)) {
-        $nr5ArtifactReviewRunCount++
+        $candidateArtifactReviewRunCount++
     }
 
-    $artifactRiskScore = Get-NullableDoubleValue $run.nr5ArtifactRiskScore
+    $artifactRiskScore = Get-NullableDoubleValue $run.candidateArtifactRiskScore
     if ($null -ne $artifactRiskScore) {
-        $nr5ArtifactRiskScoreMax = [Math]::Max([double]$nr5ArtifactRiskScoreMax, [double]$artifactRiskScore)
+        $candidateArtifactRiskScoreMax = [Math]::Max([double]$candidateArtifactRiskScoreMax, [double]$artifactRiskScore)
     }
-    $nr5LowEvidenceLiftedSampleCount += Get-IntValue $run.nr5LowEvidenceLiftedSampleCount
-    $liftedPct = Get-NullableDoubleValue $run.nr5LowEvidenceLiftedPct
+    $candidateLowEvidenceLiftedSampleCount += Get-IntValue $run.candidateLowEvidenceLiftedSampleCount
+    $liftedPct = Get-NullableDoubleValue $run.candidateLowEvidenceLiftedPct
     if ($null -ne $liftedPct) {
-        if ($null -eq $nr5LowEvidenceLiftedPctMax) {
-            $nr5LowEvidenceLiftedPctMax = [double]$liftedPct
+        if ($null -eq $candidateLowEvidenceLiftedPctMax) {
+            $candidateLowEvidenceLiftedPctMax = [double]$liftedPct
         }
         else {
-            $nr5LowEvidenceLiftedPctMax = [Math]::Max([double]$nr5LowEvidenceLiftedPctMax, [double]$liftedPct)
+            $candidateLowEvidenceLiftedPctMax = [Math]::Max([double]$candidateLowEvidenceLiftedPctMax, [double]$liftedPct)
         }
     }
-    $audioMismatchPct = Get-NullableDoubleValue $run.nr5AudioAlignmentMismatchPct
+    $audioMismatchPct = Get-NullableDoubleValue $run.candidateAudioAlignmentMismatchPct
     if ($null -ne $audioMismatchPct) {
-        if ($null -eq $nr5AudioAlignmentMismatchPctMax) {
-            $nr5AudioAlignmentMismatchPctMax = [double]$audioMismatchPct
+        if ($null -eq $candidateAudioAlignmentMismatchPctMax) {
+            $candidateAudioAlignmentMismatchPctMax = [double]$audioMismatchPct
         }
         else {
-            $nr5AudioAlignmentMismatchPctMax = [Math]::Max([double]$nr5AudioAlignmentMismatchPctMax, [double]$audioMismatchPct)
+            $candidateAudioAlignmentMismatchPctMax = [Math]::Max([double]$candidateAudioAlignmentMismatchPctMax, [double]$audioMismatchPct)
         }
     }
 }
-$nr5MixedWeakStrongStatusSummary = @(ConvertTo-CountArray $nr5MixedWeakStrongStatusCounts)
-$nr5ArtifactRiskStatusSummary = @(ConvertTo-CountArray $nr5ArtifactRiskStatusCounts)
+$candidateMixedWeakStrongStatusSummary = @(ConvertTo-CountArray $candidateMixedWeakStrongStatusCounts)
+$candidateArtifactRiskStatusSummary = @(ConvertTo-CountArray $candidateArtifactRiskStatusCounts)
 $bestMixedWeakStrongRun = $null
 if ($runArray.Count -gt 0) {
     $bestMixedWeakStrongRun = @($runArray | Sort-Object `
-            @{ Expression = { -1.0 * [double](Get-NullableDoubleValue $_.nr5MixedWeakStrongHuntScore) } }, `
-            @{ Expression = { if (Test-Truthy $_.nr5WeakStrongOutputParityReady) { 0 } else { 1 } } }, `
-            @{ Expression = { $value = Get-NullableDoubleValue $_.nr5WeakStrongOutputGapDb; if ($null -eq $value) { 999.0 } else { [Math]::Abs([double]$value) } } }, `
+            @{ Expression = { -1.0 * [double](Get-NullableDoubleValue $_.candidateMixedWeakStrongHuntScore) } }, `
+            @{ Expression = { if (Test-Truthy $_.candidateWeakStrongOutputParityReady) { 0 } else { 1 } } }, `
+            @{ Expression = { $value = Get-NullableDoubleValue $_.candidateWeakStrongOutputGapDb; if ($null -eq $value) { 999.0 } else { [Math]::Abs([double]$value) } } }, `
             @{ Expression = { [string]$_.scenarioId } }, `
             @{ Expression = { [string]$_.comparisonId } } | Select-Object -First 1)
 }
@@ -1073,16 +1073,16 @@ else {
         comparisonId = [string]$bestMixedWeakStrongRun.comparisonId
         reportPath = [string]$bestMixedWeakStrongRun.reportPath
         readyForBenchmarkTrace = Test-Truthy $bestMixedWeakStrongRun.readyForBenchmarkTrace
-        nr5WeakInputSampleCount = Get-IntValue $bestMixedWeakStrongRun.nr5WeakInputSampleCount
-        nr5StrongInputSampleCount = Get-IntValue $bestMixedWeakStrongRun.nr5StrongInputSampleCount
-        nr5WeakStrongOutputGapDb = Get-NullableDoubleValue $bestMixedWeakStrongRun.nr5WeakStrongOutputGapDb
-        nr5MixedWeakStrongEvidenceStatus = [string]$bestMixedWeakStrongRun.nr5MixedWeakStrongEvidenceStatus
-        nr5MixedWeakStrongHuntScore = Get-NullableDoubleValue $bestMixedWeakStrongRun.nr5MixedWeakStrongHuntScore
-        nr5ArtifactRiskScore = Get-NullableDoubleValue $bestMixedWeakStrongRun.nr5ArtifactRiskScore
-        nr5ArtifactRiskStatus = [string]$bestMixedWeakStrongRun.nr5ArtifactRiskStatus
+        candidateWeakInputSampleCount = Get-IntValue $bestMixedWeakStrongRun.candidateWeakInputSampleCount
+        candidateStrongInputSampleCount = Get-IntValue $bestMixedWeakStrongRun.candidateStrongInputSampleCount
+        candidateWeakStrongOutputGapDb = Get-NullableDoubleValue $bestMixedWeakStrongRun.candidateWeakStrongOutputGapDb
+        candidateMixedWeakStrongEvidenceStatus = [string]$bestMixedWeakStrongRun.candidateMixedWeakStrongEvidenceStatus
+        candidateMixedWeakStrongHuntScore = Get-NullableDoubleValue $bestMixedWeakStrongRun.candidateMixedWeakStrongHuntScore
+        candidateArtifactRiskScore = Get-NullableDoubleValue $bestMixedWeakStrongRun.candidateArtifactRiskScore
+        candidateArtifactRiskStatus = [string]$bestMixedWeakStrongRun.candidateArtifactRiskStatus
     }
 }
-$nr5MixedWeakStrongHuntReady = ($nr5MixedWeakStrongReadyTraceCount -gt 0)
+$candidateMixedWeakStrongHuntReady = ($candidateMixedWeakStrongReadyTraceCount -gt 0)
 
 $recommendations = New-Object System.Collections.Generic.List[string]
 if ($failedRunCount -gt 0) {
@@ -1115,26 +1115,26 @@ if ($comparisonStateStrictFailureCount -gt 0) {
         $recommendations.Add("Comparison state proof failed for one or more strict runs; recapture after the requested/effective NR mode matches the comparison label.") | Out-Null
     }
 }
-if ($nr5WeakDropoutSampleCount -gt 0) {
-    $recommendations.Add("NR5 weak-input dropouts appeared in the matrix; compare these windows against baseline traces before tuning recovery/makeup further.") | Out-Null
+if ($candidateWeakDropoutSampleCount -gt 0) {
+    $recommendations.Add("Candidate weak-input dropouts appeared in the matrix; compare these windows against baseline traces before tuning recovery/makeup further.") | Out-Null
 }
-if ($nr5HotMakeupSampleCount -gt 0) {
-    $recommendations.Add("NR5 hot-makeup samples appeared in the matrix; inspect the watch summaries before changing recovery attack/release.") | Out-Null
+if ($candidateHotMakeupSampleCount -gt 0) {
+    $recommendations.Add("Candidate hot-makeup samples appeared in the matrix; inspect the watch summaries before changing recovery attack/release.") | Out-Null
 }
-if ($nr5ArtifactReviewRunCount -gt 0) {
-    $recommendations.Add("NR5 artifact-control advisories appeared in the matrix; inspect low-evidence lift, audio-alignment mismatch, and texture-fill evidence before using these windows for tuning.") | Out-Null
+if ($candidateArtifactReviewRunCount -gt 0) {
+    $recommendations.Add("Candidate artifact-control advisories appeared in the matrix; inspect low-evidence lift, audio-alignment mismatch, and texture-fill evidence before using these windows for tuning.") | Out-Null
 }
-if ($nr5WeakInputSampleCount -gt 0 -and $nr5StrongInputSampleCount -le 0) {
-    $recommendations.Add("Matrix NR5 traces have weak-input samples but no strong-input samples; scan active SSB windows with both edge-of-readability and strong speech before claiming weak/strong volume parity.") | Out-Null
+if ($candidateWeakInputSampleCount -gt 0 -and $candidateStrongInputSampleCount -le 0) {
+    $recommendations.Add("Matrix Candidate traces have weak-input samples but no strong-input samples; scan active SSB windows with both edge-of-readability and strong speech before claiming weak/strong volume parity.") | Out-Null
 }
-elseif ($nr5StrongInputSampleCount -gt 0 -and $nr5WeakInputSampleCount -le 0) {
-    $recommendations.Add("Matrix NR5 traces have strong-input samples but no weak-input samples; include edge-of-readability speech before using this as mixed weak/strong parity evidence.") | Out-Null
+elseif ($candidateStrongInputSampleCount -gt 0 -and $candidateWeakInputSampleCount -le 0) {
+    $recommendations.Add("Matrix Candidate traces have strong-input samples but no weak-input samples; include edge-of-readability speech before using this as mixed weak/strong parity evidence.") | Out-Null
 }
-elseif ($nr5MixedWeakStrongTraceCount -gt 0 -and $nr5MixedWeakStrongReadyTraceCount -eq 0) {
-    $recommendations.Add("Matrix found mixed weak+strong NR5 samples but no parity-ready trace; inspect weakStrongOutputGapDb and tune only with opt-in settings until the gap is within 6 dB.") | Out-Null
+elseif ($candidateMixedWeakStrongTraceCount -gt 0 -and $candidateMixedWeakStrongReadyTraceCount -eq 0) {
+    $recommendations.Add("Matrix found mixed weak+strong Candidate samples but no parity-ready trace; inspect weakStrongOutputGapDb and tune only with opt-in settings until the gap is within 6 dB.") | Out-Null
 }
-elseif ($nr5MixedWeakStrongReadyTraceCount -gt 0 -and $null -ne $bestMixedWeakStrongRunSummary) {
-    $recommendations.Add("Best mixed weak+strong matrix run is '$($bestMixedWeakStrongRunSummary.scenarioId)'/$($bestMixedWeakStrongRunSummary.comparisonId) with score $($bestMixedWeakStrongRunSummary.nr5MixedWeakStrongHuntScore); use that window for history and live comparison evidence.") | Out-Null
+elseif ($candidateMixedWeakStrongReadyTraceCount -gt 0 -and $null -ne $bestMixedWeakStrongRunSummary) {
+    $recommendations.Add("Best mixed weak+strong matrix run is '$($bestMixedWeakStrongRunSummary.scenarioId)'/$($bestMixedWeakStrongRunSummary.comparisonId) with score $($bestMixedWeakStrongRunSummary.candidateMixedWeakStrongHuntScore); use that window for history and live comparison evidence.") | Out-Null
 }
 if ($recommendations.Count -eq 0) {
     $recommendations.Add("Store this trace index with the modernization bundle and compare candidate windows against baseline traces before changing DSP defaults.") | Out-Null
@@ -1150,19 +1150,19 @@ $index = [ordered]@{
     comparisonIds = @($comparisons)
     label = $Label
     scenarioIds = @($scenarios)
-    nr5MixedWeakStrongHuntReady = $nr5MixedWeakStrongHuntReady
-    nr5MixedWeakStrongTraceCount = $nr5MixedWeakStrongTraceCount
-    nr5MixedWeakStrongReadyTraceCount = $nr5MixedWeakStrongReadyTraceCount
-    nr5MixedWeakStrongMissingRunCount = $nr5MixedWeakStrongMissingRunCount
-    nr5MixedWeakStrongGapWatchRunCount = $nr5MixedWeakStrongGapWatchRunCount
-    nr5MixedWeakStrongStatusCounts = @($nr5MixedWeakStrongStatusSummary)
+    candidateMixedWeakStrongHuntReady = $candidateMixedWeakStrongHuntReady
+    candidateMixedWeakStrongTraceCount = $candidateMixedWeakStrongTraceCount
+    candidateMixedWeakStrongReadyTraceCount = $candidateMixedWeakStrongReadyTraceCount
+    candidateMixedWeakStrongMissingRunCount = $candidateMixedWeakStrongMissingRunCount
+    candidateMixedWeakStrongGapWatchRunCount = $candidateMixedWeakStrongGapWatchRunCount
+    candidateMixedWeakStrongStatusCounts = @($candidateMixedWeakStrongStatusSummary)
     bestMixedWeakStrongRun = $bestMixedWeakStrongRunSummary
-    nr5ArtifactReviewRunCount = $nr5ArtifactReviewRunCount
-    nr5ArtifactRiskScoreMax = $nr5ArtifactRiskScoreMax
-    nr5LowEvidenceLiftedSampleCount = $nr5LowEvidenceLiftedSampleCount
-    nr5LowEvidenceLiftedPctMax = $nr5LowEvidenceLiftedPctMax
-    nr5AudioAlignmentMismatchPctMax = $nr5AudioAlignmentMismatchPctMax
-    nr5ArtifactRiskStatusCounts = @($nr5ArtifactRiskStatusSummary)
+    candidateArtifactReviewRunCount = $candidateArtifactReviewRunCount
+    candidateArtifactRiskScoreMax = $candidateArtifactRiskScoreMax
+    candidateLowEvidenceLiftedSampleCount = $candidateLowEvidenceLiftedSampleCount
+    candidateLowEvidenceLiftedPctMax = $candidateLowEvidenceLiftedPctMax
+    candidateAudioAlignmentMismatchPctMax = $candidateAudioAlignmentMismatchPctMax
+    candidateArtifactRiskStatusCounts = @($candidateArtifactRiskStatusSummary)
     files = @($files.ToArray())
 }
 
@@ -1198,24 +1198,24 @@ $reportObject = [ordered]@{
     comparisonStateStrictRunCount = $comparisonStateStrictRunCount
     comparisonStateReadyRunCount = $comparisonStateReadyRunCount
     comparisonStateStrictFailureCount = $comparisonStateStrictFailureCount
-    nr5WeakInputSampleCount = $nr5WeakInputSampleCount
-    nr5WeakRecoveredSampleCount = $nr5WeakRecoveredSampleCount
-    nr5WeakDropoutSampleCount = $nr5WeakDropoutSampleCount
-    nr5HotMakeupSampleCount = $nr5HotMakeupSampleCount
-    nr5StrongInputSampleCount = $nr5StrongInputSampleCount
-    nr5MixedWeakStrongHuntReady = $nr5MixedWeakStrongHuntReady
-    nr5MixedWeakStrongTraceCount = $nr5MixedWeakStrongTraceCount
-    nr5MixedWeakStrongReadyTraceCount = $nr5MixedWeakStrongReadyTraceCount
-    nr5MixedWeakStrongMissingRunCount = $nr5MixedWeakStrongMissingRunCount
-    nr5MixedWeakStrongGapWatchRunCount = $nr5MixedWeakStrongGapWatchRunCount
-    nr5MixedWeakStrongStatusCounts = @($nr5MixedWeakStrongStatusSummary)
+    candidateWeakInputSampleCount = $candidateWeakInputSampleCount
+    candidateWeakRecoveredSampleCount = $candidateWeakRecoveredSampleCount
+    candidateWeakDropoutSampleCount = $candidateWeakDropoutSampleCount
+    candidateHotMakeupSampleCount = $candidateHotMakeupSampleCount
+    candidateStrongInputSampleCount = $candidateStrongInputSampleCount
+    candidateMixedWeakStrongHuntReady = $candidateMixedWeakStrongHuntReady
+    candidateMixedWeakStrongTraceCount = $candidateMixedWeakStrongTraceCount
+    candidateMixedWeakStrongReadyTraceCount = $candidateMixedWeakStrongReadyTraceCount
+    candidateMixedWeakStrongMissingRunCount = $candidateMixedWeakStrongMissingRunCount
+    candidateMixedWeakStrongGapWatchRunCount = $candidateMixedWeakStrongGapWatchRunCount
+    candidateMixedWeakStrongStatusCounts = @($candidateMixedWeakStrongStatusSummary)
     bestMixedWeakStrongRun = $bestMixedWeakStrongRunSummary
-    nr5ArtifactReviewRunCount = $nr5ArtifactReviewRunCount
-    nr5ArtifactRiskScoreMax = $nr5ArtifactRiskScoreMax
-    nr5LowEvidenceLiftedSampleCount = $nr5LowEvidenceLiftedSampleCount
-    nr5LowEvidenceLiftedPctMax = $nr5LowEvidenceLiftedPctMax
-    nr5AudioAlignmentMismatchPctMax = $nr5AudioAlignmentMismatchPctMax
-    nr5ArtifactRiskStatusCounts = @($nr5ArtifactRiskStatusSummary)
+    candidateArtifactReviewRunCount = $candidateArtifactReviewRunCount
+    candidateArtifactRiskScoreMax = $candidateArtifactRiskScoreMax
+    candidateLowEvidenceLiftedSampleCount = $candidateLowEvidenceLiftedSampleCount
+    candidateLowEvidenceLiftedPctMax = $candidateLowEvidenceLiftedPctMax
+    candidateAudioAlignmentMismatchPctMax = $candidateAudioAlignmentMismatchPctMax
+    candidateArtifactRiskStatusCounts = @($candidateArtifactRiskStatusSummary)
     collectionReady = ($failedRunCount -eq 0)
     acceptanceReady = ($failedRunCount -eq 0 -and $notReadyTraceCount -eq 0 -and $hardBlockerRunCount -eq 0 -and $comparisonStateStrictFailureCount -eq 0)
     indexPath = if (-not [string]::IsNullOrWhiteSpace($bundlePath)) { Resolve-RelativePath -Root $bundlePath -Path $IndexPath } else { $IndexPath }

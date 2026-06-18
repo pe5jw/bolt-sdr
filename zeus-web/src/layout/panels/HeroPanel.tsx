@@ -52,6 +52,7 @@ import { WaterfallSpeedControl } from '../../components/WaterfallSpeedControl';
 import { SpectrumControls } from '../../components/SpectrumControls';
 import { LeafletWorldMap } from '../../components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from '../../components/design/LeafletMapErrorBoundary';
+import { setRx2, type Rx2AudioMode } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
 import { useRotatorStore } from '../../state/rotator-store';
 import { useLayoutStore } from '../../state/layout-store';
@@ -71,6 +72,12 @@ interface HeroPanelProps {
   tile?: WorkspaceTile;
   layoutId?: string;
 }
+
+const RX_AUDIO_MODES: readonly { mode: Rx2AudioMode; label: string; title: string }[] = [
+  { mode: 'rx1', label: 'RX 1', title: 'Hear RX1 only' },
+  { mode: 'both', label: 'Both', title: 'Hear RX1 and RX2 together' },
+  { mode: 'rx2', label: 'RX 2', title: 'Hear RX2 only' },
+];
 
 // Hero panel: Panadapter + Waterfall with optional Leaflet world-map overlay.
 // Registered as headerless in panels.ts — this component owns the single
@@ -104,9 +111,10 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
     submitBeam,
   } = useWorkspace();
   const connected = useConnectionStore((s) => s.status === 'Connected');
+  const applyState = useConnectionStore((s) => s.applyState);
   const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
+  const rx2AudioMode = useConnectionStore((s) => s.rx2AudioMode);
   const rxFocus = useConnectionStore((s) => s.rxFocus);
-  const txVfo = useConnectionStore((s) => s.txVfo);
   const setRxFocus = useConnectionStore((s) => s.setRxFocus);
   const updateTileInstanceConfig = useLayoutStore(
     (s) => s.updateTileInstanceConfigInLayout,
@@ -210,6 +218,12 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
   // tile-drag start. The .workspace-tile-header strip itself stays the
   // drag handle.
   const stopDrag = (e: ReactPointerEvent | ReactMouseEvent) => e.stopPropagation();
+  const chooseRxAudioMode = (mode: Rx2AudioMode) => {
+    if (mode === 'rx1') setRxFocus('A');
+    if (mode === 'rx2') setRxFocus('B');
+    useConnectionStore.setState({ rx2AudioMode: mode });
+    setRx2({ audioMode: mode }).then(applyState).catch(() => {});
+  };
 
   const stitchedGridStyle = {
     position: 'relative',
@@ -240,26 +254,35 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
         </span>
         {rx2Enabled && (
           <div
-            className="hero-vfo-switch"
+            className="hero-rx-audio-switch"
             onPointerDown={stopDrag}
             onMouseDown={stopDrag}
-            aria-label="Select active VFO"
+            role="group"
+            aria-label="Select RX audio and VFO target"
           >
+            {RX_AUDIO_MODES.map((m) => (
+              <button
+                key={m.mode}
+                type="button"
+                className={`hero-rx-audio-switch__key ${rx2AudioMode === m.mode ? 'is-active' : ''}`}
+                onClick={() => chooseRxAudioMode(m.mode)}
+                aria-pressed={rx2AudioMode === m.mode}
+                title={m.title}
+              >
+                <span>{m.label}</span>
+              </button>
+            ))}
+            <span className="hero-rx-audio-switch__divider" aria-hidden="true" />
             {(['A', 'B'] as const).map((receiver) => (
               <button
                 key={receiver}
                 type="button"
-                className={`hero-vfo-switch__key ${rxFocus === receiver ? 'is-active' : ''}`}
+                className={`hero-rx-audio-switch__key hero-rx-audio-switch__key--vfo ${rxFocus === receiver ? 'is-active' : ''}`}
                 onClick={() => setRxFocus(receiver)}
                 aria-pressed={rxFocus === receiver}
-                title={`Focus VFO ${receiver} (keyboard tuning, meters). Spectrum clicks tune whichever half you click.`}
+                title={`Focus VFO ${receiver} for mode, filter, band, keyboard tuning, and meters.`}
               >
                 <span>{receiver}</span>
-                {txVfo === receiver && (
-                  <span className="hero-vfo-switch__tx">
-                    TX
-                  </span>
-                )}
               </button>
             ))}
           </div>

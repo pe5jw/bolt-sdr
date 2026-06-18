@@ -50,6 +50,8 @@ export function QrzPanel() {
     callsign,
     setCallsign,
     contact,
+    workedSummary,
+    workedSummaryLoading,
     enriching,
     qrzLookupError,
     handleLogQso,
@@ -77,6 +79,8 @@ export function QrzPanel() {
       <div style={{ flex: 1, overflow: 'auto' }}>
         <QrzCard
           contact={contact}
+          workedSummary={workedSummary}
+          workedSummaryLoading={workedSummaryLoading}
           enriching={enriching}
           lookupError={qrzLookupError}
           onLogQso={handleLogQso}

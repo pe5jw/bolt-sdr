@@ -96,8 +96,12 @@ export function PassbandOverlay({
   const hzPerPixel = useDisplayStore((s) => selectDisplaySlice(s, receiver).hzPerPixel);
   // Header width — survives frames whose pan payload is invalid.
   const width = useDisplayStore((s) => selectDisplaySlice(s, receiver).width);
-  const filterLowHz = useConnectionStore((s) => s.filterLowHz);
-  const filterHighHz = useConnectionStore((s) => s.filterHighHz);
+  const filterLowHz = useConnectionStore((s) =>
+    receiver === 'B' ? s.filterLowHzB : s.filterLowHz,
+  );
+  const filterHighHz = useConnectionStore((s) =>
+    receiver === 'B' ? s.filterHighHzB : s.filterHighHz,
+  );
   const selectedVfoHz = useConnectionStore((s) =>
     receiver === 'B' ? s.vfoBHz : s.vfoHz,
   );
@@ -133,7 +137,7 @@ export function PassbandOverlay({
     if (!d) return;
     d.flushTimer = null;
     d.lastWriteAt = performance.now();
-    setFilter(d.pendingLo, d.pendingHi, d.slot).catch(() => {});
+    setFilter(d.pendingLo, d.pendingHi, d.slot, undefined, receiver).catch(() => {});
   };
   const scheduleWrite = () => {
     const d = drag.current;
@@ -149,17 +153,22 @@ export function PassbandOverlay({
     e.stopPropagation();
     e.preventDefault();
     const c = useConnectionStore.getState();
-    const slot = variableSlot(c.filterPresetName);
+    const filterPresetName = receiver === 'B' ? c.filterPresetNameB : c.filterPresetName;
+    const filterLowHz = receiver === 'B' ? c.filterLowHzB : c.filterLowHz;
+    const filterHighHz = receiver === 'B' ? c.filterHighHzB : c.filterHighHz;
+    const slot = variableSlot(filterPresetName);
     drag.current = {
       side,
       slot,
-      pendingLo: c.filterLowHz,
-      pendingHi: c.filterHighHz,
+      pendingLo: filterLowHz,
+      pendingHi: filterHighHz,
       lastWriteAt: 0,
       flushTimer: null,
       pointerId: e.pointerId,
     };
-    if (slot !== c.filterPresetName) useConnectionStore.setState({ filterPresetName: slot });
+    if (slot !== filterPresetName) {
+      useConnectionStore.setState(receiver === 'B' ? { filterPresetNameB: slot } : { filterPresetName: slot });
+    }
     try { (e.target as Element).setPointerCapture(e.pointerId); } catch { /* ok */ }
   };
   const onEdgeMove = (e: ReactPointerEvent) => {
@@ -173,7 +182,9 @@ export function PassbandOverlay({
     else hi = Math.max(d.pendingLo + MIN_PASSBAND_HZ, Math.round(offset));
     d.pendingLo = lo;
     d.pendingHi = hi;
-    useConnectionStore.setState({ filterLowHz: lo, filterHighHz: hi });
+    useConnectionStore.setState(
+      receiver === 'B' ? { filterLowHzB: lo, filterHighHzB: hi } : { filterLowHz: lo, filterHighHz: hi },
+    );
     scheduleWrite();
   };
   const onEdgeUp = (e: ReactPointerEvent) => {
@@ -184,7 +195,7 @@ export function PassbandOverlay({
     drag.current = null;
     try { (e.target as Element).releasePointerCapture(e.pointerId); } catch { /* ok */ }
     const applyState = useConnectionStore.getState().applyState;
-    setFilter(pendingLo, pendingHi, slot).then(applyState).catch(() => {});
+    setFilter(pendingLo, pendingHi, slot, undefined, receiver).then(applyState).catch(() => {});
   };
 
   const showHandles = resizable && !!containerRef;
@@ -217,11 +228,13 @@ export function PassbandOverlay({
       // ~0 and the filter stays pinned to the zero line during a glide; under
       // CTUN the dial roams off-centre and the passband tracks it.
       const vfoHz = receiver === 'B' ? conn.vfoBHz : conn.vfoHz;
+      const filterLowHz = receiver === 'B' ? conn.filterLowHzB : conn.filterLowHz;
+      const filterHighHz = receiver === 'B' ? conn.filterHighHzB : conn.filterHighHz;
       const dialOffsetHz = vc.isInitialized() ? vfoHz - vc.getTargetCenterHz() : 0;
       const passCenter = view + dialOffsetHz;
       const startHz = view - spanHz / 2;
-      const leftPct = ((passCenter + conn.filterLowHz - startHz) / spanHz) * 100;
-      const rightPct = ((passCenter + conn.filterHighHz - startHz) / spanHz) * 100;
+      const leftPct = ((passCenter + filterLowHz - startHz) / spanHz) * 100;
+      const rightPct = ((passCenter + filterHighHz - startHz) / spanHz) * 100;
       const widthPct = rightPct - leftPct;
       const visible = widthPct > 0 && leftPct <= 100 && rightPct >= 0;
       rect.style.display = visible ? '' : 'none';
@@ -236,6 +249,8 @@ export function PassbandOverlay({
       if (
         s.filterLowHz !== prev.filterLowHz ||
         s.filterHighHz !== prev.filterHighHz ||
+        s.filterLowHzB !== prev.filterLowHzB ||
+        s.filterHighHzB !== prev.filterHighHzB ||
         s.vfoHz !== prev.vfoHz ||
         s.vfoBHz !== prev.vfoBHz
       ) {

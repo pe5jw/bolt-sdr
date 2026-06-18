@@ -69,7 +69,7 @@ public class NoiseReductionTests
     // Wdsp_Nb1_*) cover the same P/Invoke seams without the 192× iteration.
     //
     // Set ZEUS_RUN_WDSP_COMBINATORIAL=1 to opt into the full walk when
-    // bench-debugging an NR / NB / SBNR / SPNR engine change.
+    // bench-debugging an NR / NB / SBNR engine change.
     private static bool CombinatorialWdspOptedIn() =>
         string.Equals(Environment.GetEnvironmentVariable("ZEUS_RUN_WDSP_COMBINATORIAL"), "1",
                       StringComparison.Ordinal);
@@ -83,190 +83,10 @@ public class NoiseReductionTests
         catch { return false; }
     }
 
-    private static bool SpnrAvailable()
-    {
-        try { return WdspDspEngine.Nr5SpnrAvailable; }
-        catch { return false; }
-    }
-
-    [Fact]
-    public void Nr5PassbandPolicy_AdaptsToFilterWidth()
-    {
-        var standard = WdspDspEngine.ComputeNr5PassbandPolicy(150, 2850);
-        var lsbStandard = WdspDspEngine.ComputeNr5PassbandPolicy(-2850, -150);
-        var narrow = WdspDspEngine.ComputeNr5PassbandPolicy(300, 2100);
-        var wide = WdspDspEngine.ComputeNr5PassbandPolicy(50, 5000);
-
-        Assert.Equal(0.62, standard.Aggressiveness, 6);
-        Assert.Equal(0.075, standard.AgcTargetRms, 6);
-        Assert.Equal(standard, lsbStandard);
-        Assert.InRange(narrow.Aggressiveness, 0.56, 0.58);
-        Assert.InRange(narrow.AgcTargetRms, 0.071, 0.073);
-        Assert.True(narrow.Aggressiveness < standard.Aggressiveness);
-        Assert.True(narrow.AgcTargetRms < standard.AgcTargetRms);
-        Assert.InRange(wide.Aggressiveness, 0.68, 0.69);
-        Assert.InRange(wide.AgcTargetRms, 0.079, 0.080);
-        Assert.True(wide.Aggressiveness > standard.Aggressiveness);
-        Assert.True(wide.AgcTargetRms > standard.AgcTargetRms);
-    }
-
-    [SkippableFact]
-    public void Wdsp_Nr5PassbandPolicy_ReappliesWhenFilterChanges()
-    {
-        Skip.IfNot(WdspAvailable(), "libwdsp not available");
-        Skip.IfNot(SpnrAvailable(), "Requires libwdsp rebuild with NR5/SPNR exports.");
-
-        using var engine = new WdspDspEngine();
-        int channel = engine.OpenChannel(192_000, 1024);
-        try
-        {
-            engine.SetMode(channel, RxMode.USB);
-            engine.SetFilter(channel, 150, 2850);
-            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
-
-            var standard = engine.TryGetNr5SpnrDiagnostics(channel);
-            Assert.NotNull(standard);
-            Assert.Equal(0.62, standard.Aggressiveness, 6);
-            Assert.Equal(0.075, standard.TargetRms, 6);
-
-            engine.SetFilter(channel, 300, 2100);
-
-            var narrow = engine.TryGetNr5SpnrDiagnostics(channel);
-            Assert.NotNull(narrow);
-            Assert.InRange(narrow.Aggressiveness, 0.56, 0.58);
-            Assert.InRange(narrow.TargetRms, 0.071, 0.073);
-            Assert.True(narrow.Aggressiveness < standard.Aggressiveness);
-            Assert.True(narrow.TargetRms < standard.TargetRms);
-        }
-        finally
-        {
-            engine.CloseChannel(channel);
-        }
-    }
-
-    [SkippableFact]
-    public void Wdsp_Nr5StateReplay_DoesNotFlushLearnedFrames()
-    {
-        Skip.IfNot(WdspAvailable(), "libwdsp not available");
-        Skip.IfNot(SpnrAvailable(), "Requires libwdsp rebuild with NR5/SPNR exports.");
-
-        using var engine = new WdspDspEngine();
-        int channel = engine.OpenChannel(192_000, 1024);
-        try
-        {
-            engine.SetMode(channel, RxMode.USB);
-            engine.SetFilter(channel, 150, 2850);
-            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
-
-            var learned = FeedToneUntilNr5Learns(engine, channel, minLearnedFrames: 20);
-            Assert.True(learned.LearnedFrames >= 20, $"expected NR5 to pass the live readiness threshold before replay, got {learned.LearnedFrames}");
-            Assert.Equal(1, learned.ManagedNr5PositionApplyCount);
-            Assert.Equal(1, learned.ManagedNr5PolicyApplyCount);
-            int generation = learned.ManagedChannelGeneration;
-
-            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
-            var afterSameNrReplay = engine.TryGetNr5SpnrDiagnostics(channel);
-            Assert.NotNull(afterSameNrReplay);
-            Assert.Equal(generation, afterSameNrReplay.ManagedChannelGeneration);
-            Assert.Equal(learned.ManagedNr5PositionApplyCount, afterSameNrReplay.ManagedNr5PositionApplyCount);
-            Assert.Equal(learned.ManagedNr5PolicyApplyCount, afterSameNrReplay.ManagedNr5PolicyApplyCount);
-            Assert.True(afterSameNrReplay.ManagedNr5NoopApplyCount > learned.ManagedNr5NoopApplyCount);
-            Assert.True(
-                afterSameNrReplay.LearnedFrames >= learned.LearnedFrames,
-                $"same NR5 replay flushed learner: before={learned.LearnedFrames}, after={afterSameNrReplay.LearnedFrames}");
-
-            engine.SetFilter(channel, 300, 2100);
-            var afterFilterPolicyChange = engine.TryGetNr5SpnrDiagnostics(channel);
-            Assert.NotNull(afterFilterPolicyChange);
-            Assert.Equal(generation, afterFilterPolicyChange.ManagedChannelGeneration);
-            Assert.Equal(afterSameNrReplay.ManagedNr5PositionApplyCount, afterFilterPolicyChange.ManagedNr5PositionApplyCount);
-            Assert.True(afterFilterPolicyChange.ManagedNr5PolicyApplyCount > afterSameNrReplay.ManagedNr5PolicyApplyCount);
-            Assert.True(
-                afterFilterPolicyChange.LearnedFrames >= afterSameNrReplay.LearnedFrames,
-                $"NR5 filter-policy reapply flushed learner: before={afterSameNrReplay.LearnedFrames}, after={afterFilterPolicyChange.LearnedFrames}");
-            Assert.InRange(afterFilterPolicyChange.Aggressiveness, 0.56, 0.58);
-            Assert.InRange(afterFilterPolicyChange.TargetRms, 0.071, 0.073);
-        }
-        finally
-        {
-            engine.CloseChannel(channel);
-        }
-    }
-
-    [SkippableFact]
-    public void Wdsp_Nr5AdjacentNoiseProfile_RoundTripsThroughNativeDiagnostics()
-    {
-        Skip.IfNot(WdspAvailable(), "libwdsp not available");
-        Skip.IfNot(SpnrAvailable(), "Requires libwdsp rebuild with NR5/SPNR exports.");
-        Skip.IfNot(WdspDspEngine.Nr5SpnrAdjacentNoiseAvailable, "Requires libwdsp rebuild with NR5 adjacent-noise exports.");
-
-        using var engine = new WdspDspEngine();
-        int channel = engine.OpenChannel(192_000, 1024);
-        try
-        {
-            engine.SetMode(channel, RxMode.USB);
-            engine.SetFilter(channel, 300, 2600);
-            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
-
-            engine.SetNr5AdjacentNoiseProfile(
-                channel,
-                usable: true,
-                bins: 90,
-                floorDb: -105.2,
-                p10Db: -105.9,
-                p50Db: -105.2,
-                p90Db: -104.1,
-                slopeDbPerKhz: 0.1,
-                rejectedPct: 7.3,
-                leftBins: 42,
-                rightBins: 48,
-                leftFloorDb: -105.5,
-                rightFloorDb: -105.1);
-
-            var enabled = engine.TryGetNr5SpnrDiagnostics(channel);
-            Assert.NotNull(enabled);
-            Assert.True(enabled.AdjacentNoiseUsable);
-            Assert.Equal(90, enabled.AdjacentNoiseBins);
-            Assert.Equal(-105.2, enabled.AdjacentNoiseFloorDb, precision: 1);
-            Assert.InRange(enabled.AdjacentNoiseTrust, 0.10, 0.92);
-            Assert.Equal(7.3, enabled.AdjacentNoiseRejectedPct, precision: 1);
-            Assert.Equal(42, enabled.AdjacentNoiseLeftBins);
-            Assert.Equal(48, enabled.AdjacentNoiseRightBins);
-            Assert.Equal(-105.5, enabled.AdjacentNoiseLeftFloorDb, precision: 1);
-            Assert.Equal(-105.1, enabled.AdjacentNoiseRightFloorDb, precision: 1);
-            Assert.InRange(enabled.AdjacentNoiseSideBalance, 0.80, 0.90);
-            Assert.Equal(0.4, enabled.AdjacentNoiseAsymmetryDb, precision: 1);
-
-            engine.SetNr5AdjacentNoiseProfile(
-                channel,
-                usable: false,
-                bins: 0,
-                floorDb: 0.0,
-                p10Db: 0.0,
-                p50Db: 0.0,
-                p90Db: 0.0,
-                slopeDbPerKhz: 0.0,
-                rejectedPct: 100.0,
-                leftBins: 0,
-                rightBins: 0,
-                leftFloorDb: 0.0,
-                rightFloorDb: 0.0);
-
-            var disabled = engine.TryGetNr5SpnrDiagnostics(channel);
-            Assert.NotNull(disabled);
-            Assert.False(disabled.AdjacentNoiseUsable);
-            Assert.Equal(0.0, disabled.AdjacentNoiseTrust, precision: 3);
-            Assert.Equal(0.0, disabled.AdjacentNoiseSideBalance, precision: 3);
-        }
-        finally
-        {
-            engine.CloseChannel(channel);
-        }
-    }
 
     public static IEnumerable<object[]> AllCombos()
     {
-        foreach (var nr in new[] { NrMode.Off, NrMode.Anr, NrMode.Emnr, NrMode.Sbnr, NrMode.Nr5 })
+        foreach (var nr in new[] { NrMode.Off, NrMode.Anr, NrMode.Emnr, NrMode.Sbnr })
         foreach (var anf in new[] { false, true })
         foreach (var snb in new[] { false, true })
         foreach (var notches in new[] { false, true })
@@ -319,8 +139,6 @@ public class NoiseReductionTests
         Skip.IfNot(CombinatorialWdspOptedIn(), "Combinatorial WDSP walk is diagnostic-only — set ZEUS_RUN_WDSP_COMBINATORIAL=1 to run.");
         if (cfg.NrMode == NrMode.Sbnr)
             Skip.IfNot(SbnrAvailable(), "Requires libwdsp rebuild — Phase 1 of issue #79; bundled binaries do not export SBNR symbols.");
-        if (cfg.NrMode == NrMode.Nr5)
-            Skip.IfNot(SpnrAvailable(), "Requires libwdsp rebuild with NR5/SPNR exports.");
 
         using var engine = new WdspDspEngine();
         int channel = engine.OpenChannel(192_000, 1024);
@@ -337,7 +155,7 @@ public class NoiseReductionTests
     [SkippableFact]
     public void Wdsp_TogglingNrModes_DoesNotLeaveBothEnabled()
     {
-        // NR button cycle is Off/NR1/NR2/NR4/NR5 — only one of ANR/EMNR/SBNR/SPNR
+        // NR button cycle is Off/NR1/NR2/NR4 - only one of ANR/EMNR/SBNR
         // may be running at a time. Proven here by cycling through each mode; the
         // engine must issue the counter-Run(0) before toggling the other on.
         // Off transitions are exercised even when SBNR symbols are missing so
@@ -354,12 +172,6 @@ public class NoiseReductionTests
             if (SbnrAvailable())
             {
                 engine.SetNoiseReduction(channel, new NrConfig(NrMode.Sbnr));
-                engine.SetNoiseReduction(channel, new NrConfig(NrMode.Anr));
-            }
-
-            if (SpnrAvailable())
-            {
-                engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
                 engine.SetNoiseReduction(channel, new NrConfig(NrMode.Anr));
             }
 
@@ -391,292 +203,6 @@ public class NoiseReductionTests
         {
             engine.CloseChannel(channel);
         }
-    }
-
-    [SkippableFact]
-    public void Wdsp_Nr5Mode_DoesNotCrashWhenSymbolsMissing()
-    {
-        Skip.IfNot(WdspAvailable(), "libwdsp not available");
-        using var engine = new WdspDspEngine();
-        int channel = engine.OpenChannel(192_000, 1024);
-        try
-        {
-            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
-            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Off));
-        }
-        finally
-        {
-            engine.CloseChannel(channel);
-        }
-    }
-
-    [SkippableFact]
-    public void Wdsp_Nr5Diagnostics_LearnAfterIqFlows()
-    {
-        Skip.IfNot(WdspAvailable(), "libwdsp not available");
-        Skip.IfNot(SpnrAvailable(), "Requires libwdsp rebuild with NR5/SPNR exports.");
-
-        const int SampleRate = 192_000;
-        const int Width = 2048;
-        const int TotalComplex = 256 * 1024;
-
-        using var engine = new WdspDspEngine();
-        int channel = engine.OpenChannel(SampleRate, Width);
-        try
-        {
-            engine.SetMode(channel, RxMode.USB);
-            engine.SetFilter(channel, 150, 2850);
-            engine.SetAgcTop(channel, 80.0);
-            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
-
-            var iq = new double[TotalComplex * 2];
-            uint noise = 0x12345678u;
-            for (int n = 0; n < TotalComplex; n++)
-            {
-                noise = 1664525u * noise + 1013904223u;
-                double white = ((noise >> 8) / 16777216.0 - 0.5) * 0.012;
-                double weakPhase = 2.0 * Math.PI * 1_250.0 * n / SampleRate;
-                double strongPhase = 2.0 * Math.PI * 2_050.0 * n / SampleRate;
-                iq[2 * n] = white + 0.018 * Math.Cos(weakPhase) + 0.06 * Math.Cos(strongPhase);
-                iq[2 * n + 1] = white + 0.018 * Math.Sin(weakPhase) + 0.06 * Math.Sin(strongPhase);
-            }
-
-            for (int off = 0; off < TotalComplex; off += 126)
-            {
-                int take = Math.Min(126, TotalComplex - off);
-                engine.FeedIq(channel, iq.AsSpan(2 * off, 2 * take));
-            }
-
-            var audio = new float[2048];
-            Nr5SpnrDiagnosticsDto? diag = null;
-            for (int i = 0; i < 80; i++)
-            {
-                Thread.Sleep(20);
-                engine.ReadAudio(channel, audio);
-                diag = engine.TryGetNr5SpnrDiagnostics(channel);
-                if (diag is { LearnedFrames: > 55, InputRms: > 0.0, OutputRms: > 0.0 }) break;
-            }
-
-            Assert.NotNull(diag);
-            Assert.True(diag.Run, "NR5 should still be running");
-            Assert.True(diag.LearnedFrames > 55, $"expected learned NR5 frames, got {diag.LearnedFrames}");
-            Assert.True(diag.InputRms > 0.0, $"expected input RMS, got {diag.InputRms}");
-            Assert.True(diag.OutputRms > 0.0, $"expected output RMS, got {diag.OutputRms}");
-            Assert.Equal(9, diag.SchemaVersion);
-            Assert.InRange(diag.CoherencePeak, 0.0, 1.0);
-            Assert.InRange(diag.RidgePeak, 0.0, 1.0);
-            Assert.InRange(diag.SignalProbability, 0.0, 1.0);
-            Assert.InRange(diag.TextureFill, 0.0, 1.0);
-            Assert.InRange(diag.MaskSmoothing, 0.0, 1.0);
-            Assert.InRange(diag.SignalConfidence, 0.0, 1.0);
-            Assert.InRange(diag.AgcGate, 0.0, 1.0);
-            Assert.InRange(diag.OutputPeak, 0.0, 1.0);
-            Assert.InRange(diag.PeakEvidence, 0.0, 1.0);
-            Assert.InRange(diag.PeakLimit, 0.0, 1.0);
-            Assert.True(diag.PeakReductionDb >= 0.0, $"expected non-negative NR5 peak reduction pressure, got {diag.PeakReductionDb}");
-            Assert.InRange(diag.AdjacentNoiseTrust, 0.0, 1.0);
-            Assert.InRange(diag.AdjacentNoiseDrive, 0.0, 1.0);
-            Assert.InRange(diag.MeanGain, 0.0, 1.0);
-            Assert.InRange(diag.MinGain, 0.0, 1.0);
-            Assert.True(diag.FloorReductionDb >= 0.0, $"expected non-negative floor push, got {diag.FloorReductionDb}");
-            Assert.True(diag.DynamicRangeDb >= 0.0, $"expected non-negative NR5 dynamic range, got {diag.DynamicRangeDb}");
-            if (WdspDspEngine.Nr5SpnrAdvancedDiagnosticsAvailable)
-            {
-                Assert.True(
-                    diag.CoherencePeak > 0.0 || diag.RidgePeak > 0.0,
-                    $"expected coherent/ridge weak-signal evidence, got coherence={diag.CoherencePeak} ridge={diag.RidgePeak}");
-                Assert.True(diag.DynamicRangeDb > 0.0, $"expected NR5 spectral dynamic range, got {diag.DynamicRangeDb}");
-            }
-            if (WdspDspEngine.Nr5SpnrDeepDiagnosticsAvailable)
-            {
-                Assert.True(diag.SignalConfidence > 0.0, $"expected NR5 signal confidence, got {diag.SignalConfidence}");
-                Assert.True(diag.AgcGate > 0.0, $"expected NR5 AGC signal gate, got {DescribeNr5(diag)}");
-            }
-            if (WdspDspEngine.Nr5SpnrProbabilityDiagnosticsAvailable)
-            {
-                Assert.True(diag.SignalProbability > 0.0, $"expected NR5 signal probability, got {DescribeNr5(diag)}");
-            }
-            if (WdspDspEngine.Nr5SpnrAgcDiagnosticsAvailable)
-            {
-                Assert.InRange(diag.LevelDrive, 0.0, 1.0);
-                Assert.InRange(diag.RecoveryDrive, 0.0, 1.0);
-                Assert.True(diag.MakeupGain > 0.0, $"expected NR5 makeup gain, got {DescribeNr5(diag)}");
-            }
-            if (WdspDspEngine.Nr5SpnrMemoryDiagnosticsAvailable)
-            {
-                Assert.InRange(diag.WeakSignalMemory, 0.0, 1.0);
-            }
-            Assert.True(diag.AgcGain > 0.0, $"expected AGC gain, got {diag.AgcGain}");
-        }
-        finally
-        {
-            engine.CloseChannel(channel);
-        }
-    }
-
-    [SkippableFact]
-    public void Wdsp_Nr5DeepGate_DoesNotLiftNoiseOnlyFrames()
-    {
-        Skip.IfNot(WdspAvailable(), "libwdsp not available");
-        Skip.IfNot(SpnrAvailable(), "Requires libwdsp rebuild with NR5/SPNR exports.");
-        Skip.IfNot(WdspDspEngine.Nr5SpnrDeepDiagnosticsAvailable, "Requires libwdsp rebuild with NR5 deep diagnostics exports.");
-
-        const int SampleRate = 192_000;
-        const int Width = 2048;
-        const int TotalComplex = 256 * 1024;
-
-        using var engine = new WdspDspEngine();
-        int channel = engine.OpenChannel(SampleRate, Width);
-        try
-        {
-            engine.SetMode(channel, RxMode.USB);
-            engine.SetFilter(channel, 150, 2850);
-            engine.SetAgcTop(channel, 80.0);
-            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
-
-            var iq = new double[TotalComplex * 2];
-            uint noise = 0x9e3779b9u;
-            for (int n = 0; n < TotalComplex; n++)
-            {
-                noise = 1664525u * noise + 1013904223u;
-                double i = ((noise >> 8) / 16777216.0 - 0.5) * 0.020;
-                noise = 1664525u * noise + 1013904223u;
-                double q = ((noise >> 8) / 16777216.0 - 0.5) * 0.020;
-                iq[2 * n] = i;
-                iq[2 * n + 1] = q;
-            }
-
-            for (int off = 0; off < TotalComplex; off += 126)
-            {
-                int take = Math.Min(126, TotalComplex - off);
-                engine.FeedIq(channel, iq.AsSpan(2 * off, 2 * take));
-            }
-
-            var audio = new float[2048];
-            Nr5SpnrDiagnosticsDto? diag = null;
-            for (int i = 0; i < 100; i++)
-            {
-                Thread.Sleep(20);
-                engine.ReadAudio(channel, audio);
-                diag = engine.TryGetNr5SpnrDiagnostics(channel);
-                if (diag is { LearnedFrames: > 20, InputRms: > 0.0, OutputRms: > 0.0 }) break;
-            }
-
-            Assert.NotNull(diag);
-            Assert.True(diag.LearnedFrames > 20, $"expected learned NR5 frames, got {diag.LearnedFrames}");
-            Assert.True(diag.FloorReductionDb >= 2.6, $"expected deep floor pressure on noise-only frames, got {diag.FloorReductionDb}");
-            Assert.True(diag.MeanGain <= 0.45, $"expected low mean gain on noise-only frames, got {DescribeNr5(diag)}");
-            Assert.InRange(diag.SignalConfidence, 0.0, 1.0);
-            Assert.InRange(diag.SignalConfidence, 0.0, 0.45);
-            Assert.InRange(diag.AgcGate, 0.0, 0.45);
-            if (WdspDspEngine.Nr5SpnrAgcDiagnosticsAvailable)
-            {
-                Assert.InRange(diag.LevelDrive, 0.0, 0.45);
-                Assert.InRange(diag.RecoveryDrive, 0.0, 0.45);
-                Assert.True(diag.MakeupGain > 0.0, $"expected positive NR5 makeup gain on noise-only frames, got {DescribeNr5(diag)}");
-                AssertFinite(diag.MakeupGainDb, "NR5 noise-only makeup gain dB");
-            }
-        }
-        finally
-        {
-            engine.CloseChannel(channel);
-        }
-    }
-
-    [SkippableFact]
-    public void Wdsp_Nr5DeepGate_SeparatesBuriedToneFromNoise()
-    {
-        Skip.IfNot(WdspAvailable(), "libwdsp not available");
-        Skip.IfNot(SpnrAvailable(), "Requires libwdsp rebuild with NR5/SPNR exports.");
-        Skip.IfNot(WdspDspEngine.Nr5SpnrDeepDiagnosticsAvailable, "Requires libwdsp rebuild with NR5 deep diagnostics exports.");
-
-        const int SampleRate = 192_000;
-        const int Width = 2048;
-        const int WarmupComplex = 128 * 1024;
-        const int TotalComplex = 512 * 1024;
-
-        Nr5SpnrDiagnosticsDto RunFixture(bool includeTone)
-        {
-            using var engine = new WdspDspEngine();
-            int channel = engine.OpenChannel(SampleRate, Width);
-            try
-            {
-                engine.SetMode(channel, RxMode.USB);
-                engine.SetFilter(channel, 150, 2850);
-                engine.SetAgcTop(channel, 80.0);
-                engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
-
-                var iq = new double[TotalComplex * 2];
-                uint noise = 0x7f4a7c15u;
-                for (int n = 0; n < TotalComplex; n++)
-                {
-                    noise = 1664525u * noise + 1013904223u;
-                    double i = ((noise >> 8) / 16777216.0 - 0.5) * 0.020;
-                    noise = 1664525u * noise + 1013904223u;
-                    double q = ((noise >> 8) / 16777216.0 - 0.5) * 0.020;
-                    if (includeTone && n >= WarmupComplex)
-                    {
-                        double phase = 2.0 * Math.PI * 1_500.0 * (n - WarmupComplex) / SampleRate;
-                        i += 0.016 * Math.Cos(phase);
-                        q += 0.016 * Math.Sin(phase);
-                    }
-
-                    iq[2 * n] = i;
-                    iq[2 * n + 1] = q;
-                }
-
-                for (int off = 0; off < TotalComplex; off += 126)
-                {
-                    int take = Math.Min(126, TotalComplex - off);
-                    engine.FeedIq(channel, iq.AsSpan(2 * off, 2 * take));
-                }
-
-                var audio = new float[2048];
-                Nr5SpnrDiagnosticsDto? diag = null;
-                for (int i = 0; i < 160; i++)
-                {
-                    Thread.Sleep(20);
-                    engine.ReadAudio(channel, audio);
-                    diag = engine.TryGetNr5SpnrDiagnostics(channel);
-                    if (diag is { LearnedFrames: > 100, InputRms: > 0.0, OutputRms: > 0.0 }) break;
-                }
-
-                Assert.NotNull(diag);
-                return diag;
-            }
-            finally
-            {
-                engine.CloseChannel(channel);
-            }
-        }
-
-        var noiseOnly = RunFixture(includeTone: false);
-        var buriedTone = RunFixture(includeTone: true);
-
-        Assert.True(
-            buriedTone.SignalConfidence >= noiseOnly.SignalConfidence,
-            $"expected buried tone confidence not to fall below noise-only confidence; tone={DescribeNr5(buriedTone)}, noise={DescribeNr5(noiseOnly)}");
-        Assert.True(
-            buriedTone.AgcGate > noiseOnly.AgcGate,
-            $"expected buried tone AGC gate above noise-only gate; tone={DescribeNr5(buriedTone)}, noise={DescribeNr5(noiseOnly)}");
-        Assert.True(
-            buriedTone.MeanGain > noiseOnly.MeanGain,
-            $"expected preserved signal bins to lift mean gain above noise-only; tone={DescribeNr5(buriedTone)}, noise={DescribeNr5(noiseOnly)}");
-    }
-
-    private static string DescribeNr5(Nr5SpnrDiagnosticsDto diag) =>
-        $"learned={diag.LearnedFrames} conf={diag.SignalConfidence:F3} gate={diag.AgcGate:F3} " +
-        $"presence={diag.PresencePeak:F3} salience={diag.SaliencePeak:F3} " +
-        $"coherence={diag.CoherencePeak:F3} ridge={diag.RidgePeak:F3} " +
-        $"prob={diag.SignalProbability:F3} texture={diag.TextureFill:F3} maskSmooth={diag.MaskSmoothing:F3} " +
-        $"meanGain={diag.MeanGain:F3} minGain={diag.MinGain:F3} " +
-        $"levelDrive={diag.LevelDrive:F3} recovery={diag.RecoveryDrive:F3} memory={diag.WeakSignalMemory:F3} makeup={diag.MakeupGainDb:F1}dB " +
-        $"floor={diag.FloorReductionDb:F1}dB dr={diag.DynamicRangeDb:F1}dB";
-
-    private static void AssertFinite(double value, string label)
-    {
-        Assert.False(double.IsNaN(value), $"{label} is NaN");
-        Assert.False(double.IsInfinity(value), $"{label} is infinite");
     }
 
     // REST contract round-trip. The server registers a JsonStringEnumConverter
@@ -728,21 +254,6 @@ public class NoiseReductionTests
 
         Assert.NotNull(back);
         Assert.Equal(state.Nr, back!.Nr);
-    }
-
-    [Fact]
-    public void NrSetRequest_JsonRoundTrip_PreservesNr5()
-    {
-        var opts = new JsonSerializerOptions();
-        opts.Converters.Add(new JsonStringEnumConverter());
-
-        var req = new NrSetRequest(new NrConfig(NrMode: NrMode.Nr5));
-        string json = JsonSerializer.Serialize(req, opts);
-        var back = JsonSerializer.Deserialize<NrSetRequest>(json, opts);
-
-        Assert.NotNull(back);
-        Assert.Equal(NrMode.Nr5, back!.Nr.NrMode);
-        Assert.Contains("\"Nr5\"", json);
     }
 
     // NB1/NB2 lifecycle across a full toggle cycle. Proves: (1) create_anbEXT /
@@ -887,41 +398,4 @@ public class NoiseReductionTests
         Assert.Contains("\"Sbnr\"", json);
     }
 
-    private static Nr5SpnrDiagnosticsDto FeedToneUntilNr5Learns(
-        WdspDspEngine engine,
-        int channel,
-        int minLearnedFrames)
-    {
-        const int sampleRate = 192_000;
-        const int chunkComplex = 126;
-        const int totalComplex = 96 * 1024;
-        const double amplitude = 0.18;
-
-        var iq = new double[totalComplex * 2];
-        for (int n = 0; n < totalComplex; n++)
-        {
-            double phase = 2.0 * Math.PI * 1_200.0 * n / sampleRate;
-            iq[2 * n] = amplitude * Math.Cos(phase);
-            iq[2 * n + 1] = amplitude * Math.Sin(phase);
-        }
-
-        for (int off = 0; off < totalComplex; off += chunkComplex)
-        {
-            int take = Math.Min(chunkComplex, totalComplex - off);
-            engine.FeedIq(channel, iq.AsSpan(2 * off, 2 * take));
-        }
-
-        var audio = new float[4096];
-        Nr5SpnrDiagnosticsDto? latest = null;
-        for (int i = 0; i < 120; i++)
-        {
-            Thread.Sleep(10);
-            _ = engine.ReadAudio(channel, audio);
-            latest = engine.TryGetNr5SpnrDiagnostics(channel);
-            if (latest is not null && latest.LearnedFrames >= minLearnedFrames)
-                return latest;
-        }
-
-        return latest ?? throw new InvalidOperationException("NR5 diagnostics were not available after feeding IQ.");
-    }
 }

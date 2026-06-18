@@ -507,7 +507,7 @@ public sealed class VstDirectoryScanService
         // Anonymous object keyed to the manifest's JsonPropertyName values
         // (camelCase). Most scanned VSTs route into the TX insert chain so they
         // land in the Audio Suite rack. Known RNNoise/noise-suppression VSTs are
-        // receive speech denoisers, so route them to rx.post-demod where NR5 can
+        // receive speech denoisers, so route them to rx.post-demod where Candidate can
         // feed them demodulated 48 kHz audio. vst3Path is the ORIGINAL absolute
         // path to the .vst3 (referenced in place, not copied); vst3Uid selects
         // one sub-plugin from a shell file (null = single plugin).

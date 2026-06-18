@@ -54,16 +54,14 @@ import { NrSettingsSection, type NrSettingsMode } from './nr/NrSettingsSection';
 
 // NR-button cycle mirrors the proven operator NR paths: Off -> NR1 (ANR,
 // time-domain LMS) -> NR2 (EMNR, Ephraim-Malah spectral) -> NR4 (SBNR,
-// libspecbleach). NR3 (RNNR) is intentionally skipped; see issue #79. NR5
-// stays in the DTO/backend for saved-profile compatibility but is no longer
-// part of the normal cycle.
+// libspecbleach). NR3 (RNNR) is intentionally skipped; see issue #79. Removed
+// NR modes are not part of the normal cycle.
 const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
 const NR_LABEL: Record<NrMode, string> = {
   Off: 'NR',
   Anr: 'NR',
   Emnr: 'NR2',
   Sbnr: 'NR4',
-  Nr5: 'NR5',
 };
 
 const NB_CYCLE: readonly NbMode[] = ['Off', 'Nb1', 'Nb2'];
@@ -83,14 +81,13 @@ function nrButtonTitle(mode: NrMode): string {
     case 'Anr': return 'NR1 (ANR, time-domain LMS)';
     case 'Emnr': return 'NR2 (EMNR, spectral)';
     case 'Sbnr': return 'NR4 (SBNR, libspecbleach)';
-    case 'Nr5': return 'NR5 (SPNR weak-signal spectral NR, experimental)';
   }
 }
 
 // NR1 / NR2 / NR4 each have a tunables panel. NR4 was suppressed pre-#162
 // (libwdsp didn't export SetRXASBNR*); now that Phase 1 binaries ship the
 // symbols on linux-x64 + win-x64, the panel is reachable again. The settings
-// button stays hidden for NR Off and legacy NR5 because there's nothing to
+// button stays hidden for NR Off and removed modes because there's nothing to
 // configure.
 function settingsModeFor(nrMode: NrMode): NrSettingsMode {
   if (nrMode === 'Anr' || nrMode === 'Emnr' || nrMode === 'Sbnr') return nrMode;

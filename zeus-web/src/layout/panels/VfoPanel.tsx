@@ -44,17 +44,11 @@
 
 import type { CSSProperties } from 'react';
 import { Copy, Headphones, Repeat2, Send } from 'lucide-react';
-import { setRx2, setTxVfo, setVfo, swapVfos, type Rx2AudioMode, type TxVfo } from '../../api/client';
+import { setRx2, setTxVfo, setVfo, swapVfos, type TxVfo } from '../../api/client';
 import { bandOf } from '../../components/design/data';
 import { spectrumReceiverFilterColor } from '../../components/spectrumReceiverColor';
 import { VfoDisplay } from '../../components/VfoDisplay';
 import { useConnectionStore } from '../../state/connection-store';
-
-const AUDIO_MODES: readonly { mode: Rx2AudioMode; label: string; title: string }[] = [
-  { mode: 'both', label: 'Both', title: 'Hear RX1 and RX2 together' },
-  { mode: 'rx1', label: 'RX1', title: 'Hear RX1 only' },
-  { mode: 'rx2', label: 'RX2', title: 'Hear RX2 only' },
-];
 
 export function VfoPanel() {
   const applyState = useConnectionStore((s) => s.applyState);
@@ -70,13 +64,11 @@ export function VfoPanel() {
   const patchRx2 = (req: {
     enabled?: boolean;
     vfoBHz?: number;
-    audioMode?: Rx2AudioMode;
     afGainDb?: number;
   }) => {
     const optimistic: Partial<ReturnType<typeof useConnectionStore.getState>> = {};
     if (req.enabled !== undefined) optimistic.rx2Enabled = req.enabled;
     if (req.vfoBHz !== undefined) optimistic.vfoBHz = req.vfoBHz;
-    if (req.audioMode !== undefined) optimistic.rx2AudioMode = req.audioMode;
     if (req.afGainDb !== undefined) optimistic.rx2AfGainDb = req.afGainDb;
     useConnectionStore.setState(optimistic);
     setRx2(req).then(applyState).catch(() => {});
@@ -214,27 +206,6 @@ export function VfoPanel() {
       </div>
 
       <div className="vfo-audio-strip">
-        <div className="vfo-listen-bank" role="group" aria-label="RX2 listen mode">
-          <span className="vfo-audio-mark" title="Listen mode" aria-hidden="true">
-            <Headphones size={13} />
-          </span>
-          {AUDIO_MODES.map((m) => (
-            <button
-              key={m.mode}
-              type="button"
-              className={`vfo-segment ${rx2AudioMode === m.mode ? 'is-active' : ''}`}
-              disabled={!rx2Enabled}
-              onClick={() => {
-                if (m.mode === 'rx1') setRxFocus('A');
-                if (m.mode === 'rx2') setRxFocus('B');
-                patchRx2({ audioMode: m.mode });
-              }}
-              title={m.title}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
         <label className="vfo-af-control mono">
           <span className="vfo-af-label">AF</span>
           <input

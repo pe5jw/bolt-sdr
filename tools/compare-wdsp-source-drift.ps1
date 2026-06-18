@@ -374,14 +374,14 @@ function Get-DefaultClassification {
         }
     }
 
-    if ($path -like "*nr5*" -or
+    if ($path -like "*candidate*" -or
         $path -like "*nr4*" -or
         $path -like "*sbnr*" -or
-        $path -like "*spnr*" -or
+        $path -like "*candidate*" -or
         $path -like "*emnr*") {
         return [ordered]@{
             category = "experimental-enhancement"
-            rationale = "The path matches experimental NR4/NR5/SPNR modernization work."
+            rationale = "The path matches experimental NR4/candidate DSP modernization work."
             source = "built-in"
         }
     }

@@ -166,6 +166,7 @@ interface AudioSuiteState {
   // the operator chose until they pick another one.
   selectedProfile: string;
   rxSelectedProfile: string;
+  favoriteVstIds: string[];
 
   // Actions
   open(route?: AudioSuiteRoute): void;
@@ -195,6 +196,7 @@ interface AudioSuiteState {
   // Profile selection.
   setSelectedProfile(name: string): void;
   setSelectedProfileForRoute(route: AudioSuiteRoute, name: string): void;
+  toggleFavoriteVst(pluginId: string): void;
 
   // Chain membership — park (active=false) / un-park (active=true) an
   // installed plugin. Parking pulls it out of the active chain (stops
@@ -232,9 +234,11 @@ interface AudioSuiteState {
   reorderRxChain(fromIndex: number, toIndex: number): Promise<void>;
   loadRxChainOrderFromServer(): Promise<void>;
 
-  // Preview plumbing.
+  // Preview plumbing. `meterOnly` (Auto Tune) runs the TX-monitor chain for
+  // metering without broadcasting the audible monitor — the operator hears
+  // nothing while the sample is captured in the background.
   loadPreviewState(): Promise<void>;
-  setPreviewEnabled(enabled: boolean): Promise<void>;
+  setPreviewEnabled(enabled: boolean, meterOnly?: boolean): Promise<void>;
 
   // Master bypass plumbing.
   setMasterBypassedFromServer(bypassed: boolean): void;
@@ -285,6 +289,7 @@ type AudioSuitePersistedState = Pick<
   | 'rxSidebarCollapsed'
   | 'selectedProfile'
   | 'rxSelectedProfile'
+  | 'favoriteVstIds'
 >;
 
 // Default window placement — top-left quadrant, room for plugin panels.
@@ -353,6 +358,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       rxProfilesLoaded: false,
       selectedProfile: '',
       rxSelectedProfile: '',
+      favoriteVstIds: [],
 
       open: (route = 'tx') => {
         if (route === 'rx') get().openRx();
@@ -493,6 +499,12 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       setSelectedProfile: (name) => set({ selectedProfile: name.trim() }),
       setSelectedProfileForRoute: (route, name) =>
         set(route === 'rx' ? { rxSelectedProfile: name.trim() } : { selectedProfile: name.trim() }),
+      toggleFavoriteVst: (pluginId) =>
+        set((s) => ({
+          favoriteVstIds: s.favoriteVstIds.includes(pluginId)
+            ? s.favoriteVstIds.filter((id) => id !== pluginId)
+            : [...s.favoriteVstIds, pluginId],
+        })),
 
       setChainMembership: async (pluginId, active) => {
         const prev = get().chainOrder;
@@ -928,7 +940,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         }
       },
 
-      setPreviewEnabled: async (enabled) => {
+      setPreviewEnabled: async (enabled, meterOnly = false) => {
         const prev = get().previewEnabled;
         // Optimistic update so the toggle feels instant.
         set({ previewEnabled: enabled });
@@ -937,7 +949,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           const res = await fetch('/api/tx-audio-suite/preview', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled }),
+            body: JSON.stringify({ enabled, meterOnly }),
           });
           if (!res.ok) {
             set({ previewEnabled: prev });
@@ -1213,10 +1225,13 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           rxSidebarCollapsed: state.rxSidebarCollapsed === true,
           selectedProfile: state.selectedProfile ?? '',
           rxSelectedProfile: state.rxSelectedProfile ?? '',
+          favoriteVstIds: Array.isArray(state.favoriteVstIds)
+            ? state.favoriteVstIds.filter((id): id is string => typeof id === 'string')
+            : [],
         } satisfies AudioSuitePersistedState;
       },
-      // Persist only window placement + open flag. Chain order and
-      // preview state come from the server on every mount.
+      // Persist only presentation state. Chain order and preview state
+      // come from the server on every mount.
       partialize: (s) => ({
         isOpen: s.isOpen,
         x: s.x,
@@ -1241,6 +1256,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         rxSidebarCollapsed: s.rxSidebarCollapsed,
         selectedProfile: s.selectedProfile,
         rxSelectedProfile: s.rxSelectedProfile,
+        favoriteVstIds: s.favoriteVstIds,
       }),
     },
   ),

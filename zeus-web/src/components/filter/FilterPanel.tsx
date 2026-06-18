@@ -16,6 +16,7 @@ import {
   setFilter,
   getFilterPresets,
   type FilterPresetDto,
+  type TxVfo,
 } from '../../api/client';
 import { useFilterFavoritesStore, useFavoritesForMode } from '../../state/filter-favorites-store';
 import { FILTER_DRAG_MIME } from './FilterRibbon';
@@ -23,13 +24,24 @@ import { getPresetsForMode } from './filterPresets';
 
 export function FilterPanel() {
   const mode = useConnectionStore((s) => s.mode);
+  const modeB = useConnectionStore((s) => s.modeB);
   const filterPresetName = useConnectionStore((s) => s.filterPresetName);
+  const filterPresetNameB = useConnectionStore((s) => s.filterPresetNameB);
   const filterLow = useConnectionStore((s) => s.filterLowHz);
   const filterHigh = useConnectionStore((s) => s.filterHighHz);
+  const filterLowB = useConnectionStore((s) => s.filterLowHzB);
+  const filterHighB = useConnectionStore((s) => s.filterHighHzB);
+  const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
+  const rxFocus = useConnectionStore((s) => s.rxFocus);
   const applyState = useConnectionStore((s) => s.applyState);
   const loadFavorites = useFilterFavoritesStore((s) => s.load);
   const updateFavorites = useFilterFavoritesStore((s) => s.update);
-  const favoriteSlotNames = useFavoritesForMode(mode);
+  const activeReceiver: TxVfo = rxFocus === 'B' && rx2Enabled ? 'B' : 'A';
+  const activeMode = activeReceiver === 'B' ? modeB : mode;
+  const activeFilterPresetName = activeReceiver === 'B' ? filterPresetNameB : filterPresetName;
+  const activeFilterLow = activeReceiver === 'B' ? filterLowB : filterLow;
+  const activeFilterHigh = activeReceiver === 'B' ? filterHighB : filterHigh;
+  const favoriteSlotNames = useFavoritesForMode(activeMode);
 
   // Seed from the local Thetis preset table so labels render correctly on
   // first paint. Without this, the buttons collapse to raw slot names
@@ -37,8 +49,8 @@ export function FilterPanel() {
   // because the lookup `presets.find(...)` returns undefined against an
   // empty array. Server VAR overrides land here too once the fetch completes.
   const localPresets = useMemo<FilterPresetDto[]>(
-    () => getPresetsForMode(mode).map((p) => ({ ...p })),
-    [mode],
+    () => getPresetsForMode(activeMode).map((p) => ({ ...p })),
+    [activeMode],
   );
   const [presets, setPresets] = useState<FilterPresetDto[]>(localPresets);
   const [dragOverFav, setDragOverFav] = useState<number | null>(null);
@@ -50,7 +62,7 @@ export function FilterPanel() {
   const toggleRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => { void loadFavorites(mode); }, [mode, loadFavorites]);
+  useEffect(() => { void loadFavorites(activeMode); }, [activeMode, loadFavorites]);
 
   // Reseed `presets` to the new mode's local table whenever the mode flips,
   // so labels never reflect the old mode while the server fetch is in flight.
@@ -58,11 +70,11 @@ export function FilterPanel() {
 
   useEffect(() => {
     let cancelled = false;
-    getFilterPresets(mode)
+    getFilterPresets(activeMode)
       .then((list) => { if (!cancelled && list.length > 0) setPresets(list); })
       .catch(() => { /* keep local fallback */ });
     return () => { cancelled = true; };
-  }, [mode]);
+  }, [activeMode]);
 
   // Popover preset order: F-slots ascending by passband width, then VAR1, VAR2.
   // Matches the FilterRibbon panel's grid so operators see the same layout.
@@ -74,21 +86,29 @@ export function FilterPanel() {
     return [...fSlots, ...varSlots];
   }, [presets]);
 
-  const activeSlot = filterPresetName ?? null;
-  const currentWidth = Math.abs(filterHigh - filterLow);
+  const activeSlot = activeFilterPresetName ?? null;
+  const currentWidth = Math.abs(activeFilterHigh - activeFilterLow);
 
   const selectPreset = useCallback(
     (slot: FilterPresetDto) => {
       useConnectionStore.setState({
-        filterLowHz: slot.lowHz,
-        filterHighHz: slot.highHz,
-        filterPresetName: slot.slotName,
+        ...(activeReceiver === 'B'
+          ? {
+              filterLowHzB: slot.lowHz,
+              filterHighHzB: slot.highHz,
+              filterPresetNameB: slot.slotName,
+            }
+          : {
+              filterLowHz: slot.lowHz,
+              filterHighHz: slot.highHz,
+              filterPresetName: slot.slotName,
+            }),
       });
-      setFilter(slot.lowHz, slot.highHz, slot.slotName)
+      setFilter(slot.lowHz, slot.highHz, slot.slotName, undefined, activeReceiver)
         .then(applyState)
         .catch(() => { /* next state poll reconciles */ });
     },
-    [applyState],
+    [activeReceiver, applyState],
   );
 
   // Close popover on outside click or Escape. Treats clicks inside either
@@ -148,9 +168,9 @@ export function FilterPanel() {
         next[existing] = displaced;
       }
       next[idx] = slotName;
-      void updateFavorites(mode, next);
+      void updateFavorites(activeMode, next);
     },
-    [favoriteSlotNames, mode, updateFavorites],
+    [favoriteSlotNames, activeMode, updateFavorites],
   );
 
   const onFavDragOver = (idx: number) => (e: React.DragEvent) => {
@@ -176,7 +196,7 @@ export function FilterPanel() {
   };
   const endDrag = () => { setDragSlot(null); setDragOverFav(null); };
 
-  if (mode === 'FM') return null;
+  if (activeMode === 'FM') return null;
 
   return (
     <div

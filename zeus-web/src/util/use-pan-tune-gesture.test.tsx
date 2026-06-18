@@ -79,13 +79,15 @@ function GestureProbe({
   touchMode,
   receiver = 'A',
   tuneReceiver,
+  dragMode,
 }: {
   touchMode: PanTuneGestureOptions['touchMode'];
   receiver?: 'A' | 'B';
   tuneReceiver?: PanTuneGestureOptions['tuneReceiver'];
+  dragMode?: PanTuneGestureOptions['dragMode'];
 }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
-  usePanTuneGesture(ref, receiver, { touchMode, tuneReceiver });
+  usePanTuneGesture(ref, receiver, { touchMode, tuneReceiver, dragMode });
   return createElement('canvas', { ref });
 }
 
@@ -512,6 +514,77 @@ describe('usePanTuneGesture mobile touch mode', () => {
     expect(setVfoMock).not.toHaveBeenCalled();
     expect(setVfoBMock).toHaveBeenLastCalledWith(7_195_000, undefined);
     expect(useConnectionStore.getState().vfoBHz).toBe(7_195_000);
+
+    unmount();
+  });
+
+  it('can drag-pan RX1 by posting radio LO instead of VFO A', async () => {
+    useConnectionStore.setState({
+      ctunEnabled: false,
+      vfoHz: 14_205_000,
+      radioLoHz: 14_200_000,
+    });
+    useDisplayStore.setState({
+      width: 200,
+      centerHz: 14_200_000n,
+      hzPerPixel: 100,
+      panDb: new Float32Array(200),
+      panValid: true,
+    });
+
+    const { container, unmount } = render(
+      createElement(GestureProbe, {
+        touchMode: 'normal',
+        dragMode: 'ruler-pan',
+      }),
+    );
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+    await act(async () => {
+      pointer(canvas, 'pointerdown', { pointerId: 1, clientX: 100, pointerType: 'mouse' });
+      pointer(canvas, 'pointermove', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+      pointer(canvas, 'pointerup', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+      await flush();
+    });
+
+    expect(setVfoMock).not.toHaveBeenCalled();
+    expect(setRadioLoMock).toHaveBeenLastCalledWith(14_195_000, expect.any(AbortSignal));
+    expect(useConnectionStore.getState().vfoHz).toBe(14_205_000);
+    expect(useConnectionStore.getState().radioLoHz).toBe(14_195_000);
+
+    unmount();
+  });
+
+  it('still click-tunes when ruler-pan drag mode does not move past slop', async () => {
+    useConnectionStore.setState({
+      ctunEnabled: false,
+      vfoHz: 14_200_000,
+      radioLoHz: 14_200_000,
+    });
+    useDisplayStore.setState({
+      width: 200,
+      centerHz: 14_200_000n,
+      hzPerPixel: 100,
+      panDb: new Float32Array(200),
+      panValid: true,
+    });
+
+    const { container, unmount } = render(
+      createElement(GestureProbe, {
+        touchMode: 'normal',
+        dragMode: 'ruler-pan',
+      }),
+    );
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+    await act(async () => {
+      pointer(canvas, 'pointerdown', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+      pointer(canvas, 'pointerup', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+      await flush();
+    });
+
+    expect(setRadioLoMock).not.toHaveBeenCalled();
+    expect(setVfoMock).toHaveBeenCalledWith(14_205_000, undefined);
 
     unmount();
   });

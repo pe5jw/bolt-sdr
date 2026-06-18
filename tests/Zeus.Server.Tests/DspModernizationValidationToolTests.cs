@@ -8,6 +8,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Zeus.Contracts;
 using Zeus.Server;
 
 namespace Zeus.Server.Tests;
@@ -428,11 +429,44 @@ public sealed class DspModernizationValidationToolTests
             Directory.CreateDirectory(artifactsDir);
 
             await File.WriteAllTextAsync(
-                Path.Combine(artifactsDir, "current-zeus-fixtures.json"),
-                "{}");
-            await File.WriteAllTextAsync(
-                Path.Combine(artifactsDir, "external-engine.speexdsp.fixtures.json"),
-                "{}");
+                Path.Combine(bundleDir, "benchmark-plan.json"),
+                """
+                {
+                  "schemaVersion": 1,
+                  "scenarios": [
+                    {
+                      "id": "ssb-like-speech",
+                      "name": "SSB-like speech",
+                      "fixtureStatus": "offline-fixture-ready",
+                      "signalPath": "RX audio",
+                      "requiredMetrics": [
+                        "speech-band preservation",
+                        "noise reduction",
+                        "artifact score",
+                        "processing elapsed ms"
+                      ],
+                      "acceptanceGates": [
+                        "speech-artifacts-bounded"
+                      ]
+                    },
+                    {
+                      "id": "noise-only-gating",
+                      "name": "Noise-only gating",
+                      "fixtureStatus": "offline-fixture-ready",
+                      "signalPath": "RX IQ/RX audio",
+                      "requiredMetrics": [
+                        "false-open rate",
+                        "noise floor movement",
+                        "artifact score",
+                        "processing elapsed ms"
+                      ],
+                      "acceptanceGates": [
+                        "no-false-open"
+                      ]
+                    }
+                  ]
+                }
+                """);
 
             var scenarioIds = new[] { "ssb-like-speech-post-demod", "agc-disabled-no-pumping", "noise-only-gating" };
             await File.WriteAllTextAsync(
@@ -449,8 +483,7 @@ public sealed class DspModernizationValidationToolTests
 
             var commandSteps = new[]
             {
-                "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\compare-dsp-fixture-metrics.ps1 -BaselinePath \"$bundleDir\\artifacts\\current-zeus-fixtures.json\" -CandidatePath \"$bundleDir\\artifacts\\external-engine.speexdsp.fixtures.json\" -CandidateComparisonId candidate-external-engine-opt-in -FailOnRegression",
-                "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId candidate-external-engine-opt-in -ScenarioIds ssb-like-speech-post-demod,agc-disabled-no-pumping,noise-only-gating -IndexPath \"$bundleDir\\artifacts\\live-diagnostics-trace-index.external-engine.speexdsp.json\" -ReportPath \"$bundleDir\\artifacts\\live-diagnostics-matrix-report.external-engine.speexdsp.json\" -Samples 60 -IntervalMs 1000 -ContinueOnError"
+                "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-external-engine-bakeoff.ps1 -BundleDir \"$bundleDir\" -CandidateId speexdsp -ScenarioIds ssb-like-speech-post-demod agc-disabled-no-pumping noise-only-gating -PlanOnly"
             };
             await File.WriteAllTextAsync(
                 Path.Combine(bundleDir, "validation-triage-report.json"),
@@ -470,14 +503,13 @@ public sealed class DspModernizationValidationToolTests
                             commandTemplate = commandSteps[0],
                             commandStepCount = commandSteps.Length,
                             commandSteps,
-                            manualAction = "Produce or enable only the post-demod, operator-opt-in 'speexdsp' candidate path before running these comparisons. Do not route raw WDSP IQ, TX audio, TX monitor, or PureSignal feedback through the external engine.",
-                            expectedArtifact = "artifacts/dsp-fixture-metric-comparison.json",
-                            expectedArtifactCount = 3,
+                            manualAction = "Produce or enable only the post-demod, operator-opt-in 'speexdsp' candidate path before executing the runner plan. Start with -PlanOnly; use -Execute only after fixture metrics exist and the operator has intentionally enabled the candidate path. Do not route raw WDSP IQ, TX audio, TX monitor, or PureSignal feedback through the external engine.",
+                            expectedArtifact = "artifacts/external-engine-bakeoff-cycle-summary.json",
+                            expectedArtifactCount = 2,
                             expectedArtifacts = new[]
                             {
-                                "artifacts/dsp-fixture-metric-comparison.json",
-                                "artifacts/live-diagnostics-trace-index.external-engine.speexdsp.json",
-                                "artifacts/live-diagnostics-matrix-report.external-engine.speexdsp.json"
+                                "artifacts/external-engine-bakeoff-cycle-summary.json",
+                                "artifacts/external-engine-bakeoff-cycle-summary.md"
                             },
                             followUp = "Treat this as exploratory opt-in evidence only."
                         }
@@ -510,6 +542,12 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(root.GetProperty("readyToExecute").GetBoolean());
             Assert.False(root.GetProperty("executed").GetBoolean());
             Assert.Equal(0, root.GetProperty("missingPrerequisiteCount").GetInt32());
+            Assert.Equal(
+                new[] { "ssb-like-speech", "agc-level-step", "noise-only-gating" },
+                ReadStringArray(root, "fixtureScenarioIds"));
+            Assert.Equal(
+                new[] { "off-baseline", "current-zeus", "thetis-parity", "candidate-external-engine-opt-in" },
+                ReadStringArray(root, "fixtureComparisonIds"));
 
             var safety = root.GetProperty("safetyPolicy");
             Assert.True(safety.GetProperty("optInOnly").GetBoolean());
@@ -521,8 +559,9 @@ public sealed class DspModernizationValidationToolTests
 
             var steps = ReadStringArray(root, "commandSteps");
             Assert.Equal(4, steps.Length);
-            Assert.Contains(steps, step => step.Contains("compare-dsp-fixture-metrics.ps1", StringComparison.Ordinal)
-                && step.Contains("external-engine.speexdsp.fixtures.json", StringComparison.Ordinal));
+            Assert.Contains(steps, step => step.Contains("run-dsp-wdsp-fixture-matrix.ps1", StringComparison.Ordinal)
+                && step.Contains("-ScenarioIds ssb-like-speech agc-level-step noise-only-gating", StringComparison.Ordinal)
+                && step.Contains("-ComparisonIds off-baseline current-zeus thetis-parity candidate-external-engine-opt-in", StringComparison.Ordinal));
             Assert.Contains(steps, step => step.Contains("run-dsp-live-diagnostics-matrix.ps1", StringComparison.Ordinal)
                 && step.Contains("-ComparisonId candidate-external-engine-opt-in", StringComparison.Ordinal)
                 && step.Contains("-ScenarioIds ssb-like-speech-post-demod agc-disabled-no-pumping noise-only-gating", StringComparison.Ordinal));
@@ -530,7 +569,13 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains(steps, step => step.Contains("summarize-dsp-modernization-validation-report.ps1", StringComparison.Ordinal));
 
             var artifacts = ReadStringArray(root, "expectedArtifacts");
+            Assert.Contains("artifacts/offline-fixture-metrics.json", artifacts);
+            Assert.Contains("artifacts/audio-render-before-after.json", artifacts);
+            Assert.Contains("artifacts/spectrum-before-after.json", artifacts);
+            Assert.Contains("artifacts/wdsp-runtime-artifact-audit.json", artifacts);
+            Assert.Contains("artifacts/native-stage-timing-report.json", artifacts);
             Assert.Contains("artifacts/dsp-fixture-metric-comparison.json", artifacts);
+            Assert.Contains("artifacts/wdsp-fixture-matrix-summary.external-engine.speexdsp.json", artifacts);
             Assert.Contains("artifacts/live-diagnostics-trace-index.external-engine.speexdsp.json", artifacts);
             Assert.Contains("artifacts/live-diagnostics-matrix-report.external-engine.speexdsp.json", artifacts);
             Assert.Contains("artifacts/external-engine-bakeoff-cycle-summary.json", artifacts);
@@ -538,6 +583,7 @@ public sealed class DspModernizationValidationToolTests
             var markdown = await File.ReadAllTextAsync(markdownPath);
             Assert.Contains("External DSP/ML Bakeoff Cycle", markdown, StringComparison.Ordinal);
             Assert.Contains("post-demod", markdown, StringComparison.Ordinal);
+            Assert.Contains("run-dsp-wdsp-fixture-matrix.ps1", markdown, StringComparison.Ordinal);
             Assert.Contains("run-dsp-live-diagnostics-matrix.ps1", markdown, StringComparison.Ordinal);
         }
         finally
@@ -568,8 +614,6 @@ public sealed class DspModernizationValidationToolTests
 
             var artifactsDir = Path.Combine(bundleDir, "artifacts");
             Directory.CreateDirectory(artifactsDir);
-            await File.WriteAllTextAsync(Path.Combine(artifactsDir, "current-zeus-fixtures.json"), "{}");
-            await File.WriteAllTextAsync(Path.Combine(artifactsDir, "external-engine.speexdsp.fixtures.json"), "{}");
 
             var bakeoffReportPath = Path.Combine(artifactsDir, "external-engine-bakeoff-report.json");
             var generated = await RunPowerShellAsync(
@@ -645,7 +689,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.False(validationRoot.GetProperty("externalEngineBakeoffCycleExecuted").GetBoolean());
             Assert.Equal(0, validationRoot.GetProperty("externalEngineBakeoffCycleMissingPrerequisiteCount").GetInt32());
             Assert.Equal(4, validationRoot.GetProperty("externalEngineBakeoffCycleCommandStepCount").GetInt32());
-            Assert.Equal(8, validationRoot.GetProperty("externalEngineBakeoffCycleExpectedArtifactCount").GetInt32());
+            Assert.Equal(14, validationRoot.GetProperty("externalEngineBakeoffCycleExpectedArtifactCount").GetInt32());
             Assert.Equal(0, validationRoot.GetProperty("externalEngineBakeoffCycleNonZeroExitCount").GetInt32());
             Assert.True(validationRoot.GetProperty("externalEngineBakeoffCycleSourceExternalBakeoffReady").GetBoolean());
             Assert.True(validationRoot.GetProperty("externalEngineBakeoffCycleSourceExternalBakeoffActionPresent").GetBoolean());
@@ -697,7 +741,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.False(summaryRoot.GetProperty("externalEngineBakeoffCycleExecuted").GetBoolean());
             Assert.Equal(0, summaryRoot.GetProperty("externalEngineBakeoffCycleMissingPrerequisiteCount").GetInt32());
             Assert.Equal(4, summaryRoot.GetProperty("externalEngineBakeoffCycleCommandStepCount").GetInt32());
-            Assert.Equal(8, summaryRoot.GetProperty("externalEngineBakeoffCycleExpectedArtifactCount").GetInt32());
+            Assert.Equal(14, summaryRoot.GetProperty("externalEngineBakeoffCycleExpectedArtifactCount").GetInt32());
             Assert.Equal(0, summaryRoot.GetProperty("externalEngineBakeoffCycleNonZeroExitCount").GetInt32());
             Assert.True(summaryRoot.GetProperty("externalEngineBakeoffCycleSourceExternalBakeoffReady").GetBoolean());
             Assert.True(summaryRoot.GetProperty("externalEngineBakeoffCycleSourceExternalBakeoffActionPresent").GetBoolean());
@@ -783,7 +827,7 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
-    public async Task ArtifactManifestScaffoldKeepsSourceBenchmarkPlanOnNr5Scope()
+    public async Task ArtifactManifestScaffoldKeepsSourceBenchmarkPlanOnCandidateScope()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell artifact scaffold smoke runs on Windows.");
 
@@ -828,8 +872,8 @@ public sealed class DspModernizationValidationToolTests
             Assert.DoesNotContain("candidate-external-engine-opt-in", sourcePlan.RequiredComparisons);
             var weakCarrier = Assert.Single(sourcePlan.Scenarios, scenario => scenario.Id == "weak-cw-carrier");
             var txTwoTone = Assert.Single(sourcePlan.Scenarios, scenario => scenario.Id == "tx-two-tone");
-            Assert.Contains("nr5-spnr", weakCarrier.RequiredComparisons);
-            Assert.DoesNotContain("nr5-spnr", txTwoTone.RequiredComparisons);
+            Assert.Contains("candidate-under-test", weakCarrier.RequiredComparisons);
+            Assert.DoesNotContain("candidate-under-test", txTwoTone.RequiredComparisons);
         }
         finally
         {
@@ -1227,6 +1271,113 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task WdspFixtureMatrixCarriesExternalOptInBypassProfile()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell WDSP fixture matrix smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-wdsp-matrix-external-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(bundleDir, "benchmark-plan.json"),
+                """
+                {
+                  "schemaVersion": 1,
+                  "scenarios": [
+                    {
+                      "id": "ssb-like-speech",
+                      "name": "SSB-like speech",
+                      "fixtureStatus": "offline-fixture-ready",
+                      "signalPath": "RX audio",
+                      "requiredMetrics": [
+                        "speech-band preservation",
+                        "noise reduction",
+                        "artifact score",
+                        "processing elapsed ms"
+                      ],
+                      "acceptanceGates": [
+                        "speech-artifacts-bounded"
+                      ]
+                    },
+                    {
+                      "id": "noise-only-gating",
+                      "name": "Noise-only gating",
+                      "fixtureStatus": "offline-fixture-ready",
+                      "signalPath": "RX IQ/RX audio",
+                      "requiredMetrics": [
+                        "false-open rate",
+                        "noise floor movement",
+                        "artifact score",
+                        "processing elapsed ms"
+                      ],
+                      "acceptanceGates": [
+                        "no-false-open"
+                      ]
+                    }
+                  ]
+                }
+                """);
+
+            var matrix = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "run-dsp-wdsp-fixture-matrix.ps1"),
+                TimeSpan.FromMinutes(4),
+                "-BundleDir", bundleDir,
+                "-ScenarioIds", "ssb-like-speech,noise-only-gating",
+                "-ComparisonIds", "current-zeus,thetis-parity,candidate-external-engine-opt-in",
+                "-AllowRegression",
+                "-AllowRuntimeAuditPreflight",
+                "-NoMarkdown",
+                "-Force",
+                "-JsonOnly");
+
+            Assert.True(matrix.ExitCode == 0, matrix.CombinedOutput);
+
+            var metricsPath = Path.Combine(bundleDir, "artifacts", "offline-fixture-metrics.json");
+            var summaryPath = Path.Combine(bundleDir, "artifacts", "wdsp-fixture-matrix-summary.json");
+            Assert.True(File.Exists(metricsPath), matrix.CombinedOutput);
+            Assert.True(File.Exists(summaryPath), matrix.CombinedOutput);
+
+            using var metricsDoc = JsonDocument.Parse(await File.ReadAllTextAsync(metricsPath));
+            var metricsRoot = metricsDoc.RootElement;
+            Assert.Equal("wdsp", metricsRoot.GetProperty("evidenceEngine").GetString());
+            Assert.Contains("candidate-external-engine-opt-in", ReadStringArray(metricsRoot, "comparisonIds"));
+
+            foreach (var scenario in metricsRoot.GetProperty("scenarios").EnumerateArray())
+            {
+                var externalComparison = scenario
+                    .GetProperty("comparisons")
+                    .EnumerateArray()
+                    .Single(comparison => comparison.GetProperty("comparisonId").GetString() == "candidate-external-engine-opt-in");
+                Assert.Equal("post-demod-external-bypass", externalComparison.GetProperty("profile").GetString());
+            }
+
+            using var summaryDoc = JsonDocument.Parse(await File.ReadAllTextAsync(summaryPath));
+            var summaryRoot = summaryDoc.RootElement;
+            Assert.Contains("candidate-external-engine-opt-in", ReadStringArray(summaryRoot, "comparisonIds"));
+            Assert.False(summaryRoot.GetProperty("acceptanceEvidenceReady").GetBoolean());
+
+            var limitations = ReadStringArray(summaryRoot, "acceptanceLimitations");
+            Assert.Contains(limitations, item => item.Contains("No default DSP behavior should change", StringComparison.Ordinal));
+            Assert.Contains(limitations, item => item.Contains("opt-in post-demod candidates", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task LiveDiagnosticsHistoryPlanRequiresParityAcceptanceComparisons()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live history smoke runs on Windows.");
@@ -1260,13 +1411,13 @@ public sealed class DspModernizationValidationToolTests
             var plan = root.GetProperty("latestLiveExperimentPlan");
             Assert.Equal("g2-rx-acceptance-evidence", plan.GetProperty("planScope").GetString());
             Assert.Equal(
-                new[] { "current-zeus", "nr5-spnr" },
+                new[] { "current-zeus", "candidate-under-test" },
                 ReadStringArray(plan, "tuningComparisons"));
             Assert.Equal(
-                new[] { "off-baseline", "thetis-parity", "current-zeus", "nr5-spnr" },
+                new[] { "off-baseline", "thetis-parity", "current-zeus", "candidate-under-test" },
                 ReadStringArray(plan, "acceptanceComparisons"));
             Assert.Equal(
-                new[] { "off-baseline", "thetis-parity", "current-zeus", "nr5-spnr" },
+                new[] { "off-baseline", "thetis-parity", "current-zeus", "candidate-under-test" },
                 ReadStringArray(plan, "recommendedComparisons"));
             Assert.DoesNotContain("candidate-external-engine-opt-in", ReadStringArray(plan, "recommendedComparisons"));
 
@@ -1274,14 +1425,14 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains("-ComparisonId off-baseline", templates.GetProperty("offBaseline").GetString(), StringComparison.Ordinal);
             Assert.Contains("-ComparisonId thetis-parity", templates.GetProperty("thetis").GetString(), StringComparison.Ordinal);
             Assert.Contains("-ComparisonId current-zeus", templates.GetProperty("baseline").GetString(), StringComparison.Ordinal);
-            Assert.Contains("-ComparisonId nr5-spnr", templates.GetProperty("candidate").GetString(), StringComparison.Ordinal);
+            Assert.Contains("-ComparisonId candidate-under-test", templates.GetProperty("candidate").GetString(), StringComparison.Ordinal);
             Assert.Contains("-BaselineComparisonId current-zeus", templates.GetProperty("compare").GetString(), StringComparison.Ordinal);
-            Assert.Contains("-CandidateComparisonId nr5-spnr", templates.GetProperty("compare").GetString(), StringComparison.Ordinal);
+            Assert.Contains("-CandidateComparisonId candidate-under-test", templates.GetProperty("compare").GetString(), StringComparison.Ordinal);
 
             foreach (var scenario in plan.GetProperty("scenarios").EnumerateArray())
             {
                 Assert.Equal(
-                    new[] { "off-baseline", "thetis-parity", "current-zeus", "nr5-spnr" },
+                    new[] { "off-baseline", "thetis-parity", "current-zeus", "candidate-under-test" },
                     ReadStringArray(scenario, "requiredComparisons"));
             }
 
@@ -1370,7 +1521,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains("weak-cw-carrier/off-baseline", missingCoverageIds);
             Assert.Contains("weak-cw-carrier/thetis-parity", missingCoverageIds);
             Assert.Contains("weak-cw-carrier/current-zeus", missingCoverageIds);
-            Assert.Contains("weak-cw-carrier/nr5-spnr", missingCoverageIds);
+            Assert.Contains("weak-cw-carrier/candidate-under-test", missingCoverageIds);
 
             var errorCodes = validationRoot.GetProperty("errors")
                 .EnumerateArray()
@@ -1413,14 +1564,14 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains("off-baseline", actionReason, StringComparison.Ordinal);
             Assert.Contains("thetis-parity", actionReason, StringComparison.Ordinal);
             Assert.Contains("current-zeus", actionReason, StringComparison.Ordinal);
-            Assert.Contains("nr5-spnr", actionReason, StringComparison.Ordinal);
+            Assert.Contains("candidate-under-test", actionReason, StringComparison.Ordinal);
 
             var repairSteps = ReadStringArray(regenerateAction, "commandSteps");
             Assert.Equal(5, regenerateAction.GetProperty("commandStepCount").GetInt32());
             Assert.Contains(repairSteps, step => step.Contains("-ComparisonId off-baseline", StringComparison.Ordinal));
             Assert.Contains(repairSteps, step => step.Contains("-ComparisonId thetis-parity", StringComparison.Ordinal));
             Assert.Contains(repairSteps, step => step.Contains("-ComparisonId current-zeus", StringComparison.Ordinal));
-            Assert.Contains(repairSteps, step => step.Contains("-ComparisonId nr5-spnr", StringComparison.Ordinal));
+            Assert.Contains(repairSteps, step => step.Contains("-ComparisonId candidate-under-test", StringComparison.Ordinal));
             Assert.Contains(repairSteps, step => step.Contains("summarize-dsp-live-diagnostics-history.ps1", StringComparison.Ordinal));
         }
         finally
@@ -1485,7 +1636,7 @@ public sealed class DspModernizationValidationToolTests
                 missingComparisonIds: new[]
                 {
                     "weak-cw-carrier/thetis-parity",
-                    "weak-cw-carrier/nr5-spnr"
+                    "weak-cw-carrier/candidate-under-test"
                 });
 
             var partialSummaryReport = Path.Combine(bundleDir, "summary-partial.json");
@@ -1510,7 +1661,7 @@ public sealed class DspModernizationValidationToolTests
             var partialDetail = partialGate.GetProperty("detail").GetString() ?? "";
             Assert.Contains("missingCoverage=2", partialDetail, StringComparison.Ordinal);
             Assert.Contains("weak-cw-carrier/thetis-parity", partialDetail, StringComparison.Ordinal);
-            Assert.Contains("weak-cw-carrier/nr5-spnr", partialDetail, StringComparison.Ordinal);
+            Assert.Contains("weak-cw-carrier/candidate-under-test", partialDetail, StringComparison.Ordinal);
 
             Assert.Contains(
                 partialRoot.GetProperty("acceptanceActionPlan").EnumerateArray(),
@@ -1525,7 +1676,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains(partialRepairSteps, step => step.Contains("-ComparisonId off-baseline", StringComparison.Ordinal));
             Assert.Contains(partialRepairSteps, step => step.Contains("-ComparisonId thetis-parity", StringComparison.Ordinal));
             Assert.Contains(partialRepairSteps, step => step.Contains("-ComparisonId current-zeus", StringComparison.Ordinal));
-            Assert.Contains(partialRepairSteps, step => step.Contains("-ComparisonId nr5-spnr", StringComparison.Ordinal));
+            Assert.Contains(partialRepairSteps, step => step.Contains("-ComparisonId candidate-under-test", StringComparison.Ordinal));
 
             var missingCoverageValidationReport = Path.Combine(bundleDir, "validation-missing-coverage.json");
             WriteSyntheticLiveHistoryCoverageValidationReport(
@@ -1645,7 +1796,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains(steps, step => step.Contains("-ComparisonId off-baseline", StringComparison.Ordinal));
             Assert.Contains(steps, step => step.Contains("-ComparisonId thetis-parity", StringComparison.Ordinal));
             Assert.Contains(steps, step => step.Contains("-ComparisonId current-zeus", StringComparison.Ordinal));
-            Assert.Contains(steps, step => step.Contains("-ComparisonId nr5-spnr", StringComparison.Ordinal));
+            Assert.Contains(steps, step => step.Contains("-ComparisonId candidate-under-test", StringComparison.Ordinal));
             Assert.Contains(steps, step => step.Contains("summarize-dsp-live-diagnostics-history.ps1", StringComparison.Ordinal));
             Assert.Contains(steps, step => step.Contains("compare-dsp-live-diagnostics-matrix.ps1", StringComparison.Ordinal)
                 && step.Contains("-BaselineComparisonId current-zeus", StringComparison.Ordinal));
@@ -1666,7 +1817,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains("-ComparisonId off-baseline", commandTemplate, StringComparison.Ordinal);
             Assert.Contains("-ComparisonId thetis-parity", commandTemplate, StringComparison.Ordinal);
             Assert.Contains("-BaselineComparisonId current-zeus", commandTemplate, StringComparison.Ordinal);
-            Assert.Contains("-CandidateComparisonId nr5-spnr", commandTemplate, StringComparison.Ordinal);
+            Assert.Contains("-CandidateComparisonId candidate-under-test", commandTemplate, StringComparison.Ordinal);
             Assert.Contains("-RequireLiveAcceptanceArtifacts", commandTemplate, StringComparison.Ordinal);
             Assert.Contains("-RequireArtifactFiles", commandTemplate, StringComparison.Ordinal);
             Assert.Contains("validation-triage-report.json", commandTemplate, StringComparison.Ordinal);
@@ -1770,7 +1921,7 @@ public sealed class DspModernizationValidationToolTests
                     artifactId = "live-diagnostics-matrix-report-candidate",
                     artifactPath = "artifacts/live-diagnostics-matrix-report.candidate.json",
                     scenarioId = "mixed-ssb-speech",
-                    comparisonId = "nr5-spnr",
+                    comparisonId = "candidate-under-test",
                     reportPath = "artifacts/live-diagnostics-matrix-report.candidate.json",
                     readyForBenchmarkTrace = true,
                     weakInputSampleCount = 12,
@@ -1824,7 +1975,7 @@ public sealed class DspModernizationValidationToolTests
 
             var reason = action.GetProperty("reason").GetString() ?? "";
             Assert.Contains("mixed-ssb-speech", reason, StringComparison.Ordinal);
-            Assert.Contains("nr5-spnr", reason, StringComparison.Ordinal);
+            Assert.Contains("candidate-under-test", reason, StringComparison.Ordinal);
             Assert.Contains("score=58.5", reason, StringComparison.Ordinal);
             Assert.Contains("weakStrongOutputGapDb=3.25", reason, StringComparison.Ordinal);
 
@@ -1832,7 +1983,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(4, action.GetProperty("commandStepCount").GetInt32());
             Assert.Contains(steps, step => step.Contains("run-dsp-live-diagnostics-matrix.ps1", StringComparison.Ordinal)
                 && step.Contains("-ScenarioIds mixed-ssb-speech", StringComparison.Ordinal)
-                && step.Contains("-ComparisonId nr5-spnr", StringComparison.Ordinal)
+                && step.Contains("-ComparisonId candidate-under-test", StringComparison.Ordinal)
                 && step.Contains("live-diagnostics-matrix-report.mixed-weak-strong-followup.json", StringComparison.Ordinal));
             Assert.Contains(steps, step => step.Contains("summarize-dsp-live-diagnostics-history.ps1", StringComparison.Ordinal));
             Assert.Contains(steps, step => step.Contains("validate-dsp-modernization-bundle.ps1", StringComparison.Ordinal)
@@ -1910,7 +2061,7 @@ public sealed class DspModernizationValidationToolTests
                 manualTuneObserverBaseUrl = "http://127.0.0.1:6060",
                 manualTuneObserverBundleRelativePaths = true,
                 manualTuneObserverScenarioId = "rx-ssb-voice-like-manual",
-                manualTuneObserverComparisonId = "nr5-spnr",
+                manualTuneObserverComparisonId = "candidate-under-test",
                 manualTuneObserverPollCount = 8,
                 manualTuneObserverPollSampleCount = 8,
                 manualTuneObserverCaptureCount = 2,
@@ -2216,7 +2367,7 @@ public sealed class DspModernizationValidationToolTests
                     artifactId = "live-diagnostics-matrix-report-candidate",
                     artifactPath = "artifacts/live-diagnostics-matrix-report.candidate.json",
                     scenarioId = "mixed-ssb-speech",
-                    comparisonId = "nr5-spnr",
+                    comparisonId = "candidate-under-test",
                     reportPath = "artifacts/live-diagnostics-matrix-report.candidate.json",
                     readyForBenchmarkTrace = true,
                     weakInputSampleCount = 12,
@@ -2287,7 +2438,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(3, action.GetProperty("commandStepCount").GetInt32());
             Assert.Contains(steps, step => step.Contains("run-dsp-live-diagnostics-matrix.ps1", StringComparison.Ordinal)
                 && step.Contains("-ScenarioIds mixed-ssb-speech", StringComparison.Ordinal)
-                && step.Contains("-ComparisonId nr5-spnr", StringComparison.Ordinal)
+                && step.Contains("-ComparisonId candidate-under-test", StringComparison.Ordinal)
                 && step.Contains("live-diagnostics-matrix-report.artifact-control-followup.json", StringComparison.Ordinal));
             Assert.Contains(steps, step => step.Contains("validate-dsp-modernization-bundle.ps1", StringComparison.Ordinal)
                 && step.Contains("-RequireArtifactFiles", StringComparison.Ordinal));
@@ -2385,7 +2536,7 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
-    public async Task WatchLiveDiagnosticsReportsStableNr5SpeechContinuity()
+    public async Task WatchLiveDiagnosticsReportsStableCandidateSpeechContinuity()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
 
@@ -2393,46 +2544,46 @@ public sealed class DspModernizationValidationToolTests
         Skip.If(powerShell is null, "PowerShell executable was not found.");
 
         var repoRoot = FindRepoRoot();
-        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-speech-continuity-stable-{Guid.NewGuid():N}");
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-candidate-speech-continuity-stable-{Guid.NewGuid():N}");
         Directory.CreateDirectory(bundleDir);
 
         try
         {
-            var jsonlPath = Path.Combine(bundleDir, "nr5-speech-continuity-stable.jsonl");
+            var jsonlPath = Path.Combine(bundleDir, "candidate-speech-continuity-stable.jsonl");
             await WriteAgcWatchJsonlAsync(
                 jsonlPath,
                 new[]
                 {
-                    Nr5LevelerAlignmentWatchSample(
+                    CandidateLevelerAlignmentWatchSample(
                         0,
-                        nr5InputDbfs: -42.0,
-                        nr5OutputDbfs: -30.0,
+                        candidateInputDbfs: -42.0,
+                        candidateOutputDbfs: -30.0,
                         levelerInputRmsDbfs: -41.8,
                         levelerOutputRmsDbfs: -18.4,
-                        rxAudioLevelerNr5HybridSpeechPrior: 0.72,
-                        rxAudioLevelerNr5NoSignalNoisePrior: 0.02,
-                        rxAudioLevelerNr5NoiseProfilePrior: 0.03),
-                    Nr5LevelerAlignmentWatchSample(
+                        rxAudioLevelerCandidateHybridSpeechPrior: 0.72,
+                        rxAudioLevelerCandidateNoSignalNoisePrior: 0.02,
+                        rxAudioLevelerCandidateNoiseProfilePrior: 0.03),
+                    CandidateLevelerAlignmentWatchSample(
                         1,
-                        nr5InputDbfs: -41.5,
-                        nr5OutputDbfs: -29.6,
+                        candidateInputDbfs: -41.5,
+                        candidateOutputDbfs: -29.6,
                         levelerInputRmsDbfs: -41.7,
                         levelerOutputRmsDbfs: -18.0,
-                        rxAudioLevelerNr5HybridSpeechPrior: 0.68,
-                        rxAudioLevelerNr5NoSignalNoisePrior: 0.03,
-                        rxAudioLevelerNr5NoiseProfilePrior: 0.02),
-                    Nr5LevelerAlignmentWatchSample(
+                        rxAudioLevelerCandidateHybridSpeechPrior: 0.68,
+                        rxAudioLevelerCandidateNoSignalNoisePrior: 0.03,
+                        rxAudioLevelerCandidateNoiseProfilePrior: 0.02),
+                    CandidateLevelerAlignmentWatchSample(
                         2,
-                        nr5InputDbfs: -42.4,
-                        nr5OutputDbfs: -30.2,
+                        candidateInputDbfs: -42.4,
+                        candidateOutputDbfs: -30.2,
                         levelerInputRmsDbfs: -42.1,
                         levelerOutputRmsDbfs: -18.6,
-                        rxAudioLevelerNr5HybridSpeechPrior: 0.75,
-                        rxAudioLevelerNr5NoSignalNoisePrior: 0.01,
-                        rxAudioLevelerNr5NoiseProfilePrior: 0.04),
+                        rxAudioLevelerCandidateHybridSpeechPrior: 0.75,
+                        rxAudioLevelerCandidateNoSignalNoisePrior: 0.01,
+                        rxAudioLevelerCandidateNoiseProfilePrior: 0.04),
                 });
 
-            var reportPath = Path.Combine(bundleDir, "nr5-speech-continuity-stable.summary.json");
+            var reportPath = Path.Combine(bundleDir, "candidate-speech-continuity-stable.summary.json");
             var watch = await RunPowerShellAsync(
                 powerShell,
                 repoRoot,
@@ -2446,7 +2597,7 @@ public sealed class DspModernizationValidationToolTests
 
             using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
             var root = reportDoc.RootElement;
-            var speechWatch = root.GetProperty("nr5SpeechContinuityWatch");
+            var speechWatch = root.GetProperty("candidateSpeechContinuityWatch");
 
             Assert.Equal("stable", speechWatch.GetProperty("status").GetString());
             Assert.False(speechWatch.GetProperty("needsReview").GetBoolean());
@@ -2474,23 +2625,23 @@ public sealed class DspModernizationValidationToolTests
         Skip.If(powerShell is null, "PowerShell executable was not found.");
 
         var repoRoot = FindRepoRoot();
-        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-insufficient-weak-evidence-watch-{Guid.NewGuid():N}");
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-candidate-insufficient-weak-evidence-watch-{Guid.NewGuid():N}");
         Directory.CreateDirectory(bundleDir);
 
         try
         {
-            var jsonlPath = Path.Combine(bundleDir, "nr5-insufficient-weak-evidence.jsonl");
+            var jsonlPath = Path.Combine(bundleDir, "candidate-insufficient-weak-evidence.jsonl");
             await WriteAgcWatchJsonlAsync(
                 jsonlPath,
                 new[]
                 {
-                    Nr5LevelerAlignmentWatchSample(21, nr5InputDbfs: -34.1, nr5OutputDbfs: -33.1, levelerInputRmsDbfs: -48.1, levelerOutputRmsDbfs: -22.1),
-                    Nr5LevelerAlignmentWatchSample(22, nr5InputDbfs: -19.8, nr5OutputDbfs: -26.0, levelerInputRmsDbfs: -40.8, levelerOutputRmsDbfs: -18.0),
-                    Nr5LevelerAlignmentWatchSample(23, nr5InputDbfs: -11.2, nr5OutputDbfs: -20.4, levelerInputRmsDbfs: -35.3, levelerOutputRmsDbfs: -28.9),
-                    Nr5LevelerAlignmentWatchSample(24, nr5InputDbfs: -9.0, nr5OutputDbfs: -20.4, levelerInputRmsDbfs: -35.4, levelerOutputRmsDbfs: -29.0)
+                    CandidateLevelerAlignmentWatchSample(21, candidateInputDbfs: -34.1, candidateOutputDbfs: -33.1, levelerInputRmsDbfs: -48.1, levelerOutputRmsDbfs: -22.1),
+                    CandidateLevelerAlignmentWatchSample(22, candidateInputDbfs: -19.8, candidateOutputDbfs: -26.0, levelerInputRmsDbfs: -40.8, levelerOutputRmsDbfs: -18.0),
+                    CandidateLevelerAlignmentWatchSample(23, candidateInputDbfs: -11.2, candidateOutputDbfs: -20.4, levelerInputRmsDbfs: -35.3, levelerOutputRmsDbfs: -28.9),
+                    CandidateLevelerAlignmentWatchSample(24, candidateInputDbfs: -9.0, candidateOutputDbfs: -20.4, levelerInputRmsDbfs: -35.4, levelerOutputRmsDbfs: -29.0)
                 });
 
-            var reportPath = Path.Combine(bundleDir, "nr5-insufficient-weak-evidence.summary.json");
+            var reportPath = Path.Combine(bundleDir, "candidate-insufficient-weak-evidence.summary.json");
             var watch = await RunPowerShellAsync(
                 powerShell,
                 repoRoot,
@@ -2504,7 +2655,7 @@ public sealed class DspModernizationValidationToolTests
 
             using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
             var root = reportDoc.RootElement;
-            var weakWatch = root.GetProperty("nr5WeakSignalWatch");
+            var weakWatch = root.GetProperty("candidateWeakSignalWatch");
             Assert.Equal("insufficient-weak-input-evidence", weakWatch.GetProperty("mixedWeakStrongEvidenceStatus").GetString());
             Assert.False(weakWatch.GetProperty("mixedWeakStrongEvidenceReady").GetBoolean());
             Assert.Equal(1, weakWatch.GetProperty("weakInputSampleCount").GetInt32());
@@ -2546,25 +2697,25 @@ public sealed class DspModernizationValidationToolTests
         Skip.If(powerShell is null, "PowerShell executable was not found.");
 
         var repoRoot = FindRepoRoot();
-        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-single-qualified-parity-watch-{Guid.NewGuid():N}");
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-candidate-single-qualified-parity-watch-{Guid.NewGuid():N}");
         Directory.CreateDirectory(bundleDir);
 
         try
         {
-            var jsonlPath = Path.Combine(bundleDir, "nr5-single-qualified-parity.jsonl");
+            var jsonlPath = Path.Combine(bundleDir, "candidate-single-qualified-parity.jsonl");
             await WriteAgcWatchJsonlAsync(
                 jsonlPath,
                 new[]
                 {
-                    Nr5LevelerAlignmentWatchSample(31, nr5InputDbfs: -54.0, nr5OutputDbfs: -55.0, levelerInputRmsDbfs: -85.0, levelerOutputRmsDbfs: -85.0),
-                    Nr5LevelerAlignmentWatchSample(32, nr5InputDbfs: -54.0, nr5OutputDbfs: -35.0, levelerInputRmsDbfs: -52.0, levelerOutputRmsDbfs: -18.8),
-                    Nr5LevelerAlignmentWatchSample(33, nr5InputDbfs: -53.0, nr5OutputDbfs: -55.0, levelerInputRmsDbfs: -85.0, levelerOutputRmsDbfs: -85.0),
-                    Nr5LevelerAlignmentWatchSample(34, nr5InputDbfs: -21.0, nr5OutputDbfs: -24.0, levelerInputRmsDbfs: -60.0, levelerOutputRmsDbfs: -48.4),
-                    Nr5LevelerAlignmentWatchSample(35, nr5InputDbfs: -20.0, nr5OutputDbfs: -23.0, levelerInputRmsDbfs: -50.0, levelerOutputRmsDbfs: -18.0),
-                    Nr5LevelerAlignmentWatchSample(36, nr5InputDbfs: -19.0, nr5OutputDbfs: -24.5, levelerInputRmsDbfs: -60.0, levelerOutputRmsDbfs: -48.4)
+                    CandidateLevelerAlignmentWatchSample(31, candidateInputDbfs: -54.0, candidateOutputDbfs: -55.0, levelerInputRmsDbfs: -85.0, levelerOutputRmsDbfs: -85.0),
+                    CandidateLevelerAlignmentWatchSample(32, candidateInputDbfs: -54.0, candidateOutputDbfs: -35.0, levelerInputRmsDbfs: -52.0, levelerOutputRmsDbfs: -18.8),
+                    CandidateLevelerAlignmentWatchSample(33, candidateInputDbfs: -53.0, candidateOutputDbfs: -55.0, levelerInputRmsDbfs: -85.0, levelerOutputRmsDbfs: -85.0),
+                    CandidateLevelerAlignmentWatchSample(34, candidateInputDbfs: -21.0, candidateOutputDbfs: -24.0, levelerInputRmsDbfs: -60.0, levelerOutputRmsDbfs: -48.4),
+                    CandidateLevelerAlignmentWatchSample(35, candidateInputDbfs: -20.0, candidateOutputDbfs: -23.0, levelerInputRmsDbfs: -50.0, levelerOutputRmsDbfs: -18.0),
+                    CandidateLevelerAlignmentWatchSample(36, candidateInputDbfs: -19.0, candidateOutputDbfs: -24.5, levelerInputRmsDbfs: -60.0, levelerOutputRmsDbfs: -48.4)
                 });
 
-            var reportPath = Path.Combine(bundleDir, "nr5-single-qualified-parity.summary.json");
+            var reportPath = Path.Combine(bundleDir, "candidate-single-qualified-parity.summary.json");
             var watch = await RunPowerShellAsync(
                 powerShell,
                 repoRoot,
@@ -2577,7 +2728,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(File.Exists(reportPath), watch.CombinedOutput);
 
             using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
-            var weakWatch = reportDoc.RootElement.GetProperty("nr5WeakSignalWatch");
+            var weakWatch = reportDoc.RootElement.GetProperty("candidateWeakSignalWatch");
             Assert.Equal("weak-strong-output-gap-watch", weakWatch.GetProperty("mixedWeakStrongEvidenceStatus").GetString());
             Assert.False(weakWatch.GetProperty("mixedWeakStrongEvidenceReady").GetBoolean());
             Assert.Equal(3, weakWatch.GetProperty("weakInputSampleCount").GetInt32());
@@ -2613,12 +2764,12 @@ public sealed class DspModernizationValidationToolTests
         Skip.If(powerShell is null, "PowerShell executable was not found.");
 
         var repoRoot = FindRepoRoot();
-        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-low-evidence-weak-parity-watch-{Guid.NewGuid():N}");
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-candidate-low-evidence-weak-parity-watch-{Guid.NewGuid():N}");
         Directory.CreateDirectory(bundleDir);
 
         try
         {
-            var jsonlPath = Path.Combine(bundleDir, "nr5-low-evidence-weak-parity.jsonl");
+            var jsonlPath = Path.Combine(bundleDir, "candidate-low-evidence-weak-parity.jsonl");
             await WriteAgcWatchJsonlAsync(
                 jsonlPath,
                 new[]
@@ -2627,29 +2778,29 @@ public sealed class DspModernizationValidationToolTests
                         31,
                         agcGainDb: -37.0,
                         audioRmsDbfs: -24.1,
-                        includeNr5: true,
-                        nr5InputDbfs: -32.6,
+                        includeCandidate: true,
+                        candidateInputDbfs: -32.6,
                         signalConfidence: 0.318,
                         agcGate: 0.492,
                         signalProbability: 0.160,
                         textureFill: 0.026,
-                        nr5OutputDbfs: -33.2,
+                        candidateOutputDbfs: -33.2,
                         frontendTopPeaks: [FrontendTopPeak(7_304_813, -187, 38.2, -37.2)]),
                     AgcWatchSample(
                         32,
                         agcGainDb: -37.0,
                         audioRmsDbfs: -21.5,
-                        includeNr5: true,
-                        nr5InputDbfs: -18.0,
+                        includeCandidate: true,
+                        candidateInputDbfs: -18.0,
                         signalConfidence: 0.346,
                         agcGate: 0.567,
                         signalProbability: 0.163,
                         textureFill: 0.026,
-                        nr5OutputDbfs: -23.0,
+                        candidateOutputDbfs: -23.0,
                         frontendTopPeaks: [FrontendTopPeak(7_304_813, -187, 39.0, -35.0)])
                 });
 
-            var reportPath = Path.Combine(bundleDir, "nr5-low-evidence-weak-parity.summary.json");
+            var reportPath = Path.Combine(bundleDir, "candidate-low-evidence-weak-parity.summary.json");
             var watch = await RunPowerShellAsync(
                 powerShell,
                 repoRoot,
@@ -2662,7 +2813,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(File.Exists(reportPath), watch.CombinedOutput);
 
             using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
-            var weakWatch = reportDoc.RootElement.GetProperty("nr5WeakSignalWatch");
+            var weakWatch = reportDoc.RootElement.GetProperty("candidateWeakSignalWatch");
             Assert.Equal("low-evidence-weak-input", weakWatch.GetProperty("mixedWeakStrongEvidenceStatus").GetString());
             Assert.False(weakWatch.GetProperty("mixedWeakStrongEvidenceReady").GetBoolean());
             Assert.True(weakWatch.GetProperty("weakStrongFinalAudioParityReady").GetBoolean());
@@ -2691,7 +2842,7 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
-    public async Task WatchLiveDiagnosticsExcludesTxMonitorAudioFromNr5FinalAudioStats()
+    public async Task WatchLiveDiagnosticsExcludesTxMonitorAudioFromCandidateFinalAudioStats()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
 
@@ -2699,39 +2850,39 @@ public sealed class DspModernizationValidationToolTests
         Skip.If(powerShell is null, "PowerShell executable was not found.");
 
         var repoRoot = FindRepoRoot();
-        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-tx-monitor-exclusion-watch-{Guid.NewGuid():N}");
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-candidate-tx-monitor-exclusion-watch-{Guid.NewGuid():N}");
         Directory.CreateDirectory(bundleDir);
 
         try
         {
-            var jsonlPath = Path.Combine(bundleDir, "nr5-tx-monitor-exclusion.jsonl");
+            var jsonlPath = Path.Combine(bundleDir, "candidate-tx-monitor-exclusion.jsonl");
             await WriteAgcWatchJsonlAsync(
                 jsonlPath,
                 new[]
                 {
-                    Nr5LevelerAlignmentWatchSample(
+                    CandidateLevelerAlignmentWatchSample(
                         41,
-                        nr5InputDbfs: -43.4,
-                        nr5OutputDbfs: -24.4,
+                        candidateInputDbfs: -43.4,
+                        candidateOutputDbfs: -24.4,
                         levelerInputRmsDbfs: -40.0,
                         levelerOutputRmsDbfs: -29.0,
                         txMonitorRequested: true,
                         txMonitorAudioRmsDbfs: -8.3),
-                    Nr5LevelerAlignmentWatchSample(
+                    CandidateLevelerAlignmentWatchSample(
                         42,
-                        nr5InputDbfs: -42.7,
-                        nr5OutputDbfs: -26.1,
+                        candidateInputDbfs: -42.7,
+                        candidateOutputDbfs: -26.1,
                         levelerInputRmsDbfs: -41.8,
                         levelerOutputRmsDbfs: -29.6),
-                    Nr5LevelerAlignmentWatchSample(
+                    CandidateLevelerAlignmentWatchSample(
                         43,
-                        nr5InputDbfs: -20.0,
-                        nr5OutputDbfs: -23.0,
+                        candidateInputDbfs: -20.0,
+                        candidateOutputDbfs: -23.0,
                         levelerInputRmsDbfs: -50.0,
                         levelerOutputRmsDbfs: -18.0)
                 });
 
-            var reportPath = Path.Combine(bundleDir, "nr5-tx-monitor-exclusion.summary.json");
+            var reportPath = Path.Combine(bundleDir, "candidate-tx-monitor-exclusion.summary.json");
             var watch = await RunPowerShellAsync(
                 powerShell,
                 repoRoot,
@@ -2745,12 +2896,12 @@ public sealed class DspModernizationValidationToolTests
 
             using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
             var root = reportDoc.RootElement;
-            var weakWatch = root.GetProperty("nr5WeakSignalWatch");
+            var weakWatch = root.GetProperty("candidateWeakSignalWatch");
 
             Assert.Equal(1, root.GetProperty("txMonitorSampleCount").GetInt32());
-            Assert.Equal(2, root.GetProperty("nr5TuningReadySampleCount").GetInt32());
-            Assert.False(root.GetProperty("nr5TuningReadyTrace").GetBoolean());
-            Assert.Equal("nr5-tuning-preflight-required", root.GetProperty("nr5TuningTraceStatus").GetString());
+            Assert.Equal(2, root.GetProperty("candidateTuningReadySampleCount").GetInt32());
+            Assert.False(root.GetProperty("candidateTuningReadyTrace").GetBoolean());
+            Assert.Equal("candidate-preflight-partial", root.GetProperty("candidateTuningTraceStatus").GetString());
 
             Assert.Equal(2, weakWatch.GetProperty("weakInputSampleCount").GetInt32());
             Assert.Equal(1, weakWatch.GetProperty("weakFinalAudioDbfs").GetProperty("count").GetInt32());
@@ -2778,25 +2929,25 @@ public sealed class DspModernizationValidationToolTests
         Skip.If(powerShell is null, "PowerShell executable was not found.");
 
         var repoRoot = FindRepoRoot();
-        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-speech-qualified-parity-watch-{Guid.NewGuid():N}");
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-candidate-speech-qualified-parity-watch-{Guid.NewGuid():N}");
         Directory.CreateDirectory(bundleDir);
 
         try
         {
-            var jsonlPath = Path.Combine(bundleDir, "nr5-speech-qualified-parity.jsonl");
+            var jsonlPath = Path.Combine(bundleDir, "candidate-speech-qualified-parity.jsonl");
             await WriteAgcWatchJsonlAsync(
                 jsonlPath,
                 new[]
                 {
-                    Nr5LevelerAlignmentWatchSample(31, nr5InputDbfs: -54.0, nr5OutputDbfs: -55.0, levelerInputRmsDbfs: -85.0, levelerOutputRmsDbfs: -85.0),
-                    Nr5LevelerAlignmentWatchSample(32, nr5InputDbfs: -54.0, nr5OutputDbfs: -35.0, levelerInputRmsDbfs: -52.0, levelerOutputRmsDbfs: -18.8),
-                    Nr5LevelerAlignmentWatchSample(35, nr5InputDbfs: -53.0, nr5OutputDbfs: -34.8, levelerInputRmsDbfs: -52.0, levelerOutputRmsDbfs: -18.8),
-                    Nr5LevelerAlignmentWatchSample(33, nr5InputDbfs: -21.0, nr5OutputDbfs: -24.0, levelerInputRmsDbfs: -60.0, levelerOutputRmsDbfs: -48.4),
-                    Nr5LevelerAlignmentWatchSample(34, nr5InputDbfs: -20.0, nr5OutputDbfs: -23.0, levelerInputRmsDbfs: -50.0, levelerOutputRmsDbfs: -18.0),
-                    Nr5LevelerAlignmentWatchSample(36, nr5InputDbfs: -19.0, nr5OutputDbfs: -23.2, levelerInputRmsDbfs: -50.0, levelerOutputRmsDbfs: -18.0)
+                    CandidateLevelerAlignmentWatchSample(31, candidateInputDbfs: -54.0, candidateOutputDbfs: -55.0, levelerInputRmsDbfs: -85.0, levelerOutputRmsDbfs: -85.0),
+                    CandidateLevelerAlignmentWatchSample(32, candidateInputDbfs: -54.0, candidateOutputDbfs: -35.0, levelerInputRmsDbfs: -52.0, levelerOutputRmsDbfs: -18.8),
+                    CandidateLevelerAlignmentWatchSample(35, candidateInputDbfs: -53.0, candidateOutputDbfs: -34.8, levelerInputRmsDbfs: -52.0, levelerOutputRmsDbfs: -18.8),
+                    CandidateLevelerAlignmentWatchSample(33, candidateInputDbfs: -21.0, candidateOutputDbfs: -24.0, levelerInputRmsDbfs: -60.0, levelerOutputRmsDbfs: -48.4),
+                    CandidateLevelerAlignmentWatchSample(34, candidateInputDbfs: -20.0, candidateOutputDbfs: -23.0, levelerInputRmsDbfs: -50.0, levelerOutputRmsDbfs: -18.0),
+                    CandidateLevelerAlignmentWatchSample(36, candidateInputDbfs: -19.0, candidateOutputDbfs: -23.2, levelerInputRmsDbfs: -50.0, levelerOutputRmsDbfs: -18.0)
                 });
 
-            var reportPath = Path.Combine(bundleDir, "nr5-speech-qualified-parity.summary.json");
+            var reportPath = Path.Combine(bundleDir, "candidate-speech-qualified-parity.summary.json");
             var watch = await RunPowerShellAsync(
                 powerShell,
                 repoRoot,
@@ -2810,7 +2961,7 @@ public sealed class DspModernizationValidationToolTests
 
             using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
             var root = reportDoc.RootElement;
-            var weakWatch = root.GetProperty("nr5WeakSignalWatch");
+            var weakWatch = root.GetProperty("candidateWeakSignalWatch");
             Assert.Equal("ready-final-audio", weakWatch.GetProperty("mixedWeakStrongEvidenceStatus").GetString());
             Assert.True(weakWatch.GetProperty("mixedWeakStrongEvidenceReady").GetBoolean());
             Assert.False(weakWatch.GetProperty("weakStrongFinalAudioParityReady").GetBoolean());
@@ -2846,61 +2997,61 @@ public sealed class DspModernizationValidationToolTests
         Skip.If(powerShell is null, "PowerShell executable was not found.");
 
         var repoRoot = FindRepoRoot();
-        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-passband-qualified-parity-watch-{Guid.NewGuid():N}");
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-candidate-passband-qualified-parity-watch-{Guid.NewGuid():N}");
         Directory.CreateDirectory(bundleDir);
 
         try
         {
-            var jsonlPath = Path.Combine(bundleDir, "nr5-passband-qualified-parity.jsonl");
+            var jsonlPath = Path.Combine(bundleDir, "candidate-passband-qualified-parity.jsonl");
             await WriteAgcWatchJsonlAsync(
                 jsonlPath,
                 new[]
                 {
-                    Nr5LevelerAlignmentWatchSample(
+                    CandidateLevelerAlignmentWatchSample(
                         41,
-                        nr5InputDbfs: -52.0,
-                        nr5OutputDbfs: -31.0,
+                        candidateInputDbfs: -52.0,
+                        candidateOutputDbfs: -31.0,
                         levelerInputRmsDbfs: -50.0,
                         levelerOutputRmsDbfs: -42.0,
                         frontendTopPeaks: new[] { FrontendTopPeak(14_255_264, 15_264, 27.4, -72.0, confidence: 0.94) }),
-                    Nr5LevelerAlignmentWatchSample(
+                    CandidateLevelerAlignmentWatchSample(
                         42,
-                        nr5InputDbfs: -54.0,
-                        nr5OutputDbfs: -35.0,
+                        candidateInputDbfs: -54.0,
+                        candidateOutputDbfs: -35.0,
                         levelerInputRmsDbfs: -52.0,
                         levelerOutputRmsDbfs: -18.8,
                         frontendTopPeaks: new[] { FrontendTopPeak(14_240_264, 264, 27.3, -73.7, confidence: 0.94) }),
-                    Nr5LevelerAlignmentWatchSample(
+                    CandidateLevelerAlignmentWatchSample(
                         44,
-                        nr5InputDbfs: -53.0,
-                        nr5OutputDbfs: -34.6,
+                        candidateInputDbfs: -53.0,
+                        candidateOutputDbfs: -34.6,
                         levelerInputRmsDbfs: -52.0,
                         levelerOutputRmsDbfs: -18.8,
                         frontendTopPeaks: new[] { FrontendTopPeak(14_240_364, 364, 27.2, -73.0, confidence: 0.94) }),
-                    Nr5LevelerAlignmentWatchSample(
+                    CandidateLevelerAlignmentWatchSample(
                         43,
-                        nr5InputDbfs: -20.0,
-                        nr5OutputDbfs: -23.0,
+                        candidateInputDbfs: -20.0,
+                        candidateOutputDbfs: -23.0,
                         levelerInputRmsDbfs: -50.0,
                         levelerOutputRmsDbfs: -18.0,
                         frontendTopPeaks: new[] { FrontendTopPeak(14_240_264, 264, 29.0, -66.8, confidence: 0.94) }),
-                    Nr5LevelerAlignmentWatchSample(
+                    CandidateLevelerAlignmentWatchSample(
                         45,
-                        nr5InputDbfs: -19.5,
-                        nr5OutputDbfs: -23.1,
+                        candidateInputDbfs: -19.5,
+                        candidateOutputDbfs: -23.1,
                         levelerInputRmsDbfs: -50.0,
                         levelerOutputRmsDbfs: -18.0,
                         frontendTopPeaks: new[] { FrontendTopPeak(14_240_364, 364, 29.0, -66.8, confidence: 0.94) }),
-                    Nr5LevelerAlignmentWatchSample(
+                    CandidateLevelerAlignmentWatchSample(
                         46,
-                        nr5InputDbfs: -18.5,
-                        nr5OutputDbfs: -22.9,
+                        candidateInputDbfs: -18.5,
+                        candidateOutputDbfs: -22.9,
                         levelerInputRmsDbfs: -50.0,
                         levelerOutputRmsDbfs: -18.0,
                         frontendTopPeaks: new[] { FrontendTopPeak(14_240_464, 464, 29.0, -66.8, confidence: 0.94) })
                 });
 
-            var reportPath = Path.Combine(bundleDir, "nr5-passband-qualified-parity.summary.json");
+            var reportPath = Path.Combine(bundleDir, "candidate-passband-qualified-parity.summary.json");
             var watch = await RunPowerShellAsync(
                 powerShell,
                 repoRoot,
@@ -2913,7 +3064,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(File.Exists(reportPath), watch.CombinedOutput);
 
             using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
-            var weakWatch = reportDoc.RootElement.GetProperty("nr5WeakSignalWatch");
+            var weakWatch = reportDoc.RootElement.GetProperty("candidateWeakSignalWatch");
             Assert.Equal("weak-strong-speech-gap-watch", weakWatch.GetProperty("speechQualifiedMixedWeakStrongEvidenceStatus").GetString());
             Assert.False(weakWatch.GetProperty("speechQualifiedMixedWeakStrongEvidenceReady").GetBoolean());
             Assert.Equal(3, weakWatch.GetProperty("speechQualifiedWeakInputSampleCount").GetInt32());
@@ -3134,6 +3285,75 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task CompareLiveDiagnosticsTraceTreatsMissingCandidateEngineDiagnosticsAsNotApplicable()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics comparator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-no-candidate-engine-compare-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var baselineReport = Path.Combine(bundleDir, "weak-baseline.summary.json");
+            await File.WriteAllTextAsync(
+                baselineReport,
+                JsonSerializer.Serialize(WeakSignalSummaryWithoutCandidateEngineDiagnostics("weak-cw-carrier", -42.0), CamelCaseJson));
+
+            var candidateReport = Path.Combine(bundleDir, "weak-candidate.summary.json");
+            await File.WriteAllTextAsync(
+                candidateReport,
+                JsonSerializer.Serialize(WeakSignalSummaryWithoutCandidateEngineDiagnostics("weak-cw-carrier", -42.0), CamelCaseJson));
+
+            var comparisonReport = Path.Combine(bundleDir, "weak-comparison.json");
+            var comparison = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "compare-dsp-live-diagnostics-traces.ps1"),
+                "-BaselinePath", baselineReport,
+                "-CandidatePath", candidateReport,
+                "-ReportPath", comparisonReport,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.True(comparison.ExitCode == 0, comparison.CombinedOutput);
+            Assert.True(File.Exists(comparisonReport), comparison.CombinedOutput);
+
+            using var comparisonDoc = JsonDocument.Parse(await File.ReadAllTextAsync(comparisonReport));
+            var root = comparisonDoc.RootElement;
+            Assert.True(root.GetProperty("readyForReview").GetBoolean());
+            Assert.Equal("weak-cw-carrier", root.GetProperty("comparisonScenarioId").GetString());
+            Assert.Equal(0, root.GetProperty("missingMetricValueCount").GetInt32());
+            Assert.Equal(11, root.GetProperty("notApplicableMetricValueCount").GetInt32());
+
+            var metrics = root.GetProperty("metricComparisons").EnumerateArray().ToArray();
+            AssertMetricCandidateEngineNotApplicable(metrics, "candidateLowEvidenceLiftSampleCount");
+            AssertMetricCandidateEngineNotApplicable(metrics, "candidateLowEvidenceLiftedPct");
+            AssertMetricCandidateEngineNotApplicable(metrics, "candidateAudioAlignmentMismatchPct");
+            AssertMetricCandidateEngineNotApplicable(metrics, "candidateArtifactRiskScore");
+            AssertMetricCandidateEngineNotApplicable(metrics, "candidateOutputMovementDb");
+            AssertMetricCandidateEngineNotApplicable(metrics, "candidateMakeupMovementDb");
+            AssertMetricCandidateEngineNotApplicable(metrics, "candidateMakeupMaxDb");
+            AssertMetricCandidateEngineNotApplicable(metrics, "candidateRecoveryDriveMovement");
+            AssertMetricCandidateEngineNotApplicable(metrics, "candidateTextureFillAverage");
+            AssertMetricCandidateEngineNotApplicable(metrics, "candidatePeakReductionMaxDb");
+            AssertMetricCandidateEngineNotApplicable(metrics, "candidateOutputPeakMaxDbfs");
+            AssertMetricVerdict(metrics, "passbandAudioAverageDbfs", "tie", "weak-signal");
+            AssertMetricVerdict(metrics, "agcVoiceLikeGainMovementDb", "tie", "pumping");
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task CompareLiveDiagnosticsTraceTreatsNoiseOnlyPassbandMetricsAsNotApplicable()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics comparator smoke runs on Windows.");
@@ -3228,7 +3448,7 @@ public sealed class DspModernizationValidationToolTests
         }
     }
 
-    public async Task CompareLiveDiagnosticsTraceFlagsNr5ArtifactControlRegression()
+    public async Task CompareLiveDiagnosticsTraceFlagsCandidateArtifactControlRegression()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics comparator smoke runs on Windows.");
 
@@ -3270,11 +3490,11 @@ public sealed class DspModernizationValidationToolTests
             Assert.False(root.GetProperty("readyForReview").GetBoolean());
 
             var metrics = root.GetProperty("metricComparisons").EnumerateArray().ToArray();
-            AssertMetricRegression(metrics, "nr5LowEvidenceLiftedPct", "artifact-control");
-            AssertMetricRegression(metrics, "nr5AudioAlignmentMismatchPct", "artifact-control");
-            AssertMetricRegression(metrics, "nr5ArtifactRiskScore", "artifact-control");
+            AssertMetricRegression(metrics, "candidateLowEvidenceLiftedPct", "artifact-control");
+            AssertMetricRegression(metrics, "candidateAudioAlignmentMismatchPct", "artifact-control");
+            AssertMetricRegression(metrics, "candidateArtifactRiskScore", "artifact-control");
 
-            var weakSignal = root.GetProperty("nr5WeakSignalComparison");
+            var weakSignal = root.GetProperty("candidateWeakSignalComparison");
             Assert.Equal("artifact-clear", weakSignal.GetProperty("baselineArtifactRiskStatus").GetString());
             Assert.Equal("artifact-review", weakSignal.GetProperty("candidateArtifactRiskStatus").GetString());
             Assert.Equal(2, weakSignal.GetProperty("candidateLowEvidenceLiftedSampleCount").GetInt32());
@@ -3293,7 +3513,7 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
-    public async Task CompareLiveDiagnosticsMatrixAggregatesNr5ArtifactControlRegression()
+    public async Task CompareLiveDiagnosticsMatrixAggregatesCandidateArtifactControlRegression()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell matrix comparator smoke runs on Windows.");
 
@@ -3350,7 +3570,7 @@ public sealed class DspModernizationValidationToolTests
                             path = "artifact-review-candidate.summary.json",
                             summaryPath = "artifact-review-candidate.summary.json",
                             scenarioId = "weak-cw-carrier",
-                            comparisonId = "nr5-spnr",
+                            comparisonId = "candidate-under-test",
                             captureReadinessStatus = "ready",
                             hardGatePass = true,
                             strictPreflightPass = true
@@ -3367,7 +3587,7 @@ public sealed class DspModernizationValidationToolTests
                 "-BaselineIndexPath", baselineIndex,
                 "-CandidateIndexPath", candidateIndex,
                 "-BaselineComparisonId", "current-zeus",
-                "-CandidateComparisonId", "nr5-spnr",
+                "-CandidateComparisonId", "candidate-under-test",
                 "-ReportPath", matrixReport,
                 "-OutputDir", matrixOutputDir,
                 "-NoMarkdown",
@@ -3380,7 +3600,7 @@ public sealed class DspModernizationValidationToolTests
             var root = matrixDoc.RootElement;
             Assert.False(root.GetProperty("readyForReview").GetBoolean());
 
-            var summary = root.GetProperty("nr5WeakSignalComparisonSummary");
+            var summary = root.GetProperty("candidateWeakSignalComparisonSummary");
             Assert.Equal(2, summary.GetProperty("candidateLowEvidenceLiftedSampleCount").GetInt32());
             Assert.Equal(66.7, summary.GetProperty("candidateLowEvidenceLiftedPctMax").GetDouble(), precision: 3);
             Assert.Equal(12.5, summary.GetProperty("candidateAudioAlignmentMismatchPctMax").GetDouble(), precision: 3);
@@ -3391,7 +3611,7 @@ public sealed class DspModernizationValidationToolTests
             var regressions = root.GetProperty("metricRegressionDetails").EnumerateArray().ToArray();
             Assert.Contains(
                 regressions,
-                item => item.GetProperty("metricId").GetString() == "nr5ArtifactRiskScore"
+                item => item.GetProperty("metricId").GetString() == "candidateArtifactRiskScore"
                     && item.GetProperty("safetyClass").GetString() == "artifact-control");
         }
         finally
@@ -3426,9 +3646,9 @@ public sealed class DspModernizationValidationToolTests
                 baselineJsonl,
                 new[]
                 {
-                    AgcWatchSample(0, agcGainDb: 0.0, audioRmsDbfs: -32.0, includeNr5: true, nr5InputDbfs: -34.0),
-                    AgcWatchSample(1, agcGainDb: 0.2, audioRmsDbfs: -29.0, includeNr5: true, nr5InputDbfs: -20.0),
-                    AgcWatchSample(2, agcGainDb: 0.4, audioRmsDbfs: -32.5, includeNr5: true, nr5InputDbfs: -35.0)
+                    AgcWatchSample(0, agcGainDb: 0.0, audioRmsDbfs: -32.0, includeCandidate: true, candidateInputDbfs: -34.0),
+                    AgcWatchSample(1, agcGainDb: 0.2, audioRmsDbfs: -29.0, includeCandidate: true, candidateInputDbfs: -20.0),
+                    AgcWatchSample(2, agcGainDb: 0.4, audioRmsDbfs: -32.5, includeCandidate: true, candidateInputDbfs: -35.0)
                 });
 
             var baselineReport = Path.Combine(baselineDir, "live-diagnostics-watch.json");
@@ -3438,7 +3658,7 @@ public sealed class DspModernizationValidationToolTests
                 Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
                 "-InputPath", baselineJsonl,
                 "-ScenarioId", "weak-cw-carrier",
-                "-ComparisonId", "nr5-spnr",
+                "-ComparisonId", "candidate-under-test",
                 "-Label", "agc-stable-baseline",
                 "-ReportPath", baselineReport,
                 "-JsonOnly");
@@ -3451,9 +3671,9 @@ public sealed class DspModernizationValidationToolTests
                 candidateJsonl,
                 new[]
                 {
-                    AgcWatchSample(0, agcGainDb: 0.0, audioRmsDbfs: -33.0, includeNr5: true, nr5InputDbfs: -34.0),
-                    AgcWatchSample(1, agcGainDb: 4.0, audioRmsDbfs: -31.0, includeNr5: true, nr5InputDbfs: -20.0),
-                    AgcWatchSample(2, agcGainDb: 8.0, audioRmsDbfs: -32.0, includeNr5: true, nr5InputDbfs: -35.0)
+                    AgcWatchSample(0, agcGainDb: 0.0, audioRmsDbfs: -33.0, includeCandidate: true, candidateInputDbfs: -34.0),
+                    AgcWatchSample(1, agcGainDb: 4.0, audioRmsDbfs: -31.0, includeCandidate: true, candidateInputDbfs: -20.0),
+                    AgcWatchSample(2, agcGainDb: 8.0, audioRmsDbfs: -32.0, includeCandidate: true, candidateInputDbfs: -35.0)
                 });
 
             var candidateReport = Path.Combine(candidateDir, "live-diagnostics-watch.json");
@@ -3463,7 +3683,7 @@ public sealed class DspModernizationValidationToolTests
                 Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
                 "-InputPath", candidateJsonl,
                 "-ScenarioId", "weak-cw-carrier",
-                "-ComparisonId", "nr5-spnr",
+                "-ComparisonId", "candidate-under-test",
                 "-Label", "agc-pumping-candidate",
                 "-ReportPath", candidateReport,
                 "-JsonOnly");
@@ -3518,7 +3738,7 @@ public sealed class DspModernizationValidationToolTests
             var promotion = root.GetProperty("promotionDecision");
             Assert.Equal("blocked-weak-and-pumping", promotion.GetProperty("status").GetString());
 
-            var delta = root.GetProperty("latestVsPreviousNr5Delta");
+            var delta = root.GetProperty("latestVsPreviousCandidateDelta");
             Assert.Equal(1.0, delta.GetProperty("agcPumpingRisk").GetDouble(), precision: 3);
             Assert.Equal(7.6, delta.GetProperty("agcActiveGainMovementDb").GetDouble(), precision: 3);
 
@@ -3613,7 +3833,7 @@ public sealed class DspModernizationValidationToolTests
         {
             WriteSourcePlanScopeBundle(bundleDir);
 
-            var traceDir = Path.Combine(bundleDir, "20260616T000200000Z-nr5-low-evidence-lift");
+            var traceDir = Path.Combine(bundleDir, "20260616T000200000Z-candidate-low-evidence-lift");
             Directory.CreateDirectory(traceDir);
             var jsonlPath = Path.Combine(traceDir, "live-diagnostics-watch.jsonl");
             await WriteAgcWatchJsonlAsync(
@@ -3622,13 +3842,13 @@ public sealed class DspModernizationValidationToolTests
                     index,
                     agcGainDb: 0.0,
                     audioRmsDbfs: -18.5,
-                    includeNr5: true,
-                    nr5InputDbfs: -36.0,
+                    includeCandidate: true,
+                    candidateInputDbfs: -36.0,
                     signalConfidence: 0.12,
                     agcGate: 0.10,
                     signalProbability: 0.05,
                     textureFill: 0.82,
-                    nr5OutputDbfs: -18.5)));
+                    candidateOutputDbfs: -18.5)));
 
             var watchReport = Path.Combine(traceDir, "live-diagnostics-watch.json");
             var watch = await RunPowerShellAsync(
@@ -3637,8 +3857,8 @@ public sealed class DspModernizationValidationToolTests
                 Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
                 "-InputPath", jsonlPath,
                 "-ScenarioId", "ssb-like-speech",
-                "-ComparisonId", "nr5-spnr",
-                "-Label", "nr5-low-evidence-lift",
+                "-ComparisonId", "candidate-under-test",
+                "-Label", "candidate-low-evidence-lift",
                 "-ReportPath", watchReport,
                 "-JsonOnly");
             Assert.Equal(0, watch.ExitCode);
@@ -3662,13 +3882,13 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(1, root.GetProperty("artifactControlSignalCount").GetInt32());
 
             var latest = root.GetProperty("latestTrace");
-            Assert.Equal("artifact-review", latest.GetProperty("nr5ArtifactRiskStatus").GetString());
-            Assert.Equal(6, latest.GetProperty("nr5LowEvidenceLiftedSampleCount").GetInt32());
-            Assert.True(latest.GetProperty("nr5ArtifactRiskScore").GetDouble() >= 2.0);
+            Assert.Equal("artifact-review", latest.GetProperty("candidateArtifactRiskStatus").GetString());
+            Assert.Equal(6, latest.GetProperty("candidateLowEvidenceLiftedSampleCount").GetInt32());
+            Assert.True(latest.GetProperty("candidateArtifactRiskScore").GetDouble() >= 2.0);
             var latestFullTrace = root.GetProperty("traces")
                 .EnumerateArray()
-                .Single(trace => (trace.GetProperty("path").GetString() ?? "").Contains("nr5-low-evidence-lift", StringComparison.Ordinal));
-            AssertTraceHasSafetySignal(latestFullTrace, "nr5-speech-artifact-risk-score", "artifact-control");
+                .Single(trace => (trace.GetProperty("path").GetString() ?? "").Contains("candidate-low-evidence-lift", StringComparison.Ordinal));
+            AssertTraceHasSafetySignal(latestFullTrace, "candidate-speech-artifact-risk-score", "artifact-control");
 
             var promotion = root.GetProperty("promotionDecision");
             Assert.DoesNotContain("artifact-control", ReadStringArray(promotion, "blockerClasses"));
@@ -3903,7 +4123,7 @@ public sealed class DspModernizationValidationToolTests
                 "-ReportPath", "artifacts/cross-radio-validation-report.json",
                 "-HardwareTarget", "ANAN-7000DLE",
                 "-ScenarioId", "weak-cw-carrier",
-                "-ComparisonId", "current-zeus,nr5-spnr",
+                "-ComparisonId", "current-zeus,candidate-under-test",
                 "-NoMarkdown",
                 "-JsonOnly");
 
@@ -4049,7 +4269,7 @@ public sealed class DspModernizationValidationToolTests
                 "-ReportPath", "artifacts/cross-radio-validation-report.json",
                 "-HardwareTarget", "G2",
                 "-ScenarioId", "weak-cw-carrier",
-                "-ComparisonId", "current-zeus,nr5-spnr",
+                "-ComparisonId", "current-zeus,candidate-under-test",
                 "-NoMarkdown",
                 "-JsonOnly",
                 "-FailOnNotReady");
@@ -4524,13 +4744,13 @@ public sealed class DspModernizationValidationToolTests
         Assert.Contains(steps, step => step.Contains("-ComparisonId off-baseline", StringComparison.Ordinal));
         Assert.Contains(steps, step => step.Contains("-ComparisonId thetis-parity", StringComparison.Ordinal));
         Assert.Contains(steps, step => step.Contains("-ComparisonId current-zeus", StringComparison.Ordinal));
-        Assert.Contains(steps, step => step.Contains("-ComparisonId nr5-spnr", StringComparison.Ordinal));
+        Assert.Contains(steps, step => step.Contains("-ComparisonId candidate-under-test", StringComparison.Ordinal));
         Assert.Contains(steps, step => step.Contains("compare-dsp-live-diagnostics-matrix.ps1", StringComparison.Ordinal)
             && step.Contains("-BaselineComparisonId current-zeus", StringComparison.Ordinal)
-            && step.Contains("-CandidateComparisonId nr5-spnr", StringComparison.Ordinal));
+            && step.Contains("-CandidateComparisonId candidate-under-test", StringComparison.Ordinal));
         Assert.Contains(steps, step => step.Contains("compare-dsp-live-diagnostics-matrix.ps1", StringComparison.Ordinal)
             && step.Contains("-BaselineComparisonId thetis-parity", StringComparison.Ordinal)
-            && step.Contains("-CandidateComparisonId nr5-spnr", StringComparison.Ordinal)
+            && step.Contains("-CandidateComparisonId candidate-under-test", StringComparison.Ordinal)
             && step.Contains("live-diagnostics-trace-comparison.thetis-parity.json", StringComparison.Ordinal));
         Assert.Contains(steps, step => step.Contains("new-dsp-artifact-manifest.ps1", StringComparison.Ordinal)
             && step.Contains("-AcceptanceManifest", StringComparison.Ordinal)
@@ -4617,7 +4837,7 @@ public sealed class DspModernizationValidationToolTests
                         topHardConstraint = $null
                         topStatus = [ordered]@{ name = "ready"; count = $Samples }
                     }
-                    nr5WeakSignalWatch = [ordered]@{
+                    candidateWeakSignalWatch = [ordered]@{
                         weakInputSampleCount = 3
                         weakRecoveredSampleCount = 3
                         weakDropoutSampleCount = 0
@@ -4628,16 +4848,16 @@ public sealed class DspModernizationValidationToolTests
                         weakStrongOutputParityReady = $isMixed
                         mixedWeakStrongEvidenceStatus = $status
                     }
-                    nr5SignalProbability = [ordered]@{
+                    candidateSignalProbability = [ordered]@{
                         average = $signalProbabilityAverage
                     }
-                    nr5TextureFill = [ordered]@{
+                    candidateTextureFill = [ordered]@{
                         average = $textureFillAverage
                     }
-                    nr5AudioAlignmentWatch = [ordered]@{
+                    candidateAudioAlignmentWatch = [ordered]@{
                         mismatchPct = $audioAlignmentMismatchPct
                     }
-                    nr5LowEvidenceLiftWatch = [ordered]@{
+                    candidateLowEvidenceLiftWatch = [ordered]@{
                         liftedSampleCount = $lowEvidenceLiftedSampleCount
                         liftedPct = $lowEvidenceLiftedPct
                         alignmentMismatchPct = $lowEvidenceAlignmentMismatchPct
@@ -4648,13 +4868,13 @@ public sealed class DspModernizationValidationToolTests
                         status = "ready"
                         nextAction = ""
                     }
-                    nr5SampleCount = $Samples
-                    nr5AlignedSampleCount = $Samples
-                    nr5AgcDiagnosticSampleCount = $Samples
-                    nr5ProbabilityDiagnosticSampleCount = $Samples
-                    nr5PeakDiagnosticSampleCount = $Samples
-                    nr5RequestedSampleCount = $Samples
-                    nr5EffectiveSampleCount = $Samples
+                    candidateSampleCount = $Samples
+                    candidateAlignedSampleCount = $Samples
+                    candidateAgcDiagnosticSampleCount = $Samples
+                    candidateProbabilityDiagnosticSampleCount = $Samples
+                    candidatePeakDiagnosticSampleCount = $Samples
+                    candidateRequestedSampleCount = $Samples
+                    candidateEffectiveSampleCount = $Samples
                     nrOffRequestedSampleCount = 0
                     nrOffEffectiveSampleCount = 0
                     nrModeMismatchSampleCount = 0
@@ -4672,7 +4892,7 @@ public sealed class DspModernizationValidationToolTests
                 Path.Combine(repoRoot, "tools", "run-dsp-live-diagnostics-matrix.ps1"),
                 "-WatchScriptPath", fakeWatchPath,
                 "-ScenarioIds", "weak-ssb-speech,mixed-ssb-speech",
-                "-ComparisonId", "nr5-spnr",
+                "-ComparisonId", "candidate-under-test",
                 "-Samples", "3",
                 "-IntervalMs", "0",
                 "-OutputRoot", bundleDir,
@@ -4687,33 +4907,33 @@ public sealed class DspModernizationValidationToolTests
             using var matrixDoc = JsonDocument.Parse(await File.ReadAllTextAsync(matrixReportPath));
             var root = matrixDoc.RootElement;
             Assert.Equal(3, root.GetProperty("schemaVersion").GetInt32());
-            Assert.True(root.GetProperty("nr5MixedWeakStrongHuntReady").GetBoolean());
-            Assert.Equal(6, root.GetProperty("nr5WeakInputSampleCount").GetInt32());
-            Assert.Equal(2, root.GetProperty("nr5StrongInputSampleCount").GetInt32());
-            Assert.Equal(1, root.GetProperty("nr5MixedWeakStrongTraceCount").GetInt32());
-            Assert.Equal(1, root.GetProperty("nr5MixedWeakStrongReadyTraceCount").GetInt32());
-            Assert.Equal(1, root.GetProperty("nr5MixedWeakStrongMissingRunCount").GetInt32());
-            Assert.Equal(1, root.GetProperty("nr5ArtifactReviewRunCount").GetInt32());
-            Assert.True(root.GetProperty("nr5ArtifactRiskScoreMax").GetDouble() >= 3.0);
-            Assert.Equal(2, root.GetProperty("nr5LowEvidenceLiftedSampleCount").GetInt32());
-            Assert.Equal(66.7, root.GetProperty("nr5LowEvidenceLiftedPctMax").GetDouble(), precision: 3);
-            Assert.Equal(12.5, root.GetProperty("nr5AudioAlignmentMismatchPctMax").GetDouble(), precision: 3);
+            Assert.True(root.GetProperty("candidateMixedWeakStrongHuntReady").GetBoolean());
+            Assert.Equal(6, root.GetProperty("candidateWeakInputSampleCount").GetInt32());
+            Assert.Equal(2, root.GetProperty("candidateStrongInputSampleCount").GetInt32());
+            Assert.Equal(1, root.GetProperty("candidateMixedWeakStrongTraceCount").GetInt32());
+            Assert.Equal(1, root.GetProperty("candidateMixedWeakStrongReadyTraceCount").GetInt32());
+            Assert.Equal(1, root.GetProperty("candidateMixedWeakStrongMissingRunCount").GetInt32());
+            Assert.Equal(1, root.GetProperty("candidateArtifactReviewRunCount").GetInt32());
+            Assert.True(root.GetProperty("candidateArtifactRiskScoreMax").GetDouble() >= 3.0);
+            Assert.Equal(2, root.GetProperty("candidateLowEvidenceLiftedSampleCount").GetInt32());
+            Assert.Equal(66.7, root.GetProperty("candidateLowEvidenceLiftedPctMax").GetDouble(), precision: 3);
+            Assert.Equal(12.5, root.GetProperty("candidateAudioAlignmentMismatchPctMax").GetDouble(), precision: 3);
 
             var best = root.GetProperty("bestMixedWeakStrongRun");
             Assert.Equal("mixed-ssb-speech", best.GetProperty("scenarioId").GetString());
-            Assert.Equal("nr5-spnr", best.GetProperty("comparisonId").GetString());
-            Assert.Equal("ready", best.GetProperty("nr5MixedWeakStrongEvidenceStatus").GetString());
-            Assert.Equal(3.0, best.GetProperty("nr5WeakStrongOutputGapDb").GetDouble(), precision: 3);
-            Assert.True(best.GetProperty("nr5MixedWeakStrongHuntScore").GetDouble() > 70.0);
-            Assert.Equal("artifact-review", best.GetProperty("nr5ArtifactRiskStatus").GetString());
-            Assert.True(best.GetProperty("nr5ArtifactRiskScore").GetDouble() >= 3.0);
+            Assert.Equal("candidate-under-test", best.GetProperty("comparisonId").GetString());
+            Assert.Equal("ready", best.GetProperty("candidateMixedWeakStrongEvidenceStatus").GetString());
+            Assert.Equal(3.0, best.GetProperty("candidateWeakStrongOutputGapDb").GetDouble(), precision: 3);
+            Assert.True(best.GetProperty("candidateMixedWeakStrongHuntScore").GetDouble() > 70.0);
+            Assert.Equal("artifact-review", best.GetProperty("candidateArtifactRiskStatus").GetString());
+            Assert.True(best.GetProperty("candidateArtifactRiskScore").GetDouble() >= 3.0);
 
             var runs = root.GetProperty("runs").EnumerateArray().ToArray();
             var weakRun = runs.Single(run => run.GetProperty("scenarioId").GetString() == "weak-ssb-speech");
-            Assert.Equal("missing-strong-input", weakRun.GetProperty("nr5MixedWeakStrongEvidenceStatus").GetString());
-            Assert.False(weakRun.GetProperty("nr5MixedWeakStrongEvidenceReady").GetBoolean());
+            Assert.Equal("missing-strong-input", weakRun.GetProperty("candidateMixedWeakStrongEvidenceStatus").GetString());
+            Assert.False(weakRun.GetProperty("candidateMixedWeakStrongEvidenceReady").GetBoolean());
 
-            var readyStatusCount = root.GetProperty("nr5MixedWeakStrongStatusCounts")
+            var readyStatusCount = root.GetProperty("candidateMixedWeakStrongStatusCounts")
                 .EnumerateArray()
                 .Single(entry => entry.GetProperty("name").GetString() == "ready");
             Assert.Equal(1, readyStatusCount.GetProperty("count").GetInt32());
@@ -4728,16 +4948,16 @@ public sealed class DspModernizationValidationToolTests
             using var indexDoc = JsonDocument.Parse(await File.ReadAllTextAsync(matrixIndexPath));
             var indexRoot = indexDoc.RootElement;
             Assert.Equal(3, indexRoot.GetProperty("schemaVersion").GetInt32());
-            Assert.True(indexRoot.GetProperty("nr5MixedWeakStrongHuntReady").GetBoolean());
+            Assert.True(indexRoot.GetProperty("candidateMixedWeakStrongHuntReady").GetBoolean());
             Assert.Equal("mixed-ssb-speech", indexRoot.GetProperty("bestMixedWeakStrongRun").GetProperty("scenarioId").GetString());
-            Assert.Equal(1, indexRoot.GetProperty("nr5ArtifactReviewRunCount").GetInt32());
-            Assert.True(indexRoot.GetProperty("nr5ArtifactRiskScoreMax").GetDouble() >= 3.0);
+            Assert.Equal(1, indexRoot.GetProperty("candidateArtifactReviewRunCount").GetInt32());
+            Assert.True(indexRoot.GetProperty("candidateArtifactRiskScoreMax").GetDouble() >= 3.0);
             Assert.Contains(
                 indexRoot.GetProperty("files").EnumerateArray(),
-                file => file.GetProperty("nr5MixedWeakStrongHuntScore").GetDouble() > 70.0);
+                file => file.GetProperty("candidateMixedWeakStrongHuntScore").GetDouble() > 70.0);
             Assert.Contains(
                 indexRoot.GetProperty("files").EnumerateArray(),
-                file => file.GetProperty("nr5ArtifactRiskStatus").GetString() == "artifact-review");
+                file => file.GetProperty("candidateArtifactRiskStatus").GetString() == "artifact-review");
 
             WriteSourcePlanScopeBundle(bundleDir);
             var manifestPath = Path.Combine(bundleDir, "artifact-manifest.json");
@@ -4756,7 +4976,7 @@ public sealed class DspModernizationValidationToolTests
                                 source = "tools/run-dsp-live-diagnostics-matrix.ps1",
                                 path = Path.GetFileName(matrixReportPath),
                                 required = false,
-                                comparisonIds = new[] { "nr5-spnr" }
+                                comparisonIds = new[] { "candidate-under-test" }
                             }
                         }
                     },
@@ -4817,7 +5037,7 @@ public sealed class DspModernizationValidationToolTests
                 .Single(gate => gate.GetProperty("gateId").GetString() == "live-matrix-mixed-weak-strong-hunt");
             Assert.True(huntGate.GetProperty("ready").GetBoolean());
             Assert.False(huntGate.GetProperty("requiredForAcceptance").GetBoolean());
-            Assert.Contains("best=mixed-ssb-speech/nr5-spnr", huntGate.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.Contains("best=mixed-ssb-speech/candidate-under-test", huntGate.GetProperty("detail").GetString(), StringComparison.Ordinal);
             var artifactGate = summaryRoot.GetProperty("evidenceGates")
                 .EnumerateArray()
                 .Single(gate => gate.GetProperty("gateId").GetString() == "live-matrix-artifact-control");
@@ -4876,13 +5096,13 @@ public sealed class DspModernizationValidationToolTests
         Assert.Contains(steps, step => step.Contains("-ComparisonId off-baseline", StringComparison.Ordinal));
         Assert.Contains(steps, step => step.Contains("-ComparisonId thetis-parity", StringComparison.Ordinal));
         Assert.Contains(steps, step => step.Contains("-ComparisonId current-zeus", StringComparison.Ordinal));
-        Assert.Contains(steps, step => step.Contains("-ComparisonId nr5-spnr", StringComparison.Ordinal));
+        Assert.Contains(steps, step => step.Contains("-ComparisonId candidate-under-test", StringComparison.Ordinal));
         Assert.Contains(steps, step => step.Contains("compare-dsp-live-diagnostics-matrix.ps1", StringComparison.Ordinal)
             && step.Contains("-BaselineComparisonId current-zeus", StringComparison.Ordinal)
-            && step.Contains("-CandidateComparisonId nr5-spnr", StringComparison.Ordinal));
+            && step.Contains("-CandidateComparisonId candidate-under-test", StringComparison.Ordinal));
         Assert.Contains(steps, step => step.Contains("compare-dsp-live-diagnostics-matrix.ps1", StringComparison.Ordinal)
             && step.Contains("-BaselineComparisonId thetis-parity", StringComparison.Ordinal)
-            && step.Contains("-CandidateComparisonId nr5-spnr", StringComparison.Ordinal)
+            && step.Contains("-CandidateComparisonId candidate-under-test", StringComparison.Ordinal)
             && step.Contains("live-diagnostics-trace-comparison.thetis-parity.json", StringComparison.Ordinal));
         Assert.Contains(steps, step => step.Contains("new-dsp-artifact-manifest.ps1", StringComparison.Ordinal)
             && step.Contains("-RequireLiveAcceptanceArtifacts", StringComparison.Ordinal));
@@ -5024,7 +5244,7 @@ public sealed class DspModernizationValidationToolTests
                 liveDiagnosticsHistoryAgcVoiceLikePumpingSignalCount = 0,
                 liveDiagnosticsHistoryArtifactControlSignalCount = 0,
                 liveDiagnosticsHistoryMixedWeakStrongEvidenceReady = false,
-                liveDiagnosticsHistoryMixedWeakStrongEvidenceStatus = "no-nr5-history",
+                liveDiagnosticsHistoryMixedWeakStrongEvidenceStatus = "no-candidate-history",
                 liveDiagnosticsHistoryMixedWeakStrongTraceCount = 0,
                 liveDiagnosticsHistoryMixedWeakStrongReadyTraceCount = 0,
                 liveDiagnosticsHistoryMixedWeakStrongMissingTraceCount = 0,
@@ -5062,11 +5282,11 @@ public sealed class DspModernizationValidationToolTests
                 triagePrimaryAcceptanceActionCategory = "live-diagnostics",
                 triagePrimaryAcceptanceActionRequired = true,
                 triagePrimaryAcceptanceActionManual = false,
-                triagePrimaryAcceptanceCommandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId nr5-spnr",
+                triagePrimaryAcceptanceCommandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId candidate-under-test",
                 triagePrimaryAcceptanceCommandStepCount = 1,
                 triagePrimaryAcceptanceCommandSteps = new[]
                 {
-                    "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId nr5-spnr"
+                    "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId candidate-under-test"
                 },
                 triagePrimaryAcceptanceManualAction = "",
                 triagePrimaryAcceptanceExpectedArtifact = "artifacts/live-diagnostics-history.json",
@@ -5140,7 +5360,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(0, validationRoot.GetProperty("liveAcceptanceCycleLiveDiagnosticsHistoryAgcStabilityMissingTraceCount").GetInt32());
             Assert.Equal(0, validationRoot.GetProperty("liveAcceptanceCycleLiveDiagnosticsHistoryArtifactControlSignalCount").GetInt32());
             Assert.False(validationRoot.GetProperty("liveAcceptanceCycleLiveDiagnosticsHistoryMixedWeakStrongEvidenceReady").GetBoolean());
-            Assert.Equal("no-nr5-history", validationRoot.GetProperty("liveAcceptanceCycleLiveDiagnosticsHistoryMixedWeakStrongEvidenceStatus").GetString());
+            Assert.Equal("no-candidate-history", validationRoot.GetProperty("liveAcceptanceCycleLiveDiagnosticsHistoryMixedWeakStrongEvidenceStatus").GetString());
             Assert.False(validationRoot.GetProperty("liveAcceptanceCycleLiveMatrixMixedWeakStrongHuntReady").GetBoolean());
             Assert.Equal("missing", validationRoot.GetProperty("liveAcceptanceCycleLiveMatrixMixedWeakStrongStatus").GetString());
             Assert.Equal(0, validationRoot.GetProperty("liveAcceptanceCycleLiveMatrixMixedWeakStrongReportCount").GetInt32());
@@ -5198,7 +5418,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal("no-traces", summaryRoot.GetProperty("liveAcceptanceCycleLiveDiagnosticsHistoryAgcStabilityStatus").GetString());
             Assert.Equal(0, summaryRoot.GetProperty("liveAcceptanceCycleLiveDiagnosticsHistoryArtifactControlSignalCount").GetInt32());
             Assert.False(summaryRoot.GetProperty("liveAcceptanceCycleLiveDiagnosticsHistoryMixedWeakStrongEvidenceReady").GetBoolean());
-            Assert.Equal("no-nr5-history", summaryRoot.GetProperty("liveAcceptanceCycleLiveDiagnosticsHistoryMixedWeakStrongEvidenceStatus").GetString());
+            Assert.Equal("no-candidate-history", summaryRoot.GetProperty("liveAcceptanceCycleLiveDiagnosticsHistoryMixedWeakStrongEvidenceStatus").GetString());
             Assert.False(summaryRoot.GetProperty("liveAcceptanceCycleLiveMatrixMixedWeakStrongHuntReady").GetBoolean());
             Assert.Equal("missing", summaryRoot.GetProperty("liveAcceptanceCycleLiveMatrixMixedWeakStrongStatus").GetString());
             Assert.Equal("not-present", summaryRoot.GetProperty("liveAcceptanceCycleLiveMatrixArtifactControlStatus").GetString());
@@ -5219,7 +5439,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains("Triage primary action", markdown, StringComparison.Ordinal);
             Assert.Contains("promote-matrix-mixed-weak-strong-window", markdown, StringComparison.Ordinal);
             Assert.Contains("Triage primary command/manual action", markdown, StringComparison.Ordinal);
-            Assert.Contains("-ComparisonId nr5-spnr", markdown, StringComparison.Ordinal);
+            Assert.Contains("-ComparisonId candidate-under-test", markdown, StringComparison.Ordinal);
             Assert.Contains("Triage primary follow-up", markdown, StringComparison.Ordinal);
             Assert.Contains("diagnostics-missing", markdown, StringComparison.Ordinal);
             Assert.Contains("artifacts/live-acceptance-cycle-summary.json", markdown, StringComparison.Ordinal);
@@ -5294,19 +5514,12 @@ public sealed class DspModernizationValidationToolTests
             await File.WriteAllTextAsync(Path.Combine(bundleDir, "validation-report.json"), "{}");
             var externalBakeoffCommandSteps = new[]
             {
-                "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\compare-dsp-fixture-metrics.ps1 -BaselinePath \"$bundleDir\\artifacts\\current-zeus-fixtures.json\" -CandidatePath \"$bundleDir\\artifacts\\external-engine.speexdsp.fixtures.json\" -CandidateComparisonId candidate-external-engine-opt-in -FailOnRegression",
-                "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId candidate-external-engine-opt-in -ScenarioIds ssb-like-speech-post-demod,agc-disabled-no-pumping,noise-only-gating -IndexPath \"$bundleDir\\artifacts\\live-diagnostics-trace-index.external-engine.speexdsp.json\" -ReportPath \"$bundleDir\\artifacts\\live-diagnostics-matrix-report.external-engine.speexdsp.json\" -Samples 60 -IntervalMs 1000 -ContinueOnError",
-                "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\validate-dsp-modernization-bundle.ps1 -BundleDir \"$bundleDir\" -RequireArtifactFiles -ReportPath \"$bundleDir\\validation-report.json\"",
-                "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\summarize-dsp-modernization-validation-report.ps1 -BundleDir \"$bundleDir\" -ReportPath \"$bundleDir\\validation-triage-report.json\" -MarkdownPath \"$bundleDir\\validation-triage-report.md\" -FailOnIssues"
+                "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-external-engine-bakeoff.ps1 -BundleDir \"$bundleDir\" -CandidateId speexdsp -ScenarioIds ssb-like-speech-post-demod agc-disabled-no-pumping noise-only-gating -PlanOnly"
             };
             var externalBakeoffExpectedArtifacts = new[]
             {
-                "artifacts/dsp-fixture-metric-comparison.json",
-                "artifacts/live-diagnostics-trace-index.external-engine.speexdsp.json",
-                "artifacts/live-diagnostics-matrix-report.external-engine.speexdsp.json",
-                "validation-report.json",
-                "validation-triage-report.json",
-                "validation-triage-report.md"
+                "artifacts/external-engine-bakeoff-cycle-summary.json",
+                "artifacts/external-engine-bakeoff-cycle-summary.md"
             };
             var pureSignalCommandSteps = new[]
             {
@@ -5337,11 +5550,11 @@ public sealed class DspModernizationValidationToolTests
                     primaryAcceptanceActionCategory = "live-diagnostics",
                     primaryAcceptanceActionRequired = true,
                     primaryAcceptanceActionManual = false,
-                    primaryAcceptanceCommandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId nr5-spnr",
+                    primaryAcceptanceCommandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId candidate-under-test",
                     primaryAcceptanceCommandStepCount = 1,
                     primaryAcceptanceCommandSteps = new[]
                     {
-                        "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId nr5-spnr"
+                        "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId candidate-under-test"
                     },
                     primaryAcceptanceManualAction = "",
                     primaryAcceptanceExpectedArtifact = "artifacts/live-diagnostics-history.json",
@@ -5359,11 +5572,11 @@ public sealed class DspModernizationValidationToolTests
                             category = "live-diagnostics",
                             requiredForAcceptance = true,
                             blocksDefaultChange = true,
-                            commandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId nr5-spnr",
+                            commandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId candidate-under-test",
                             commandStepCount = 1,
                             commandSteps = new[]
                             {
-                                "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId nr5-spnr"
+                                "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId candidate-under-test"
                             },
                             manualAction = "",
                             expectedArtifact = "artifacts/live-diagnostics-history.json",
@@ -5383,8 +5596,8 @@ public sealed class DspModernizationValidationToolTests
                             commandTemplate = externalBakeoffCommandSteps[0],
                             commandStepCount = externalBakeoffCommandSteps.Length,
                             commandSteps = externalBakeoffCommandSteps,
-                            manualAction = "Produce or enable only the post-demod, operator-opt-in 'speexdsp' candidate path before running these comparisons. Do not route raw WDSP IQ, TX audio, TX monitor, or PureSignal feedback through the external engine.",
-                            expectedArtifact = "artifacts/dsp-fixture-metric-comparison.json",
+                            manualAction = "Produce or enable only the post-demod, operator-opt-in 'speexdsp' candidate path before executing the runner plan. Start with -PlanOnly; use -Execute only after fixture metrics exist and the operator has intentionally enabled the candidate path. Do not route raw WDSP IQ, TX audio, TX monitor, or PureSignal feedback through the external engine.",
+                            expectedArtifact = "artifacts/external-engine-bakeoff-cycle-summary.json",
                             expectedArtifactCount = externalBakeoffExpectedArtifacts.Length,
                             expectedArtifacts = externalBakeoffExpectedArtifacts,
                             followUp = "Treat this as exploratory opt-in evidence only. External DSP/ML remains post-demod and off by default until fixture metrics, G2 live evidence, operator notes, package/license review, and cross-radio validation all pass."
@@ -5522,11 +5735,11 @@ public sealed class DspModernizationValidationToolTests
                 triagePrimaryAcceptanceActionCategory = "live-diagnostics",
                 triagePrimaryAcceptanceActionRequired = true,
                 triagePrimaryAcceptanceActionManual = false,
-                triagePrimaryAcceptanceCommandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId nr5-spnr",
+                triagePrimaryAcceptanceCommandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId candidate-under-test",
                 triagePrimaryAcceptanceCommandStepCount = 1,
                 triagePrimaryAcceptanceCommandSteps = new[]
                 {
-                    "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId nr5-spnr"
+                    "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId candidate-under-test"
                 },
                 triagePrimaryAcceptanceManualAction = "",
                 triagePrimaryAcceptanceExpectedArtifact = "artifacts/live-diagnostics-history.json",
@@ -5544,8 +5757,8 @@ public sealed class DspModernizationValidationToolTests
                 triageExternalEngineBakeoffCommandTemplate = externalBakeoffCommandSteps[0],
                 triageExternalEngineBakeoffCommandStepCount = externalBakeoffCommandSteps.Length,
                 triageExternalEngineBakeoffCommandSteps = externalBakeoffCommandSteps,
-                triageExternalEngineBakeoffManualAction = "Produce or enable only the post-demod, operator-opt-in 'speexdsp' candidate path before running these comparisons. Do not route raw WDSP IQ, TX audio, TX monitor, or PureSignal feedback through the external engine.",
-                triageExternalEngineBakeoffExpectedArtifact = "artifacts/dsp-fixture-metric-comparison.json",
+                triageExternalEngineBakeoffManualAction = "Produce or enable only the post-demod, operator-opt-in 'speexdsp' candidate path before executing the runner plan. Start with -PlanOnly; use -Execute only after fixture metrics exist and the operator has intentionally enabled the candidate path. Do not route raw WDSP IQ, TX audio, TX monitor, or PureSignal feedback through the external engine.",
+                triageExternalEngineBakeoffExpectedArtifact = "artifacts/external-engine-bakeoff-cycle-summary.json",
                 triageExternalEngineBakeoffExpectedArtifactCount = externalBakeoffExpectedArtifacts.Length,
                 triageExternalEngineBakeoffExpectedArtifacts = externalBakeoffExpectedArtifacts,
                 triageExternalEngineBakeoffFollowUp = "Treat this as exploratory opt-in evidence only. External DSP/ML remains post-demod and off by default until fixture metrics, G2 live evidence, operator notes, package/license review, and cross-radio validation all pass.",
@@ -5613,17 +5826,17 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal("artifacts/live-diagnostics-history.json", validationRoot.GetProperty("liveAcceptanceCycleTriagePrimaryAcceptanceExpectedArtifact").GetString());
             Assert.Contains(
                 validationRoot.GetProperty("liveAcceptanceCycleTriagePrimaryAcceptanceCommandSteps").EnumerateArray(),
-                step => (step.GetString() ?? "").Contains("-ComparisonId nr5-spnr", StringComparison.Ordinal));
+                step => (step.GetString() ?? "").Contains("-ComparisonId candidate-under-test", StringComparison.Ordinal));
             Assert.True(validationRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffActionPresent").GetBoolean());
             Assert.Equal("run-first-safe-external-engine-bakeoff", validationRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffActionId").GetString());
             Assert.Equal("external-dsp-ml", validationRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffActionCategory").GetString());
             Assert.False(validationRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffActionRequired").GetBoolean());
             Assert.True(validationRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffActionManual").GetBoolean());
-            Assert.Equal(4, validationRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffCommandStepCount").GetInt32());
-            Assert.Equal(6, validationRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffExpectedArtifactCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffCommandStepCount").GetInt32());
+            Assert.Equal(2, validationRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffExpectedArtifactCount").GetInt32());
             Assert.Contains(
                 validationRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffCommandSteps").EnumerateArray(),
-                step => (step.GetString() ?? "").Contains("external-engine.speexdsp.fixtures.json", StringComparison.Ordinal));
+                step => (step.GetString() ?? "").Contains("run-dsp-external-engine-bakeoff.ps1", StringComparison.Ordinal));
             Assert.Contains("post-demod", validationRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffManualAction").GetString(), StringComparison.Ordinal);
             Assert.Contains("cross-radio validation", validationRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffFollowUp").GetString(), StringComparison.Ordinal);
             Assert.True(validationRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassActionPresent").GetBoolean());
@@ -5678,7 +5891,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(summaryRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffActionPresent").GetBoolean());
             Assert.Equal("run-first-safe-external-engine-bakeoff", summaryRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffActionId").GetString());
             Assert.Equal("external-dsp-ml", summaryRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffActionCategory").GetString());
-            Assert.Equal(4, summaryRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffCommandStepCount").GetInt32());
+            Assert.Equal(1, summaryRoot.GetProperty("liveAcceptanceCycleTriageExternalEngineBakeoffCommandStepCount").GetInt32());
             Assert.True(summaryRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassActionPresent").GetBoolean());
             Assert.Equal("capture-puresignal-safe-bypass-bench", summaryRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassActionId").GetString());
             Assert.Equal("tx-puresignal", summaryRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassActionCategory").GetString());
@@ -5687,7 +5900,7 @@ public sealed class DspModernizationValidationToolTests
             var markdown = await File.ReadAllTextAsync(summaryMarkdown);
             Assert.Contains("Triage external DSP/ML bakeoff action", markdown, StringComparison.Ordinal);
             Assert.Contains("run-first-safe-external-engine-bakeoff", markdown, StringComparison.Ordinal);
-            Assert.Contains("external-engine.speexdsp.fixtures.json", markdown, StringComparison.Ordinal);
+            Assert.Contains("run-dsp-external-engine-bakeoff.ps1", markdown, StringComparison.Ordinal);
             Assert.Contains("post-demod", markdown, StringComparison.Ordinal);
             Assert.Contains("Triage PureSignal safe-bypass action", markdown, StringComparison.Ordinal);
             Assert.Contains("capture-puresignal-safe-bypass-bench", markdown, StringComparison.Ordinal);
@@ -5795,7 +6008,7 @@ public sealed class DspModernizationValidationToolTests
                             path = "artifacts/live-diagnostics-trace-comparison.json",
                             required = true,
                             scenarioIds = new[] { "weak-cw-carrier" },
-                            comparisonIds = new[] { "current-zeus", "nr5-spnr" }
+                            comparisonIds = new[] { "current-zeus", "candidate-under-test" }
                         }
                     }
                 }, CamelCaseJson));
@@ -5909,7 +6122,7 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
-    public async Task RequiredLiveTraceRejectsMislabeledNr5ComparisonState()
+    public async Task RequiredLiveTraceRejectsMislabeledCandidateComparisonState()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validator smoke runs on Windows.");
 
@@ -5941,7 +6154,7 @@ public sealed class DspModernizationValidationToolTests
             var tracesDir = Path.Combine(artifactsDir, "live-traces");
             Directory.CreateDirectory(tracesDir);
 
-            var jsonlPath = Path.Combine(tracesDir, "weak-cw-carrier.nr5-spnr.jsonl");
+            var jsonlPath = Path.Combine(tracesDir, "weak-cw-carrier.candidate-under-test.jsonl");
             var jsonlRecord = new
             {
                 sampleIndex = 1,
@@ -5965,32 +6178,32 @@ public sealed class DspModernizationValidationToolTests
             };
             await File.WriteAllTextAsync(jsonlPath, JsonSerializer.Serialize(jsonlRecord, CamelCaseJson) + Environment.NewLine);
 
-            var summaryPath = Path.Combine(tracesDir, "weak-cw-carrier.nr5-spnr.summary.json");
-            var jsonlRelative = "artifacts/live-traces/weak-cw-carrier.nr5-spnr.jsonl";
-            var summaryRelative = "artifacts/live-traces/weak-cw-carrier.nr5-spnr.summary.json";
+            var summaryPath = Path.Combine(tracesDir, "weak-cw-carrier.candidate-under-test.summary.json");
+            var jsonlRelative = "artifacts/live-traces/weak-cw-carrier.candidate-under-test.jsonl";
+            var summaryRelative = "artifacts/live-traces/weak-cw-carrier.candidate-under-test.summary.json";
             var watchSummary = new
             {
                 schemaVersion = 1,
                 tool = "watch-dsp-live-diagnostics",
                 scenarioId = "weak-cw-carrier",
-                comparisonId = "nr5-spnr",
+                comparisonId = "candidate-under-test",
                 jsonlPath = jsonlRelative,
                 sampleCount = 1,
                 okSampleCount = 1,
                 failedSampleCount = 0,
                 readyForBenchmarkTrace = true,
                 trendStatus = "ready-trace",
-                nr5SampleCount = 0,
-                nr5AlignedSampleCount = 0,
-                nr5AgcDiagnosticSampleCount = 0,
-                nr5ProbabilityDiagnosticSampleCount = 0,
-                nr5PeakDiagnosticSampleCount = 0,
-                nr5RequestedSampleCount = 0,
-                nr5EffectiveSampleCount = 0,
+                candidateSampleCount = 0,
+                candidateAlignedSampleCount = 0,
+                candidateAgcDiagnosticSampleCount = 0,
+                candidateProbabilityDiagnosticSampleCount = 0,
+                candidatePeakDiagnosticSampleCount = 0,
+                candidateRequestedSampleCount = 0,
+                candidateEffectiveSampleCount = 0,
                 nrOffRequestedSampleCount = 1,
                 nrOffEffectiveSampleCount = 1,
                 nrModeMismatchSampleCount = 0,
-                nr5WeakSignalWatch = new
+                candidateWeakSignalWatch = new
                 {
                     weakInputSampleCount = 0,
                     weakRecoveredSampleCount = 0,
@@ -5999,17 +6212,17 @@ public sealed class DspModernizationValidationToolTests
                 },
                 comparisonStateReadiness = new
                 {
-                    comparisonId = "nr5-spnr",
+                    comparisonId = "candidate-under-test",
                     strict = true,
                     ready = false,
-                    status = "nr5-effective-missing",
-                    nextAction = "Reassert NR5/SPNR before recapturing.",
+                    status = "candidate-tuning-preflight-required",
+                    nextAction = "Recapture the comparison-under-test after the preflight state is ready.",
                     okSampleCount = 1,
-                    nr5SampleCount = 0,
-                    nr5AlignedSampleCount = 0,
-                    nr5AgcDiagnosticSampleCount = 0,
-                    nr5ProbabilityDiagnosticSampleCount = 0,
-                    nr5PeakDiagnosticSampleCount = 0
+                    candidateSampleCount = 0,
+                    candidateAlignedSampleCount = 0,
+                    candidateAgcDiagnosticSampleCount = 0,
+                    candidateProbabilityDiagnosticSampleCount = 0,
+                    candidatePeakDiagnosticSampleCount = 0
                 }
             };
             await File.WriteAllTextAsync(summaryPath, JsonSerializer.Serialize(watchSummary, CamelCaseJson));
@@ -6020,8 +6233,8 @@ public sealed class DspModernizationValidationToolTests
                 schemaVersion = 1,
                 tool = "run-dsp-live-diagnostics-matrix",
                 artifactId = "live-diagnostics-trace-index",
-                comparisonId = "nr5-spnr",
-                comparisonIds = new[] { "nr5-spnr" },
+                comparisonId = "candidate-under-test",
+                comparisonIds = new[] { "candidate-under-test" },
                 scenarioIds = new[] { "weak-cw-carrier" },
                 files = new[]
                 {
@@ -6030,20 +6243,20 @@ public sealed class DspModernizationValidationToolTests
                         path = jsonlRelative,
                         kind = "diagnostics-jsonl",
                         scenarioId = "weak-cw-carrier",
-                        comparisonId = "nr5-spnr",
-                        comparisonIds = new[] { "nr5-spnr" },
+                        comparisonId = "candidate-under-test",
+                        comparisonIds = new[] { "candidate-under-test" },
                         sampleCount = 1,
                         summaryPath = summaryRelative,
                         sha256 = ComputeSha256(jsonlPath),
                         summarySha256 = ComputeSha256(summaryPath),
                         comparisonStateStrict = true,
                         comparisonStateReady = false,
-                        comparisonStateStatus = "nr5-effective-missing",
-                        nr5SampleCount = 0,
-                        nr5AlignedSampleCount = 0,
-                        nr5AgcDiagnosticSampleCount = 0,
-                        nr5ProbabilityDiagnosticSampleCount = 0,
-                        nr5PeakDiagnosticSampleCount = 0
+                        comparisonStateStatus = "candidate-effective-missing",
+                        candidateSampleCount = 0,
+                        candidateAlignedSampleCount = 0,
+                        candidateAgcDiagnosticSampleCount = 0,
+                        candidateProbabilityDiagnosticSampleCount = 0,
+                        candidatePeakDiagnosticSampleCount = 0
                     }
                 }
             };
@@ -6054,8 +6267,8 @@ public sealed class DspModernizationValidationToolTests
             {
                 schemaVersion = 1,
                 tool = "run-dsp-live-diagnostics-matrix",
-                comparisonId = "nr5-spnr",
-                comparisonIds = new[] { "nr5-spnr" },
+                comparisonId = "candidate-under-test",
+                comparisonIds = new[] { "candidate-under-test" },
                 samples = 1,
                 scenarioCount = 1,
                 failedRunCount = 0,
@@ -6063,7 +6276,7 @@ public sealed class DspModernizationValidationToolTests
                 hardBlockerRunCount = 0,
                 hardGatePassRunCount = 1,
                 strictPreflightPassRunCount = 1,
-                comparisonStateStatusCounts = new[] { new { name = "nr5-effective-missing", count = 1 } },
+                comparisonStateStatusCounts = new[] { new { name = "candidate-effective-missing", count = 1 } },
                 comparisonStateStrictRunCount = 1,
                 comparisonStateReadyRunCount = 0,
                 comparisonStateStrictFailureCount = 1,
@@ -6076,7 +6289,7 @@ public sealed class DspModernizationValidationToolTests
                     new
                     {
                         scenarioId = "weak-cw-carrier",
-                        comparisonId = "nr5-spnr",
+                        comparisonId = "candidate-under-test",
                         ok = true,
                         readyForBenchmarkTrace = true,
                         okSampleCount = 1,
@@ -6086,7 +6299,7 @@ public sealed class DspModernizationValidationToolTests
                         strictPreflightPass = true,
                         comparisonStateStrict = true,
                         comparisonStateReady = false,
-                        comparisonStateStatus = "nr5-effective-missing"
+                        comparisonStateStatus = "candidate-effective-missing"
                     }
                 }
             };
@@ -6175,8 +6388,8 @@ public sealed class DspModernizationValidationToolTests
             AssertLiveArtifact(artifacts, "artifacts/live-diagnostics-matrix-report.thetis-parity.json", "live-diagnostics-matrix-report-thetis-parity", "thetis-parity", required: true);
             AssertLiveArtifact(artifacts, "artifacts/live-diagnostics-trace-index.baseline.json", "live-diagnostics-trace-index", "current-zeus", required: true);
             AssertLiveArtifact(artifacts, "artifacts/live-diagnostics-matrix-report.baseline.json", "live-diagnostics-matrix-report-baseline", "current-zeus", required: true);
-            AssertLiveArtifact(artifacts, "artifacts/live-diagnostics-trace-index.candidate.json", "live-diagnostics-trace-index", "nr5-spnr", required: true);
-            AssertLiveArtifact(artifacts, "artifacts/live-diagnostics-matrix-report.candidate.json", "live-diagnostics-matrix-report-candidate", "nr5-spnr", required: true);
+            AssertLiveArtifact(artifacts, "artifacts/live-diagnostics-trace-index.candidate.json", "live-diagnostics-trace-index", "candidate-under-test", required: true);
+            AssertLiveArtifact(artifacts, "artifacts/live-diagnostics-matrix-report.candidate.json", "live-diagnostics-matrix-report-candidate", "candidate-under-test", required: true);
 
             var comparison = artifacts.Single(artifact => artifact.GetProperty("id").GetString() == "live-diagnostics-trace-comparison");
             Assert.True(comparison.GetProperty("required").GetBoolean());
@@ -6185,7 +6398,7 @@ public sealed class DspModernizationValidationToolTests
             var thetisComparison = artifacts.Single(artifact => artifact.GetProperty("id").GetString() == "live-diagnostics-trace-comparison-thetis-parity");
             Assert.True(thetisComparison.GetProperty("required").GetBoolean());
             Assert.Equal("artifacts/live-diagnostics-trace-comparison.thetis-parity.json", thetisComparison.GetProperty("path").GetString());
-            Assert.Equal(new[] { "thetis-parity", "nr5-spnr" }, ReadStringArray(thetisComparison, "comparisonIds"));
+            Assert.Equal(new[] { "thetis-parity", "candidate-under-test" }, ReadStringArray(thetisComparison, "comparisonIds"));
 
             var history = artifacts.Single(artifact => artifact.GetProperty("id").GetString() == "live-diagnostics-history");
             Assert.True(history.GetProperty("required").GetBoolean());
@@ -6389,8 +6602,8 @@ public sealed class DspModernizationValidationToolTests
             AssertLiveArtifact(artifacts, "artifacts/live-diagnostics-matrix-report.thetis-parity.json", "live-diagnostics-matrix-report-thetis-parity", "thetis-parity");
             AssertLiveArtifact(artifacts, "artifacts/live-diagnostics-trace-index.baseline.json", "live-diagnostics-trace-index", "current-zeus");
             AssertLiveArtifact(artifacts, "artifacts/live-diagnostics-matrix-report.baseline.json", "live-diagnostics-matrix-report-baseline", "current-zeus");
-            AssertLiveArtifact(artifacts, "artifacts/live-diagnostics-trace-index.candidate.json", "live-diagnostics-trace-index", "nr5-spnr");
-            AssertLiveArtifact(artifacts, "artifacts/live-diagnostics-matrix-report.candidate.json", "live-diagnostics-matrix-report-candidate", "nr5-spnr");
+            AssertLiveArtifact(artifacts, "artifacts/live-diagnostics-trace-index.candidate.json", "live-diagnostics-trace-index", "candidate-under-test");
+            AssertLiveArtifact(artifacts, "artifacts/live-diagnostics-matrix-report.candidate.json", "live-diagnostics-matrix-report-candidate", "candidate-under-test");
 
             var liveAcceptanceCycleSummary = artifacts.Single(artifact => artifact.GetProperty("id").GetString() == "live-acceptance-cycle-summary");
             Assert.False(liveAcceptanceCycleSummary.GetProperty("required").GetBoolean());
@@ -6419,14 +6632,14 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal("manual-tune-observer-report-json", manualTuneObserverReport.GetProperty("kind").GetString());
             Assert.Equal("tools/watch-dsp-manual-tune-observer.ps1", manualTuneObserverReport.GetProperty("source").GetString());
             Assert.Equal("artifacts/manual-tune-observer-report.json", manualTuneObserverReport.GetProperty("path").GetString());
-            Assert.Equal(new[] { "nr5-spnr" }, ReadStringArray(manualTuneObserverReport, "comparisonIds"));
+            Assert.Equal(new[] { "candidate-under-test" }, ReadStringArray(manualTuneObserverReport, "comparisonIds"));
 
             var g2RxPeakHuntReport = artifacts.Single(artifact => artifact.GetProperty("id").GetString() == "g2-rx-peak-hunt-report");
             Assert.False(g2RxPeakHuntReport.GetProperty("required").GetBoolean());
             Assert.Equal("g2-rx-peak-hunt-report-json", g2RxPeakHuntReport.GetProperty("kind").GetString());
             Assert.Equal("tools/run-dsp-g2-rx-peak-hunt.ps1", g2RxPeakHuntReport.GetProperty("source").GetString());
             Assert.Equal("artifacts/g2-rx-peak-hunt-report.json", g2RxPeakHuntReport.GetProperty("path").GetString());
-            Assert.Equal(new[] { "nr5-spnr" }, ReadStringArray(g2RxPeakHuntReport, "comparisonIds"));
+            Assert.Equal(new[] { "candidate-under-test" }, ReadStringArray(g2RxPeakHuntReport, "comparisonIds"));
 
             Assert.DoesNotContain(
                 artifacts,
@@ -6723,7 +6936,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal("http://127.0.0.1:6060", validationRoot.GetProperty("manualTuneObserverBaseUrl").GetString());
             Assert.True(validationRoot.GetProperty("manualTuneObserverBundleRelativePaths").GetBoolean());
             Assert.Equal("rx-ssb-voice-like-manual", validationRoot.GetProperty("manualTuneObserverScenarioId").GetString());
-            Assert.Equal("nr5-spnr", validationRoot.GetProperty("manualTuneObserverComparisonId").GetString());
+            Assert.Equal("candidate-under-test", validationRoot.GetProperty("manualTuneObserverComparisonId").GetString());
             Assert.Equal(8, validationRoot.GetProperty("manualTuneObserverPollCount").GetInt32());
             Assert.Equal(8, validationRoot.GetProperty("manualTuneObserverPollSampleCount").GetInt32());
             Assert.Equal(2, validationRoot.GetProperty("manualTuneObserverCaptureCount").GetInt32());
@@ -6773,7 +6986,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.All(referencedFiles, file =>
             {
                 Assert.True(file.GetProperty("ok").GetBoolean());
-                Assert.Equal("matched", file.GetProperty("sourceStatus").GetString());
+                Assert.Equal("matched-ready", file.GetProperty("sourceStatus").GetString());
                 Assert.Equal("matched", file.GetProperty("jsonlStatus").GetString());
                 Assert.StartsWith("artifacts/manual-tune-observer/", file.GetProperty("path").GetString(), StringComparison.Ordinal);
             });
@@ -6943,8 +7156,8 @@ public sealed class DspModernizationValidationToolTests
                     "    failedSampleCount = 0",
                     "    readySampleCount = $Samples",
                     "    hardBlockerSampleCount = 0",
-                    "    nr5TuningTraceStatus = 'ready'",
-                    "    nr5TuningReadySampleCount = $Samples",
+                    "    candidateTuningTraceStatus = 'ready'",
+                    "    candidateTuningReadySampleCount = $Samples",
                     "    agcGainDb = @{ movement = 0.0 }",
                     "    audioRmsDbfs = @{ movement = 0.0 }",
                     "    adcHeadroomDb = @{ min = 30.0 }",
@@ -6954,7 +7167,7 @@ public sealed class DspModernizationValidationToolTests
                     "    rxAudioLevelerPeakLimitedSampleCount = 0",
                     "    rxAudioLevelerOutputLimitedSampleCount = 0",
                     "    frontendTopPeakWatch = @{ sampleCount = $Samples; nearPassbandSampleCount = $Samples; nearPassbandThresholdHz = 3000; topNearPassbandSamples = @() }",
-                    "    nr5WeakSignalWatch = @{",
+                    "    candidateWeakSignalWatch = @{",
                     "        weakInputSampleCount = 1",
                     "        strongInputSampleCount = 1",
                     "        nearStrongInputSampleCount = 0",
@@ -7055,9 +7268,9 @@ public sealed class DspModernizationValidationToolTests
                     readyForLiveBenchmark = true,
                     wdspActive = true,
                     wdspNativeLoadable = true,
-                    requestedNrMode = "Nr5",
-                    effectiveNrMode = "Nr5",
-                    readyForNr5Tuning = true,
+                    requestedNrMode = "Off",
+                    effectiveNrMode = "Off",
+                    readyForCandidateTuning = true,
                     frontendSceneFresh = true
                 }, CamelCaseJson),
                 ["/api/vfo"] = "{}",
@@ -7190,8 +7403,8 @@ public sealed class DspModernizationValidationToolTests
                     "    failedSampleCount = 0",
                     "    readySampleCount = $Samples",
                     "    hardBlockerSampleCount = 0",
-                    "    nr5TuningTraceStatus = 'ready'",
-                    "    nr5TuningReadySampleCount = $Samples",
+                    "    candidateTuningTraceStatus = 'ready'",
+                    "    candidateTuningReadySampleCount = $Samples",
                     "    agcGainDb = @{ movement = 0.0 }",
                     "    audioRmsDbfs = @{ movement = 0.0 }",
                     "    adcHeadroomDb = @{ min = 30.0 }",
@@ -7201,7 +7414,7 @@ public sealed class DspModernizationValidationToolTests
                     "    rxAudioLevelerPeakLimitedSampleCount = 0",
                     "    rxAudioLevelerOutputLimitedSampleCount = 0",
                     "    frontendTopPeakWatch = @{ sampleCount = $Samples; nearPassbandSampleCount = $Samples; nearPassbandThresholdHz = 3000; topNearPassbandSamples = @() }",
-                    "    nr5WeakSignalWatch = @{",
+                    "    candidateWeakSignalWatch = @{",
                     "        weakInputSampleCount = 1",
                     "        strongInputSampleCount = 0",
                     "        nearStrongInputSampleCount = 0",
@@ -7311,9 +7524,9 @@ public sealed class DspModernizationValidationToolTests
                     readyForLiveBenchmark = true,
                     wdspActive = true,
                     wdspNativeLoadable = true,
-                    requestedNrMode = "Nr5",
-                    effectiveNrMode = "Nr5",
-                    readyForNr5Tuning = true,
+                    requestedNrMode = "Off",
+                    effectiveNrMode = "Off",
+                    readyForCandidateTuning = true,
                     frontendSceneFresh = true
                 }, CamelCaseJson),
                 ["/api/vfo"] = "{}",
@@ -7493,9 +7706,9 @@ public sealed class DspModernizationValidationToolTests
                     readyForLiveBenchmark = true,
                     wdspActive = true,
                     wdspNativeLoadable = true,
-                    requestedNrMode = "Nr5",
-                    effectiveNrMode = "Nr5",
-                    readyForNr5Tuning = true,
+                    requestedNrMode = "Off",
+                    effectiveNrMode = "Off",
+                    readyForCandidateTuning = true,
                     frontendSceneFresh = true
                 }, CamelCaseJson),
                 ["/api/vfo"] = "{}",
@@ -7653,9 +7866,9 @@ public sealed class DspModernizationValidationToolTests
                     readyForLiveBenchmark = true,
                     wdspActive = true,
                     wdspNativeLoadable = true,
-                    requestedNrMode = "Nr5",
-                    effectiveNrMode = "Nr5",
-                    readyForNr5Tuning = true,
+                    requestedNrMode = "Off",
+                    effectiveNrMode = "Off",
+                    readyForCandidateTuning = true,
                     frontendSceneFresh = true
                 }, CamelCaseJson),
                 ["/api/connect/p2"] = "{}",
@@ -7768,15 +7981,15 @@ public sealed class DspModernizationValidationToolTests
                     "    failedSampleCount = 0",
                     "    readySampleCount = $Samples",
                     "    hardBlockerSampleCount = 0",
-                    "    nr5TuningTraceStatus = 'ready'",
-                    "    nr5TuningReadySampleCount = $Samples",
+                    "    candidateTuningTraceStatus = 'ready'",
+                    "    candidateTuningReadySampleCount = $Samples",
                     "    agcGainDb = @{ movement = 0.0 }",
                     "    audioRmsDbfs = @{ movement = 0.0 }",
                     "    adcHeadroomDb = @{ min = 30.0 }",
                     "    agcStabilityWatch = @{ status = 'stable'; pumpingRisk = $false }",
                     "    rxAudioLevelerWatch = @{ constrainedSampleCount = 0 }",
                     "    frontendTopPeakWatch = @{ sampleCount = $Samples; nearPassbandSampleCount = 1; nearPassbandThresholdHz = 3000 }",
-                    "    nr5WeakSignalWatch = @{",
+                    "    candidateWeakSignalWatch = @{",
                     "        weakInputSampleCount = 1",
                     "        strongInputSampleCount = 0",
                     "        nearStrongInputSampleCount = 0",
@@ -7838,9 +8051,9 @@ public sealed class DspModernizationValidationToolTests
                     readyForLiveBenchmark = true,
                     wdspActive = true,
                     wdspNativeLoadable = true,
-                    requestedNrMode = "Nr5",
-                    effectiveNrMode = "Nr5",
-                    readyForNr5Tuning = true,
+                    requestedNrMode = "Off",
+                    effectiveNrMode = "Off",
+                    readyForCandidateTuning = true,
                     frontendSceneFresh = true
                 }, CamelCaseJson),
                 ["/api/vfo"] = "{}",
@@ -8547,7 +8760,7 @@ public sealed class DspModernizationValidationToolTests
                     source = "tools/watch-dsp-manual-tune-observer.ps1",
                     path = "artifacts/manual-tune-observer-report.json",
                     required = false,
-                    comparisonIds = new[] { "nr5-spnr" }
+                    comparisonIds = new[] { "candidate-under-test" }
                 }
             }
         };
@@ -8592,7 +8805,7 @@ public sealed class DspModernizationValidationToolTests
             outputRoot = "artifacts/manual-tune-observer",
             label = "synthetic-ready",
             scenarioId = "rx-ssb-voice-like-manual",
-            comparisonId = "nr5-spnr",
+            comparisonId = "candidate-under-test",
             pollCount = 8,
             pollIntervalSec = 1,
             stablePolls = 2,
@@ -8741,8 +8954,8 @@ public sealed class DspModernizationValidationToolTests
 
         if (!nonPortableCapturePaths)
         {
-            WriteSyntheticG2PeakHuntWatcherFiles(bundleDir, weakCaptureReportPath, weakCaptureJsonlPath, weakInputSampleCount: 6, strongInputSampleCount: 0, mixedReady: false);
-            WriteSyntheticG2PeakHuntWatcherFiles(bundleDir, bestCaptureReportPath, bestCaptureJsonlPath, weakInputSampleCount: 8, strongInputSampleCount: 9, mixedReady: true);
+            WriteSyntheticG2PeakHuntWatcherFiles(bundleDir, weakCaptureReportPath, weakCaptureJsonlPath, weakInputSampleCount: 6, strongInputSampleCount: 0, nearStrongInputSampleCount: 1, mixedReady: false);
+            WriteSyntheticG2PeakHuntWatcherFiles(bundleDir, bestCaptureReportPath, bestCaptureJsonlPath, weakInputSampleCount: 8, strongInputSampleCount: 9, nearStrongInputSampleCount: 2, mixedReady: true);
         }
     }
 
@@ -8762,7 +8975,7 @@ public sealed class DspModernizationValidationToolTests
                     source = "tools/run-dsp-g2-rx-peak-hunt.ps1",
                     path = "artifacts/g2-rx-peak-hunt-report.json",
                     required = false,
-                    comparisonIds = new[] { "nr5-spnr" }
+                    comparisonIds = new[] { "candidate-under-test" }
                 }
             }
         };
@@ -8845,7 +9058,7 @@ public sealed class DspModernizationValidationToolTests
             },
             outputDir = "artifacts/g2-rx-peak-hunt",
             label = "synthetic-ready",
-            comparisonId = "nr5-spnr",
+            comparisonId = "candidate-under-test",
             targetMode = "USB",
             allowRetune = true,
             skipCurrentVfo = false,
@@ -8911,9 +9124,9 @@ public sealed class DspModernizationValidationToolTests
                 readyForLiveBenchmark = true,
                 wdspActive = true,
                 wdspNativeLoadable = true,
-                requestedNrMode = "NR5",
-                effectiveNrMode = "NR5",
-                readyForNr5Tuning = true,
+                requestedNrMode = "Off",
+                effectiveNrMode = "Off",
+                readyForCandidateTuning = true,
                 frontendSceneFresh = true
             },
             frontendScene = new
@@ -8976,8 +9189,8 @@ public sealed class DspModernizationValidationToolTests
                     failedSampleCount = 0,
                     readySampleCount = 24,
                     hardBlockerSampleCount = 0,
-                    nr5TuningTraceStatus = "ready",
-                    nr5TuningReadySampleCount = 24,
+                    candidateTuningTraceStatus = "ready",
+                    candidateTuningReadySampleCount = 24,
                     agcStabilityStatus = "stable",
                     agcPumpingRisk = false,
                     weakInputSampleCount = 10,
@@ -9217,7 +9430,7 @@ public sealed class DspModernizationValidationToolTests
             },
             recommendations = new[]
             {
-                "A mixed weak+strong NR5/SPNR run was found; promote the best run into live history before tuning defaults."
+                "A mixed weak+strong comparison-under-test run was found; promote the best run into live history before tuning defaults."
             }
         };
 
@@ -9238,12 +9451,23 @@ public sealed class DspModernizationValidationToolTests
         string jsonlPath,
         int weakInputSampleCount,
         int strongInputSampleCount,
-        bool mixedReady)
+        bool mixedReady,
+        int nearStrongInputSampleCount = 0)
     {
         var resolvedReportPath = Path.Combine(bundleDir, reportPath.Replace('/', Path.DirectorySeparatorChar));
         var resolvedJsonlPath = Path.Combine(bundleDir, jsonlPath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(resolvedReportPath)!);
         Directory.CreateDirectory(Path.GetDirectoryName(resolvedJsonlPath)!);
+
+        var mixedWeakStrongEvidenceStatus = mixedReady
+            ? "ready"
+            : weakInputSampleCount switch
+            {
+                <= 0 when strongInputSampleCount <= 0 => "missing-weak-and-strong-input",
+                <= 0 => "missing-weak-input",
+                _ when strongInputSampleCount <= 0 => "missing-strong-input",
+                _ => "mixed-not-ready"
+            };
 
         var summary = new
         {
@@ -9253,12 +9477,13 @@ public sealed class DspModernizationValidationToolTests
             readyForBenchmarkTrace = true,
             sampleCount = 24,
             jsonlPath,
-            nr5WeakSignalWatch = new
+            candidateWeakSignalWatch = new
             {
                 weakInputSampleCount,
                 strongInputSampleCount,
+                nearStrongInputSampleCount,
                 mixedWeakStrongEvidenceReady = mixedReady,
-                mixedWeakStrongEvidenceStatus = mixedReady ? "ready" : "mixed-not-ready",
+                mixedWeakStrongEvidenceStatus,
                 speechQualifiedWeakInputSampleCount = Math.Max(0, weakInputSampleCount - 2),
                 speechQualifiedStrongInputSampleCount = Math.Max(0, strongInputSampleCount - 2),
                 passbandQualifiedWeakInputSampleCount = Math.Max(0, weakInputSampleCount - 4),
@@ -9368,7 +9593,7 @@ public sealed class DspModernizationValidationToolTests
                 "off-baseline",
                 "thetis-parity",
                 "current-zeus",
-                "nr5-spnr",
+                "candidate-under-test",
                 "candidate-external-engine-opt-in"
               ],
               "globalAcceptanceGates": [
@@ -9413,7 +9638,7 @@ public sealed class DspModernizationValidationToolTests
                 "off-baseline",
                 "thetis-parity",
                 "current-zeus",
-                "nr5-spnr",
+                "candidate-under-test",
                 "candidate-external-engine-opt-in"
               ],
               "requiredArtifacts": [
@@ -9429,7 +9654,7 @@ public sealed class DspModernizationValidationToolTests
 
     private static void WriteSourcePlanScopeBundle(string bundleDir)
     {
-        var plan = DspBenchmarkPlanCatalog.Build();
+        var plan = WithoutExternalEngineBakeoff(DspBenchmarkPlanCatalog.Build());
         File.WriteAllText(
             Path.Combine(bundleDir, "benchmark-plan.json"),
             JsonSerializer.Serialize(plan, CamelCaseJson));
@@ -9468,6 +9693,23 @@ public sealed class DspModernizationValidationToolTests
             Path.Combine(bundleDir, "benchmark-capture-manifest.json"),
             JsonSerializer.Serialize(captureManifest, CamelCaseJson));
     }
+
+    private static DspBenchmarkPlanDto WithoutExternalEngineBakeoff(DspBenchmarkPlanDto plan) =>
+        plan with
+        {
+            RequiredComparisons = WithoutExternalEngineBakeoff(plan.RequiredComparisons),
+            Scenarios = plan.Scenarios
+                .Select(scenario => scenario with
+                {
+                    RequiredComparisons = WithoutExternalEngineBakeoff(scenario.RequiredComparisons),
+                })
+                .ToArray(),
+        };
+
+    private static string[] WithoutExternalEngineBakeoff(string[] comparisonIds) =>
+        comparisonIds
+            .Where(comparisonId => !string.Equals(comparisonId, "candidate-external-engine-opt-in", StringComparison.Ordinal))
+            .ToArray();
 
     private static void WritePureSignalScopeBundle(string bundleDir)
     {
@@ -9712,7 +9954,7 @@ public sealed class DspModernizationValidationToolTests
             wdspRuntimeSha256 = "abc123",
             wdspRuntimeStatus = "found",
             scenarioCount = 1,
-            comparisonIds = new[] { "current-zeus", "nr5-spnr" },
+            comparisonIds = new[] { "current-zeus", "candidate-under-test" },
             scenarios = new[]
             {
                 new
@@ -9724,7 +9966,7 @@ public sealed class DspModernizationValidationToolTests
                     comparisons = new object[]
                     {
                         NativeStageTimingComparison("current-zeus", 5.25, 4096),
-                        NativeStageTimingComparison("nr5-spnr", 6.50, 8192)
+                        NativeStageTimingComparison("candidate-under-test", 6.50, 8192)
                     }
                 }
             }
@@ -9812,7 +10054,7 @@ public sealed class DspModernizationValidationToolTests
             liveTraceComparisonReady,
             liveTraceThetisComparisonReady,
             scenarioIds = new[] { "weak-cw-carrier" },
-            comparisonIds = new[] { "current-zeus", "nr5-spnr" }
+            comparisonIds = new[] { "current-zeus", "candidate-under-test" }
         };
 
         await File.WriteAllTextAsync(path, JsonSerializer.Serialize(report, CamelCaseJson));
@@ -9919,7 +10161,7 @@ public sealed class DspModernizationValidationToolTests
             runtimeEvidenceSampleCount = 3,
             audioFreshSampleCount = 3,
             rxMetersFreshSampleCount = 3,
-            nr5SampleCount = 3,
+            candidateSampleCount = 3,
             squelchClosedPct = 0.0,
             readinessScore = new { average = 92.0 },
             agcGainDb = new { movement = 0.2 },
@@ -9929,7 +10171,7 @@ public sealed class DspModernizationValidationToolTests
                 activeAgcGainDb = new { movement = 0.2 },
                 voiceLikeAgcGainDb = new { movement = 0.2 }
             },
-            nr5WeakSignalWatch = new
+            candidateWeakSignalWatch = new
             {
                 weakInputSampleCount = 3,
                 weakRecoveredSampleCount = 3,
@@ -9939,23 +10181,23 @@ public sealed class DspModernizationValidationToolTests
                 weakDropoutFinalAudiblePct = 100.0,
                 hotMakeupSampleCount = 0
             },
-            nr5LowEvidenceLiftWatch = new
+            candidateLowEvidenceLiftWatch = new
             {
                 liftedSampleCount = lowEvidenceLiftedSampleCount,
                 liftedPct = lowEvidenceLiftedPct,
                 alignmentMismatchPct = 0.0
             },
-            nr5AudioAlignmentWatch = new
+            candidateAudioAlignmentWatch = new
             {
                 mismatchPct = audioAlignmentMismatchPct
             },
-            nr5SignalProbability = new { average = signalProbabilityAverage },
-            nr5TextureFill = new { average = textureFillAverage },
-            nr5OutputDbfs = new { movement = 0.1 },
-            nr5MakeupGainDb = new { movement = 0.1, max = 1.0 },
-            nr5RecoveryDrive = new { movement = 0.01 },
-            nr5PeakReductionDb = new { max = 0.0 },
-            nr5OutputPeakDbfs = new { max = -10.0 },
+            candidateSignalProbability = new { average = signalProbabilityAverage },
+            candidateTextureFill = new { average = textureFillAverage },
+            candidateOutputDbfs = new { movement = 0.1 },
+            candidateMakeupGainDb = new { movement = 0.1, max = 1.0 },
+            candidateRecoveryDrive = new { movement = 0.01 },
+            candidatePeakReductionDb = new { max = 0.0 },
+            candidateOutputPeakDbfs = new { max = -10.0 },
             audioRmsDbfs = new { movement = 0.2 },
             audioPeakDbfs = new { max = -9.0 },
             rxAudioLevelerOutputRmsDbfs = new { movement = 0.2 },
@@ -9993,7 +10235,7 @@ public sealed class DspModernizationValidationToolTests
             runtimeEvidenceSampleCount = 3,
             audioFreshSampleCount = 3,
             rxMetersFreshSampleCount = 3,
-            nr5SampleCount = 3,
+            candidateSampleCount = 3,
             squelchClosedPct = 0.0,
             readinessScore = new { average = 92.0 },
             agcGainDb = new { movement = 0.0 },
@@ -10010,7 +10252,7 @@ public sealed class DspModernizationValidationToolTests
                 offPassbandPeakSampleCount = 3,
                 offPassbandAudioRmsDbfs = new { average = offPassbandAudioAverageDbfs, movement = 0.2 }
             },
-            nr5WeakSignalWatch = new
+            candidateWeakSignalWatch = new
             {
                 weakInputSampleCount = 0,
                 weakRecoveredSampleCount = 0,
@@ -10020,28 +10262,98 @@ public sealed class DspModernizationValidationToolTests
                 weakDropoutFinalAudiblePct = 100.0,
                 hotMakeupSampleCount = 0
             },
-            nr5LowEvidenceLiftWatch = new
+            candidateLowEvidenceLiftWatch = new
             {
                 liftedSampleCount = 0,
                 liftedPct = 0.0,
                 suppressedPct = 100.0,
                 alignmentMismatchPct = 0.0
             },
-            nr5AudioAlignmentWatch = new
+            candidateAudioAlignmentWatch = new
             {
                 mismatchPct = 0.0
             },
-            nr5SignalProbability = new { average = 0.04 },
-            nr5TextureFill = new { average = 0.02 },
-            nr5OutputDbfs = new { average = -58.0, movement = 0.1 },
-            nr5MakeupGainDb = new { movement = 0.1, max = 1.0 },
-            nr5RecoveryDrive = new { movement = 0.01 },
-            nr5PeakReductionDb = new { max = 0.0 },
-            nr5OutputPeakDbfs = new { max = -10.0 },
+            candidateSignalProbability = new { average = 0.04 },
+            candidateTextureFill = new { average = 0.02 },
+            candidateOutputDbfs = new { average = -58.0, movement = 0.1 },
+            candidateMakeupGainDb = new { movement = 0.1, max = 1.0 },
+            candidateRecoveryDrive = new { movement = 0.01 },
+            candidatePeakReductionDb = new { max = 0.0 },
+            candidateOutputPeakDbfs = new { max = -10.0 },
             audioRmsDbfs = new { average = offPassbandAudioAverageDbfs, movement = 0.2 },
             audioPeakDbfs = new { max = -9.0 },
             rxAudioLevelerOutputRmsDbfs = new { movement = 0.2 },
             rxAudioLevelerAppliedGainDb = new { movement = 0.0 },
+            rxAudioLevelerWatch = new
+            {
+                diagnosticSampleCount = 3,
+                constrainedSampleCount = 0,
+                constrainedPct = 0.0,
+                boostSlewLimitedSampleCount = 0,
+                peakLimitedSampleCount = 0,
+                outputLimitedSampleCount = 0
+            },
+            rxAudioLevelerOutputLimitReductionDb = new { max = 0.0 },
+            rxAudioLevelerOutputLimitSampleCount = new { max = 0.0 },
+            adcHeadroomDb = new { min = 22.0 },
+            monitorBacklogSamples = new { max = 0.0 },
+            hardConstraintCounts = Array.Empty<object>(),
+            latencyMs = new { average = 1.0 }
+        };
+    }
+
+    private static object WeakSignalSummaryWithoutCandidateEngineDiagnostics(
+        string scenarioId,
+        double passbandAudioAverageDbfs)
+    {
+        return new
+        {
+            schemaVersion = 1,
+            tool = "watch-dsp-live-diagnostics",
+            scenarioId,
+            readyForBenchmarkTrace = true,
+            trendStatus = "ready-trace",
+            okSampleCount = 3,
+            readySampleCount = 3,
+            failedSampleCount = 0,
+            hardBlockerSampleCount = 0,
+            runtimeEvidenceSampleCount = 3,
+            audioFreshSampleCount = 3,
+            rxMetersFreshSampleCount = 3,
+            candidateSampleCount = 3,
+            squelchClosedPct = 0.0,
+            readinessScore = new { average = 92.0 },
+            agcGainDb = new { movement = 0.1 },
+            agcStabilityWatch = new
+            {
+                pumpingRisk = false,
+                activeAgcGainDb = new { movement = 0.1 },
+                voiceLikeAgcGainDb = new { movement = 0.1 }
+            },
+            passbandAudioWatch = new
+            {
+                status = "ready",
+                passbandEvidenceMissing = false,
+                passbandPeakSampleCount = 3,
+                passbandActiveAudioPct = 100.0,
+                passbandFloorAudioPct = 0.0,
+                passbandAudioRmsDbfs = new { average = passbandAudioAverageDbfs, movement = 0.2 },
+                offPassbandAudioRmsDbfs = new { average = passbandAudioAverageDbfs - 12.0, movement = 0.2 }
+            },
+            candidateWeakSignalWatch = new
+            {
+                weakInputSampleCount = 3,
+                weakRecoveredSampleCount = 3,
+                weakDropoutSampleCount = 0,
+                weakDropoutCandidateLossSampleCount = 0,
+                weakDropoutFinalAudibleSampleCount = 0,
+                weakDropoutFinalAudiblePct = 100.0,
+                hotMakeupSampleCount = 0
+            },
+            audioRmsDbfs = new { average = -18.0, movement = 0.1 },
+            audioPeakDbfs = new { max = -8.0 },
+            rxAudioLevelerOutputRmsDbfs = new { movement = 0.1 },
+            rxAudioLevelerAppliedGainDb = new { movement = 0.1 },
             rxAudioLevelerWatch = new
             {
                 diagnosticSampleCount = 3,
@@ -10077,21 +10389,21 @@ public sealed class DspModernizationValidationToolTests
         int sampleIndex,
         double agcGainDb,
         double audioRmsDbfs,
-        bool includeNr5 = false,
-        double nr5InputDbfs = -24.0,
+        bool includeCandidate = false,
+        double candidateInputDbfs = -24.0,
         double signalConfidence = 0.72,
         double agcGate = 0.74,
         double signalProbability = 0.68,
         double textureFill = 0.04,
-        double? nr5OutputDbfs = null,
+        double? candidateOutputDbfs = null,
         int learnedFrames = 30,
         int? managedChannelGeneration = null,
-        int? managedNr5ApplyCount = null,
-        int? managedNr5PositionApplyCount = null,
-        int? managedNr5PolicyApplyCount = null,
-        int? managedNr5NoopApplyCount = null,
-        int? managedNr5RunApplyCount = null,
-        string? managedNr5LastApplyReason = null,
+        int? managedCandidateApplyCount = null,
+        int? managedCandidatePositionApplyCount = null,
+        int? managedCandidatePolicyApplyCount = null,
+        int? managedCandidateNoopApplyCount = null,
+        int? managedCandidateRunApplyCount = null,
+        string? managedCandidateLastApplyReason = null,
         object[]? frontendTopPeaks = null,
         int rxChainFilterLowHz = 300,
         int rxChainFilterHighHz = 2600,
@@ -10113,9 +10425,9 @@ public sealed class DspModernizationValidationToolTests
                 qualityTone = "ready",
                 readinessScore = 92,
                 readyForLiveBenchmark = true,
-                readyForNr5Tuning = includeNr5,
-                nr5TuningStatus = includeNr5 ? "ready-for-nr5-live-tuning" : "nr5-diagnostics-missing",
-                nr5TuningConstraints = Array.Empty<string>(),
+                readyForCandidateTuning = true,
+                candidateTuningStatus = "candidate-preflight-ready",
+                candidateTuningConstraints = Array.Empty<string>(),
                 frontendTopPeaks = frontendTopPeaks ?? Array.Empty<object>(),
                 radioVfoHz,
                 radioLoHz = radioLoHz ?? radioVfoHz,
@@ -10126,8 +10438,8 @@ public sealed class DspModernizationValidationToolTests
                 rxChainFilterHighHz,
                 rxChainFilterWidthHz = Math.Abs(rxChainFilterHighHz - rxChainFilterLowHz),
                 rxChainFilterPresetName = "TEST",
-                requestedNrMode = includeNr5 ? "Nr5" : "Off",
-                effectiveNrMode = includeNr5 ? "Nr5" : "Off",
+                requestedNrMode = includeCandidate ? "Off" : "Off",
+                effectiveNrMode = includeCandidate ? "Off" : "Off",
                 constraints = Array.Empty<string>(),
                 recommendedActions = Array.Empty<string>(),
                 runtimeEvidence = new
@@ -10149,14 +10461,14 @@ public sealed class DspModernizationValidationToolTests
                     rxAudioLevelerOutputRmsDbfs = audioRmsDbfs,
                     rxAudioLevelerAppliedGainDb = 0.0
                 },
-                nr5SpnrDiagnostics = includeNr5
+                candidateDspDiagnostics = includeCandidate
                     ? new
                     {
                         run = true,
                         agcRun = true,
                         learnedFrames,
-                        inputDbfs = nr5InputDbfs,
-                        outputDbfs = nr5OutputDbfs ?? audioRmsDbfs,
+                        inputDbfs = candidateInputDbfs,
+                        outputDbfs = candidateOutputDbfs ?? audioRmsDbfs,
                         meanGain = 0.98,
                         floorReductionDb = 8.0,
                         dynamicRangeDb = 12.0,
@@ -10174,12 +10486,12 @@ public sealed class DspModernizationValidationToolTests
                         peakLimitDbfs = -3.0,
                         peakReductionDb = 0.0,
                         managedChannelGeneration,
-                        managedNr5ApplyCount,
-                        managedNr5PositionApplyCount,
-                        managedNr5PolicyApplyCount,
-                        managedNr5NoopApplyCount,
-                        managedNr5RunApplyCount,
-                        managedNr5LastApplyReason
+                        managedCandidateApplyCount,
+                        managedCandidatePositionApplyCount,
+                        managedCandidatePolicyApplyCount,
+                        managedCandidateNoopApplyCount,
+                        managedCandidateRunApplyCount,
+                        managedCandidateLastApplyReason
                     }
                     : null
             }
@@ -10203,10 +10515,10 @@ public sealed class DspModernizationValidationToolTests
             coherent
         };
 
-    private static object Nr5LevelerAlignmentWatchSample(
+    private static object CandidateLevelerAlignmentWatchSample(
         int sampleIndex,
-        double nr5InputDbfs,
-        double nr5OutputDbfs,
+        double candidateInputDbfs,
+        double candidateOutputDbfs,
         double levelerInputRmsDbfs,
         double levelerOutputRmsDbfs,
         object[]? frontendTopPeaks = null,
@@ -10222,12 +10534,12 @@ public sealed class DspModernizationValidationToolTests
         double? rxAudioLevelerGainDeltaDb = null,
         double? rxAudioLevelerPeakHeadroomDb = null,
         double? rxAudioLevelerPreLimitPeakDbfs = null,
-        double? rxAudioLevelerNr5HybridSpeechPrior = null,
-        double? rxAudioLevelerNr5NoSignalNoisePrior = null,
-        double? rxAudioLevelerNr5NoiseProfilePrior = null,
-        bool rxAudioLevelerNr5NoSignalNoiseCap = false,
-        bool rxAudioLevelerNr5FarPeakNoiseCap = false,
-        bool rxAudioLevelerNr5NoProofNoiseCap = false)
+        double? rxAudioLevelerCandidateHybridSpeechPrior = null,
+        double? rxAudioLevelerCandidateNoSignalNoisePrior = null,
+        double? rxAudioLevelerCandidateNoiseProfilePrior = null,
+        bool rxAudioLevelerCandidateNoSignalNoiseCap = false,
+        bool rxAudioLevelerCandidateFarPeakNoiseCap = false,
+        bool rxAudioLevelerCandidateNoProofNoiseCap = false)
     {
         var runtimeStatus = txMonitorRequested ? "audio-tx-monitor" : "ready";
         var audioStatus = txMonitorRequested ? "tx-monitor" : "ready";
@@ -10258,16 +10570,18 @@ public sealed class DspModernizationValidationToolTests
                 qualityTone = "ready",
                 readinessScore = 92,
                 readyForLiveBenchmark = true,
-                readyForNr5Tuning = !txMonitorRequested,
-                nr5TuningStatus = txMonitorRequested ? "nr5-tuning-preflight-required" : "ready-for-nr5-live-tuning",
-                nr5TuningConstraints = txMonitorRequested ? new[] { "tx-monitor-audio-active" } : Array.Empty<string>(),
+                readyForCandidateTuning = !txMonitorRequested,
+                candidateTuningStatus = txMonitorRequested ? "candidate-tuning-preflight-required" : "candidate-preflight-ready",
+                candidateTuningConstraints = txMonitorRequested
+                    ? new[] { "tx-monitor-audio-active" }
+                    : Array.Empty<string>(),
                 frontendTopPeaks = frontendTopPeaks ?? Array.Empty<object>(),
                 rxChainFilterLowHz,
                 rxChainFilterHighHz,
                 rxChainFilterWidthHz = Math.Abs(rxChainFilterHighHz - rxChainFilterLowHz),
                 rxChainFilterPresetName = "TEST",
-                requestedNrMode = "Nr5",
-                effectiveNrMode = "Nr5",
+                requestedNrMode = "Off",
+                effectiveNrMode = "Off",
                 constraints = Array.Empty<string>(),
                 recommendedActions = Array.Empty<string>(),
                 runtimeEvidence = new
@@ -10297,23 +10611,23 @@ public sealed class DspModernizationValidationToolTests
                     rxAudioLevelerPreLimitPeakDbfs = runtimeLevelerPreLimitPeakDbfs,
                     rxAudioLevelerOutputLimitReductionDb = runtimeLevelerOutputLimitReductionDb,
                     rxAudioLevelerOutputLimitSampleCount = runtimeLevelerOutputLimitSampleCount,
-                    rxAudioLevelerNr5HybridSpeechPrior = txMonitorRequested ? null : rxAudioLevelerNr5HybridSpeechPrior,
-                    rxAudioLevelerNr5NoSignalNoisePrior = txMonitorRequested ? null : rxAudioLevelerNr5NoSignalNoisePrior,
-                    rxAudioLevelerNr5NoiseProfilePrior = txMonitorRequested ? null : rxAudioLevelerNr5NoiseProfilePrior,
-                    rxAudioLevelerNr5NoSignalNoiseCap = txMonitorRequested ? (bool?)null : rxAudioLevelerNr5NoSignalNoiseCap,
-                    rxAudioLevelerNr5FarPeakNoiseCap = txMonitorRequested ? (bool?)null : rxAudioLevelerNr5FarPeakNoiseCap,
-                    rxAudioLevelerNr5NoProofNoiseCap = txMonitorRequested ? (bool?)null : rxAudioLevelerNr5NoProofNoiseCap,
+                    rxAudioLevelerCandidateHybridSpeechPrior = txMonitorRequested ? null : rxAudioLevelerCandidateHybridSpeechPrior,
+                    rxAudioLevelerCandidateNoSignalNoisePrior = txMonitorRequested ? null : rxAudioLevelerCandidateNoSignalNoisePrior,
+                    rxAudioLevelerCandidateNoiseProfilePrior = txMonitorRequested ? null : rxAudioLevelerCandidateNoiseProfilePrior,
+                    rxAudioLevelerCandidateNoSignalNoiseCap = txMonitorRequested ? (bool?)null : rxAudioLevelerCandidateNoSignalNoiseCap,
+                    rxAudioLevelerCandidateFarPeakNoiseCap = txMonitorRequested ? (bool?)null : rxAudioLevelerCandidateFarPeakNoiseCap,
+                    rxAudioLevelerCandidateNoProofNoiseCap = txMonitorRequested ? (bool?)null : rxAudioLevelerCandidateNoProofNoiseCap,
                     rxAudioLevelerBoostSlewLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerBoostSlewLimited,
                     rxAudioLevelerPeakLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerPeakLimited,
                     rxAudioLevelerOutputLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerOutputLimited
                 },
-                nr5SpnrDiagnostics = new
+                candidateDspDiagnostics = new
                 {
                     run = true,
                     agcRun = true,
                     learnedFrames = 30,
-                    inputDbfs = nr5InputDbfs,
-                    outputDbfs = nr5OutputDbfs,
+                    inputDbfs = candidateInputDbfs,
+                    outputDbfs = candidateOutputDbfs,
                     meanGain = 0.16,
                     floorReductionDb = 5.2,
                     dynamicRangeDb = 54.2,
@@ -10326,7 +10640,7 @@ public sealed class DspModernizationValidationToolTests
                     recoveryDrive = 1.0,
                     weakSignalMemory = 0.50,
                     makeupGainDb = 0.2,
-                    outputPeakDbfs = nr5OutputDbfs + 4.0,
+                    outputPeakDbfs = candidateOutputDbfs + 4.0,
                     peakEvidence = 1.0,
                     peakLimitDbfs = -2.6,
                     peakReductionDb = 0.0
@@ -10358,6 +10672,14 @@ public sealed class DspModernizationValidationToolTests
         var metric = metrics.Single(item => item.GetProperty("metricId").GetString() == metricId);
         Assert.Equal(verdict, metric.GetProperty("verdict").GetString());
         Assert.Equal(safetyClass, metric.GetProperty("safetyClass").GetString());
+    }
+
+    private static void AssertMetricCandidateEngineNotApplicable(JsonElement[] metrics, string metricId)
+    {
+        var metric = metrics.Single(item => item.GetProperty("metricId").GetString() == metricId);
+        Assert.Equal("not-applicable", metric.GetProperty("verdict").GetString());
+        Assert.Equal("candidate-engine-diagnostics-not-present", metric.GetProperty("verdictNote").GetString());
+        Assert.True(metric.GetProperty("ignoredForReadiness").GetBoolean());
     }
 
     private static void RemoveJsonProperty(string path, string propertyName)
@@ -10400,9 +10722,9 @@ public sealed class DspModernizationValidationToolTests
     private static object ManualTuneObserverLiveDiagnostics() => new
     {
         status = "ready-for-live-benchmark",
-        requestedNrMode = "Nr5",
-        effectiveNrMode = "Nr5",
-        readyForNr5Tuning = true,
+        requestedNrMode = "Off",
+        effectiveNrMode = "Off",
+        readyForCandidateTuning = true,
         runtimeEvidence = new
         {
             status = "ready",
@@ -10414,11 +10736,11 @@ public sealed class DspModernizationValidationToolTests
             rxAudioLevelerDesiredGainDb = 0.0,
             rxAudioLevelerAppliedGainDb = 0.0,
             rxAudioLevelerGainDeltaDb = 0.0,
-            rxAudioLevelerNr5SpeechHoldBlocks = 0,
+            rxAudioLevelerCandidateSpeechHoldBlocks = 0,
             rxAudioLevelerBoostSlewLimited = false,
             rxAudioLevelerOutputLimited = false
         },
-        nr5SpnrDiagnostics = new
+        candidateDspDiagnostics = new
         {
             signalConfidence = 0.7,
             signalProbability = 0.6,
@@ -10432,10 +10754,25 @@ public sealed class DspModernizationValidationToolTests
         }
     };
 
+    private static Task<ToolResult> RunPowerShellAsync(
+        string powerShell,
+        string workingDirectory,
+        string scriptPath,
+        params string[] arguments)
+    {
+        return RunPowerShellAsync(
+            powerShell,
+            workingDirectory,
+            scriptPath,
+            TimeSpan.FromSeconds(45),
+            arguments);
+    }
+
     private static async Task<ToolResult> RunPowerShellAsync(
         string powerShell,
         string workingDirectory,
         string scriptPath,
+        TimeSpan timeout,
         params string[] arguments)
     {
         var startInfo = new ProcessStartInfo(powerShell)
@@ -10463,7 +10800,7 @@ public sealed class DspModernizationValidationToolTests
 
         try
         {
-            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(45));
+            await process.WaitForExitAsync().WaitAsync(timeout);
         }
         catch (TimeoutException)
         {
@@ -10587,8 +10924,8 @@ public sealed class DspModernizationValidationToolTests
                 "    failedSampleCount = 0",
                 "    readySampleCount = $Samples",
                 "    hardBlockerSampleCount = 0",
-                "    nr5TuningTraceStatus = 'ready'",
-                "    nr5TuningReadySampleCount = $Samples",
+                "    candidateTuningTraceStatus = 'ready'",
+                "    candidateTuningReadySampleCount = $Samples",
                 "    agcGainDb = @{ movement = 0.0 }",
                 "    audioRmsDbfs = @{ movement = 0.0 }",
                 "    adcHeadroomDb = @{ min = 30.0 }",
@@ -10598,7 +10935,7 @@ public sealed class DspModernizationValidationToolTests
                 "    rxAudioLevelerPeakLimitedSampleCount = 0",
                 "    rxAudioLevelerOutputLimitedSampleCount = 0",
                 "    frontendTopPeakWatch = @{ sampleCount = $Samples; nearPassbandSampleCount = $Samples; nearPassbandThresholdHz = 3000; topNearPassbandSamples = @() }",
-                "    nr5WeakSignalWatch = @{",
+                "    candidateWeakSignalWatch = @{",
                 "        weakInputSampleCount = 1",
                 "        strongInputSampleCount = 1",
                 "        nearStrongInputSampleCount = 0",

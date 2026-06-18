@@ -86,7 +86,7 @@ describe('tx-station-profile activation', () => {
       if (url === '/api/tx/fidelity-policy') {
         return jsonResponse({ profileId: 'dx', targetSpectralDensity: 100 });
       }
-      if (url === '/api/audio-suite/profiles/ESSB%20Broadcast/apply') {
+      if (url === '/api/tx-audio-suite/profiles/ESSB%20Broadcast/apply') {
         return jsonResponse({
           pluginIds: ['com.openhpsdr.zeus.samples.compressor'],
           processingMode: 'vst',
@@ -111,7 +111,7 @@ describe('tx-station-profile activation', () => {
     await ensureTxStationProfileActivated();
 
     const urls = fetchMock.mock.calls.map(([input]) => String(input));
-    expect(urls).toContain('/api/audio-suite/profiles/ESSB%20Broadcast/apply');
+    expect(urls).toContain('/api/tx-audio-suite/profiles/ESSB%20Broadcast/apply');
     expect(urls).toContain('/api/mic-gain');
     expect(urls).toContain('/api/tx/leveler-max-gain');
     expect(urls).toContain('/api/tx/leveling');
@@ -128,10 +128,10 @@ describe('tx-station-profile activation', () => {
       if (url === '/api/tx/fidelity-policy') {
         return jsonResponse({ profileId: 'dx', targetSpectralDensity: 100 });
       }
-      if (url === '/api/audio-suite/processing-mode') {
+      if (url === '/api/tx-audio-suite/processing-mode') {
         return jsonResponse({ mode: 'vst', engineAvailable: true, engineActive: true });
       }
-      if (url === '/api/audio-suite/master-bypass') {
+      if (url === '/api/tx-audio-suite/master-bypass') {
         return jsonResponse({ bypassed: false });
       }
       if (url === '/api/mic-gain') return jsonResponse({ micGainDb: -2 });
@@ -148,7 +148,7 @@ describe('tx-station-profile activation', () => {
 
     const routePuts = fetchMock.mock.calls.filter(
       ([input, init]) =>
-        String(input) === '/api/audio-suite/processing-mode' &&
+        String(input) === '/api/tx-audio-suite/processing-mode' &&
         init?.method === 'PUT',
     );
     expect(routePuts).toHaveLength(1);

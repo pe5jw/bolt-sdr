@@ -225,7 +225,7 @@ public sealed class FrontendDspSceneDiagnosticsService
         }
     }
 
-    public FrontendDspSceneTopPeakDto? TryGetFreshNr5LevelerTopPeak(
+    public FrontendDspSceneTopPeakDto? TryGetFreshLevelerTopPeak(
         int? filterLowHz = null,
         int? filterHighHz = null,
         int passbandMaxAbsOffsetHz = 3_000)
@@ -350,12 +350,9 @@ public sealed class FrontendDspSceneDiagnosticsService
                     WdspNativeLoadable: nrRuntime.WdspNativeLoadable,
                     WdspEmnrPost2Available: nrRuntime.WdspEmnrPost2Available,
                     WdspNr4SbnrAvailable: nrRuntime.WdspNr4SbnrAvailable,
-                    WdspNr5SpnrAvailable: nrRuntime.WdspNr5SpnrAvailable,
                     Nr4Readiness: nrRuntime.Nr4Readiness,
-                    Nr5Readiness: nrRuntime.Nr5Readiness,
                     RequestedNrMode: nrRuntime.RequestedNrMode,
                     EffectiveNrMode: nrRuntime.EffectiveNrMode,
-                    Nr5SpnrDiagnostics: nrRuntime.Nr5SpnrDiagnostics,
                     ExpectedNrMode: alignment.ExpectedNrMode,
                     RuntimeAligned: alignment.RuntimeAligned,
                     RuntimeAlignmentStatus: alignment.Status,
@@ -413,12 +410,9 @@ public sealed class FrontendDspSceneDiagnosticsService
                 WdspNativeLoadable: nrRuntime.WdspNativeLoadable,
                 WdspEmnrPost2Available: nrRuntime.WdspEmnrPost2Available,
                 WdspNr4SbnrAvailable: nrRuntime.WdspNr4SbnrAvailable,
-                WdspNr5SpnrAvailable: nrRuntime.WdspNr5SpnrAvailable,
                 Nr4Readiness: nrRuntime.Nr4Readiness,
-                Nr5Readiness: nrRuntime.Nr5Readiness,
                 RequestedNrMode: nrRuntime.RequestedNrMode,
                 EffectiveNrMode: nrRuntime.EffectiveNrMode,
-                Nr5SpnrDiagnostics: nrRuntime.Nr5SpnrDiagnostics,
                 ExpectedNrMode: runtimeAlignment.ExpectedNrMode,
                 RuntimeAligned: runtimeAlignment.RuntimeAligned,
                 RuntimeAlignmentStatus: runtimeAlignment.Status,
@@ -793,7 +787,6 @@ public sealed class FrontendDspSceneDiagnosticsService
             "NR1" => "Anr",
             "NR2" => "Emnr",
             "NR4" => "Sbnr",
-            "NR5" => "Nr5",
             "LIGHT" => "Off",
             "NOTCH" => "Off",
             _ => null,
@@ -824,7 +817,6 @@ public sealed class FrontendDspSceneDiagnosticsService
             "ANR" => "Anr",
             "EMNR" => "Emnr",
             "SBNR" => "Sbnr",
-            "NR5" => "Nr5",
             _ => null,
         };
     }

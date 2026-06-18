@@ -41,7 +41,7 @@ describe('TxFidelityPanel', () => {
       'fetch',
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
-        if (url === '/api/audio-suite/preview') {
+        if (url === '/api/tx-audio-suite/preview') {
           let enabled = false;
           if (init?.method === 'PUT' && typeof init.body === 'string') {
             enabled = JSON.parse(init.body).enabled === true;
@@ -51,7 +51,7 @@ describe('TxFidelityPanel', () => {
             headers: { 'content-type': 'application/json' },
           });
         }
-        if (url === '/api/audio-suite/profiles') {
+        if (url === '/api/tx-audio-suite/profiles') {
           return new Response(
             JSON.stringify({
               profiles: [
@@ -78,7 +78,7 @@ describe('TxFidelityPanel', () => {
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
-        if (url === '/api/audio-suite/processing-mode') {
+        if (url === '/api/tx-audio-suite/processing-mode') {
           return new Response(
             JSON.stringify({
               mode: 'native',
@@ -88,13 +88,28 @@ describe('TxFidelityPanel', () => {
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
-        if (url === '/api/audio-suite/chain/meters') {
+        if (url === '/api/tx-audio-suite/chain/meters') {
           return new Response(
             JSON.stringify({
               inputPeak: 0.01,
               outputPeak: 0.02,
               inputDb: -54,
               outputDb: -48,
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url === '/api/tx/diag') {
+          return new Response(
+            JSON.stringify({
+              micUplink: { status: 'live' },
+              ingest: { droppedFrames: 0 },
+              protocol2: {
+                queuedPackets: 0,
+                sendFailures: 0,
+                queueWriteFailures: 0,
+              },
+              vstEngine: { active: false, degradedBlocks: 0 },
             }),
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
@@ -132,6 +147,12 @@ describe('TxFidelityPanel', () => {
     });
   });
 
+  function metric(container: HTMLElement, id: string): HTMLElement {
+    const el = container.querySelector<HTMLElement>(`[data-testid="tx-fidelity-metric-${id}"]`);
+    expect(el).not.toBeNull();
+    return el!;
+  }
+
   it('syncs the Preview toggle with Audio Suite preview mode', async () => {
     const { container, unmount } = render(createElement(TxFidelityPanel));
 
@@ -157,10 +178,10 @@ describe('TxFidelityPanel', () => {
     expect(useTxStore.getState().txMonitorEnabled).toBe(true);
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="Preview on"]')?.textContent).toBe('ON');
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
-      '/api/audio-suite/preview',
+      '/api/tx-audio-suite/preview',
       expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({ enabled: true }),
+        body: JSON.stringify({ enabled: true, meterOnly: false }),
       }),
     );
 
@@ -294,7 +315,8 @@ describe('TxFidelityPanel', () => {
     expect(profileButton).not.toBeNull();
     expect(profileButton!.textContent).toContain('DX Punch');
     expect(container.querySelector<HTMLInputElement>('input[aria-label="TX spectral density"]')?.value).toBe('100');
-    expect(container.textContent).toContain('DENS --/100');
+    expect(metric(container, 'dens').textContent).toContain('--');
+    expect(metric(container, 'dens').title).toContain('target 100');
 
     unmount();
   });
@@ -334,7 +356,8 @@ describe('TxFidelityPanel', () => {
     expect(container.textContent).toContain('DX Punch selected / connect to apply');
     expect(container.querySelector<HTMLInputElement>('input[aria-label="TX spectral density"]')?.value).toBe('100');
     expect(container.querySelector<HTMLInputElement>('input[aria-label="TX profile high cut"]')?.value).toBe('2850');
-    expect(container.textContent).toContain('DENS --/100');
+    expect(metric(container, 'dens').textContent).toContain('--');
+    expect(metric(container, 'dens').title).toContain('target 100');
     expect(container.querySelector('[aria-label="TX profile audio route"]')).toBeNull();
     expect(container.querySelector('[aria-label="TX profile audio suite rack"]')).toBeNull();
     expect(
@@ -430,7 +453,7 @@ describe('TxFidelityPanel', () => {
     const fetchUrls = vi
       .mocked(fetch)
       .mock.calls.map(([input]) => String(input));
-    expect(fetchUrls).toContain('/api/audio-suite/profiles/ESSB%20Broadcast/apply');
+    expect(fetchUrls).toContain('/api/tx-audio-suite/profiles/ESSB%20Broadcast/apply');
     expect(fetchUrls).toContain('/api/mic-gain');
     expect(fetchUrls).toContain('/api/tx/leveler-max-gain');
     expect(fetchUrls).toContain('/api/tx/leveling');
@@ -484,12 +507,12 @@ describe('TxFidelityPanel', () => {
     const calls = vi.mocked(fetch).mock.calls;
     const routeCall = calls.find(
       ([input, init]) =>
-        String(input) === '/api/audio-suite/processing-mode' &&
+        String(input) === '/api/tx-audio-suite/processing-mode' &&
         init?.method === 'PUT',
     );
     const bypassCall = calls.find(
       ([input, init]) =>
-        String(input) === '/api/audio-suite/master-bypass' &&
+        String(input) === '/api/tx-audio-suite/master-bypass' &&
         init?.method === 'PUT',
     );
     expect(routeCall?.[1]?.body).toBe(JSON.stringify({ mode: 'vst' }));

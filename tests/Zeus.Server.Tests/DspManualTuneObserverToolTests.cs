@@ -127,7 +127,7 @@ public sealed class DspManualTuneObserverToolTests
             Assert.Equal("manual-tune-to-frontend-suggestion", root.GetProperty("primaryManualTuneActionId").GetString());
             Assert.Equal("tuning-hint", root.GetProperty("primaryManualTuneActionStatus").GetString());
             Assert.Contains("14.365000 MHz", root.GetProperty("primaryManualTuneActionManualAction").GetString() ?? "", StringComparison.Ordinal);
-            Assert.Contains("-RequireNr5CaptureReady", root.GetProperty("primaryManualTuneActionCommandTemplate").GetString() ?? "", StringComparison.Ordinal);
+            Assert.DoesNotContain("-RequireCandidateCaptureReady", root.GetProperty("primaryManualTuneActionCommandTemplate").GetString() ?? "", StringComparison.Ordinal);
             Assert.Contains("-SuggestedVfoStepHz 1000", root.GetProperty("primaryManualTuneActionCommandTemplate").GetString() ?? "", StringComparison.Ordinal);
             var primaryAction = root.GetProperty("primaryManualTuneAction");
             Assert.Equal(14_365_000, primaryAction.GetProperty("suggestedVfoHz").GetInt64());
@@ -407,13 +407,13 @@ public sealed class DspManualTuneObserverToolTests
             Assert.True(capture.GetProperty("nearStrongInputSampleCount").GetInt32() > 0);
             Assert.NotEmpty(capture.GetProperty("topNearStrongInputs").EnumerateArray());
             Assert.Equal(2.5, capture.GetProperty("topNearStrongInputs").EnumerateArray().First().GetProperty("distanceToStrongThresholdDb").GetDouble(), precision: 3);
-            Assert.Equal("ready-for-nr5-live-tuning", capture.GetProperty("nr5TuningTraceStatus").GetString());
+            Assert.Equal("candidate-preflight-ready", capture.GetProperty("candidateTuningTraceStatus").GetString());
             Assert.Equal("ready", capture.GetProperty("captureReadinessStatus").GetString());
             Assert.True(capture.GetProperty("captureReadinessHardGatePass").GetBoolean());
             Assert.True(capture.GetProperty("comparisonStateReady").GetBoolean());
-            Assert.Equal("nr5-state-ready", capture.GetProperty("comparisonStateStatus").GetString());
+            Assert.Equal("not-required", capture.GetProperty("comparisonStateStatus").GetString());
             Assert.Equal("missing-strong-input", capture.GetProperty("mixedWeakStrongTuningStatus").GetString());
-            Assert.Equal("retune-or-extend-dwell-using-frontend-candidates-and-near-strong-rows", capture.GetProperty("mixedWeakStrongTuningAction").GetString());
+            Assert.Equal("inspect-frontend-strong-passband-subthreshold-inputs-before-changing-dsp", capture.GetProperty("mixedWeakStrongTuningAction").GetString());
 
             var bestCandidate = root.GetProperty("bestNearStrongPromotionCandidateCapture");
             Assert.NotEmpty(bestCandidate.GetProperty("topNearStrongInputs").EnumerateArray());
@@ -435,7 +435,7 @@ public sealed class DspManualTuneObserverToolTests
     }
 
     [SkippableFact]
-    public async Task ManualTuneObserverRequireNr5CaptureReadyBlocksOtherwiseQualifiedWindow()
+    public async Task ManualTuneObserverLegacyRequireCandidateCaptureReadyDoesNotBlockQualifiedWindow()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell manual-tune observer smoke runs on Windows.");
 
@@ -443,7 +443,7 @@ public sealed class DspManualTuneObserverToolTests
         Skip.If(powerShell is null, "PowerShell executable was not found.");
 
         var repoRoot = FindRepoRoot();
-        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-manual-tune-observer-nr5-gate-{Guid.NewGuid():N}");
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-manual-tune-observer-candidate-gate-{Guid.NewGuid():N}");
         Directory.CreateDirectory(bundleDir);
 
         try
@@ -472,12 +472,12 @@ public sealed class DspManualTuneObserverToolTests
                     }
                 }),
                 ["/api/dsp/live-diagnostics"] = Json(ManualTuneObserverLiveDiagnostics(
-                    requestedNrMode: "Nr5",
+                    requestedNrMode: "Off",
                     effectiveNrMode: "Off",
-                    readyForNr5Tuning: false))
+                    readyForCandidateTuning: true))
             });
 
-            var reportPath = Path.Combine(bundleDir, "manual-observer-nr5-gate.json");
+            var reportPath = Path.Combine(bundleDir, "manual-observer-candidate-gate.json");
             var run = await RunPowerShellAsync(
                 powerShell,
                 repoRoot,
@@ -490,37 +490,36 @@ public sealed class DspManualTuneObserverToolTests
                 "-StablePolls", "1",
                 "-MinCoherentSnrDb", "6",
                 "-SceneProfilePattern", "voice",
-                "-MaxCaptures", "1",
+                "-MaxCaptures", "0",
                 "-RequireFrontendNearPassband",
-                "-RequireNr5CaptureReady",
+                "-RequireCandidateCaptureReady",
                 "-JsonOnly");
 
             Assert.True(run.ExitCode == 0, run.CombinedOutput);
             using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
             var root = doc.RootElement;
-            Assert.True(root.GetProperty("requireNr5CaptureReady").GetBoolean());
+            Assert.True(root.GetProperty("requireCandidateCaptureReady").GetBoolean());
+            Assert.True(root.GetProperty("legacyRequireCandidateCaptureReadyRequested").GetBoolean());
             Assert.Equal(3, root.GetProperty("baseCaptureQualifiedPollCount").GetInt32());
-            Assert.Equal(0, root.GetProperty("captureQualifiedPollCount").GetInt32());
+            Assert.Equal(3, root.GetProperty("captureQualifiedPollCount").GetInt32());
             Assert.Equal(0, root.GetProperty("captureCount").GetInt32());
-            Assert.Equal(0, root.GetProperty("nr5CaptureReadyPollCount").GetInt32());
-            Assert.Equal(3, root.GetProperty("nr5CaptureBlockedPollCount").GetInt32());
-            Assert.Equal("wait-for-nr5-capture-readiness", root.GetProperty("primaryManualTuneActionId").GetString());
+            Assert.Equal(3, root.GetProperty("candidateCaptureReadyPollCount").GetInt32());
+            Assert.Equal(0, root.GetProperty("candidateCaptureBlockedPollCount").GetInt32());
 
             var poll = root.GetProperty("polls").EnumerateArray().First();
-            Assert.False(poll.GetProperty("nr5CaptureReady").GetBoolean());
-            Assert.Equal("blocked", poll.GetProperty("nr5CaptureReadinessStatus").GetString());
-            var constraints = poll.GetProperty("nr5CaptureReadinessConstraints")
+            Assert.True(poll.GetProperty("candidateCaptureReady").GetBoolean());
+            Assert.Equal("ready", poll.GetProperty("candidateCaptureReadinessStatus").GetString());
+            var constraints = poll.GetProperty("candidateCaptureReadinessConstraints")
                 .EnumerateArray()
                 .Select(item => item.GetString() ?? "")
                 .ToArray();
-            Assert.Contains("effective-nr-mode-not-nr5", constraints);
-            Assert.Contains("nr5-tuning-not-ready", constraints);
+            Assert.Empty(constraints);
 
             var recommendations = root.GetProperty("recommendations")
                 .EnumerateArray()
                 .Select(item => item.GetString() ?? "")
                 .ToArray();
-            Assert.Contains(recommendations, value => value.Contains("NR5 capture readiness was blocked", StringComparison.Ordinal));
+            Assert.DoesNotContain(recommendations, value => value.Contains("Candidate capture readiness was blocked", StringComparison.Ordinal));
         }
         finally
         {
@@ -634,9 +633,9 @@ public sealed class DspManualTuneObserverToolTests
         double audioRmsDbfs = -34.0,
         double outputPeakDbfs = -9.0,
         double agcGainDb = -42.5,
-        string requestedNrMode = "Nr5",
-        string effectiveNrMode = "Nr5",
-        bool readyForNr5Tuning = true) => new
+        string requestedNrMode = "Off",
+        string effectiveNrMode = "Off",
+        bool readyForCandidateTuning = true) => new
     {
         status = "ready-for-live-benchmark",
         qualityTone = "ready",
@@ -644,8 +643,9 @@ public sealed class DspManualTuneObserverToolTests
         readyForLiveBenchmark = true,
         requestedNrMode,
         effectiveNrMode,
-        readyForNr5Tuning,
-        nr5TuningStatus = readyForNr5Tuning ? "ready-for-nr5-live-tuning" : "nr5-tuning-preflight-required",
+        readyForCandidateTuning,
+        candidateTuningStatus = readyForCandidateTuning ? "candidate-preflight-ready" : "candidate-tuning-preflight-required",
+        candidateTuningConstraints = readyForCandidateTuning ? Array.Empty<string>() : new[] { "candidate-preflight-blocked" },
         wdspActive = true,
         frontendSceneAvailable = true,
         frontendSceneStatus = "fresh",
@@ -688,12 +688,12 @@ public sealed class DspManualTuneObserverToolTests
             rxAudioLevelerOutputLimitReductionDb = 0.0,
             rxAudioLevelerOutputLimitSampleCount = 0,
             rxAudioLevelerPauseHoldBlocks = 0,
-            rxAudioLevelerNr5SpeechHoldBlocks = 0,
+            rxAudioLevelerCandidateSpeechHoldBlocks = 0,
             rxAudioLevelerBoostSlewLimited = false,
             rxAudioLevelerPeakLimited = false,
             rxAudioLevelerOutputLimited = false
         },
-        nr5SpnrDiagnostics = new
+        candidateDspDiagnostics = new
         {
             schemaVersion = 9,
             run = true,

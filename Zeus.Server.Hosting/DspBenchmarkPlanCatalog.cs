@@ -30,7 +30,7 @@ public static class DspBenchmarkPlanCatalog
                 "off-baseline",
                 "thetis-parity",
                 "current-zeus",
-                "candidate-external-engine-opt-in",
+                "candidate-under-test",
             ],
             GlobalAcceptanceGates:
             [
@@ -68,14 +68,7 @@ public static class DspBenchmarkPlanCatalog
             scenarios.Add("noise-only-gating");
         }
 
-        if (ModeEquals(condition.ExpectedNrMode, "Nr5") || ModeEquals(condition.EffectiveNrMode, "Nr5"))
-        {
-            scenarios.Add("weak-cw-carrier");
-            scenarios.Add("fading-carrier");
-            scenarios.Add("strong-adjacent");
-            scenarios.Add("agc-level-step");
-        }
-        else if (ModeEquals(condition.ExpectedNrMode, "Emnr") || ModeEquals(condition.EffectiveNrMode, "Emnr")
+        if (ModeEquals(condition.ExpectedNrMode, "Emnr") || ModeEquals(condition.EffectiveNrMode, "Emnr")
             || ModeEquals(condition.ExpectedNrMode, "Sbnr") || ModeEquals(condition.EffectiveNrMode, "Sbnr"))
         {
             scenarios.Add("ssb-like-speech");
@@ -96,8 +89,7 @@ public static class DspBenchmarkPlanCatalog
             scenarios.Add("squelch-transition");
         }
 
-        if (condition.Nr5SpnrDiagnostics is { SignalConfidence: < 0.20 }
-            || condition.CoherentSubthresholdSignal == true)
+        if (condition.CoherentSubthresholdSignal == true)
             scenarios.Add("weak-cw-carrier");
 
         if (scenarios.Count == 0)
@@ -133,7 +125,7 @@ public static class DspBenchmarkPlanCatalog
             phase: "offline-and-g2-live",
             signalPath: "RX IQ",
             fixtureStatus: "offline-fixture-ready",
-            appliesTo: ["NR2", "NR4", "NR5/SPNR", "external speech bypass"],
+            appliesTo: ["NR2", "NR4", "external speech bypass"],
             metrics: ["coherent tone power", "wanted SNR", "signal SINAD", "spectral preservation", "output RMS", "latency", "processing elapsed ms", "throughput ratio"],
             gates:
             [
@@ -148,7 +140,7 @@ public static class DspBenchmarkPlanCatalog
             phase: "offline-and-g2-live",
             signalPath: "RX audio",
             fixtureStatus: "offline-fixture-ready",
-            appliesTo: ["NR2", "NR4", "NR5/SPNR", "RNNoise", "DeepFilterNet", "SpeexDSP", "WebRTC APM"],
+            appliesTo: ["NR2", "NR4", "RNNoise", "DeepFilterNet", "SpeexDSP", "WebRTC APM"],
             metrics: ["speech-band preservation", "noise reduction", "artifact score", "RMS movement", "CPU", "latency", "processing elapsed ms", "throughput ratio"],
             gates:
             [
@@ -163,7 +155,7 @@ public static class DspBenchmarkPlanCatalog
             phase: "offline-and-g2-live",
             signalPath: "RX IQ",
             fixtureStatus: "offline-fixture-ready",
-            appliesTo: ["AGC", "NR2", "NR5/SPNR"],
+            appliesTo: ["AGC", "NR2", "NR4"],
             metrics: ["windowed RMS movement", "coherent tone continuity", "signal SINAD", "AGC gain movement", "latency", "processing elapsed ms", "throughput ratio"],
             gates:
             [
@@ -177,7 +169,7 @@ public static class DspBenchmarkPlanCatalog
             phase: "offline-and-g2-live",
             signalPath: "RX IQ",
             fixtureStatus: "offline-fixture-ready",
-            appliesTo: ["NB1", "NB2", "SNB", "NR5/SPNR"],
+            appliesTo: ["NB1", "NB2", "SNB", "NR2", "NR4"],
             metrics: ["impulse suppression", "wanted SNR", "signal SINAD", "post-blanker ringing", "artifact score", "processing elapsed ms", "throughput ratio"],
             gates:
             [
@@ -191,7 +183,7 @@ public static class DspBenchmarkPlanCatalog
             phase: "offline-and-g2-live",
             signalPath: "RX IQ",
             fixtureStatus: "offline-fixture-ready",
-            appliesTo: ["filters", "AGC", "NR2", "NR4", "NR5/SPNR"],
+            appliesTo: ["filters", "AGC", "NR2", "NR4"],
             metrics: ["wanted/adjacent ratio", "signal SINAD", "filter leakage", "AGC movement", "spectral preservation", "processing elapsed ms", "throughput ratio"],
             gates:
             [
@@ -219,7 +211,7 @@ public static class DspBenchmarkPlanCatalog
             phase: "offline-and-g2-live",
             signalPath: "RX IQ/RX audio",
             fixtureStatus: "offline-fixture-ready",
-            appliesTo: ["WDSP AGC", "Auto AGC", "NR5/SPNR AGC", "external post-demod engines"],
+            appliesTo: ["WDSP AGC", "Auto AGC", "external post-demod engines"],
             metrics: ["AGC gain movement", "windowed RMS movement", "signal SINAD", "settling time", "overshoot", "artifact score", "processing elapsed ms", "throughput ratio"],
             gates:
             [
@@ -372,12 +364,11 @@ public static class DspBenchmarkPlanCatalog
             "off-baseline",
             "thetis-parity",
             "current-zeus",
-            "candidate-under-test",
         };
 
         if (IsRxSignalPath(signalPath))
         {
-            comparisons.Add("candidate-external-engine-opt-in");
+            comparisons.Add("candidate-under-test");
         }
 
         return comparisons.ToArray();
@@ -504,41 +495,41 @@ public static class DspBenchmarkPlanCatalog
         TraceMetric("failedSampleCount", "Failed samples", "lower", "0.0", "samples", "hard-gate",
             "Endpoint failures make trace evidence incomplete."),
         TraceMetric("hardBlockerSampleCount", "Hard blocker samples", "lower", "0.0", "samples", "hard-gate",
-            "Hard live diagnostics blockers must not increase under candidate DSP settings."),
+            "Hard live diagnostics blockers must not increase under comparison-under-test settings."),
         TraceMetric("readySamplePct", "Ready sample percent", "higher", "1.0", "percent", "readiness",
-            "Candidate traces should not reduce readiness for G2 live benchmark capture."),
+            "Comparison-under-test traces should not reduce readiness for G2 live benchmark capture."),
         TraceMetric("readinessScoreAverage", "Average readiness score", "higher", "1.0", "score", "readiness",
             "Readiness score combines WDSP lifecycle, runtime alignment, live scene, and runtime evidence constraints."),
         TraceMetric("agcGainMovementDb", "AGC gain movement dB", "lower", "1.0", "dB", "pumping",
             "Lower movement reduces the risk of audible AGC pumping during NR/AGC tuning."),
-        TraceMetric("nr5WeakDropoutSampleCount", "NR5 weak-input dropout samples", "lower", "0.0", "samples", "weak-signal",
-            "Candidate NR5 live traces must not increase weak-input dropouts against the baseline window."),
-        TraceMetric("nr5WeakRecoveryPct", "NR5 weak-input recovery percent", "higher", "5.0", "percent", "weak-signal",
+        TraceMetric("weakDropoutSampleCount", "Weak-input dropout samples", "lower", "0.0", "samples", "weak-signal",
+            "Comparison-under-test live traces must not increase weak-input dropouts against the baseline window."),
+        TraceMetric("weakRecoveryPct", "Weak-input recovery percent", "higher", "5.0", "percent", "weak-signal",
             "Weak-signal preservation should improve or stay within 5 percentage points of the baseline recovery rate."),
-        TraceMetric("nr5HotMakeupSampleCount", "NR5 hot makeup samples", "lower", "0.0", "samples", "pumping",
-            "Candidate NR5 live traces must not add samples with makeup gain above the watcher hot-makeup threshold."),
-        TraceMetric("nr5LowEvidenceLiftSampleCount", "NR5 low-evidence lifted samples", "lower", "0.0", "samples", "noise-gate",
-            "Candidate NR5 live traces must not increase low-confidence weak-input samples that are lifted into audible output."),
-        TraceMetric("nr5LowEvidenceLiftedPct", "NR5 low-evidence lifted percent", "lower", "5.0", "percent", "artifact-control",
+        TraceMetric("hotMakeupSampleCount", "Hot makeup samples", "lower", "0.0", "samples", "pumping",
+            "Comparison-under-test live traces must not add samples with makeup gain above the watcher hot-makeup threshold."),
+        TraceMetric("lowEvidenceLiftSampleCount", "Low-evidence lifted samples", "lower", "0.0", "samples", "noise-gate",
+            "Comparison-under-test live traces must not increase low-confidence weak-input samples that are lifted into audible output."),
+        TraceMetric("lowEvidenceLiftedPct", "Low-evidence lifted percent", "lower", "5.0", "percent", "artifact-control",
             "Low-evidence lift must stay bounded so speech-artifact review rows cannot hide inside weak-signal recovery gains."),
-        TraceMetric("nr5AudioAlignmentMismatchPct", "NR5 audio-alignment mismatch percent", "lower", "10.0", "percent", "artifact-control",
-            "NR5 artifact-control evidence is unsafe when candidate output rows diverge from the aligned final-audio window."),
-        TraceMetric("nr5ArtifactRiskScore", "NR5 artifact-risk score", "lower", "0.0", "score", "artifact-control",
-            "Candidate traces must not introduce the matrix artifact-review score from low-evidence lift, alignment mismatch, or unsupported texture fill."),
-        TraceMetric("nr5OutputMovementDb", "NR5 output movement dB", "lower", "1.0", "dB", "pumping",
-            "Candidate NR5 output level should not swing more than the baseline trace; larger movement risks audible level pumping."),
-        TraceMetric("nr5MakeupMovementDb", "NR5 makeup movement dB", "lower", "1.0", "dB", "pumping",
-            "Large makeup-gain movement is a direct review signal for NR5 output-level watch traces."),
-        TraceMetric("nr5MakeupMaxDb", "NR5 maximum makeup dB", "lower", "1.0", "dB", "pumping",
-            "Candidate NR5 tuning should not require a higher maximum makeup boost to recover weak content."),
-        TraceMetric("nr5RecoveryDriveMovement", "NR5 recovery-drive movement", "lower", "0.1", "score", "pumping",
-            "Recovery-drive movement is the fast control surface behind many NR5 output-level watch traces."),
-        TraceMetric("nr5TextureFillAverage", "NR5 texture-fill average", "informational", "0.01", "score", "weak-signal",
+        TraceMetric("audioAlignmentMismatchPct", "Audio-alignment mismatch percent", "lower", "10.0", "percent", "artifact-control",
+            "Artifact-control evidence is unsafe when comparison output rows diverge from the aligned final-audio window."),
+        TraceMetric("artifactRiskScore", "Artifact-risk score", "lower", "0.0", "score", "artifact-control",
+            "Comparison-under-test traces must not introduce the matrix artifact-review score from low-evidence lift, alignment mismatch, or unsupported texture fill."),
+        TraceMetric("candidateOutputMovementDb", "Comparison output movement dB", "lower", "1.0", "dB", "pumping",
+            "Comparison output level should not swing more than the baseline trace; larger movement risks audible level pumping."),
+        TraceMetric("makeupMovementDb", "Makeup movement dB", "lower", "1.0", "dB", "pumping",
+            "Large makeup-gain movement is a direct review signal for output-level watch traces."),
+        TraceMetric("makeupMaxDb", "Maximum makeup dB", "lower", "1.0", "dB", "pumping",
+            "Comparison-under-test tuning should not require a higher maximum makeup boost to recover weak content."),
+        TraceMetric("recoveryDriveMovement", "Recovery-drive movement", "lower", "0.1", "score", "pumping",
+            "Recovery-drive movement is the fast control surface behind many output-level watch traces."),
+        TraceMetric("textureFillAverage", "Texture-fill average", "informational", "0.01", "score", "weak-signal",
             "Texture fill helps distinguish weak-signal hole-fill from persistent makeup; direction is scenario-dependent."),
-        TraceMetric("nr5PeakReductionMaxDb", "NR5 maximum peak reduction dB", "lower", "1.0", "dB", "clipping",
-            "Higher NR5 peak-shaper pressure means the candidate is creating or passing larger crests before final audio."),
-        TraceMetric("nr5OutputPeakMaxDbfs", "NR5 maximum output peak dBFS", "lower", "1.0", "dBFS", "clipping",
-            "NR5 output peaks should not move closer to clipping before downstream audio processing."),
+        TraceMetric("peakReductionMaxDb", "Maximum peak reduction dB", "lower", "1.0", "dB", "clipping",
+            "Higher peak-shaper pressure means the comparison under test is creating or passing larger crests before final audio."),
+        TraceMetric("candidateOutputPeakMaxDbfs", "Maximum comparison output peak dBFS", "lower", "1.0", "dBFS", "clipping",
+            "Comparison output peaks should not move closer to clipping before downstream audio processing."),
         TraceMetric("audioRmsMovementDb", "Audio RMS movement dB", "lower", "1.0", "dB", "pumping",
             "Large final-audio RMS swings need fixture/audio review before tuning is accepted."),
         TraceMetric("audioPeakMaxDbfs", "Maximum audio peak dBFS", "lower", "1.0", "dBFS", "clipping",
@@ -546,7 +537,7 @@ public static class DspBenchmarkPlanCatalog
         TraceMetric("rxAudioLevelerOutputRmsMovementDb", "RX audio leveler output RMS movement dB", "lower", "1.0", "dB", "pumping",
             "The final RX leveler should reduce loudness movement without adding audible pumping."),
         TraceMetric("rxAudioLevelerAppliedGainMovementDb", "RX audio leveler applied gain movement dB", "lower", "1.0", "dB", "pumping",
-            "Large final leveler gain swings indicate downstream loudness pumping even when NR5 output is stable."),
+            "Large final leveler gain swings indicate downstream loudness pumping even when candidate output is stable."),
         TraceMetric("rxAudioLevelerConstrainedSampleCount", "RX audio leveler constrained samples", "lower", "0.0", "samples", "pumping",
             "Any increase in constrained final-leveler samples means loudness normalization is still fighting slew or peak limits."),
         TraceMetric("rxAudioLevelerConstrainedPct", "RX audio leveler constrained percent", "lower", "1.0", "percent", "pumping",

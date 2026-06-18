@@ -44,6 +44,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useLoggerStore } from '../../state/logger-store';
+import type { LogEntry } from '../../api/log';
 
 // QSO timestamps are stored / exported / uploaded to QRZ in UTC throughout
 // the server stack (Zeus.Server.Hosting/LogService.cs writes DateTime.UtcNow
@@ -74,6 +75,36 @@ export function formatQsoDateUtc(isoString: string): string {
     day: 'numeric',
     timeZone: 'UTC',
   });
+}
+
+function compactList(parts: Array<string | null | undefined>): string {
+  return parts.filter((p): p is string => !!p).join(' · ');
+}
+
+function logLocation(entry: LogEntry): string {
+  return compactList([entry.grid, entry.state, entry.country]) || '—';
+}
+
+function logMeta(entry: LogEntry): string {
+  return compactList([
+    entry.band,
+    logLocation(entry) !== '—' ? logLocation(entry) : null,
+    entry.comment,
+  ]) || '—';
+}
+
+function logRowTitle(entry: LogEntry): string {
+  return compactList([
+    `${entry.callsign} ${formatQsoDateUtc(entry.qsoDateTimeUtc)} ${formatQsoTimeUtc(entry.qsoDateTimeUtc)}Z`,
+    `${entry.frequencyMhz.toFixed(3)} MHz`,
+    entry.band,
+    entry.mode,
+    `RST ${entry.rstSent}/${entry.rstRcvd}`,
+    entry.name,
+    logLocation(entry) !== '—' ? logLocation(entry) : null,
+    entry.comment,
+    entry.qrzLogId ? `QRZ ${entry.qrzLogId}` : null,
+  ]);
 }
 
 export function LogbookLive() {
@@ -148,10 +179,10 @@ export function LogbookLive() {
         <span title="QSO date in UTC">Date·UTC</span>
         <span title="QSO time in UTC">Time·UTC</span>
         <span>Call</span>
-        <span>Freq</span>
+        <span>Freq·Band</span>
         <span>Mode</span>
         <span>RST</span>
-        <span>Name</span>
+        <span>Name · QTH · Notes</span>
       </div>
       <div className="log-rows">
         {entries.map((entry) => (
@@ -160,6 +191,7 @@ export function LogbookLive() {
             type="button"
             className={`log-row mono ${selectedIds.has(entry.id) ? 'selected' : ''}`}
             onClick={() => toggleSelected(entry.id)}
+            title={logRowTitle(entry)}
           >
             <span>
               <input
@@ -177,18 +209,25 @@ export function LogbookLive() {
               {formatQsoTimeUtc(entry.qsoDateTimeUtc)}
             </span>
             <span className="t-call">{entry.callsign}</span>
-            <span>{entry.frequencyMhz.toFixed(3)}</span>
+            <span className="t-freq log-cell-stack">
+              <span>{entry.frequencyMhz.toFixed(3)}</span>
+              <span className="log-sub">{entry.band || '—'}</span>
+            </span>
             <span className="t-mode">{entry.mode}</span>
-            <span>{entry.rstSent}/{entry.rstRcvd}</span>
-            <span className="t-name" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {entry.name ?? '—'}
-              </span>
-              {entry.qrzLogId && (
-                <span style={{ color: 'var(--accent)', fontSize: '0.7em', flexShrink: 0 }}>
-                  ✓ QRZ
+            <span className="log-cell-stack">
+              <span>{entry.rstSent}/{entry.rstRcvd}</span>
+              <span className="log-sub">{entry.grid || '—'}</span>
+            </span>
+            <span className="t-name log-cell-stack">
+              <span className="log-name-line">
+                <span className="log-name-text">
+                  {entry.name ?? '—'}
                 </span>
-              )}
+                {entry.qrzLogId && (
+                  <span className="log-sync-pill">✓ QRZ</span>
+                )}
+              </span>
+              <span className="log-meta-line">{logMeta(entry)}</span>
             </span>
           </button>
         ))}

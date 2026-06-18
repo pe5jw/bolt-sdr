@@ -13,7 +13,7 @@ param(
 
     [switch]$RequireFrontendNearPassband,
 
-    [switch]$RequireNr5CaptureReady,
+    [switch]$RequireCandidateCaptureReady,
 
     [int]$FrontendNearPassbandThresholdHz = 3000,
 
@@ -57,6 +57,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# Keep the legacy field name on the wire, but use it for current comparison
+# preflight so existing reports remain readable.
+$legacyRequireCandidateCaptureReadyRequested = [bool]$RequireCandidateCaptureReady
 
 function Normalize-BaseUrl {
     param([string]$Url)
@@ -416,7 +420,6 @@ function New-ManualTuneObserverCommandTemplate {
     $parts.Add("-ScenarioId `"$ScenarioId`"") | Out-Null
     $parts.Add("-ComparisonId `"$ComparisonId`"") | Out-Null
     $parts.Add("-RequireFrontendNearPassband") | Out-Null
-    $parts.Add("-RequireNr5CaptureReady") | Out-Null
     $parts.Add("-SuggestedVfoStepHz $SuggestedVfoStepHz") | Out-Null
     $parts.Add("-MaxCapturesPerVfo $MaxPerVfo") | Out-Null
     $parts.Add("-CaptureSamples $Samples") | Out-Null
@@ -634,7 +637,8 @@ if ($PlanOnly) {
         minCoherentSnrDb = $MinCoherentSnrDb
         sceneProfilePattern = $SceneProfilePattern
         requireFrontendNearPassband = [bool]$RequireFrontendNearPassband
-        requireNr5CaptureReady = [bool]$RequireNr5CaptureReady
+        requireCandidateCaptureReady = [bool]$RequireCandidateCaptureReady
+        legacyRequireCandidateCaptureReadyRequested = $legacyRequireCandidateCaptureReadyRequested
         frontendNearPassbandThresholdHz = $FrontendNearPassbandThresholdHz
         frontendOffsetMismatchToleranceHz = $FrontendOffsetMismatchToleranceHz
         suggestedVfoStepHz = $SuggestedVfoStepHz
@@ -664,16 +668,16 @@ if ($PlanOnly) {
                 "This tool is for operator/manual tuning; it never posts VFO, LO, TX, or DSP settings.",
                 "It captures a watch-dsp-live-diagnostics window only after the current VFO is stable and the scene looks active.",
                 "Use -RequireFrontendNearPassband for acceptance-oriented runs so off-passband frontend peaks do not consume capture slots; strict runs use the signed RX filter window from /api/state when available.",
-                "Use -RequireNr5CaptureReady for NR5/SPNR acceptance-oriented runs so child captures are not spent while requested/effective NR mode or diagnostics are not ready.",
+                "Comparison capture readiness is based on stable manual tuning, passband evidence, runtime freshness, and benchmark state.",
                 "Operator tune suggestions are snapped to -SuggestedVfoStepHz; exact FFT-bin-derived targets remain in exactSuggested* fields for diagnostics.",
                 "Traces captured while the operator continues tuning are scouting evidence, not final acceptance proof."
             )
         }
         example = if ([string]::IsNullOrWhiteSpace($bundlePath)) {
-            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -PollCount 60 -StablePolls 3 -MaxCaptures 4 -MaxCapturesPerVfo 2 -RequireFrontendNearPassband -RequireNr5CaptureReady -SuggestedVfoStepHz $SuggestedVfoStepHz -AllowStaleSceneCapture"
+            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -PollCount 60 -StablePolls 3 -MaxCaptures 4 -MaxCapturesPerVfo 2 -RequireFrontendNearPassband -SuggestedVfoStepHz $SuggestedVfoStepHz -AllowStaleSceneCapture"
         }
         else {
-            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -BundleDir `"$bundlePath`" -OutputRoot `"$bundlePath\artifacts\manual-tune-observer`" -ReportPath `"$bundlePath\artifacts\manual-tune-observer-report.json`" -PollCount 60 -StablePolls 3 -MaxCaptures 4 -MaxCapturesPerVfo 2 -RequireFrontendNearPassband -RequireNr5CaptureReady -SuggestedVfoStepHz $SuggestedVfoStepHz -AllowStaleSceneCapture"
+            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -BundleDir `"$bundlePath`" -OutputRoot `"$bundlePath\artifacts\manual-tune-observer`" -ReportPath `"$bundlePath\artifacts\manual-tune-observer-report.json`" -PollCount 60 -StablePolls 3 -MaxCaptures 4 -MaxCapturesPerVfo 2 -RequireFrontendNearPassband -SuggestedVfoStepHz $SuggestedVfoStepHz -AllowStaleSceneCapture"
         }
     } | ConvertTo-Json -Depth 16
     exit 0
@@ -837,49 +841,35 @@ try {
             $false
         }
         $runtime = Get-JsonValue $live "runtimeEvidence"
-        $nr5 = Get-JsonValue $live "nr5SpnrDiagnostics"
+        $candidate = Get-JsonValue $live "candidateDspDiagnostics"
         $requestedNrMode = [string](Get-JsonValue $live "requestedNrMode")
         $effectiveNrMode = [string](Get-JsonValue $live "effectiveNrMode")
-        $readyForNr5Tuning = Test-Truthy (Get-JsonValue $live "readyForNr5Tuning")
+        $readyForCandidateTuning = Test-Truthy (Get-JsonValue $live "readyForCandidateTuning")
         $runtimeFresh = (
             [string]::Equals([string](Get-JsonValue $runtime "status"), "fresh", [StringComparison]::OrdinalIgnoreCase) -or
             [string]::Equals([string](Get-JsonValue $runtime "audioStatus"), "fresh", [StringComparison]::OrdinalIgnoreCase) -or
             (Test-Truthy (Get-JsonValue $runtime "audioFresh")))
-        $nr5DiagnosticsPresent = ($null -ne $nr5)
-        $nr5DiagnosticRun = Test-Truthy (Get-JsonValue $nr5 "run")
-        $nr5CaptureReadinessConstraints = New-Object System.Collections.Generic.List[string]
-        if (-not [string]::Equals($requestedNrMode, "Nr5", [StringComparison]::OrdinalIgnoreCase)) {
-            $nr5CaptureReadinessConstraints.Add("requested-nr-mode-not-nr5") | Out-Null
+        $candidateDiagnosticsPresent = ($null -ne $candidate)
+        $candidateDiagnosticRun = Test-Truthy (Get-JsonValue $candidate "run")
+        $candidateCaptureReadinessConstraints = New-Object System.Collections.Generic.List[string]
+        if (-not [string]::Equals($requestedNrMode, "Off", [StringComparison]::OrdinalIgnoreCase)) {
+            $candidateCaptureReadinessConstraints.Add("requested-nr-mode-not-candidate") | Out-Null
         }
-        if (-not [string]::Equals($effectiveNrMode, "Nr5", [StringComparison]::OrdinalIgnoreCase)) {
-            $nr5CaptureReadinessConstraints.Add("effective-nr-mode-not-nr5") | Out-Null
+        if (-not [string]::Equals($effectiveNrMode, "Off", [StringComparison]::OrdinalIgnoreCase)) {
+            $candidateCaptureReadinessConstraints.Add("effective-nr-mode-not-candidate") | Out-Null
         }
-        if (-not $readyForNr5Tuning) {
-            $nr5CaptureReadinessConstraints.Add("nr5-tuning-not-ready") | Out-Null
-        }
-        if (-not $nr5DiagnosticsPresent) {
-            $nr5CaptureReadinessConstraints.Add("nr5-diagnostics-missing") | Out-Null
-        }
-        elseif (-not $nr5DiagnosticRun) {
-            $nr5CaptureReadinessConstraints.Add("nr5-diagnostics-not-running") | Out-Null
+        if ($candidateDiagnosticsPresent -and -not $candidateDiagnosticRun) {
+            $candidateCaptureReadinessConstraints.Add("candidate-diagnostics-not-running") | Out-Null
         }
         if (-not $runtimeFresh) {
-            $nr5CaptureReadinessConstraints.Add("runtime-audio-not-fresh") | Out-Null
+            $candidateCaptureReadinessConstraints.Add("runtime-audio-not-fresh") | Out-Null
         }
-        $nr5CaptureReady = ($nr5CaptureReadinessConstraints.Count -eq 0)
-        $nr5CaptureReadinessStatus = if ($nr5CaptureReady) {
-            "ready"
-        }
-        elseif ($RequireNr5CaptureReady) {
-            "blocked"
-        }
-        else {
-            "advisory"
-        }
+        $candidateCaptureReady = ($candidateCaptureReadinessConstraints.Count -eq 0)
+        $candidateCaptureReadinessStatus = if ($candidateCaptureReady) { "ready" } else { "blocked" }
 
         $capturePassbandQualified = (-not [bool]$RequireFrontendNearPassband) -or $frontendPassbandEvidenceQualified
         $baseCaptureQualified = ($stableQualified -and ($sceneFresh -or $staleSceneCaptureAllowed) -and $snrQualified -and $profileMatches -and $capturePassbandQualified)
-        $captureQualified = ($baseCaptureQualified -and ((-not [bool]$RequireNr5CaptureReady) -or $nr5CaptureReady))
+        $captureQualified = $baseCaptureQualified -and ((-not [bool]$RequireCandidateCaptureReady) -or $candidateCaptureReady)
 
         $pollRecord = [ordered]@{
             poll = $poll
@@ -935,11 +925,11 @@ try {
             liveStatus = [string](Get-JsonValue $live "status")
             requestedNrMode = $requestedNrMode
             effectiveNrMode = $effectiveNrMode
-            readyForNr5Tuning = $readyForNr5Tuning
-            requireNr5CaptureReady = [bool]$RequireNr5CaptureReady
-            nr5CaptureReady = $nr5CaptureReady
-            nr5CaptureReadinessStatus = $nr5CaptureReadinessStatus
-            nr5CaptureReadinessConstraints = @($nr5CaptureReadinessConstraints.ToArray())
+            readyForCandidateTuning = $readyForCandidateTuning
+            requireCandidateCaptureReady = [bool]$RequireCandidateCaptureReady
+            candidateCaptureReady = $candidateCaptureReady
+            candidateCaptureReadinessStatus = $candidateCaptureReadinessStatus
+            candidateCaptureReadinessConstraints = @($candidateCaptureReadinessConstraints.ToArray())
             audioStatus = [string](Get-JsonValue $runtime "audioStatus")
             audioRmsDbfs = Get-NullableDoubleValue (Get-JsonValue $runtime "audioRmsDbfs")
             audioPeakDbfs = Get-NullableDoubleValue (Get-JsonValue $runtime "audioPeakDbfs")
@@ -948,18 +938,18 @@ try {
             rxAudioLevelerDesiredGainDb = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerDesiredGainDb")
             rxAudioLevelerAppliedGainDb = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerAppliedGainDb")
             rxAudioLevelerGainDeltaDb = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerGainDeltaDb")
-            rxAudioLevelerNr5SpeechHoldBlocks = Get-IntValue (Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHoldBlocks")
+            rxAudioLevelerCandidateSpeechHoldBlocks = Get-IntValue (Get-JsonValue $runtime "rxAudioLevelerCandidateSpeechHoldBlocks")
             rxAudioLevelerBoostSlewLimited = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerBoostSlewLimited")
             rxAudioLevelerOutputLimited = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerOutputLimited")
-            nr5SignalConfidence = Get-NullableDoubleValue (Get-JsonValue $nr5 "signalConfidence")
-            nr5SignalProbability = Get-NullableDoubleValue (Get-JsonValue $nr5 "signalProbability")
-            nr5AgcGate = Get-NullableDoubleValue (Get-JsonValue $nr5 "agcGate")
-            nr5RecoveryDrive = Get-NullableDoubleValue (Get-JsonValue $nr5 "recoveryDrive")
-            nr5WeakSignalMemory = Get-NullableDoubleValue (Get-JsonValue $nr5 "weakSignalMemory")
-            nr5MaskSmoothing = Get-NullableDoubleValue (Get-JsonValue $nr5 "maskSmoothing")
-            nr5InputDbfs = Get-NullableDoubleValue (Get-JsonValue $nr5 "inputDbfs")
-            nr5OutputDbfs = Get-NullableDoubleValue (Get-JsonValue $nr5 "outputDbfs")
-            nr5OutputPeakDbfs = Get-NullableDoubleValue (Get-JsonValue $nr5 "outputPeakDbfs")
+            candidateSignalConfidence = Get-NullableDoubleValue (Get-JsonValue $candidate "signalConfidence")
+            candidateSignalProbability = Get-NullableDoubleValue (Get-JsonValue $candidate "signalProbability")
+            candidateAgcGate = Get-NullableDoubleValue (Get-JsonValue $candidate "agcGate")
+            candidateRecoveryDrive = Get-NullableDoubleValue (Get-JsonValue $candidate "recoveryDrive")
+            candidateWeakSignalMemory = Get-NullableDoubleValue (Get-JsonValue $candidate "weakSignalMemory")
+            candidateMaskSmoothing = Get-NullableDoubleValue (Get-JsonValue $candidate "maskSmoothing")
+            candidateInputDbfs = Get-NullableDoubleValue (Get-JsonValue $candidate "inputDbfs")
+            candidateOutputDbfs = Get-NullableDoubleValue (Get-JsonValue $candidate "outputDbfs")
+            candidateOutputPeakDbfs = Get-NullableDoubleValue (Get-JsonValue $candidate "outputPeakDbfs")
             staleSceneCaptureAllowed = $staleSceneCaptureAllowed
             baseCaptureQualified = $baseCaptureQualified
             captureQualified = $captureQualified
@@ -969,10 +959,10 @@ try {
         if (-not $JsonOnly) {
             $pollVfoText = Format-MhzText -Hz $vfo -Mhz $null
             $passbandText = if ($frontendPassbandEvidenceQualified) { "in-filter" } elseif ($frontendNearPassbandQualified) { "near" } else { "off" }
-            $nr5Text = if ($nr5CaptureReady) { "ready" } elseif ($nr5CaptureReadinessConstraints.Count -gt 0) { ($nr5CaptureReadinessConstraints.ToArray() -join ",") } else { $nr5CaptureReadinessStatus }
-            $captureText = if ($captureQualified) { "capture" } elseif ($baseCaptureQualified) { "wait-nr5" } else { "hold/scan" }
-            Write-Host ("Poll {0}/{1}: vfo={2}, stable={3}, snr={4}, profile={5}, passband={6}, nr5={7}, action={8}" -f `
-                    $poll, $PollCount, $pollVfoText, $stableCount, $coherentSnr, $profile, $passbandText, $nr5Text, $captureText)
+            $candidateText = if ($candidateCaptureReady) { "ready" } elseif ($candidateCaptureReadinessConstraints.Count -gt 0) { ($candidateCaptureReadinessConstraints.ToArray() -join ",") } else { $candidateCaptureReadinessStatus }
+            $captureText = if ($captureQualified) { "capture" } elseif ($baseCaptureQualified) { "capture-preflight" } else { "hold/scan" }
+            Write-Host ("Poll {0}/{1}: vfo={2}, stable={3}, snr={4}, profile={5}, passband={6}, candidate={7}, action={8}" -f `
+                    $poll, $PollCount, $pollVfoText, $stableCount, $coherentSnr, $profile, $passbandText, $candidateText, $captureText)
         }
 
         if ($captureQualified -and $captures.Count -lt $MaxCaptures) {
@@ -1015,7 +1005,7 @@ try {
                     -SkipCertificate:$SkipCertificateCheck
 
                 $watchReport = $watch.report
-                $weak = Get-JsonValue $watchReport "nr5WeakSignalWatch"
+                $weak = Get-JsonValue $watchReport "candidateWeakSignalWatch"
                 $agc = Get-JsonValue $watchReport "agcStabilityWatch"
                 $captureReadiness = Get-JsonValue $watchReport "captureReadinessWatch"
                 $comparisonState = Get-JsonValue $watchReport "comparisonStateReadiness"
@@ -1084,11 +1074,11 @@ try {
                         liveStatus = [string](Get-JsonValue $live "status")
                         requestedNrMode = $requestedNrMode
                         effectiveNrMode = $effectiveNrMode
-                        readyForNr5Tuning = $readyForNr5Tuning
-                        requireNr5CaptureReady = [bool]$RequireNr5CaptureReady
-                        nr5CaptureReady = $nr5CaptureReady
-                        nr5CaptureReadinessStatus = $nr5CaptureReadinessStatus
-                        nr5CaptureReadinessConstraints = @($nr5CaptureReadinessConstraints.ToArray())
+                        readyForCandidateTuning = $readyForCandidateTuning
+                        requireCandidateCaptureReady = [bool]$RequireCandidateCaptureReady
+                        candidateCaptureReady = $candidateCaptureReady
+                        candidateCaptureReadinessStatus = $candidateCaptureReadinessStatus
+                        candidateCaptureReadinessConstraints = @($candidateCaptureReadinessConstraints.ToArray())
                         signalProfile = $profile
                         coherentMaxSnrDb = $coherentSnr
                         frontendNearPassbandTopPeakCount = $frontendNearPassbandTopPeakCount
@@ -1129,25 +1119,25 @@ try {
                         rxAudioLevelerDesiredGainDb = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerDesiredGainDb")
                         rxAudioLevelerAppliedGainDb = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerAppliedGainDb")
                         rxAudioLevelerGainDeltaDb = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerGainDeltaDb")
-                        rxAudioLevelerNr5SpeechHoldBlocks = Get-IntValue (Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHoldBlocks")
+                        rxAudioLevelerCandidateSpeechHoldBlocks = Get-IntValue (Get-JsonValue $runtime "rxAudioLevelerCandidateSpeechHoldBlocks")
                         rxAudioLevelerBoostSlewLimited = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerBoostSlewLimited")
                         rxAudioLevelerOutputLimited = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerOutputLimited")
-                        nr5SignalConfidence = Get-NullableDoubleValue (Get-JsonValue $nr5 "signalConfidence")
-                        nr5SignalProbability = Get-NullableDoubleValue (Get-JsonValue $nr5 "signalProbability")
-                        nr5AgcGate = Get-NullableDoubleValue (Get-JsonValue $nr5 "agcGate")
-                        nr5RecoveryDrive = Get-NullableDoubleValue (Get-JsonValue $nr5 "recoveryDrive")
-                        nr5WeakSignalMemory = Get-NullableDoubleValue (Get-JsonValue $nr5 "weakSignalMemory")
-                        nr5MaskSmoothing = Get-NullableDoubleValue (Get-JsonValue $nr5 "maskSmoothing")
-                        nr5InputDbfs = Get-NullableDoubleValue (Get-JsonValue $nr5 "inputDbfs")
-                        nr5OutputDbfs = Get-NullableDoubleValue (Get-JsonValue $nr5 "outputDbfs")
-                        nr5OutputPeakDbfs = Get-NullableDoubleValue (Get-JsonValue $nr5 "outputPeakDbfs")
+                        candidateSignalConfidence = Get-NullableDoubleValue (Get-JsonValue $candidate "signalConfidence")
+                        candidateSignalProbability = Get-NullableDoubleValue (Get-JsonValue $candidate "signalProbability")
+                        candidateAgcGate = Get-NullableDoubleValue (Get-JsonValue $candidate "agcGate")
+                        candidateRecoveryDrive = Get-NullableDoubleValue (Get-JsonValue $candidate "recoveryDrive")
+                        candidateWeakSignalMemory = Get-NullableDoubleValue (Get-JsonValue $candidate "weakSignalMemory")
+                        candidateMaskSmoothing = Get-NullableDoubleValue (Get-JsonValue $candidate "maskSmoothing")
+                        candidateInputDbfs = Get-NullableDoubleValue (Get-JsonValue $candidate "inputDbfs")
+                        candidateOutputDbfs = Get-NullableDoubleValue (Get-JsonValue $candidate "outputDbfs")
+                        candidateOutputPeakDbfs = Get-NullableDoubleValue (Get-JsonValue $candidate "outputPeakDbfs")
                     }
                     reportPath = $serializedSummaryPath
                     jsonlPath = $serializedJsonlPath
                     readyForBenchmarkTrace = $captureReady
                     trendStatus = [string](Get-JsonValue $watchReport "trendStatus")
-                    nr5TuningTraceStatus = [string](Get-JsonValue $watchReport "nr5TuningTraceStatus")
-                    nr5TuningReadySampleCount = Get-IntValue (Get-JsonValue $watchReport "nr5TuningReadySampleCount")
+                    candidateTuningTraceStatus = [string](Get-JsonValue $watchReport "candidateTuningTraceStatus")
+                    candidateTuningReadySampleCount = Get-IntValue (Get-JsonValue $watchReport "candidateTuningReadySampleCount")
                     captureReadinessStatus = [string](Get-JsonValue $captureReadiness "status")
                     captureReadinessHardGatePass = Test-Truthy (Get-JsonValue $captureReadiness "hardGatePass")
                     captureReadinessStrictPreflightPass = Test-Truthy (Get-JsonValue $captureReadiness "strictPreflightPass")
@@ -1222,9 +1212,9 @@ $mixedReadyCount = 0
 $pumpingRiskCount = 0
 $staleSceneCaptureCount = 0
 $baseCaptureQualifiedPollCount = 0
-$nr5CaptureReadyPollCount = 0
-$nr5CaptureBlockedPollCount = 0
-$nr5CaptureAdvisoryPollCount = 0
+$candidateCaptureReadyPollCount = 0
+$candidateCaptureBlockedPollCount = 0
+$candidateCaptureAdvisoryPollCount = 0
 $mixedWeakStrongStatusCounts = @{}
 $missingStrongInputCaptureCount = 0
 $missingWeakInputCaptureCount = 0
@@ -1366,7 +1356,7 @@ $frontendBestTuningHint = $null
 $captureQualifiedPollCount = 0
 $triggerAudioActivePollCount = 0
 $triggerMaxAudioRmsDbfs = $null
-$triggerMaxNr5OutputDbfs = $null
+$triggerMaxCandidateOutputDbfs = $null
 $bestTriggerPoll = $null
 $observedVfoMap = @{}
 $observedVfoOrder = New-Object System.Collections.Generic.List[string]
@@ -1395,14 +1385,14 @@ foreach ($pollRecord in $pollArray) {
     if (Test-Truthy $pollRecord.baseCaptureQualified) {
         $baseCaptureQualifiedPollCount++
     }
-    if (Test-Truthy $pollRecord.nr5CaptureReady) {
-        $nr5CaptureReadyPollCount++
+    if (Test-Truthy $pollRecord.candidateCaptureReady) {
+        $candidateCaptureReadyPollCount++
     }
-    elseif ([string]::Equals([string]$pollRecord.nr5CaptureReadinessStatus, "blocked", [StringComparison]::OrdinalIgnoreCase)) {
-        $nr5CaptureBlockedPollCount++
+    elseif ([string]::Equals([string]$pollRecord.candidateCaptureReadinessStatus, "blocked", [StringComparison]::OrdinalIgnoreCase)) {
+        $candidateCaptureBlockedPollCount++
     }
-    elseif ([string]::Equals([string]$pollRecord.nr5CaptureReadinessStatus, "advisory", [StringComparison]::OrdinalIgnoreCase)) {
-        $nr5CaptureAdvisoryPollCount++
+    elseif ([string]::Equals([string]$pollRecord.candidateCaptureReadinessStatus, "advisory", [StringComparison]::OrdinalIgnoreCase)) {
+        $candidateCaptureAdvisoryPollCount++
     }
 
     $pollTuningHint = Get-JsonValue $pollRecord "frontendTuningHint"
@@ -1444,7 +1434,7 @@ foreach ($pollRecord in $pollArray) {
                 captureQualifiedPollCount = 0
                 maxCoherentSnrDb = $null
                 maxAudioRmsDbfs = $null
-                maxNr5OutputDbfs = $null
+                maxCandidateOutputDbfs = $null
                 bestTuningHint = $null
                 frontendSuggestedDialShiftHz = $null
                 frontendSuggestedVfoHz = $null
@@ -1498,9 +1488,9 @@ foreach ($pollRecord in $pollArray) {
         if ($null -ne $observedAudio -and ($null -eq $observed["maxAudioRmsDbfs"] -or [double]$observedAudio -gt [double]$observed["maxAudioRmsDbfs"])) {
             $observed["maxAudioRmsDbfs"] = $observedAudio
         }
-        $observedNr5Output = Get-NullableDoubleValue $pollRecord.nr5OutputDbfs
-        if ($null -ne $observedNr5Output -and ($null -eq $observed["maxNr5OutputDbfs"] -or [double]$observedNr5Output -gt [double]$observed["maxNr5OutputDbfs"])) {
-            $observed["maxNr5OutputDbfs"] = $observedNr5Output
+        $observedCandidateOutput = Get-NullableDoubleValue $pollRecord.candidateOutputDbfs
+        if ($null -ne $observedCandidateOutput -and ($null -eq $observed["maxCandidateOutputDbfs"] -or [double]$observedCandidateOutput -gt [double]$observed["maxCandidateOutputDbfs"])) {
+            $observed["maxCandidateOutputDbfs"] = $observedCandidateOutput
         }
 
         if ($null -ne $pollTuningHint) {
@@ -1540,9 +1530,9 @@ foreach ($pollRecord in $pollArray) {
         }
     }
 
-    $pollNr5Output = Get-NullableDoubleValue $pollRecord.nr5OutputDbfs
-    if ($null -ne $pollNr5Output -and ($null -eq $triggerMaxNr5OutputDbfs -or [double]$pollNr5Output -gt [double]$triggerMaxNr5OutputDbfs)) {
-        $triggerMaxNr5OutputDbfs = $pollNr5Output
+    $pollCandidateOutput = Get-NullableDoubleValue $pollRecord.candidateOutputDbfs
+    if ($null -ne $pollCandidateOutput -and ($null -eq $triggerMaxCandidateOutputDbfs -or [double]$pollCandidateOutput -gt [double]$triggerMaxCandidateOutputDbfs)) {
+        $triggerMaxCandidateOutputDbfs = $pollCandidateOutput
     }
 }
 $uniqueCapturedVfoCount = $vfoCaptureCounts.Count
@@ -1638,8 +1628,8 @@ if ($captureArray.Count -le 0) {
     if ($RequireFrontendNearPassband -and $frontendOffsetMismatchPollCount -gt 0) {
         $recommendations.Add("Some frontend peak offsets disagreed with frequencyHz minus VFO beyond $FrontendOffsetMismatchToleranceHz Hz; strict passband capture ignored those inconsistent peaks.") | Out-Null
     }
-    if ($RequireNr5CaptureReady -and $baseCaptureQualifiedPollCount -gt 0 -and $captureQualifiedPollCount -le 0) {
-        $recommendations.Add("Stable voice-like passband polls were present but NR5 capture readiness was blocked; wait for requested/effective NR5 alignment and complete NR5 diagnostics before spending child capture slots.") | Out-Null
+    if ($RequireCandidateCaptureReady -and $baseCaptureQualifiedPollCount -gt 0 -and $captureQualifiedPollCount -le 0) {
+        $recommendations.Add("Stable voice-like passband polls were present but comparison capture readiness was blocked; resolve the readiness constraints before spending child capture slots.") | Out-Null
     }
     if ($staleScenePollCount -gt 0 -and -not $AllowStaleSceneCapture) {
         $recommendations.Add("Frontend DSP scene evidence was stale during $staleScenePollCount poll(s); open the frontend scene publisher or rerun with -AllowStaleSceneCapture for scouting-only child diagnostics.") | Out-Null
@@ -1678,17 +1668,17 @@ elseif ($weakTotal -gt 0 -and $strongTotal -le 0) {
         $recommendations.Add("Best weak-only capture is at $bestWeakVfoText with $bestWeakCount weak-input sample(s) and $bestWeakNearStrong near-strong sample(s); keep collecting or recapture that VFO until strict strongInputSampleCount becomes non-zero.") | Out-Null
     }
     if ($MaxCapturesPerVfo -le 1) {
-        $recommendations.Add("Manual-tune captures are weak-only by the strict NR5 input threshold; rerun with -MaxCapturesPerVfo 2 or keep collecting active windows until strongInputSampleCount is non-zero.") | Out-Null
+        $recommendations.Add("Manual-tune captures are weak-only by the strict input threshold; rerun with -MaxCapturesPerVfo 2 or keep collecting active windows until strongInputSampleCount is non-zero.") | Out-Null
     }
     else {
-        $recommendations.Add("Manual-tune captures are weak-only by the strict NR5 input threshold after bounded same-VFO recapture; keep collecting active windows until strongInputSampleCount is non-zero.") | Out-Null
+        $recommendations.Add("Manual-tune captures are weak-only by the strict input threshold after bounded same-VFO recapture; keep collecting active windows until strongInputSampleCount is non-zero.") | Out-Null
     }
 }
 if ($recapturedVfoCount -gt 0) {
     $recommendations.Add("Same-VFO recapture was used for $recapturedVfoCount VFO(s); prefer the latest ready or mixed-ready capture for promotion.") | Out-Null
 }
 if (-not $RequireFrontendNearPassband -and $captureArray.Count -gt 0 -and $passbandWeakTotal -le 0 -and $passbandStrongTotal -le 0) {
-    $recommendations.Add("Captured windows had no passband-qualified NR5 samples; rerun with -RequireFrontendNearPassband for acceptance-oriented manual-tune capture.") | Out-Null
+    $recommendations.Add("Captured windows had no passband-qualified comparison samples; rerun with -RequireFrontendNearPassband for acceptance-oriented manual-tune capture.") | Out-Null
 }
 if ($staleSceneCaptureCount -gt 0) {
     $recommendations.Add("Stale-scene fallback captured $staleSceneCaptureCount window(s); treat them as scouting evidence until refreshed scene data or live-history validation confirms the window.") | Out-Null
@@ -1697,7 +1687,7 @@ if ($nearStrongTotal -gt 0 -and $strongTotal -le 0) {
     $recommendations.Add("Near-strong samples appeared without strict strong input; inspect per-capture topNearStrongInputs before changing thresholds.") | Out-Null
 }
 if ($pumpingRiskCount -gt 0) {
-    $recommendations.Add("One or more manual-tune captures flagged AGC pumping risk; reject those windows for NR5 tuning promotion.") | Out-Null
+    $recommendations.Add("One or more manual-tune captures flagged AGC pumping risk; reject those windows for Candidate tuning promotion.") | Out-Null
 }
 
 $serializedOutputRoot = ConvertTo-BundleRelativeEvidencePath -Path $captureRoot -BundlePath $bundlePath
@@ -1737,7 +1727,7 @@ if ($bestMixedReadyCapture.Count -gt 0) {
         -Status "mixed-ready" `
         -Priority 1 `
         -Summary "Mixed weak+strong evidence was captured at $mixedVfoText; promote this watcher window into live history before tuning DSP behavior." `
-        -ManualAction "Keep DSP defaults unchanged; promote the captured watcher report into live history and compare current-Zeus/Thetis windows before any opt-in NR5/SPNR tuning." `
+        -ManualAction "Keep DSP defaults unchanged; promote the captured watcher report into live history and compare current-Zeus/Thetis windows before any under-test comparison tuning." `
         -FollowUp "Run summarize-dsp-live-diagnostics-history.ps1, strict validation, and live trace comparisons against current-Zeus/Thetis evidence." `
         -VfoHz $mixedVfoHz `
         -VfoMhz $mixedVfoMhz `
@@ -1804,7 +1794,7 @@ elseif ($MaxCaptures -le 0 -and $captureQualifiedPollCount -gt 0 -and $null -ne 
         -Summary "The current manual-tune VFO at $observedText is capture-qualified, but child diagnostics are disabled by -MaxCaptures 0." `
         -ManualAction "Keep the G2 tuned near $observedText and rerun the observer with capture enabled." `
         -CommandTemplate $observerCommandTemplate `
-        -FollowUp "Promote only after the child watcher produces ready mixed weak+strong NR5/SPNR evidence." `
+        -FollowUp "Promote only after the child watcher produces ready mixed weak+strong opt-in candidate evidence." `
         -VfoHz $observedVfoHz `
         -VfoMhz $observedVfoMhz `
         -WeakInputSampleCount 0 `
@@ -1812,24 +1802,24 @@ elseif ($MaxCaptures -le 0 -and $captureQualifiedPollCount -gt 0 -and $null -ne 
         -NearStrongInputSampleCount 0 `
         -ExpectedEvidence "captureCount>0 and mixedWeakStrongEvidenceReady=true"
 }
-elseif ([bool]$RequireNr5CaptureReady -and $baseCaptureQualifiedPollCount -gt 0 -and $captureQualifiedPollCount -le 0) {
+elseif ([bool]$RequireCandidateCaptureReady -and $baseCaptureQualifiedPollCount -gt 0 -and $captureQualifiedPollCount -le 0) {
     $observedVfoHz = Get-NullableLongValue (Get-JsonValue $bestObservedVfo "vfoHz")
     $observedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "vfoMhz")
     $observedText = Format-MhzText -Hz $observedVfoHz -Mhz $observedVfoMhz
     $primaryManualTuneAction = New-ManualTuneAction `
-        -ActionId "wait-for-nr5-capture-readiness" `
-        -Status "nr5-capture-readiness-blocked" `
+        -ActionId "wait-for-candidate-capture-readiness" `
+        -Status "candidate-capture-readiness-blocked" `
         -Priority 4 `
-        -Summary "The manual-tune window at $observedText was otherwise capture-qualified, but NR5/SPNR readiness blocked child capture." `
-        -ManualAction "Hold the signal if it is still active, reassert NR5/SPNR if needed, and wait until requested/effective NR mode and NR5 diagnostics are ready before recapturing." `
+        -Summary "The manual-tune window at $observedText was otherwise capture-qualified, but comparison readiness was blocked." `
+        -ManualAction "Hold the signal if it is still active, resolve comparison readiness constraints, then recapture against current-Zeus and Thetis baselines." `
         -CommandTemplate $observerCommandTemplate `
-        -FollowUp "Rerun the observer with -RequireNr5CaptureReady; child captures should start only after nr5CaptureReady=true." `
+        -FollowUp "Rerun the observer after the candidate-readiness constraints clear; child captures remain governed by signal/passband/runtime readiness." `
         -VfoHz $observedVfoHz `
         -VfoMhz $observedVfoMhz `
         -WeakInputSampleCount 0 `
         -StrongInputSampleCount 0 `
         -NearStrongInputSampleCount 0 `
-        -ExpectedEvidence "nr5CaptureReady=true and ready watcher capture with mixed weak+strong evidence"
+        -ExpectedEvidence "ready watcher capture with mixed weak+strong opt-in candidate evidence"
 }
 elseif ($null -ne $bestObservedVfo -and $null -ne (Get-NullableLongValue (Get-JsonValue $bestObservedVfo "frontendSuggestedVfoHz"))) {
     $observedVfoHz = Get-NullableLongValue (Get-JsonValue $bestObservedVfo "vfoHz")
@@ -1846,7 +1836,7 @@ elseif ($null -ne $bestObservedVfo -and $null -ne (Get-NullableLongValue (Get-Js
         -Summary "Manually tune toward $suggestedText so the strongest frontend peak lands inside the active RX filter." `
         -ManualAction "Tune G2 near $suggestedText, then rerun the observer with capture enabled and frontend passband required." `
         -CommandTemplate $observerCommandTemplate `
-        -FollowUp "Capture is still scouting evidence until a ready watcher window has weak and strong NR5/SPNR samples." `
+        -FollowUp "Capture is still scouting evidence until a ready watcher window has weak and strong opt-in candidate samples." `
         -VfoHz $observedVfoHz `
         -VfoMhz $observedVfoMhz `
         -SuggestedVfoHz $suggestedVfoHz `
@@ -1955,15 +1945,16 @@ $report = [ordered]@{
     frontendTuningHintPollCount = $frontendTuningHintPollCount
     frontendBestTuningHint = $frontendBestTuningHint
     suggestedVfoStepHz = $SuggestedVfoStepHz
-    requireNr5CaptureReady = [bool]$RequireNr5CaptureReady
+    requireCandidateCaptureReady = [bool]$RequireCandidateCaptureReady
+    legacyRequireCandidateCaptureReadyRequested = $legacyRequireCandidateCaptureReadyRequested
     baseCaptureQualifiedPollCount = $baseCaptureQualifiedPollCount
-    nr5CaptureReadyPollCount = $nr5CaptureReadyPollCount
-    nr5CaptureBlockedPollCount = $nr5CaptureBlockedPollCount
-    nr5CaptureAdvisoryPollCount = $nr5CaptureAdvisoryPollCount
+    candidateCaptureReadyPollCount = $candidateCaptureReadyPollCount
+    candidateCaptureBlockedPollCount = $candidateCaptureBlockedPollCount
+    candidateCaptureAdvisoryPollCount = $candidateCaptureAdvisoryPollCount
     captureQualifiedPollCount = $captureQualifiedPollCount
     triggerAudioActivePollCount = $triggerAudioActivePollCount
     triggerMaxAudioRmsDbfs = $triggerMaxAudioRmsDbfs
-    triggerMaxNr5OutputDbfs = $triggerMaxNr5OutputDbfs
+    triggerMaxCandidateOutputDbfs = $triggerMaxCandidateOutputDbfs
     bestTriggerPoll = $bestTriggerPoll
     readyCaptureCount = $readyCaptureCount
     mixedWeakStrongReady = ($mixedReadyCount -gt 0)

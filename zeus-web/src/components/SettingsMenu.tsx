@@ -66,7 +66,7 @@ const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
   { id: 'pa', label: 'PA SETTINGS' },
   { id: 'hardware', label: 'HARDWARE' },
   { id: 'ps', label: 'PURESIGNAL' },
-  { id: 'tx-audio', label: 'TX AUDIO TOOLS' },
+  { id: 'tx-audio', label: 'AUDIO TOOLS' },
   { id: 'dsp', label: 'DSP' },
   { id: 'bandplan', label: 'BAND PLAN' },
   { id: 'qrz', label: 'QRZ' },

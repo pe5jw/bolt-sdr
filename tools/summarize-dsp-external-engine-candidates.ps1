@@ -426,7 +426,7 @@ function Get-BakeoffScenariosForCandidate {
                 },
                 [ordered]@{
                     scenarioId = "service-unavailable-bypass"
-                    purpose = "Verify network/service failure keeps current NR5 audio intact."
+                    purpose = "Verify network/service failure keeps current Candidate audio intact."
                     acceptanceGates = @("Service unavailable falls back immediately.", "No live cloud stream is required for RX.", "Operator consent and privacy gates are documented.")
                 }
             )
@@ -436,7 +436,7 @@ function Get-BakeoffScenariosForCandidate {
                 [ordered]@{
                     scenarioId = "ssb-like-speech-post-demod"
                     purpose = "Measure causal neural speech enhancement after WDSP demodulation."
-                    acceptanceGates = @("Improves weak SSB speech artifact score beyond NR5/SPNR.", "No weak-signal deletion or clipped peaks.", "No added audio RMS pumping.")
+                    acceptanceGates = @("Improves weak SSB speech artifact score beyond candidate DSP.", "No weak-signal deletion or clipped peaks.", "No added audio RMS pumping.")
                 },
                 [ordered]@{
                     scenarioId = "weak-ssb-speech-latency"
@@ -455,7 +455,7 @@ function Get-BakeoffScenariosForCandidate {
                 [ordered]@{
                     scenarioId = "ssb-like-speech-post-demod"
                     purpose = "Measure full-band neural enhancement on demodulated speech."
-                    acceptanceGates = @("Improves speech artifact score beyond NR5/SPNR.", "No weak-signal intelligibility loss.", "No musical-noise or burbling artifacts.")
+                    acceptanceGates = @("Improves speech artifact score beyond candidate DSP.", "No weak-signal intelligibility loss.", "No musical-noise or burbling artifacts.")
                 },
                 [ordered]@{
                     scenarioId = "weak-ssb-speech-latency"
@@ -498,7 +498,7 @@ function Get-BakeoffScenariosForCandidate {
                 [ordered]@{
                     scenarioId = "agc-disabled-no-pumping"
                     purpose = "Prove Speex AGC/VAD behavior cannot fight WDSP AGC."
-                    acceptanceGates = @("Speex AGC remains disabled.", "No VAD gate chatter.", "No NR5/SPNR level-stability regression.")
+                    acceptanceGates = @("Speex AGC remains disabled.", "No VAD gate chatter.", "No candidate DSP level-stability regression.")
                 },
                 [ordered]@{
                     scenarioId = "noise-only-gating"
@@ -557,7 +557,7 @@ function New-CandidateBakeoffPlan {
             priority = $priority
             scenarioId = [string](Get-JsonValue $scenario "scenarioId")
             purpose = [string](Get-JsonValue $scenario "purpose")
-            requiredComparisons = @("current-zeus", "nr5-spnr", "candidate-external-engine-opt-in")
+            requiredComparisons = @("current-zeus", "candidate-under-test", "candidate-external-engine-opt-in")
             acceptanceGates = @(Get-JsonArray $scenario "acceptanceGates")
         }) | Out-Null
         $priority++
@@ -685,7 +685,7 @@ function New-ExternalBakeoffPlan {
         defaultBehaviorChangeReady = $false
         rawWdspIqReplacementAllowed = $false
         txPathAllowed = $false
-        requiredComparisons = @("current-zeus", "nr5-spnr", "candidate-external-engine-opt-in")
+        requiredComparisons = @("current-zeus", "candidate-under-test", "candidate-external-engine-opt-in")
         requiredHardwareEvidence = @("G2 first-pass live evidence", "non-G2 cross-radio validation before graduation")
         requiredOperatorEvidence = @("speech artifact notes", "weak-signal readability notes", "noise-only artifact notes")
         firstSafeBakeoffCandidateId = $firstSafeCandidateId
@@ -701,7 +701,7 @@ function New-ExternalBakeoffPlan {
         scenarioCount = $allScenarioIds.Count
         scenarioIds = @($allScenarioIds)
         candidatePlans = @($candidatePlans.ToArray())
-        fixtureComparisonCommandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-fixture-metrics.ps1 -BaselinePath <current-zeus-fixtures.json> -CandidatePath <external-engine-fixtures.json> -CandidateComparisonId candidate-external-engine-opt-in -FailOnRegression"
+        fixtureComparisonCommandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-wdsp-fixture-matrix.ps1 -BundleDir <bundle-dir> -ScenarioIds <fixture-scenario-ids> -ComparisonIds off-baseline,current-zeus,thetis-parity,candidate-external-engine-opt-in"
         liveMatrixCommandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -ComparisonId candidate-external-engine-opt-in -ScenarioIds <scenario-ids> -Samples 60 -IntervalMs 1000"
     }
 }

@@ -102,6 +102,7 @@ import {
   saveTxFidelityPolicy,
   saveCfcPreset,
   setLevelerMaxGain,
+  setFilter,
   setMicGain,
   setMode,
   setNr,
@@ -188,12 +189,17 @@ describe('normalizeState', () => {
       rx2AfGainDb: -3,
       txVfo: 1,
       mode: 1,
+      modeB: 3,
       filterLowHz: 150,
       filterHighHz: 2850,
+      filterLowHzB: 475,
+      filterHighHzB: 725,
+      filterPresetNameB: 'F6',
       sampleRate: 192_000,
     });
     expect(s.status).toBe('Connected');
     expect(s.mode).toBe('USB');
+    expect(s.modeB).toBe('CWU');
     expect(s.endpoint).toBe('192.168.100.21:1024');
     expect(s.vfoHz).toBe(14_200_000);
     expect(s.vfoBHz).toBe(14_250_000);
@@ -201,6 +207,9 @@ describe('normalizeState', () => {
     expect(s.rx2AudioMode).toBe('rx2');
     expect(s.rx2AfGainDb).toBe(-3);
     expect(s.txVfo).toBe('B');
+    expect(s.filterLowHzB).toBe(475);
+    expect(s.filterHighHzB).toBe(725);
+    expect(s.filterPresetNameB).toBe('F6');
     expect(s.sampleRate).toBe(192_000);
     expect(s.preampOn).toBe(false);
   });
@@ -229,6 +238,9 @@ describe('normalizeState', () => {
     expect(s.rx2AfGainDb).toBe(0);
     expect(s.txVfo).toBe('A');
     expect(s.mode).toBe('USB');
+    expect(s.modeB).toBe('USB');
+    expect(s.filterLowHzB).toBe(0);
+    expect(s.filterHighHzB).toBe(0);
     expect(s.nr).toEqual(NR_CONFIG_DEFAULT);
     expect(s.zoomLevel).toBe(1);
   });
@@ -293,14 +305,14 @@ describe('normalizeNrMode / normalizeNbMode', () => {
   it('accepts string forms', () => {
     expect(normalizeNrMode('Anr')).toBe('Anr');
     expect(normalizeNrMode('Emnr')).toBe('Emnr');
-    expect(normalizeNrMode('Nr5')).toBe('Nr5');
+    expect(normalizeNrMode('Unsupported')).toBe('Off');
     expect(normalizeNbMode('Nb1')).toBe('Nb1');
   });
   it('maps numeric ordinals', () => {
     expect(normalizeNrMode(0)).toBe('Off');
     expect(normalizeNrMode(1)).toBe('Anr');
     expect(normalizeNrMode(2)).toBe('Emnr');
-    expect(normalizeNrMode(4)).toBe('Nr5');
+    expect(normalizeNrMode(4)).toBe('Off');
     expect(normalizeNbMode(2)).toBe('Nb2');
   });
   it('falls back to Off on garbage', () => {
@@ -391,6 +403,23 @@ describe('POST helpers', () => {
     await setMode('CWU', undefined, 'B');
     expect(JSON.parse((fetchMock.mock.calls[2]![1]?.body ?? '') as string))
       .toEqual({ mode: 3, receiver: 1 });
+  });
+
+  it('setFilter posts receiver to /api/filter', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => jsonResponse(okState));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await setFilter(475, 725, 'F6', undefined, 'B');
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/filter');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({
+      lowHz: 475,
+      highHz: 725,
+      presetName: 'F6',
+      receiver: 1,
+    });
   });
 
   it('setPreamp posts { on } to /api/preamp', async () => {
@@ -602,40 +631,9 @@ describe('POST helpers', () => {
           wdspNativeLoadable: true,
           wdspEmnrPost2Available: true,
           wdspNr4SbnrAvailable: false,
-          wdspNr5SpnrAvailable: false,
           nr4Readiness: 'missing-sbnr-exports',
-          nr5Readiness: 'missing-spnr-exports',
           requestedNrMode: 'Sbnr',
           effectiveNrMode: 'Off',
-          nr5SpnrDiagnostics: {
-            schemaVersion: 3,
-            channelId: 1,
-            run: true,
-            position: 1,
-            learnedFrames: 42,
-            aggressiveness: 0.62,
-            agcRun: true,
-            targetRms: 0.075,
-            maxGain: 12,
-            agcGain: 1.45,
-            agcGainDb: 3.2,
-            presencePeak: 0.72,
-            saliencePeak: 0.31,
-            coherencePeak: 0.68,
-            ridgePeak: 0.59,
-            meanGain: 0.64,
-            minGain: 0.22,
-            suppressionDb: -3.9,
-            noiseFloorDb: -118.5,
-            floorReductionDb: 0.8,
-            dynamicRangeDb: 24.6,
-            signalConfidence: 0.73,
-            agcGate: 0.82,
-            inputRms: 0.021,
-            inputDbfs: -33.6,
-            outputRms: 0.064,
-            outputDbfs: -23.9,
-          },
           channelId: 1,
           sampleRateHz: 192000,
           displayWidth: 2048,
@@ -676,38 +674,7 @@ describe('POST helpers', () => {
             wdspNativeLoadable: true,
             wdspEmnrPost2Available: true,
             wdspNr4SbnrAvailable: false,
-            wdspNr5SpnrAvailable: false,
             nr4Readiness: 'missing-sbnr-exports',
-            nr5Readiness: 'missing-spnr-exports',
-            nr5SpnrDiagnostics: {
-              schemaVersion: 3,
-              channelId: 1,
-              run: true,
-              position: 1,
-              learnedFrames: 42,
-              aggressiveness: 0.62,
-              agcRun: true,
-              targetRms: 0.075,
-              maxGain: 12,
-              agcGain: 1.45,
-              agcGainDb: 3.2,
-              presencePeak: 0.72,
-              saliencePeak: 0.31,
-              coherencePeak: 0.68,
-              ridgePeak: 0.59,
-              meanGain: 0.64,
-              minGain: 0.22,
-              suppressionDb: -3.9,
-              noiseFloorDb: -118.5,
-              floorReductionDb: 0.8,
-              dynamicRangeDb: 24.6,
-              signalConfidence: 0.73,
-              agcGate: 0.82,
-              inputRms: 0.021,
-              inputDbfs: -33.6,
-              outputRms: 0.064,
-              outputDbfs: -23.9,
-            },
             appliedNrMatchesRequested: true,
             appliedAgcMatchesRequested: true,
             appliedSquelchMatchesRequested: true,
@@ -1286,32 +1253,12 @@ describe('POST helpers', () => {
     expect(diag.dsp.txMonitorRequested).toBe(true);
     expect(diag.dsp.wdspNativeLoadable).toBe(true);
     expect(diag.dsp.wdspEmnrPost2Available).toBe(true);
-    expect(diag.dsp.wdspNr4SbnrAvailable).toBe(false);
-    expect(diag.dsp.wdspNr5SpnrAvailable).toBe(false);
-    expect(diag.dsp.nr4Readiness).toBe('missing-sbnr-exports');
-    expect(diag.dsp.nr5Readiness).toBe('missing-spnr-exports');
-    expect(diag.dsp.requestedNrMode).toBe('Sbnr');
-    expect(diag.dsp.effectiveNrMode).toBe('Off');
-    expect(diag.dsp.nr5SpnrDiagnostics?.learnedFrames).toBe(42);
-    expect(diag.dsp.nr5SpnrDiagnostics?.agcGainDb).toBe(3.2);
-    expect(diag.dsp.nr5SpnrDiagnostics?.coherencePeak).toBe(0.68);
-    expect(diag.dsp.nr5SpnrDiagnostics?.dynamicRangeDb).toBe(24.6);
-    expect(diag.dsp.nr5SpnrDiagnostics?.signalConfidence).toBe(0.73);
-    expect(diag.dsp.nr5SpnrDiagnostics?.agcGate).toBe(0.82);
-    expect(diag.dsp.rxDsp.status).toBe('nr-capability-limited');
+    expect(diag.dsp.wdspNr4SbnrAvailable).toBe(false);    expect(diag.dsp.nr4Readiness).toBe('missing-sbnr-exports');    expect(diag.dsp.requestedNrMode).toBe('Sbnr');
+    expect(diag.dsp.effectiveNrMode).toBe('Off');    expect(diag.dsp.rxDsp.status).toBe('nr-capability-limited');
     expect(diag.dsp.rxDsp.agcMode).toBe('Fast');
     expect(diag.dsp.rxDsp.effectiveAgcTopDb).toBe(62);
     expect(diag.dsp.rxDsp.effectiveNbpNotchesRun).toBe(true);
-    expect(diag.dsp.rxDsp.activeManualNotchCount).toBe(1);
-    expect(diag.dsp.rxDsp.wdspNr5SpnrAvailable).toBe(false);
-    expect(diag.dsp.rxDsp.nr5Readiness).toBe('missing-spnr-exports');
-    expect(diag.dsp.rxDsp.nr5SpnrDiagnostics?.presencePeak).toBe(0.72);
-    expect(diag.dsp.rxDsp.nr5SpnrDiagnostics?.suppressionDb).toBe(-3.9);
-    expect(diag.dsp.rxDsp.nr5SpnrDiagnostics?.ridgePeak).toBe(0.59);
-    expect(diag.dsp.rxDsp.nr5SpnrDiagnostics?.floorReductionDb).toBe(0.8);
-    expect(diag.dsp.rxDsp.nr5SpnrDiagnostics?.signalConfidence).toBe(0.73);
-    expect(diag.dsp.rxDsp.nr5SpnrDiagnostics?.agcGate).toBe(0.82);
-    expect(diag.dsp.rxDsp.activeFeatures).toContain('manual-notches');
+    expect(diag.dsp.rxDsp.activeManualNotchCount).toBe(1);    expect(diag.dsp.rxDsp.activeFeatures).toContain('manual-notches');
     expect(diag.dsp.rxDsp.qualityReasons).toContain('nr-capability-limited');
     expect(diag.dsp.rxDsp.diagnosticRecommendation).toContain('NR2/EMNR');
     expect(diag.dsp.rxMeters.status).toBe('adc-hot');
@@ -1771,40 +1718,9 @@ describe('POST helpers', () => {
       wdspNativeLoadable: true,
       wdspEmnrPost2Available: true,
       wdspNr4SbnrAvailable: false,
-      wdspNr5SpnrAvailable: false,
       nr4Readiness: 'missing-sbnr-exports',
-      nr5Readiness: 'missing-spnr-exports',
       requestedNrMode: 'Sbnr',
       effectiveNrMode: 'Off',
-      nr5SpnrDiagnostics: {
-        schemaVersion: 3,
-        channelId: 0,
-        run: true,
-        position: 1,
-        learnedFrames: 64,
-        aggressiveness: 0.62,
-        agcRun: true,
-        targetRms: 0.075,
-        maxGain: 12,
-        agcGain: 1.2,
-        agcGainDb: 1.6,
-        presencePeak: 0.44,
-        saliencePeak: 0.25,
-        coherencePeak: 0.51,
-        ridgePeak: 0.43,
-        meanGain: 0.71,
-        minGain: 0.28,
-        suppressionDb: -3,
-        noiseFloorDb: -121.2,
-        floorReductionDb: 0.6,
-        dynamicRangeDb: 18.9,
-        signalConfidence: 0.55,
-        agcGate: 0.61,
-        inputRms: 0.018,
-        inputDbfs: -34.9,
-        outputRms: 0.055,
-        outputDbfs: -25.2,
-      },
       expectedNrMode: 'Emnr',
       runtimeAligned: false,
       runtimeAlignmentStatus: 'mismatched',
@@ -1815,7 +1731,7 @@ describe('POST helpers', () => {
         filterLowHz: 300,
         filterHighHz: 2600,
         filterWidthHz: 2300,
-        filterPresetName: 'NR5-WEAK',
+        filterPresetName: 'WEAK-RX',
         autoAgcEnabled: true,
         agcMode: 'Fast',
         agcTopDb: 83,
@@ -1860,19 +1776,8 @@ describe('POST helpers', () => {
     expect(condition.rxChainScore).toBe(62);
     expect(condition.maxSnrDb).toBe(7.1);
     expect(condition.coherentSubthresholdSignal).toBe(true);
-    expect(condition.wdspNr4SbnrAvailable).toBe(false);
-    expect(condition.wdspNr5SpnrAvailable).toBe(false);
-    expect(condition.nr4Readiness).toBe('missing-sbnr-exports');
-    expect(condition.nr5Readiness).toBe('missing-spnr-exports');
-    expect(condition.requestedNrMode).toBe('Sbnr');
-    expect(condition.effectiveNrMode).toBe('Off');
-    expect(condition.nr5SpnrDiagnostics?.learnedFrames).toBe(64);
-    expect(condition.nr5SpnrDiagnostics?.outputDbfs).toBe(-25.2);
-    expect(condition.nr5SpnrDiagnostics?.coherencePeak).toBe(0.51);
-    expect(condition.nr5SpnrDiagnostics?.dynamicRangeDb).toBe(18.9);
-    expect(condition.nr5SpnrDiagnostics?.signalConfidence).toBe(0.55);
-    expect(condition.nr5SpnrDiagnostics?.agcGate).toBe(0.61);
-    expect(condition.expectedNrMode).toBe('Emnr');
+    expect(condition.wdspNr4SbnrAvailable).toBe(false);    expect(condition.nr4Readiness).toBe('missing-sbnr-exports');    expect(condition.requestedNrMode).toBe('Sbnr');
+    expect(condition.effectiveNrMode).toBe('Off');    expect(condition.expectedNrMode).toBe('Emnr');
     expect(condition.runtimeAligned).toBe(false);
     expect(condition.runtimeAlignmentStatus).toBe('mismatched');
     expect(condition.runtimeAlignmentRecommendation).toContain('maps to WDSP Emnr');
@@ -1880,7 +1785,7 @@ describe('POST helpers', () => {
     expect(condition.rxChain.filterLowHz).toBe(300);
     expect(condition.rxChain.filterHighHz).toBe(2600);
     expect(condition.rxChain.filterWidthHz).toBe(2300);
-    expect(condition.rxChain.filterPresetName).toBe('NR5-WEAK');
+    expect(condition.rxChain.filterPresetName).toBe('WEAK-RX');
     expect(condition.rxChain.autoAgcEnabled).toBe(true);
     expect(condition.rxChain.agcMode).toBe('Fast');
     expect(condition.rxChain.effectiveAgcTopDb).toBe(52);
@@ -1895,35 +1800,30 @@ describe('POST helpers', () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
       schemaVersion: 1,
       generatedUtc: '2026-06-15T18:22:00Z',
-      status: 'nr5-retired-for-wdsp-v2',
+      status: 'replacement-preflight-required',
       qualityTone: 'protect',
       readinessScore: 70,
       readyForLiveBenchmark: false,
-      readyForNr5Tuning: false,
-      nr5TuningStatus: 'nr5-retired-for-wdsp-v2',
-      nr5TuningConstraints: ['nr5-retired-for-wdsp-v2'],
       readyForExternalEngineBakeoff: false,
       externalEngineBakeoffStatus: 'external-engine-bakeoff-preflight-required',
-      externalEngineBakeoffConstraints: ['nr5-active-retired-for-wdsp-v2'],
+      externalEngineBakeoffConstraints: ['replacement-preflight-required'],
       rolloutGate: 'opt-in-only-until-benchmark-and-g2-on-air-acceptance',
       wdspActive: true,
       wdspNativeLoadable: true,
       wdspEmnrPost2Available: true,
       wdspNr4SbnrAvailable: true,
-      wdspNr5SpnrAvailable: true,
       nr4Readiness: 'available',
-      nr5Readiness: 'available',
       frontendSceneAvailable: true,
       frontendSceneStatus: 'fresh',
       frontendSceneFresh: true,
       frontendSceneStale: false,
       frontendSceneAgeMs: 42,
-      smartNrProfile: 'NR5',
-      expectedNrMode: 'Nr5',
+      smartNrProfile: 'NR4',
+      expectedNrMode: 'Sbnr',
       runtimeAligned: true,
       runtimeAlignmentStatus: 'aligned',
-      requestedNrMode: 'Nr5',
-      effectiveNrMode: 'Nr5',
+      requestedNrMode: 'Sbnr',
+      effectiveNrMode: 'Sbnr',
       heldByRxChain: false,
       rxChainScore: 94,
       rxChainTone: 'neutral',
@@ -1931,78 +1831,11 @@ describe('POST helpers', () => {
       rxChainFilterLowHz: 300,
       rxChainFilterHighHz: 2600,
       rxChainFilterWidthHz: 2300,
-      rxChainFilterPresetName: 'NR5-WEAK',
-      nr5SignalConfidence: 0.73,
-      nr5AgcGate: 0.66,
-      nr5SignalProbability: 0.69,
-      nr5TextureFill: 0.11,
-      nr5MaskSmoothing: 0.19,
-      nr5WeakSignalMemory: 0.41,
-      nr5MeanGain: 0.58,
-      nr5FloorReductionDb: 7.3,
-      nr5OutputPeakDbfs: -18.4,
-      nr5PeakEvidence: 0.72,
-      nr5PeakLimitDbfs: -3.2,
-      nr5PeakReductionDb: 1.4,
-      nr5SpnrDiagnostics: {
-        schemaVersion: 9,
-        channelId: 0,
-        run: true,
-        position: 1,
-        learnedFrames: 80,
-        aggressiveness: 0.62,
-        agcRun: true,
-        targetRms: 0.075,
-        maxGain: 12,
-        agcGain: 1.7,
-        agcGainDb: 4.6,
-        presencePeak: 0.8,
-        saliencePeak: 0.7,
-        coherencePeak: 0.65,
-        ridgePeak: 0.61,
-        meanGain: 0.58,
-        minGain: 0.18,
-        suppressionDb: 9.1,
-        noiseFloorDb: -58,
-        floorReductionDb: 7.3,
-        dynamicRangeDb: 18.4,
-        signalProbability: 0.69,
-        textureFill: 0.11,
-        maskSmoothing: 0.19,
-        signalConfidence: 0.73,
-        agcGate: 0.66,
-        levelDrive: 0.82,
-        recoveryDrive: 0.64,
-        weakSignalMemory: 0.41,
-        makeupGain: 1.35,
-        makeupGainDb: 2.6,
-        inputRms: 0.031,
-        inputDbfs: -30.2,
-        outputRms: 0.068,
-        outputDbfs: -23.4,
-        outputPeak: 0.12,
-        outputPeakDbfs: -18.4,
-        peakEvidence: 0.72,
-        peakLimit: 0.69,
-        peakLimitDbfs: -3.2,
-        peakReductionDb: 1.4,
-        adjacentNoiseUsable: true,
-        adjacentNoiseBins: 90,
-        adjacentNoiseFloorDb: -105.2,
-        adjacentNoiseTrust: 0.68,
-        adjacentNoiseDrive: 0.21,
-        adjacentNoiseRejectedPct: 7.3,
-        adjacentNoiseLeftBins: 42,
-        adjacentNoiseRightBins: 48,
-        adjacentNoiseLeftFloorDb: -105.5,
-        adjacentNoiseRightFloorDb: -105.1,
-        adjacentNoiseSideBalance: 0.875,
-        adjacentNoiseAsymmetryDb: 0.4,
-      },
-      evidence: ['wdsp-active', 'legacy-nr5-spnr-available'],
-      constraints: ['nr5-retired-for-wdsp-v2'],
-      recommendedActions: ['Turn NR5 off before collecting WDSP v2 evidence.'],
-      candidateTools: ['legacy-nr5-spnr-diagnostics', 'external-post-demod-bakeoff:rnnoise'],
+      rxChainFilterPresetName: 'WEAK-RX',
+      evidence: ['wdsp-active'],
+      constraints: ['replacement-preflight-required'],
+      recommendedActions: ['Capture replacement-candidate evidence before promotion.'],
+      candidateTools: ['external-post-demod-bakeoff:rnnoise'],
       benchmarkPlanEndpoint: '/api/dsp/benchmark-plan',
       benchmarkScenarioCount: 12,
       nextBenchmarkScenarios: ['weak-cw-carrier', 'agc-level-step'],
@@ -2028,7 +1861,7 @@ describe('POST helpers', () => {
           referenceUrls: ['https://github.com/xiph/rnnoise'],
         },
       ],
-      diagnosticRecommendation: 'NR5 is retired for WDSP v2; turn it off and capture NR-off/current-Zeus plus opt-in non-NR5 candidate evidence instead.',
+      diagnosticRecommendation: 'Capture NR-off/current-Zeus plus opt-in replacement-candidate evidence before promotion.',
     }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -2037,39 +1870,18 @@ describe('POST helpers', () => {
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('/api/dsp/live-diagnostics');
     expect(init?.method).toBeUndefined();
-    expect(diag.status).toBe('nr5-retired-for-wdsp-v2');
+    expect(diag.status).toBe('replacement-preflight-required');
     expect(diag.readinessScore).toBe(70);
     expect(diag.readyForLiveBenchmark).toBe(false);
-    expect(diag.readyForNr5Tuning).toBe(false);
-    expect(diag.nr5TuningStatus).toBe('nr5-retired-for-wdsp-v2');
-    expect(diag.nr5TuningConstraints).toContain('nr5-retired-for-wdsp-v2');
     expect(diag.readyForExternalEngineBakeoff).toBe(false);
     expect(diag.externalEngineBakeoffStatus).toBe('external-engine-bakeoff-preflight-required');
-    expect(diag.externalEngineBakeoffConstraints).toContain('nr5-active-retired-for-wdsp-v2');
-    expect(diag.wdspNr5SpnrAvailable).toBe(true);
+    expect(diag.externalEngineBakeoffConstraints).toContain('replacement-preflight-required');
     expect(diag.frontendSceneFresh).toBe(true);
     expect(diag.runtimeAligned).toBe(true);
     expect(diag.rxChainFilterLowHz).toBe(300);
     expect(diag.rxChainFilterHighHz).toBe(2600);
     expect(diag.rxChainFilterWidthHz).toBe(2300);
-    expect(diag.rxChainFilterPresetName).toBe('NR5-WEAK');
-    expect(diag.nr5SpnrDiagnostics?.learnedFrames).toBe(80);
-    expect(diag.nr5SignalConfidence).toBe(0.73);
-    expect(diag.nr5SignalProbability).toBe(0.69);
-    expect(diag.nr5TextureFill).toBe(0.11);
-    expect(diag.nr5MaskSmoothing).toBe(0.19);
-    expect(diag.nr5WeakSignalMemory).toBe(0.41);
-    expect(diag.nr5SpnrDiagnostics?.levelDrive).toBe(0.82);
-    expect(diag.nr5SpnrDiagnostics?.weakSignalMemory).toBe(0.41);
-    expect(diag.nr5SpnrDiagnostics?.makeupGainDb).toBe(2.6);
-    expect(diag.nr5SpnrDiagnostics?.peakReductionDb).toBe(1.4);
-    expect(diag.nr5SpnrDiagnostics?.adjacentNoiseTrust).toBe(0.68);
-    expect(diag.nr5SpnrDiagnostics?.adjacentNoiseDrive).toBe(0.21);
-    expect(diag.nr5SpnrDiagnostics?.adjacentNoiseSideBalance).toBe(0.875);
-    expect(diag.nr5SpnrDiagnostics?.adjacentNoiseAsymmetryDb).toBe(0.4);
-    expect(diag.evidence).toContain('legacy-nr5-spnr-available');
-    expect(diag.candidateTools).toContain('legacy-nr5-spnr-diagnostics');
-    expect(diag.benchmarkPlanEndpoint).toBe('/api/dsp/benchmark-plan');
+    expect(diag.rxChainFilterPresetName).toBe('WEAK-RX');    expect(diag.benchmarkPlanEndpoint).toBe('/api/dsp/benchmark-plan');
     expect(diag.benchmarkScenarioCount).toBe(12);
     expect(diag.nextBenchmarkScenarios).toEqual(['weak-cw-carrier', 'agc-level-step']);
     expect(diag.benchmarkAcceptanceGates[0]).toContain('pumping');

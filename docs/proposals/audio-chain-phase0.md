@@ -74,7 +74,7 @@ If field telemetry shows sustained > 80% single-core, defaults can be tuned (rev
 
 ### UX panel
 
-The chain panel sits in **Settings → TX Audio Tools** as a tab next to CFC. Master enable + preset dropdown at the top, then five collapsible block cards, then per-block bypass + whole-chain bypass for A/B comparison. Full UX prose lives in `audio-chain/03-ux-and-integration.md`. All colors via existing `tokens.css` tokens; no raw hex. Fonts unchanged (Inter UI, JetBrains Mono numerics). Meter slots reuse existing `HBarMeter` primitive.
+The chain panel sits in **Settings → Audio Tools** as a tab next to CFC. Master enable + preset dropdown at the top, then five collapsible block cards, then per-block bypass + whole-chain bypass for A/B comparison. Full UX prose lives in `audio-chain/03-ux-and-integration.md`. All colors via existing `tokens.css` tokens; no raw hex. Fonts unchanged (Inter UI, JetBrains Mono numerics). Meter slots reuse existing `HBarMeter` primitive.
 
 ### Sensible-defaults principle
 

@@ -1134,7 +1134,7 @@ function New-LiveHistoryReadinessTrend {
 
     if ($null -eq $Latest) {
         return [ordered]@{
-            status = "no-nr5-history"
+            status = "no-candidate-history"
             latestTraceId = ""
             previousTraceId = if ($null -eq $Previous) { "" } else { [string](Get-JsonValue $Previous "traceId") }
             latestReadinessGapSignalCount = 0
@@ -1262,7 +1262,7 @@ function New-LiveHistoryReadinessTrend {
     $improvedCount = $narrowedCount + $resolvedCount
     $regressedCount = $widenedCount + $newCount
     $statusValue = if ($null -eq $Previous) {
-        "no-previous-nr5-trace"
+        "no-previous-candidate-trace"
     }
     else {
         Get-LiveHistoryTrendOverallStatus -ImprovedCount $improvedCount -RegressedCount $regressedCount -ClearedCount $resolvedCount -NewCount $newCount -UnchangedCount $unchangedCount
@@ -1342,7 +1342,7 @@ function Select-LiveHistoryTraceForSummary {
         [Parameter(Mandatory = $true)][string]$Mode
     )
 
-    $items = @($Records | Where-Object { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "nr5SampleCount")) -gt 0 })
+    $items = @($Records | Where-Object { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "candidateSampleCount")) -gt 0 })
     if ($items.Count -eq 0) {
         return $null
     }
@@ -1361,7 +1361,7 @@ function Select-LiveHistoryTraceForSummary {
             return @($items | Sort-Object `
                 @{ Expression = { Get-NumericValue (Get-JsonValue $_ "weakDropoutSampleCount") }; Ascending = $true },
                 @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "weakRecoveryPct"); if ($null -eq $value) { -1.0 } else { $value } }; Ascending = $false },
-                @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "nr5OutputMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true },
+                @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "candidateOutputMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true },
                 @{ Expression = { Get-NumericValue (Get-JsonValue $_ "safetyRiskScore") }; Ascending = $true })[0]
         }
         "lowest-pumping" {
@@ -1371,7 +1371,7 @@ function Select-LiveHistoryTraceForSummary {
                 @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "agcActiveGainMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true },
                 @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "agcVoiceLikeGainMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true },
                 @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "rxAudioLevelerConstrainedSampleCount"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true },
-                @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "nr5OutputMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true },
+                @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "candidateOutputMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true },
                 @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "audioRmsMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true })[0]
         }
         default {
@@ -1379,7 +1379,7 @@ function Select-LiveHistoryTraceForSummary {
                 @{ Expression = { Get-NumericValue (Get-JsonValue $_ "safetyRiskScore") }; Ascending = $true },
                 @{ Expression = { Get-NumericValue (Get-JsonValue $_ "weakDropoutSampleCount") }; Ascending = $true },
                 @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "weakRecoveryPct"); if ($null -eq $value) { -1.0 } else { $value } }; Ascending = $false },
-                @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "nr5OutputMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true })[0]
+                @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "candidateOutputMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true })[0]
         }
     }
 }
@@ -1433,7 +1433,7 @@ function New-LiveHistoryExpectedLatestDelta {
         weakDropoutSampleCount = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "weakDropoutSampleCount"
         strongInputSampleCount = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "strongInputSampleCount"
         weakStrongOutputGapDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "weakStrongOutputGapDb"
-        nr5OutputMovementDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "nr5OutputMovementDb"
+        candidateOutputMovementDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "candidateOutputMovementDb"
         rxAudioLevelerConstrainedSampleCount = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "rxAudioLevelerConstrainedSampleCount"
         rxAudioLevelerConstrainedPct = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "rxAudioLevelerConstrainedPct"
         rxAudioLevelerBoostSlewLimitedSampleCount = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "rxAudioLevelerBoostSlewLimitedSampleCount"
@@ -1446,12 +1446,12 @@ function New-LiveHistoryExpectedLatestDelta {
         agcVoiceLikeGainMovementDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "agcVoiceLikeGainMovementDb"
         agcQuietNoEvidenceGainMovementDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "agcQuietNoEvidenceGainMovementDb"
         agcLevelerConstrainedGainMovementDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "agcLevelerConstrainedGainMovementDb"
-        nr5MakeupMovementDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "nr5MakeupMovementDb"
-        nr5RecoveryDriveMovement = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "nr5RecoveryDriveMovement"
-        nr5ArtifactRiskScore = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "nr5ArtifactRiskScore"
-        nr5LowEvidenceLiftedSampleCount = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "nr5LowEvidenceLiftedSampleCount"
-        nr5LowEvidenceLiftedPct = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "nr5LowEvidenceLiftedPct"
-        nr5AudioAlignmentMismatchPct = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "nr5AudioAlignmentMismatchPct"
+        candidateMakeupMovementDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "candidateMakeupMovementDb"
+        candidateRecoveryDriveMovement = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "candidateRecoveryDriveMovement"
+        candidateArtifactRiskScore = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "candidateArtifactRiskScore"
+        candidateLowEvidenceLiftedSampleCount = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "candidateLowEvidenceLiftedSampleCount"
+        candidateLowEvidenceLiftedPct = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "candidateLowEvidenceLiftedPct"
+        candidateAudioAlignmentMismatchPct = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "candidateAudioAlignmentMismatchPct"
         safetyRiskScore = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "safetyRiskScore"
     }
 }
@@ -1459,7 +1459,7 @@ function New-LiveHistoryExpectedLatestDelta {
 function New-LiveHistoryExpectedThresholds {
     return [ordered]@{
         weakRecoveryPctMinimum = 95.0
-        nr5OutputMovementDbMaximum = 6.0
+        candidateOutputMovementDbMaximum = 6.0
         audioRmsMovementDbMaximum = 6.0
         rxAudioLevelerConstrainedPctMaximum = 1.0
         rxAudioLevelerOutputRmsMovementDbMaximum = 6.0
@@ -1469,13 +1469,13 @@ function New-LiveHistoryExpectedThresholds {
         mixedWeakStrongMinimumWeakSamples = 1
         mixedWeakStrongMinimumStrongSamples = 1
         weakStrongOutputGapDbMaximum = 6.0
-        nr5MakeupMovementDbMaximum = 6.0
-        nr5RecoveryDriveMovementMaximum = 0.5
-        nr5MakeupMaxDbMaximum = 12.0
-        nr5ArtifactRiskScoreMaximum = 0.0
-        nr5LowEvidenceLiftedSampleCountMaximum = 0
-        nr5LowEvidenceLiftedPctMaximum = 5.0
-        nr5AudioAlignmentMismatchPctMaximum = 10.0
+        candidateMakeupMovementDbMaximum = 6.0
+        candidateRecoveryDriveMovementMaximum = 0.5
+        candidateMakeupMaxDbMaximum = 12.0
+        candidateArtifactRiskScoreMaximum = 0.0
+        candidateLowEvidenceLiftedSampleCountMaximum = 0
+        candidateLowEvidenceLiftedPctMaximum = 5.0
+        candidateAudioAlignmentMismatchPctMaximum = 10.0
         audioPeakMaxDbfsMaximum = -1.0
         adcHeadroomMinDbMinimum = 6.0
     }
@@ -1560,7 +1560,7 @@ function New-LiveHistoryExpectedRecommendations {
 
     $items = New-Object System.Collections.Generic.List[string]
     if ($null -eq $Latest) {
-        $items.Add("No NR5 live diagnostics summaries were found; capture G2 NR5 and baseline windows before tuning.") | Out-Null
+        $items.Add("No Candidate live diagnostics summaries were found; capture G2 Candidate and baseline windows before tuning.") | Out-Null
         return @($items.ToArray())
     }
 
@@ -1571,20 +1571,20 @@ function New-LiveHistoryExpectedRecommendations {
         $topHardConstraintName = [string](Get-JsonValue $Latest "topHardConstraintName")
         $topHardConstraintCount = [int](Get-NumericValueOrDefault (Get-JsonValue $Latest "topHardConstraintCount"))
         if (-not [string]::IsNullOrWhiteSpace($topHardConstraintName) -and $topHardConstraintCount -gt 0) {
-            $items.Add("Latest NR5 trace is hard-gated by '$topHardConstraintName' in $topHardConstraintCount sample(s); clear that capture-readiness blocker before interpreting NR5 or RX leveler movement.") | Out-Null
+            $items.Add("Latest Candidate trace is hard-gated by '$topHardConstraintName' in $topHardConstraintCount sample(s); clear that capture-readiness blocker before interpreting Candidate or RX leveler movement.") | Out-Null
         }
         else {
-            $items.Add("Latest NR5 trace is hard-gated; inspect hardConstraintCounts before interpreting NR5 or RX leveler movement.") | Out-Null
+            $items.Add("Latest Candidate trace is hard-gated; inspect hardConstraintCounts before interpreting Candidate or RX leveler movement.") | Out-Null
         }
     }
     if ($latestPumping -gt 0 -and $latestWeak -gt 0) {
-        $items.Add("Latest NR5 trace has both pumping and weak-signal safety signals; tune recovery/makeup coupling before raising global makeup or mask fill.") | Out-Null
+        $items.Add("Latest Candidate trace has both pumping and weak-signal safety signals; tune recovery/makeup coupling before raising global makeup or mask fill.") | Out-Null
     }
     elseif ($latestPumping -gt 0) {
-        $items.Add("Latest NR5 trace is primarily pumping-limited; inspect output movement, makeup movement, recovery-drive movement, and RX leveler constraints before changing weak-fill thresholds.") | Out-Null
+        $items.Add("Latest Candidate trace is primarily pumping-limited; inspect output movement, makeup movement, recovery-drive movement, and RX leveler constraints before changing weak-fill thresholds.") | Out-Null
     }
     elseif ($latestWeak -gt 0) {
-        $items.Add("Latest NR5 trace is primarily weak-signal-limited; inspect top weak dropouts before increasing broad makeup.") | Out-Null
+        $items.Add("Latest Candidate trace is primarily weak-signal-limited; inspect top weak dropouts before increasing broad makeup.") | Out-Null
     }
 
     $latestTraceId = [string](Get-JsonValue $Latest "traceId")
@@ -1619,10 +1619,10 @@ function New-LiveHistoryExpectedPromotionDecision {
     $blockers = New-Object System.Collections.Generic.List[object]
     if ($null -eq $Latest) {
         $blockers.Add([ordered]@{
-            code = "no-nr5-history"
+            code = "no-candidate-history"
             safetyClass = "tooling"
             traceId = ""
-            message = "No NR5 live diagnostics summaries were found."
+            message = "No Candidate live diagnostics summaries were found."
             value = 0
             threshold = 1
             thresholdDirection = "minimum"
@@ -1638,7 +1638,7 @@ function New-LiveHistoryExpectedPromotionDecision {
         $blockerGapSummary = @(New-LiveHistoryReadinessSummaryFromSignals -Signals @($blockers.ToArray()))
         return [ordered]@{
             promotionScope = "candidate-comparison-only"
-            status = "no-nr5-history"
+            status = "no-candidate-history"
             candidatePromotionReady = $false
             defaultBehaviorChangeReady = $false
             latestTraceId = ""
@@ -1653,7 +1653,7 @@ function New-LiveHistoryExpectedPromotionDecision {
             safetyClassReadiness = @($blockerGapSummary)
             blockerGapSummary = @($blockerGapSummary)
             blockers = @($blockers.ToArray())
-            nextAction = "Capture G2 NR5 live diagnostics before selecting a candidate comparison window."
+            nextAction = "Capture G2 Candidate live diagnostics before selecting a candidate comparison window."
         }
     }
 
@@ -2500,7 +2500,7 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
         throw "Input '$Path' must be a watch-dsp-live-diagnostics summary; found tool '$tool'."
     }
 
-    $weak = Get-JsonValue $Report "nr5WeakSignalWatch"
+    $weak = Get-JsonValue $Report "candidateWeakSignalWatch"
     $weakInput = Get-LiveHistoryNumericOrNull $weak "weakInputSampleCount"
     $weakRecovered = Get-LiveHistoryNumericOrNull $weak "weakRecoveredSampleCount"
     $weakDropout = Get-LiveHistoryNumericOrNull $weak "weakDropoutSampleCount"
@@ -2508,7 +2508,7 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
     $hotMakeup = Get-LiveHistoryNumericOrNull $weak "hotMakeupSampleCount"
     $weakRecoveryPct = Get-LiveHistoryNumericOrNull $weak "weakRecoveryPct"
     $weakStrongOutputGap = Get-LiveHistoryNumericOrNull $weak "weakStrongOutputGapDb"
-    $nr5SampleCountForMixedStatus = Get-LiveHistoryNumericOrNull $Report "nr5SampleCount"
+    $candidateSampleCountForMixedStatus = Get-LiveHistoryNumericOrNull $Report "candidateSampleCount"
     if ($null -eq $weakRecoveryPct) {
         $weakRecoveryPct = Get-LiveHistoryPercent $weakRecovered $weakInput
     }
@@ -2521,8 +2521,8 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
         [Math]::Abs([double]$weakStrongOutputGap) -le 6.0)
     $mixedWeakStrongTraceStatus = [string](Get-JsonValue $weak "mixedWeakStrongEvidenceStatus")
     if ([string]::IsNullOrWhiteSpace($mixedWeakStrongTraceStatus)) {
-        $mixedWeakStrongTraceStatus = if ($null -eq $nr5SampleCountForMixedStatus -or $nr5SampleCountForMixedStatus -le 0) {
-            "no-nr5-samples"
+        $mixedWeakStrongTraceStatus = if ($null -eq $candidateSampleCountForMixedStatus -or $candidateSampleCountForMixedStatus -le 0) {
+            "no-candidate-samples"
         }
         elseif ($null -eq $weakInput -or $weakInput -le 0) {
             if ($null -eq $strongInput -or $strongInput -le 0) { "missing-weak-and-strong-input" } else { "missing-weak-input" }
@@ -2548,7 +2548,7 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
     $runtimeEvidenceSampleCount = Get-LiveHistoryNumericOrNull $Report "runtimeEvidenceSampleCount"
     $audioFreshPct = Get-LiveHistoryPercent (Get-JsonValue $Report "audioFreshSampleCount") $runtimeEvidenceSampleCount
     $rxMetersFreshPct = Get-LiveHistoryPercent (Get-JsonValue $Report "rxMetersFreshSampleCount") $runtimeEvidenceSampleCount
-    $nr5SampleCount = Get-LiveHistoryNumericOrNull $Report "nr5SampleCount"
+    $candidateSampleCount = Get-LiveHistoryNumericOrNull $Report "candidateSampleCount"
     $constraintCounts = @(ConvertTo-LiveHistoryNamedCountArray (Get-JsonArray $Report "constraintCounts"))
     $hardConstraintCounts = @(ConvertTo-LiveHistoryNamedCountArray (Get-JsonArray $Report "hardConstraintCounts"))
     $statusCounts = @(ConvertTo-LiveHistoryNamedCountArray (Get-JsonArray $Report "statusCounts"))
@@ -2566,11 +2566,11 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
     }
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($mixedWeakStrongEvidenceReady -and -not $weakStrongOutputParityReady) -SafetyClass "pumping" -Name "weak-strong-output-gap-db" -Value $weakStrongOutputGap -Threshold 6.0 -Message "Mixed weak/strong samples did not normalize to the live output parity target."
 
-    $nr5OutputMovement = Get-LiveHistoryStatValue $Report "nr5OutputDbfs" "movement"
+    $candidateOutputMovement = Get-LiveHistoryStatValue $Report "candidateOutputDbfs" "movement"
     $audioRmsMovement = Get-LiveHistoryStatValue $Report "audioRmsDbfs" "movement"
-    $makeupMovement = Get-LiveHistoryStatValue $Report "nr5MakeupGainDb" "movement"
-    $makeupMax = Get-LiveHistoryStatValue $Report "nr5MakeupGainDb" "max"
-    $recoveryMovement = Get-LiveHistoryStatValue $Report "nr5RecoveryDrive" "movement"
+    $makeupMovement = Get-LiveHistoryStatValue $Report "candidateMakeupGainDb" "movement"
+    $makeupMax = Get-LiveHistoryStatValue $Report "candidateMakeupGainDb" "max"
+    $recoveryMovement = Get-LiveHistoryStatValue $Report "candidateRecoveryDrive" "movement"
     $audioPeakMax = Get-LiveHistoryStatValue $Report "audioPeakDbfs" "max"
     $adcHeadroomMin = Get-LiveHistoryStatValue $Report "adcHeadroomDb" "min"
     $monitorBacklogMax = Get-LiveHistoryStatValue $Report "monitorBacklogSamples" "max"
@@ -2589,44 +2589,44 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
     $agcVoiceLikeMovement = Get-LiveHistoryAgcStabilityWatchValue $Report "voiceLikeAgcMovementDb"
     $agcQuietNoEvidenceMovement = Get-LiveHistoryAgcStabilityWatchValue $Report "quietNoEvidenceAgcMovementDb"
     $agcLevelerConstrainedMovement = Get-LiveHistoryAgcStabilityWatchValue $Report "levelerConstrainedAgcMovementDb"
-    $nr5TextureFillAverage = Get-LiveHistoryStatValue $Report "nr5TextureFill" "average"
-    $nr5SignalProbabilityAverage = Get-LiveHistoryStatValue $Report "nr5SignalProbability" "average"
-    $nr5LowEvidenceLiftWatch = Get-JsonValue $Report "nr5LowEvidenceLiftWatch"
-    $nr5LowEvidenceLiftedSamples = Get-LiveHistoryNumericOrNull $nr5LowEvidenceLiftWatch "liftedSampleCount"
-    $nr5LowEvidenceLiftedPct = Get-LiveHistoryNumericOrNull $nr5LowEvidenceLiftWatch "liftedPct"
-    $nr5LowEvidenceAlignmentMismatchPct = Get-LiveHistoryNumericOrNull $nr5LowEvidenceLiftWatch "alignmentMismatchPct"
-    $nr5AudioAlignmentWatch = Get-JsonValue $Report "nr5AudioAlignmentWatch"
-    $nr5AudioAlignmentMismatchPct = Get-LiveHistoryNumericOrNull $nr5AudioAlignmentWatch "mismatchPct"
-    $nr5ArtifactRiskScore = 0.0
-    if ($null -ne $nr5LowEvidenceLiftedSamples -and $nr5LowEvidenceLiftedSamples -gt 0) {
-        $nr5ArtifactRiskScore += 1.0
+    $candidateTextureFillAverage = Get-LiveHistoryStatValue $Report "candidateTextureFill" "average"
+    $candidateSignalProbabilityAverage = Get-LiveHistoryStatValue $Report "candidateSignalProbability" "average"
+    $candidateLowEvidenceLiftWatch = Get-JsonValue $Report "candidateLowEvidenceLiftWatch"
+    $candidateLowEvidenceLiftedSamples = Get-LiveHistoryNumericOrNull $candidateLowEvidenceLiftWatch "liftedSampleCount"
+    $candidateLowEvidenceLiftedPct = Get-LiveHistoryNumericOrNull $candidateLowEvidenceLiftWatch "liftedPct"
+    $candidateLowEvidenceAlignmentMismatchPct = Get-LiveHistoryNumericOrNull $candidateLowEvidenceLiftWatch "alignmentMismatchPct"
+    $candidateAudioAlignmentWatch = Get-JsonValue $Report "candidateAudioAlignmentWatch"
+    $candidateAudioAlignmentMismatchPct = Get-LiveHistoryNumericOrNull $candidateAudioAlignmentWatch "mismatchPct"
+    $candidateArtifactRiskScore = 0.0
+    if ($null -ne $candidateLowEvidenceLiftedSamples -and $candidateLowEvidenceLiftedSamples -gt 0) {
+        $candidateArtifactRiskScore += 1.0
     }
-    if ($null -ne $nr5LowEvidenceLiftedPct -and $nr5LowEvidenceLiftedPct -gt 5.0) {
-        $nr5ArtifactRiskScore += 1.0
+    if ($null -ne $candidateLowEvidenceLiftedPct -and $candidateLowEvidenceLiftedPct -gt 5.0) {
+        $candidateArtifactRiskScore += 1.0
     }
-    if ($null -ne $nr5AudioAlignmentMismatchPct -and $nr5AudioAlignmentMismatchPct -gt 10.0) {
-        $nr5ArtifactRiskScore += 1.0
+    if ($null -ne $candidateAudioAlignmentMismatchPct -and $candidateAudioAlignmentMismatchPct -gt 10.0) {
+        $candidateArtifactRiskScore += 1.0
     }
-    if ($null -ne $nr5TextureFillAverage -and $nr5TextureFillAverage -gt 0.65 -and
-        ($null -eq $nr5SignalProbabilityAverage -or $nr5SignalProbabilityAverage -lt 0.30)) {
-        $nr5ArtifactRiskScore += 1.0
+    if ($null -ne $candidateTextureFillAverage -and $candidateTextureFillAverage -gt 0.65 -and
+        ($null -eq $candidateSignalProbabilityAverage -or $candidateSignalProbabilityAverage -lt 0.30)) {
+        $candidateArtifactRiskScore += 1.0
     }
-    $nr5ArtifactRiskScore = [Math]::Round($nr5ArtifactRiskScore, 3)
-    $nr5ArtifactRiskStatus = if ($null -eq $nr5SampleCount -or $nr5SampleCount -le 0) {
-        "no-nr5-samples"
+    $candidateArtifactRiskScore = [Math]::Round($candidateArtifactRiskScore, 3)
+    $candidateArtifactRiskStatus = if ($null -eq $candidateSampleCount -or $candidateSampleCount -le 0) {
+        "no-candidate-samples"
     }
-    elseif ($nr5ArtifactRiskScore -gt 0.0) {
+    elseif ($candidateArtifactRiskScore -gt 0.0) {
         "artifact-review"
     }
     else {
         "artifact-clear"
     }
 
-    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $nr5OutputMovement -and $nr5OutputMovement -gt 6.0) -SafetyClass "pumping" -Name "nr5-output-movement-db" -Value $nr5OutputMovement -Threshold 6.0 -Message "NR5 output movement is high enough to need pumping review."
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $candidateOutputMovement -and $candidateOutputMovement -gt 6.0) -SafetyClass "pumping" -Name "candidate-output-movement-db" -Value $candidateOutputMovement -Threshold 6.0 -Message "Candidate output movement is high enough to need pumping review."
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $audioRmsMovement -and $audioRmsMovement -gt 6.0) -SafetyClass "pumping" -Name "audio-rms-movement-db" -Value $audioRmsMovement -Threshold 6.0 -Message "Final-audio RMS movement is high enough to need listening review."
-    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $makeupMovement -and $makeupMovement -gt 6.0) -SafetyClass "pumping" -Name "nr5-makeup-movement-db" -Value $makeupMovement -Threshold 6.0 -Message "NR5 makeup gain movement is high."
-    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $recoveryMovement -and $recoveryMovement -gt 0.5) -SafetyClass "pumping" -Name "nr5-recovery-drive-movement" -Value $recoveryMovement -Threshold 0.5 -Message "Recovery-drive movement is high."
-    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $makeupMax -and $makeupMax -gt 12.0) -SafetyClass "pumping" -Name "nr5-makeup-max-db" -Value $makeupMax -Threshold 12.0 -Message "NR5 makeup peak exceeded the hot-makeup threshold."
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $makeupMovement -and $makeupMovement -gt 6.0) -SafetyClass "pumping" -Name "candidate-makeup-movement-db" -Value $makeupMovement -Threshold 6.0 -Message "Candidate makeup gain movement is high."
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $recoveryMovement -and $recoveryMovement -gt 0.5) -SafetyClass "pumping" -Name "candidate-recovery-drive-movement" -Value $recoveryMovement -Threshold 0.5 -Message "Recovery-drive movement is high."
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $makeupMax -and $makeupMax -gt 12.0) -SafetyClass "pumping" -Name "candidate-makeup-max-db" -Value $makeupMax -Threshold 12.0 -Message "Candidate makeup peak exceeded the hot-makeup threshold."
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $hotMakeup -and $hotMakeup -gt 0) -SafetyClass "pumping" -Name "hot-makeup-samples" -Value $hotMakeup -Threshold 0 -Message "Hot-makeup samples appeared in the trace."
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerBoostSlewSamples -and $rxAudioLevelerBoostSlewSamples -gt 0) -SafetyClass "pumping" -Name "rx-leveler-boost-slew-samples" -Value $rxAudioLevelerBoostSlewSamples -Threshold 0 -Message "RX audio leveler boost slew limited one or more samples."
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerConstrainedPct -and $rxAudioLevelerConstrainedPct -gt 1.0) -SafetyClass "pumping" -Name "rx-leveler-constrained-pct" -Value $rxAudioLevelerConstrainedPct -Threshold 1.0 -Message "RX audio leveler constrained more than 1 percent of diagnostic samples."
@@ -2635,7 +2635,7 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $agcActiveMovement -and $agcActiveMovement -gt 6.0) -SafetyClass "pumping" -Name "agc-active-gain-movement-db" -Value $agcActiveMovement -Threshold 6.0 -Message "AGC gain moved during active audio; inspect AGC stability before tuning NR or AGC."
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $agcVoiceLikeMovement -and $agcVoiceLikeMovement -gt 6.0) -SafetyClass "pumping" -Name "agc-voice-like-gain-movement-db" -Value $agcVoiceLikeMovement -Threshold 6.0 -Message "AGC gain moved during voice-like evidence; inspect AGC stability before tuning speech recovery."
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $agcPumpingRisk -and $agcPumpingRisk -gt 0.0) -SafetyClass "pumping" -Name "agc-pumping-risk" -Value $agcPumpingRisk -Threshold 0 -Message "Watcher classified active or voice-like AGC pumping risk."
-    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($nr5ArtifactRiskScore -gt 0.0) -SafetyClass "artifact-control" -Name "nr5-speech-artifact-risk-score" -Value $nr5ArtifactRiskScore -Threshold 0.0 -Message "NR5 low-evidence lift, audio-alignment mismatch, or unsupported texture fill needs speech-artifact listening review."
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($candidateArtifactRiskScore -gt 0.0) -SafetyClass "artifact-control" -Name "candidate-speech-artifact-risk-score" -Value $candidateArtifactRiskScore -Threshold 0.0 -Message "Candidate low-evidence lift, audio-alignment mismatch, or unsupported texture fill needs speech-artifact listening review."
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerPeakLimitedSamples -and $rxAudioLevelerPeakLimitedSamples -gt 0) -SafetyClass "clipping" -Name "rx-leveler-peak-limited-samples" -Value $rxAudioLevelerPeakLimitedSamples -Threshold 0 -Message "RX audio leveler peak headroom limited one or more samples."
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerOutputLimitedSamples -and $rxAudioLevelerOutputLimitedSamples -gt 0) -SafetyClass "clipping" -Name "rx-leveler-output-limited-samples" -Value $rxAudioLevelerOutputLimitedSamples -Threshold 0 -Message "RX audio leveler output cap shaped one or more samples."
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $audioPeakMax -and $audioPeakMax -gt -1.0) -SafetyClass "clipping" -Name "audio-peak-max-dbfs" -Value $audioPeakMax -Threshold -1.0 -Message "Audio peak is close to clipping."
@@ -2653,8 +2653,8 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
     $candidateBlockerCount = Get-TotalSafetyClassCount -Counts $candidateBlockingCounts
     $candidateComparisonReady = ($readyForBenchmark -and
         $candidateBlockerCount -eq 0 -and
-        $null -ne $nr5SampleCount -and
-        $nr5SampleCount -gt 0)
+        $null -ne $candidateSampleCount -and
+        $candidateSampleCount -gt 0)
     $reviewStatus = Get-LiveHistoryTraceStatus `
         -ReadyForBenchmark $readyForBenchmark `
         -HardGateCount $hardGateCount `
@@ -2714,11 +2714,11 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
         topHardConstraintCount = if ($null -eq $topHardConstraint) { 0 } else { [int](Get-NumericValueOrDefault (Get-JsonValue $topHardConstraint "count")) }
         readyForBenchmarkTrace = $readyForBenchmark
         trendStatus = [string](Get-JsonValue $Report "trendStatus")
-        nr5TuningReadyTrace = Test-Truthy (Get-JsonValue $Report "nr5TuningReadyTrace")
-        nr5TuningTraceStatus = [string](Get-JsonValue $Report "nr5TuningTraceStatus")
-        nr5SampleCount = if ($null -eq $nr5SampleCount) { 0 } else { [int][Math]::Round($nr5SampleCount) }
-        nr5ProbabilityDiagnosticSampleCount = [int](Get-NumericValue (Get-JsonValue $Report "nr5ProbabilityDiagnosticSampleCount"))
-        nr5AgcDiagnosticSampleCount = [int](Get-NumericValue (Get-JsonValue $Report "nr5AgcDiagnosticSampleCount"))
+        candidateTuningReadyTrace = Test-Truthy (Get-JsonValue $Report "candidateTuningReadyTrace")
+        candidateTuningTraceStatus = [string](Get-JsonValue $Report "candidateTuningTraceStatus")
+        candidateSampleCount = if ($null -eq $candidateSampleCount) { 0 } else { [int][Math]::Round($candidateSampleCount) }
+        candidateProbabilityDiagnosticSampleCount = [int](Get-NumericValue (Get-JsonValue $Report "candidateProbabilityDiagnosticSampleCount"))
+        candidateAgcDiagnosticSampleCount = [int](Get-NumericValue (Get-JsonValue $Report "candidateAgcDiagnosticSampleCount"))
         weakInputSampleCount = if ($null -eq $weakInput) { 0 } else { [int][Math]::Round($weakInput) }
         weakRecoveredSampleCount = if ($null -eq $weakRecovered) { 0 } else { [int][Math]::Round($weakRecovered) }
         weakDropoutSampleCount = if ($null -eq $weakDropout) { 0 } else { [int][Math]::Round($weakDropout) }
@@ -2729,7 +2729,7 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
         mixedWeakStrongEvidenceReady = $mixedWeakStrongEvidenceReady
         weakStrongOutputParityReady = $weakStrongOutputParityReady
         mixedWeakStrongEvidenceStatus = $mixedWeakStrongTraceStatus
-        nr5OutputMovementDb = $nr5OutputMovement
+        candidateOutputMovementDb = $candidateOutputMovement
         audioRmsMovementDb = $audioRmsMovement
         rxAudioLevelerConstrainedSampleCount = if ($null -eq $rxAudioLevelerConstrainedSamples) { 0 } else { [int][Math]::Round($rxAudioLevelerConstrainedSamples) }
         rxAudioLevelerConstrainedPct = if ($null -eq $rxAudioLevelerConstrainedPct) { $null } else { [Math]::Round([double]$rxAudioLevelerConstrainedPct, 3) }
@@ -2744,17 +2744,17 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
         agcVoiceLikeGainMovementDb = $agcVoiceLikeMovement
         agcQuietNoEvidenceGainMovementDb = $agcQuietNoEvidenceMovement
         agcLevelerConstrainedGainMovementDb = $agcLevelerConstrainedMovement
-        nr5MakeupMovementDb = $makeupMovement
-        nr5MakeupMaxDb = $makeupMax
-        nr5RecoveryDriveMovement = $recoveryMovement
-        nr5TextureFillAverage = $nr5TextureFillAverage
-        nr5SignalProbabilityAverage = $nr5SignalProbabilityAverage
-        nr5LowEvidenceLiftedSampleCount = if ($null -eq $nr5LowEvidenceLiftedSamples) { 0 } else { [int][Math]::Round($nr5LowEvidenceLiftedSamples) }
-        nr5LowEvidenceLiftedPct = if ($null -eq $nr5LowEvidenceLiftedPct) { $null } else { [Math]::Round([double]$nr5LowEvidenceLiftedPct, 3) }
-        nr5LowEvidenceAlignmentMismatchPct = if ($null -eq $nr5LowEvidenceAlignmentMismatchPct) { $null } else { [Math]::Round([double]$nr5LowEvidenceAlignmentMismatchPct, 3) }
-        nr5AudioAlignmentMismatchPct = if ($null -eq $nr5AudioAlignmentMismatchPct) { $null } else { [Math]::Round([double]$nr5AudioAlignmentMismatchPct, 3) }
-        nr5ArtifactRiskScore = $nr5ArtifactRiskScore
-        nr5ArtifactRiskStatus = $nr5ArtifactRiskStatus
+        candidateMakeupMovementDb = $makeupMovement
+        candidateMakeupMaxDb = $makeupMax
+        candidateRecoveryDriveMovement = $recoveryMovement
+        candidateTextureFillAverage = $candidateTextureFillAverage
+        candidateSignalProbabilityAverage = $candidateSignalProbabilityAverage
+        candidateLowEvidenceLiftedSampleCount = if ($null -eq $candidateLowEvidenceLiftedSamples) { 0 } else { [int][Math]::Round($candidateLowEvidenceLiftedSamples) }
+        candidateLowEvidenceLiftedPct = if ($null -eq $candidateLowEvidenceLiftedPct) { $null } else { [Math]::Round([double]$candidateLowEvidenceLiftedPct, 3) }
+        candidateLowEvidenceAlignmentMismatchPct = if ($null -eq $candidateLowEvidenceAlignmentMismatchPct) { $null } else { [Math]::Round([double]$candidateLowEvidenceAlignmentMismatchPct, 3) }
+        candidateAudioAlignmentMismatchPct = if ($null -eq $candidateAudioAlignmentMismatchPct) { $null } else { [Math]::Round([double]$candidateAudioAlignmentMismatchPct, 3) }
+        candidateArtifactRiskScore = $candidateArtifactRiskScore
+        candidateArtifactRiskStatus = $candidateArtifactRiskStatus
         audioPeakMaxDbfs = $audioPeakMax
         adcHeadroomMinDb = $adcHeadroomMin
         monitorBacklogMaxSamples = $monitorBacklogMax
@@ -3168,7 +3168,7 @@ function New-LiveHistoryExperimentCoverage {
         $coveredComparisons = New-Object System.Collections.Generic.List[string]
         $scenarioTraceIds = New-Object System.Collections.Generic.List[string]
         $readyTraceCount = 0
-        $nr5TraceCount = 0
+        $candidateTraceCount = 0
 
         foreach ($record in @($Records)) {
             $recordScenarioId = ConvertTo-LiveHistoryScenarioId ([string](Get-JsonValue $record "scenarioId"))
@@ -3182,8 +3182,8 @@ function New-LiveHistoryExperimentCoverage {
             }
 
             $scenarioTraceIds.Add([string](Get-JsonValue $record "traceId")) | Out-Null
-            if ([int](Get-NumericValueOrDefault (Get-JsonValue $record "nr5SampleCount")) -gt 0) {
-                $nr5TraceCount++
+            if ([int](Get-NumericValueOrDefault (Get-JsonValue $record "candidateSampleCount")) -gt 0) {
+                $candidateTraceCount++
             }
             if (Test-Truthy (Get-JsonValue $record "readyForBenchmarkTrace")) {
                 $readyTraceCount++
@@ -3214,7 +3214,7 @@ function New-LiveHistoryExperimentCoverage {
             coveredComparisons = @($covered)
             missingComparisons = @($missing)
             readyTraceCount = $readyTraceCount
-            nr5TraceCount = $nr5TraceCount
+            candidateTraceCount = $candidateTraceCount
             traceIds = @($scenarioTraceIds.ToArray() | Select-Object -Unique | Sort-Object)
         }) | Out-Null
     }
@@ -3289,7 +3289,7 @@ function Test-LiveHistoryExperimentCoverageMatches {
         if (-not [string]::Equals([string](Get-JsonValue $actualScenario "status"), [string](Get-JsonValue $expectedScenario "status"), [StringComparison]::OrdinalIgnoreCase)) {
             return $false
         }
-        foreach ($field in @("readyTraceCount", "nr5TraceCount")) {
+        foreach ($field in @("readyTraceCount", "candidateTraceCount")) {
             if ([int](Get-NumericValueOrDefault (Get-JsonValue $actualScenario $field) -1) -ne [int](Get-NumericValueOrDefault (Get-JsonValue $expectedScenario $field) -1)) {
                 return $false
             }
@@ -3313,10 +3313,10 @@ function Get-LiveHistoryTuningControlFamilyForSignal {
     )
 
     switch -Regex ($SignalName) {
-        "artifact|texture|low-evidence" { return "nr5-speech-artifact-control" }
-        "recovery-drive" { return "nr5-recovery-drive-damping" }
-        "makeup" { return "nr5-makeup-gain-cap-and-slew" }
-        "output-movement|audio-rms" { return "nr5-output-level-stability" }
+        "artifact|texture|low-evidence" { return "candidate-speech-artifact-control" }
+        "recovery-drive" { return "candidate-recovery-drive-damping" }
+        "makeup" { return "candidate-makeup-gain-cap-and-slew" }
+        "output-movement|audio-rms" { return "candidate-output-level-stability" }
         "weak-recovery|weak-dropout|weak-dropouts" { return "weak-signal-rescue-gating" }
         "audio-peak|clipping" { return "audio-peak-headroom" }
         "fresh" { return "diagnostic-freshness" }
@@ -3325,8 +3325,8 @@ function Get-LiveHistoryTuningControlFamilyForSignal {
     }
 
     switch ($SafetyClass) {
-        "pumping" { return "nr5-level-stability" }
-        "artifact-control" { return "nr5-speech-artifact-control" }
+        "pumping" { return "candidate-level-stability" }
+        "artifact-control" { return "candidate-speech-artifact-control" }
         "weak-signal" { return "weak-signal-preservation" }
         "clipping" { return "level-headroom" }
         "freshness" { return "diagnostic-freshness" }
@@ -3360,10 +3360,10 @@ function Get-LiveHistoryTuningRationaleForSafetyClass {
     )
 
     switch ($SafetyClass) {
-        "pumping" { return "Latest NR5 evidence is level-stability limited; inspect output movement, makeup movement, recovery-drive movement, and RX leveler constraints before changing weak-fill thresholds." }
-        "artifact-control" { return "Latest NR5 evidence needs speech-artifact review; inspect texture fill, low-evidence lift, and audio-alignment rows before changing mask fill or recovery." }
-        "weak-signal" { return "Latest NR5 evidence is weak-signal limited; preserve recovery and reduce dropouts before tightening noise suppression." }
-        "clipping" { return "Latest NR5 evidence is level-headroom limited; reduce peak or makeup risk before candidate comparison." }
+        "pumping" { return "Latest Candidate evidence is level-stability limited; inspect output movement, makeup movement, recovery-drive movement, and RX leveler constraints before changing weak-fill thresholds." }
+        "artifact-control" { return "Latest Candidate evidence needs speech-artifact review; inspect texture fill, low-evidence lift, and audio-alignment rows before changing mask fill or recovery." }
+        "weak-signal" { return "Latest Candidate evidence is weak-signal limited; preserve recovery and reduce dropouts before tightening noise suppression." }
+        "clipping" { return "Latest Candidate evidence is level-headroom limited; reduce peak or makeup risk before candidate comparison." }
         "freshness" { return "Diagnostics were not fresh enough to support tuning; fix capture fidelity before interpreting NR behavior." }
         "front-end" { return "Front-end evidence is limiting the trace; correct RF/ADC headroom before attributing symptoms to DSP." }
         "audio-path" { return "Audio-path runtime evidence is limiting the trace; fix monitor or latency evidence before tuning." }
@@ -3467,11 +3467,11 @@ function New-LiveHistoryExpectedTuningActionPlan {
 
     $actions = New-Object System.Collections.Generic.List[object]
     if ($null -eq $Latest) {
-        Add-LiveHistoryExpectedTuningAction -Actions $actions -ActionId "capture-nr5-live-history" -SafetyClass "tooling" -SignalName "no-nr5-history" -Rationale "No NR5 live history exists; capture G2 NR5 and reference windows before tuning."
+        Add-LiveHistoryExpectedTuningAction -Actions $actions -ActionId "capture-candidate-live-history" -SafetyClass "tooling" -SignalName "no-candidate-history" -Rationale "No Candidate live history exists; capture G2 Candidate and reference windows before tuning."
         return [ordered]@{
             planScope = "candidate-comparison-only"
-            status = "no-nr5-history"
-            directionStatus = "no-nr5-history"
+            status = "no-candidate-history"
+            directionStatus = "no-candidate-history"
             promotionStatus = ""
             latestTraceId = ""
             referenceTraceId = ""
@@ -3479,7 +3479,7 @@ function New-LiveHistoryExpectedTuningActionPlan {
             latestVsPreviousStatus = ""
             latestVsReferenceStatus = ""
             primarySafetyClass = "tooling"
-            primarySignalName = "no-nr5-history"
+            primarySignalName = "no-candidate-history"
             topControlFamily = "capture-readiness"
             actionCount = $actions.Count
             actions = @($actions.ToArray())
@@ -3554,7 +3554,7 @@ function New-LiveHistoryExpectedTuningActionPlan {
             "front-end" { "restore-front-end-headroom" }
             "audio-path" { "restore-audio-path-runtime" }
             "weak-signal" { "restore-weak-signal-recovery" }
-            "pumping" { if ($promotionStatus -eq "blocked-weak-and-pumping") { "balance-weak-recovery-and-pumping" } else { "reduce-nr5-pumping" } }
+            "pumping" { if ($promotionStatus -eq "blocked-weak-and-pumping") { "balance-weak-recovery-and-pumping" } else { "reduce-candidate-pumping" } }
             default { "resolve-latest-safety-signal" }
         }
         Add-LiveHistoryExpectedTuningAction `
@@ -3597,8 +3597,8 @@ function New-LiveHistoryExpectedTuningActionPlan {
             -ReadinessGapUnit ([string](Get-JsonValue $previousDetail "readinessGapUnit")) `
             -PreviousDelta (Get-JsonValue $previousDetail "readinessGapDelta") `
             -ReferenceTraceId ([string](Get-JsonValue $LatestVsPreviousTrend "referenceTraceId")) `
-            -ReferenceTraceRole "previous-nr5" `
-            -Rationale "Latest trace introduced or widened a gap against the immediately previous NR5 trace; isolate this last tuning step before further changes."
+            -ReferenceTraceRole "previous-candidate" `
+            -Rationale "Latest trace introduced or widened a gap against the immediately previous Candidate trace; isolate this last tuning step before further changes."
     }
 
     $topAction = if ($actions.Count -gt 0) { $actions[0] } else { $null }
@@ -3621,11 +3621,11 @@ function New-LiveHistoryExpectedTuningActionPlan {
 }
 
 function Get-LiveHistoryExperimentTuningComparisons {
-    return @("current-zeus", "nr5-spnr")
+    return @("current-zeus", "candidate-under-test")
 }
 
 function Get-LiveHistoryExperimentAcceptanceComparisons {
-    return @("off-baseline", "thetis-parity", "current-zeus", "nr5-spnr")
+    return @("off-baseline", "thetis-parity", "current-zeus", "candidate-under-test")
 }
 
 function Get-LiveHistoryExperimentRequiredComparisons {
@@ -3637,8 +3637,8 @@ function Get-LiveHistoryExperimentRequiredEvidence {
         "off-baseline live diagnostics trace index",
         "Thetis-parity live diagnostics trace index",
         "current-Zeus baseline live diagnostics trace index",
-        "NR5/SPNR opt-in candidate live diagnostics trace index",
-        "current-vs-NR5 matrix comparison report with no regressions",
+        "candidate DSP opt-in candidate live diagnostics trace index",
+        "current-vs-Candidate matrix comparison report with no regressions",
         "operator notes for speech texture and pumping"
     )
 }
@@ -3650,15 +3650,15 @@ function Get-LiveHistoryExperimentGatesForControlFamily {
     )
 
     switch ($ControlFamily) {
-        "nr5-output-level-stability" {
+        "candidate-output-level-stability" {
             return @(
-                "No nr5OutputMovementDb regression against current-Zeus or reference trace.",
-                "No nr5MakeupMovementDb, nr5MakeupMaxDb, or nr5RecoveryDriveMovement regression.",
+                "No candidateOutputMovementDb regression against current-Zeus or reference trace.",
+                "No candidateMakeupMovementDb, candidateMakeupMaxDb, or candidateRecoveryDriveMovement regression.",
                 "No weak-signal recovery loss while reducing level movement.",
                 "No audio peak max above -1 dBFS."
             )
         }
-        "nr5-weak-signal-recovery" {
+        "candidate-weak-signal-recovery" {
             return @(
                 "Weak recovery stays at or above 95 percent when weak input is present.",
                 "No new weak-input dropouts.",
@@ -3666,7 +3666,7 @@ function Get-LiveHistoryExperimentGatesForControlFamily {
                 "No output-level pumping regression while improving recovery."
             )
         }
-        "nr5-recovery-makeup-bounds" {
+        "candidate-recovery-makeup-bounds" {
             return @(
                 "No makeup gain movement or max-gain regression.",
                 "No recovery-drive movement regression.",
@@ -3674,7 +3674,7 @@ function Get-LiveHistoryExperimentGatesForControlFamily {
                 "No audio peak max above -1 dBFS."
             )
         }
-        "nr5-mask-fill-texture" {
+        "candidate-mask-fill-texture" {
             return @(
                 "Texture-fill movement does not create audible burbling or speech loss.",
                 "Noise-only windows remain closed.",
@@ -3682,10 +3682,10 @@ function Get-LiveHistoryExperimentGatesForControlFamily {
                 "Output and makeup movement do not regress."
             )
         }
-        "nr5-speech-artifact-control" {
+        "candidate-speech-artifact-control" {
             return @(
                 "No increase in low-evidence lifted samples.",
-                "No NR5/audio alignment mismatch growth on speech-like windows.",
+                "No Candidate/audio alignment mismatch growth on speech-like windows.",
                 "Texture fill remains supported by signal probability or coherent weak evidence.",
                 "Operator listening notes report no metallic, burbling, or speech-like artifacts."
             )
@@ -3702,7 +3702,7 @@ function Get-LiveHistoryExperimentGatesForControlFamily {
             return @(
                 "All live diagnostics endpoint samples succeed.",
                 "Runtime evidence, RX meters, and final audio are fresh for every runtime sample.",
-                "NR5 AGC diagnostics cover every NR5 sample.",
+                "Candidate AGC diagnostics cover every Candidate sample.",
                 "G2 hardware evidence remains connected and in-family."
             )
         }
@@ -3768,24 +3768,24 @@ function Add-LiveHistoryExpectedExperimentScenariosForAction {
 
     $controlFamily = [string](Get-JsonValue $Action "controlFamily")
     switch ($controlFamily) {
-        "nr5-output-level-stability" {
-            Add-LiveHistoryExpectedExperimentScenario -Scenarios $Scenarios -Action $Action -ScenarioId "ssb-like-speech-dynamic" -Purpose "Stress dynamic voice and AGC-driven NR5 output movement." -OperatorSetup "Use a live SSB voice segment with obvious level swings or QSB."
+        "candidate-output-level-stability" {
+            Add-LiveHistoryExpectedExperimentScenario -Scenarios $Scenarios -Action $Action -ScenarioId "ssb-like-speech-dynamic" -Purpose "Stress dynamic voice and AGC-driven Candidate output movement." -OperatorSetup "Use a live SSB voice segment with obvious level swings or QSB."
             Add-LiveHistoryExpectedExperimentScenario -Scenarios $Scenarios -Action $Action -ScenarioId "adjacent-strong-signal" -Purpose "Check strong-neighbor energy without rescue or makeup pumping." -OperatorSetup "Tune near a strong adjacent signal while preserving the wanted signal."
             Add-LiveHistoryExpectedExperimentScenario -Scenarios $Scenarios -Action $Action -ScenarioId "noise-only-gating" -Purpose "Verify level rescue and makeup stay closed without wanted signal." -OperatorSetup "Use a clear/noise-only slice with squelch open if needed for audio evidence."
         }
-        "nr5-weak-signal-recovery" {
+        "candidate-weak-signal-recovery" {
             Add-LiveHistoryExpectedExperimentScenario -Scenarios $Scenarios -Action $Action -ScenarioId "weak-cw-carrier" -Purpose "Measure faint carrier recovery without dropout." -OperatorSetup "Use the weakest stable carrier available on G2."
-            Add-LiveHistoryExpectedExperimentScenario -Scenarios $Scenarios -Action $Action -ScenarioId "weak-ssb-speech" -Purpose "Measure faint speech preservation under NR5 rescue." -OperatorSetup "Use weak SSB speech at the edge of readability."
+            Add-LiveHistoryExpectedExperimentScenario -Scenarios $Scenarios -Action $Action -ScenarioId "weak-ssb-speech" -Purpose "Measure faint speech preservation under Candidate rescue." -OperatorSetup "Use weak SSB speech at the edge of readability."
             Add-LiveHistoryExpectedExperimentScenario -Scenarios $Scenarios -Action $Action -ScenarioId "fading-weak-signal" -Purpose "Check recovery during QSB and near-threshold fades." -OperatorSetup "Prefer a weak signal with natural fading or flutter."
         }
-        "nr5-recovery-makeup-bounds" {
+        "candidate-recovery-makeup-bounds" {
             Add-LiveHistoryExpectedExperimentScenario -Scenarios $Scenarios -Action $Action -ScenarioId "ssb-like-speech-dynamic" -Purpose "Bound recovery and makeup motion during voice level swings." -OperatorSetup "Use a dynamic SSB voice segment."
             Add-LiveHistoryExpectedExperimentScenario -Scenarios $Scenarios -Action $Action -ScenarioId "weak-ssb-speech" -Purpose "Confirm makeup bounds do not bury weak speech." -OperatorSetup "Use weak speech where recovery matters."
             Add-LiveHistoryExpectedExperimentScenario -Scenarios $Scenarios -Action $Action -ScenarioId "noise-only-gating" -Purpose "Confirm makeup does not open on noise-only audio." -OperatorSetup "Use a no-signal slice after candidate tuning."
         }
-        "nr5-mask-fill-texture" {
+        "candidate-mask-fill-texture" {
             Add-LiveHistoryExpectedExperimentScenario -Scenarios $Scenarios -Action $Action -ScenarioId "ssb-like-speech" -Purpose "Listen and measure speech texture while mask fill changes." -OperatorSetup "Use normal SSB speech with operator notes."
-            Add-LiveHistoryExpectedExperimentScenario -Scenarios $Scenarios -Action $Action -ScenarioId "weak-ssb-speech" -Purpose "Check weak speech intelligibility with mask fill active." -OperatorSetup "Use weak speech that previously needed NR5 rescue."
+            Add-LiveHistoryExpectedExperimentScenario -Scenarios $Scenarios -Action $Action -ScenarioId "weak-ssb-speech" -Purpose "Check weak speech intelligibility with mask fill active." -OperatorSetup "Use weak speech that previously needed Candidate rescue."
             Add-LiveHistoryExpectedExperimentScenario -Scenarios $Scenarios -Action $Action -ScenarioId "noise-only-gating" -Purpose "Check mask fill does not create noise-only artifacts." -OperatorSetup "Use no wanted signal and capture operator notes."
         }
         "audio-headroom" {
@@ -3816,7 +3816,7 @@ function New-LiveHistoryExpectedExperimentPlan {
     if ($scenarios.Count -eq 0) {
         Add-LiveHistoryExpectedExperimentScenario `
             -Scenarios $scenarios `
-            -Action ([ordered]@{ actionId = "capture-nr5-live-history"; priority = 1; controlFamily = "capture-readiness"; safetyClass = "tooling"; signalName = "no-nr5-history"; trendSource = "tooling" }) `
+            -Action ([ordered]@{ actionId = "capture-candidate-live-history"; priority = 1; controlFamily = "capture-readiness"; safetyClass = "tooling"; signalName = "no-candidate-history"; trendSource = "tooling" }) `
             -ScenarioId "diagnostic-freshness-preflight" `
             -Purpose "Capture enough G2 live diagnostics to build a tuning history." `
             -OperatorSetup "Run the watcher on the connected G2 backend before tuning."
@@ -3854,9 +3854,9 @@ function New-LiveHistoryExpectedExperimentPlan {
             offBaseline = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ScenarioIds $scenarioArgument -ComparisonId off-baseline -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.off-baseline.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.off-baseline.json -Samples $recommendedSampleCount -IntervalMs $recommendedIntervalMs"
             thetis = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ScenarioIds $scenarioArgument -ComparisonId thetis-parity -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.thetis-parity.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.thetis-parity.json -Samples $recommendedSampleCount -IntervalMs $recommendedIntervalMs"
             baseline = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ScenarioIds $scenarioArgument -ComparisonId current-zeus -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.baseline.json -Samples $recommendedSampleCount -IntervalMs $recommendedIntervalMs"
-            candidate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ScenarioIds $scenarioArgument -ComparisonId nr5-spnr -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.candidate.json -Samples $recommendedSampleCount -IntervalMs $recommendedIntervalMs"
-            compare = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -BaselineComparisonId current-zeus -CandidateComparisonId nr5-spnr -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.json -FailOnRegression"
-            compareThetis = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.thetis-parity.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -BaselineComparisonId thetis-parity -CandidateComparisonId nr5-spnr -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.thetis-parity.json -FailOnRegression"
+            candidate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ScenarioIds $scenarioArgument -ComparisonId candidate-under-test -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.candidate.json -Samples $recommendedSampleCount -IntervalMs $recommendedIntervalMs"
+            compare = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -BaselineComparisonId current-zeus -CandidateComparisonId candidate-under-test -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.json -FailOnRegression"
+            compareThetis = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.thetis-parity.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -BaselineComparisonId thetis-parity -CandidateComparisonId candidate-under-test -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.thetis-parity.json -FailOnRegression"
         }
         defaultBehaviorChangeReady = $false
         requiredEvidence = @(Get-LiveHistoryExperimentRequiredEvidence)
@@ -4519,7 +4519,7 @@ function Get-LiveDiagnosticsHistoryAbsolutePaths {
         }
     }
 
-    foreach ($name in @("latestTrace", "previousNr5Trace", "bestBalancedTrace", "bestWeakSignalTrace", "lowestPumpingTrace")) {
+    foreach ($name in @("latestTrace", "previousCandidateTrace", "bestBalancedTrace", "bestWeakSignalTrace", "lowestPumpingTrace")) {
         $trace = Get-JsonValue $Report $name
         Add-AbsolutePathIfPresent $absolutePaths "$name.path" (Get-JsonValue $trace "path")
     }
@@ -4581,9 +4581,9 @@ function ConvertTo-ComparisonId {
         "current-zeus" { return "current-zeus" }
         "zeus-current" { return "current-zeus" }
         "zeus" { return "current-zeus" }
-        "nr5" { return "nr5-spnr" }
-        "spnr" { return "nr5-spnr" }
-        "nr5-spnr" { return "nr5-spnr" }
+        "candidate" { return "candidate-under-test" }
+        "candidate" { return "candidate-under-test" }
+        "candidate-under-test" { return "candidate-under-test" }
         "candidate" { return "candidate-under-test" }
         "candidate-under-test" { return "candidate-under-test" }
         "external" { return "candidate-external-engine-opt-in" }
@@ -4597,7 +4597,7 @@ function Test-StrictComparisonStateId {
     param([string]$ComparisonId)
 
     $id = ConvertTo-ComparisonId $ComparisonId
-    return ($id -eq "nr5-spnr" -or $id -eq "off-baseline")
+    return ($id -eq "candidate-under-test" -or $id -eq "off-baseline")
 }
 
 function Get-FixtureEvidenceEngine {
@@ -5224,7 +5224,7 @@ function Test-ExternalBakeoffEvaluationOrderRecordsEqual {
 }
 
 function Get-ExternalBakeoffRequiredComparisons {
-    return @("current-zeus", "nr5-spnr", "candidate-external-engine-opt-in")
+    return @("current-zeus", "candidate-under-test", "candidate-external-engine-opt-in")
 }
 
 function Get-ExternalBakeoffRequiredControls {
@@ -5276,7 +5276,7 @@ function Get-ExternalBakeoffExpectedScenariosForCandidateId {
                 },
                 [ordered]@{
                     scenarioId = "service-unavailable-bypass"
-                    purpose = "Verify network/service failure keeps current NR5 audio intact."
+                    purpose = "Verify network/service failure keeps current Candidate audio intact."
                     acceptanceGates = @("Service unavailable falls back immediately.", "No live cloud stream is required for RX.", "Operator consent and privacy gates are documented.")
                 }
             )
@@ -5286,7 +5286,7 @@ function Get-ExternalBakeoffExpectedScenariosForCandidateId {
                 [ordered]@{
                     scenarioId = "ssb-like-speech-post-demod"
                     purpose = "Measure causal neural speech enhancement after WDSP demodulation."
-                    acceptanceGates = @("Improves weak SSB speech artifact score beyond NR5/SPNR.", "No weak-signal deletion or clipped peaks.", "No added audio RMS pumping.")
+                    acceptanceGates = @("Improves weak SSB speech artifact score beyond candidate DSP.", "No weak-signal deletion or clipped peaks.", "No added audio RMS pumping.")
                 },
                 [ordered]@{
                     scenarioId = "weak-ssb-speech-latency"
@@ -5305,7 +5305,7 @@ function Get-ExternalBakeoffExpectedScenariosForCandidateId {
                 [ordered]@{
                     scenarioId = "ssb-like-speech-post-demod"
                     purpose = "Measure full-band neural enhancement on demodulated speech."
-                    acceptanceGates = @("Improves speech artifact score beyond NR5/SPNR.", "No weak-signal intelligibility loss.", "No musical-noise or burbling artifacts.")
+                    acceptanceGates = @("Improves speech artifact score beyond candidate DSP.", "No weak-signal intelligibility loss.", "No musical-noise or burbling artifacts.")
                 },
                 [ordered]@{
                     scenarioId = "weak-ssb-speech-latency"
@@ -5348,7 +5348,7 @@ function Get-ExternalBakeoffExpectedScenariosForCandidateId {
                 [ordered]@{
                     scenarioId = "agc-disabled-no-pumping"
                     purpose = "Prove Speex AGC/VAD behavior cannot fight WDSP AGC."
-                    acceptanceGates = @("Speex AGC remains disabled.", "No VAD gate chatter.", "No NR5/SPNR level-stability regression.")
+                    acceptanceGates = @("Speex AGC remains disabled.", "No VAD gate chatter.", "No candidate DSP level-stability regression.")
                 },
                 [ordered]@{
                     scenarioId = "noise-only-gating"
@@ -5936,21 +5936,21 @@ $liveTraceComparisonEvidence = [ordered]@{
     rxAudioLevelerOutputLimitedRegressionCount = 0
     bundleRelativePaths = $false
     absolutePathCount = 0
-    nr5WeakSignalComparisonSummary = $null
-    nr5WeakInputSampleDelta = 0
-    nr5WeakRecoveredSampleDelta = 0
-    nr5WeakDropoutSampleDelta = 0
-    nr5HotMakeupSampleDelta = 0
-    nr5WeakRecoveryPctDelta = 0.0
-    nr5OutputMovementDbDelta = 0.0
-    nr5MakeupMovementDbDelta = 0.0
-    nr5MakeupMaxDbDelta = 0.0
-    nr5RecoveryDriveMovementDelta = 0.0
-    nr5TextureFillAverageDelta = 0.0
-    nr5OutputMovementRegressionCount = 0
-    nr5MakeupMovementRegressionCount = 0
-    nr5MakeupMaxRegressionCount = 0
-    nr5RecoveryDriveMovementRegressionCount = 0
+    candidateWeakSignalComparisonSummary = $null
+    candidateWeakInputSampleDelta = 0
+    candidateWeakRecoveredSampleDelta = 0
+    candidateWeakDropoutSampleDelta = 0
+    candidateHotMakeupSampleDelta = 0
+    candidateWeakRecoveryPctDelta = 0.0
+    candidateOutputMovementDbDelta = 0.0
+    candidateMakeupMovementDbDelta = 0.0
+    candidateMakeupMaxDbDelta = 0.0
+    candidateRecoveryDriveMovementDelta = 0.0
+    candidateTextureFillAverageDelta = 0.0
+    candidateOutputMovementRegressionCount = 0
+    candidateMakeupMovementRegressionCount = 0
+    candidateMakeupMaxRegressionCount = 0
+    candidateRecoveryDriveMovementRegressionCount = 0
     metricDefinitionCount = 0
     metricCatalogAlignedMetricCount = 0
     metricCatalogMissingMetricCount = 0
@@ -5978,10 +5978,10 @@ $liveDiagnosticsHistoryEvidence = [ordered]@{
     present = $false
     readyForReview = $false
     traceCount = 0
-    nr5TraceCount = 0
+    candidateTraceCount = 0
     readyTraceCount = 0
-    readyNr5TraceCount = 0
-    candidateReadyNr5TraceCount = 0
+    readyCandidateTraceCount = 0
+    candidateReadyCandidateTraceCount = 0
     latestTraceId = ""
     latestReviewStatus = ""
     latestSafetyRiskScore = 0
@@ -6290,11 +6290,11 @@ $manualTuneObserverEvidence = [ordered]@{
     frontendSuggestedFilterCenterOffsetHz = $null
     frontendSuggestedFilterDistanceHz = $null
     frontendSuggestedTuneReason = ""
-    requireNr5CaptureReady = $false
+    requireCandidateCaptureReady = $false
     baseCaptureQualifiedPollCount = 0
-    nr5CaptureReadyPollCount = 0
-    nr5CaptureBlockedPollCount = 0
-    nr5CaptureAdvisoryPollCount = 0
+    candidateCaptureReadyPollCount = 0
+    candidateCaptureBlockedPollCount = 0
+    candidateCaptureAdvisoryPollCount = 0
     captureQualifiedPollCount = 0
     readyCaptureCount = 0
     mixedWeakStrongReady = $false
@@ -6447,7 +6447,7 @@ $g2RxPeakHuntEvidence = [ordered]@{
     liveDiagnosticsWdspNativeLoadable = $false
     liveDiagnosticsRequestedNrMode = ""
     liveDiagnosticsEffectiveNrMode = ""
-    liveDiagnosticsReadyForNr5Tuning = $false
+    liveDiagnosticsReadyForCandidateTuning = $false
     liveDiagnosticsFrontendSceneFresh = $false
     frontendSceneStatus = ""
     frontendSceneFresh = $false
@@ -7990,7 +7990,7 @@ else {
                 }
 
                 if ($schemaVersion -ge 6 -and $null -eq $summaryArtifactControlSignalCountValue) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-artifact-control-count-missing" "Artifact '$artifactId' must declare liveDiagnosticsHistoryArtifactControlSignalCount so wrapper summaries expose NR5 speech-artifact review advisories."
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-artifact-control-count-missing" "Artifact '$artifactId' must declare liveDiagnosticsHistoryArtifactControlSignalCount so wrapper summaries expose Candidate speech-artifact review advisories."
                     $artifactValidationOk = $false
                 }
                 elseif ($schemaVersion -ge 6) {
@@ -9158,12 +9158,12 @@ else {
                         $artifactValidationOk = $false
                     }
 
-                    $matrixWeakInputSampleCount += [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "nr5WeakInputSampleCount"))
-                    $matrixWeakRecoveredSampleCount += [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "nr5WeakRecoveredSampleCount"))
-                    $matrixWeakDropoutSampleCount += [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "nr5WeakDropoutSampleCount"))
-                    $matrixHotMakeupSampleCount += [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "nr5HotMakeupSampleCount"))
-                    $runWeakInput = [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "nr5WeakInputSampleCount"))
-                    $runStrongInput = [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "nr5StrongInputSampleCount"))
+                    $matrixWeakInputSampleCount += [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "candidateWeakInputSampleCount"))
+                    $matrixWeakRecoveredSampleCount += [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "candidateWeakRecoveredSampleCount"))
+                    $matrixWeakDropoutSampleCount += [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "candidateWeakDropoutSampleCount"))
+                    $matrixHotMakeupSampleCount += [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "candidateHotMakeupSampleCount"))
+                    $runWeakInput = [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "candidateWeakInputSampleCount"))
+                    $runStrongInput = [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "candidateStrongInputSampleCount"))
                     $matrixStrongInputSampleCount += $runStrongInput
                     if ($runWeakInput -gt 0 -and $runStrongInput -gt 0) {
                         $matrixMixedWeakStrongTraceCount++
@@ -9171,10 +9171,10 @@ else {
                     else {
                         $matrixMixedWeakStrongMissingRunCount++
                     }
-                    if (Test-Truthy (Get-JsonValue $matrixRun "nr5WeakStrongOutputParityReady")) {
+                    if (Test-Truthy (Get-JsonValue $matrixRun "candidateWeakStrongOutputParityReady")) {
                         $matrixMixedWeakStrongReadyTraceCount++
                     }
-                    $runMixedStatus = [string](Get-JsonValue $matrixRun "nr5MixedWeakStrongEvidenceStatus")
+                    $runMixedStatus = [string](Get-JsonValue $matrixRun "candidateMixedWeakStrongEvidenceStatus")
                     if ([string]::IsNullOrWhiteSpace($runMixedStatus)) {
                         $runMixedStatus = "not-evaluated"
                     }
@@ -9186,7 +9186,7 @@ else {
                     }
                     $matrixMixedWeakStrongStatusCounts[$runMixedStatus] = [int]$matrixMixedWeakStrongStatusCounts[$runMixedStatus] + 1
 
-                    $runArtifactStatus = [string](Get-JsonValue $matrixRun "nr5ArtifactRiskStatus")
+                    $runArtifactStatus = [string](Get-JsonValue $matrixRun "candidateArtifactRiskStatus")
                     if ([string]::IsNullOrWhiteSpace($runArtifactStatus)) {
                         $runArtifactStatus = "not-evaluated"
                     }
@@ -9197,12 +9197,12 @@ else {
                     if ([string]::Equals($runArtifactStatus, "artifact-review", [StringComparison]::OrdinalIgnoreCase)) {
                         $matrixArtifactReviewRunCount++
                     }
-                    $runArtifactRiskScore = Get-NumericValue (Get-JsonValue $matrixRun "nr5ArtifactRiskScore")
+                    $runArtifactRiskScore = Get-NumericValue (Get-JsonValue $matrixRun "candidateArtifactRiskScore")
                     if ($null -ne $runArtifactRiskScore) {
                         $matrixArtifactRiskScoreMax = [Math]::Max([double]$matrixArtifactRiskScoreMax, [double]$runArtifactRiskScore)
                     }
-                    $matrixLowEvidenceLiftedSampleCount += [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "nr5LowEvidenceLiftedSampleCount"))
-                    $runLowEvidenceLiftedPct = Get-NumericValue (Get-JsonValue $matrixRun "nr5LowEvidenceLiftedPct")
+                    $matrixLowEvidenceLiftedSampleCount += [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "candidateLowEvidenceLiftedSampleCount"))
+                    $runLowEvidenceLiftedPct = Get-NumericValue (Get-JsonValue $matrixRun "candidateLowEvidenceLiftedPct")
                     if ($null -ne $runLowEvidenceLiftedPct) {
                         if ($null -eq $matrixLowEvidenceLiftedPctMax) {
                             $matrixLowEvidenceLiftedPctMax = [double]$runLowEvidenceLiftedPct
@@ -9211,7 +9211,7 @@ else {
                             $matrixLowEvidenceLiftedPctMax = [Math]::Max([double]$matrixLowEvidenceLiftedPctMax, [double]$runLowEvidenceLiftedPct)
                         }
                     }
-                    $runAudioAlignmentMismatchPct = Get-NumericValue (Get-JsonValue $matrixRun "nr5AudioAlignmentMismatchPct")
+                    $runAudioAlignmentMismatchPct = Get-NumericValue (Get-JsonValue $matrixRun "candidateAudioAlignmentMismatchPct")
                     if ($null -ne $runAudioAlignmentMismatchPct) {
                         if ($null -eq $matrixAudioAlignmentMismatchPctMax) {
                             $matrixAudioAlignmentMismatchPctMax = [double]$runAudioAlignmentMismatchPct
@@ -9267,7 +9267,7 @@ else {
                     }
 
                     $reportedBestRun = Get-JsonValue $artifactJson "bestMixedWeakStrongRun"
-                    $reportedBestScore = Get-NumericValue (Get-JsonValue $reportedBestRun "nr5MixedWeakStrongHuntScore")
+                    $reportedBestScore = Get-NumericValue (Get-JsonValue $reportedBestRun "candidateMixedWeakStrongHuntScore")
                     if ($null -ne $reportedBestRun -and $null -ne $reportedBestScore -and
                         ($null -eq $liveMatrixMixedWeakStrongBestScore -or [double]$reportedBestScore -gt [double]$liveMatrixMixedWeakStrongBestScore)) {
                         $liveMatrixMixedWeakStrongBestScore = [double]$reportedBestScore
@@ -9278,10 +9278,10 @@ else {
                             comparisonId = [string](Get-JsonValue $reportedBestRun "comparisonId")
                             reportPath = [string](Get-JsonValue $reportedBestRun "reportPath")
                             readyForBenchmarkTrace = Test-Truthy (Get-JsonValue $reportedBestRun "readyForBenchmarkTrace")
-                            weakInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $reportedBestRun "nr5WeakInputSampleCount"))
-                            strongInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $reportedBestRun "nr5StrongInputSampleCount"))
-                            weakStrongOutputGapDb = Get-NumericValue (Get-JsonValue $reportedBestRun "nr5WeakStrongOutputGapDb")
-                            mixedWeakStrongEvidenceStatus = [string](Get-JsonValue $reportedBestRun "nr5MixedWeakStrongEvidenceStatus")
+                            weakInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $reportedBestRun "candidateWeakInputSampleCount"))
+                            strongInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $reportedBestRun "candidateStrongInputSampleCount"))
+                            weakStrongOutputGapDb = Get-NumericValue (Get-JsonValue $reportedBestRun "candidateWeakStrongOutputGapDb")
+                            mixedWeakStrongEvidenceStatus = [string](Get-JsonValue $reportedBestRun "candidateMixedWeakStrongEvidenceStatus")
                             mixedWeakStrongHuntScore = [double]$reportedBestScore
                         }
                     }
@@ -9395,10 +9395,10 @@ else {
                 }
 
                 foreach ($counterSpec in @(
-                        @{ Name = "nr5WeakInputSampleCount"; Expected = $matrixWeakInputSampleCount },
-                        @{ Name = "nr5WeakRecoveredSampleCount"; Expected = $matrixWeakRecoveredSampleCount },
-                        @{ Name = "nr5WeakDropoutSampleCount"; Expected = $matrixWeakDropoutSampleCount },
-                        @{ Name = "nr5HotMakeupSampleCount"; Expected = $matrixHotMakeupSampleCount }
+                        @{ Name = "candidateWeakInputSampleCount"; Expected = $matrixWeakInputSampleCount },
+                        @{ Name = "candidateWeakRecoveredSampleCount"; Expected = $matrixWeakRecoveredSampleCount },
+                        @{ Name = "candidateWeakDropoutSampleCount"; Expected = $matrixWeakDropoutSampleCount },
+                        @{ Name = "candidateHotMakeupSampleCount"; Expected = $matrixHotMakeupSampleCount }
                     )) {
                     $counterName = [string]$counterSpec["Name"]
                     $reportedCounter = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson $counterName))
@@ -9411,11 +9411,11 @@ else {
 
                 if ($matrixSchemaVersion -ge 2) {
                     foreach ($mixedCounterSpec in @(
-                            @{ Name = "nr5StrongInputSampleCount"; Expected = $matrixStrongInputSampleCount },
-                            @{ Name = "nr5MixedWeakStrongTraceCount"; Expected = $matrixMixedWeakStrongTraceCount },
-                            @{ Name = "nr5MixedWeakStrongReadyTraceCount"; Expected = $matrixMixedWeakStrongReadyTraceCount },
-                            @{ Name = "nr5MixedWeakStrongMissingRunCount"; Expected = $matrixMixedWeakStrongMissingRunCount },
-                            @{ Name = "nr5MixedWeakStrongGapWatchRunCount"; Expected = $matrixMixedWeakStrongGapWatchRunCount }
+                            @{ Name = "candidateStrongInputSampleCount"; Expected = $matrixStrongInputSampleCount },
+                            @{ Name = "candidateMixedWeakStrongTraceCount"; Expected = $matrixMixedWeakStrongTraceCount },
+                            @{ Name = "candidateMixedWeakStrongReadyTraceCount"; Expected = $matrixMixedWeakStrongReadyTraceCount },
+                            @{ Name = "candidateMixedWeakStrongMissingRunCount"; Expected = $matrixMixedWeakStrongMissingRunCount },
+                            @{ Name = "candidateMixedWeakStrongGapWatchRunCount"; Expected = $matrixMixedWeakStrongGapWatchRunCount }
                         )) {
                         $counterName = [string]$mixedCounterSpec["Name"]
                         $reportedCounterValue = Get-NumericValue (Get-JsonValue $artifactJson $counterName)
@@ -9426,24 +9426,24 @@ else {
                         }
                     }
 
-                    $reportedMixedHuntReady = Test-Truthy (Get-JsonValue $artifactJson "nr5MixedWeakStrongHuntReady")
+                    $reportedMixedHuntReady = Test-Truthy (Get-JsonValue $artifactJson "candidateMixedWeakStrongHuntReady")
                     $expectedMixedHuntReady = ($matrixMixedWeakStrongReadyTraceCount -gt 0)
                     if ($reportedMixedHuntReady -ne $expectedMixedHuntReady) {
-                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-mixed-weak-strong-ready-mismatch" "Artifact '$artifactId' nr5MixedWeakStrongHuntReady=$reportedMixedHuntReady but runs imply $expectedMixedHuntReady."
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-mixed-weak-strong-ready-mismatch" "Artifact '$artifactId' candidateMixedWeakStrongHuntReady=$reportedMixedHuntReady but runs imply $expectedMixedHuntReady."
                         $artifactValidationOk = $false
                     }
 
-                    $reportedMixedStatusCounts = @(Get-JsonArray $artifactJson "nr5MixedWeakStrongStatusCounts")
+                    $reportedMixedStatusCounts = @(Get-JsonArray $artifactJson "candidateMixedWeakStrongStatusCounts")
                     if (-not (Test-LiveHistoryNamedCountsMatch -Actual $reportedMixedStatusCounts -Expected $expectedMatrixMixedWeakStrongStatusCounts)) {
-                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-mixed-weak-strong-status-count-mismatch" "Artifact '$artifactId' nr5MixedWeakStrongStatusCounts does not match runs[]."
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-mixed-weak-strong-status-count-mismatch" "Artifact '$artifactId' candidateMixedWeakStrongStatusCounts does not match runs[]."
                         $artifactValidationOk = $false
                     }
                 }
 
                 if ($matrixSchemaVersion -ge 3) {
                     foreach ($artifactCounterSpec in @(
-                            @{ Name = "nr5ArtifactReviewRunCount"; Expected = $matrixArtifactReviewRunCount },
-                            @{ Name = "nr5LowEvidenceLiftedSampleCount"; Expected = $matrixLowEvidenceLiftedSampleCount }
+                            @{ Name = "candidateArtifactReviewRunCount"; Expected = $matrixArtifactReviewRunCount },
+                            @{ Name = "candidateLowEvidenceLiftedSampleCount"; Expected = $matrixLowEvidenceLiftedSampleCount }
                         )) {
                         $counterName = [string]$artifactCounterSpec["Name"]
                         $reportedCounterValue = Get-NumericValue (Get-JsonValue $artifactJson $counterName)
@@ -9455,9 +9455,9 @@ else {
                     }
 
                     foreach ($artifactScalarSpec in @(
-                            @{ Name = "nr5ArtifactRiskScoreMax"; Expected = $matrixArtifactRiskScoreMax },
-                            @{ Name = "nr5LowEvidenceLiftedPctMax"; Expected = $matrixLowEvidenceLiftedPctMax },
-                            @{ Name = "nr5AudioAlignmentMismatchPctMax"; Expected = $matrixAudioAlignmentMismatchPctMax }
+                            @{ Name = "candidateArtifactRiskScoreMax"; Expected = $matrixArtifactRiskScoreMax },
+                            @{ Name = "candidateLowEvidenceLiftedPctMax"; Expected = $matrixLowEvidenceLiftedPctMax },
+                            @{ Name = "candidateAudioAlignmentMismatchPctMax"; Expected = $matrixAudioAlignmentMismatchPctMax }
                         )) {
                         $fieldName = [string]$artifactScalarSpec["Name"]
                         $reportedScalar = Get-NumericValue (Get-JsonValue $artifactJson $fieldName)
@@ -9471,9 +9471,9 @@ else {
                         }
                     }
 
-                    $reportedArtifactStatusCounts = @(Get-JsonArray $artifactJson "nr5ArtifactRiskStatusCounts")
+                    $reportedArtifactStatusCounts = @(Get-JsonArray $artifactJson "candidateArtifactRiskStatusCounts")
                     if (-not (Test-LiveHistoryNamedCountsMatch -Actual $reportedArtifactStatusCounts -Expected $expectedMatrixArtifactRiskStatusCounts)) {
-                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-artifact-control-status-count-mismatch" "Artifact '$artifactId' nr5ArtifactRiskStatusCounts does not match runs[]."
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-artifact-control-status-count-mismatch" "Artifact '$artifactId' candidateArtifactRiskStatusCounts does not match runs[]."
                         $artifactValidationOk = $false
                     }
                 }
@@ -9615,10 +9615,10 @@ else {
                                 }
 
                                 foreach ($counterSpec in @(
-                                        @{ Name = "nr5WeakInputSampleCount" },
-                                        @{ Name = "nr5WeakRecoveredSampleCount" },
-                                        @{ Name = "nr5WeakDropoutSampleCount" },
-                                        @{ Name = "nr5HotMakeupSampleCount" }
+                                        @{ Name = "candidateWeakInputSampleCount" },
+                                        @{ Name = "candidateWeakRecoveredSampleCount" },
+                                        @{ Name = "candidateWeakDropoutSampleCount" },
+                                        @{ Name = "candidateHotMakeupSampleCount" }
                                     )) {
                                     $counterName = [string]$counterSpec["Name"]
                                     $indexCounterValue = Get-NumericValue (Get-JsonValue $matchingIndexEntry $counterName)
@@ -9637,9 +9637,9 @@ else {
 
                                 if ($matrixSchemaVersion -ge 2 -or $matrixIndexSchemaVersion -ge 2) {
                                     foreach ($mixedNumberSpec in @(
-                                            "nr5StrongInputSampleCount",
-                                            "nr5WeakStrongOutputGapDb",
-                                            "nr5MixedWeakStrongHuntScore"
+                                            "candidateStrongInputSampleCount",
+                                            "candidateWeakStrongOutputGapDb",
+                                            "candidateMixedWeakStrongHuntScore"
                                         )) {
                                         $fieldName = [string]$mixedNumberSpec
                                         $runValue = Get-NumericValue (Get-JsonValue $matrixRun $fieldName)
@@ -9659,8 +9659,8 @@ else {
                                     }
 
                                     foreach ($mixedBoolSpec in @(
-                                            "nr5MixedWeakStrongEvidenceReady",
-                                            "nr5WeakStrongOutputParityReady"
+                                            "candidateMixedWeakStrongEvidenceReady",
+                                            "candidateWeakStrongOutputParityReady"
                                         )) {
                                         $fieldName = [string]$mixedBoolSpec
                                         $runValue = Get-JsonValue $matrixRun $fieldName
@@ -9676,27 +9676,27 @@ else {
                                         }
                                     }
 
-                                    $runMixedStatus = [string](Get-JsonValue $matrixRun "nr5MixedWeakStrongEvidenceStatus")
-                                    $indexMixedStatus = [string](Get-JsonValue $matchingIndexEntry "nr5MixedWeakStrongEvidenceStatus")
+                                    $runMixedStatus = [string](Get-JsonValue $matrixRun "candidateMixedWeakStrongEvidenceStatus")
+                                    $indexMixedStatus = [string](Get-JsonValue $matchingIndexEntry "candidateMixedWeakStrongEvidenceStatus")
                                     if ([string]::IsNullOrWhiteSpace($indexMixedStatus)) {
-                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-mixed-weak-strong-missing" "Artifact '$artifactId' run '$runLabel' matched a trace-index entry without nr5MixedWeakStrongEvidenceStatus."
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-mixed-weak-strong-missing" "Artifact '$artifactId' run '$runLabel' matched a trace-index entry without candidateMixedWeakStrongEvidenceStatus."
                                         $artifactValidationOk = $false
                                     }
                                     elseif (-not [string]::Equals($runMixedStatus, $indexMixedStatus, [StringComparison]::OrdinalIgnoreCase)) {
-                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-mixed-weak-strong-mismatch" "Artifact '$artifactId' run '$runLabel' reports nr5MixedWeakStrongEvidenceStatus='$runMixedStatus' but trace-index entry reports '$indexMixedStatus'."
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-mixed-weak-strong-mismatch" "Artifact '$artifactId' run '$runLabel' reports candidateMixedWeakStrongEvidenceStatus='$runMixedStatus' but trace-index entry reports '$indexMixedStatus'."
                                         $artifactValidationOk = $false
                                     }
                                 }
 
                                 if ($matrixSchemaVersion -ge 3 -or $matrixIndexSchemaVersion -ge 3) {
                                     foreach ($artifactNumberSpec in @(
-                                            "nr5TextureFillAverage",
-                                            "nr5SignalProbabilityAverage",
-                                            "nr5LowEvidenceLiftedSampleCount",
-                                            "nr5LowEvidenceLiftedPct",
-                                            "nr5LowEvidenceAlignmentMismatchPct",
-                                            "nr5AudioAlignmentMismatchPct",
-                                            "nr5ArtifactRiskScore"
+                                            "candidateTextureFillAverage",
+                                            "candidateSignalProbabilityAverage",
+                                            "candidateLowEvidenceLiftedSampleCount",
+                                            "candidateLowEvidenceLiftedPct",
+                                            "candidateLowEvidenceAlignmentMismatchPct",
+                                            "candidateAudioAlignmentMismatchPct",
+                                            "candidateArtifactRiskScore"
                                         )) {
                                         $fieldName = [string]$artifactNumberSpec
                                         $runValue = Get-NumericValue (Get-JsonValue $matrixRun $fieldName)
@@ -9715,14 +9715,14 @@ else {
                                         }
                                     }
 
-                                    $runArtifactStatus = [string](Get-JsonValue $matrixRun "nr5ArtifactRiskStatus")
-                                    $indexArtifactStatus = [string](Get-JsonValue $matchingIndexEntry "nr5ArtifactRiskStatus")
+                                    $runArtifactStatus = [string](Get-JsonValue $matrixRun "candidateArtifactRiskStatus")
+                                    $indexArtifactStatus = [string](Get-JsonValue $matchingIndexEntry "candidateArtifactRiskStatus")
                                     if ([string]::IsNullOrWhiteSpace($indexArtifactStatus)) {
-                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-artifact-control-missing" "Artifact '$artifactId' run '$runLabel' matched a trace-index entry without nr5ArtifactRiskStatus."
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-artifact-control-missing" "Artifact '$artifactId' run '$runLabel' matched a trace-index entry without candidateArtifactRiskStatus."
                                         $artifactValidationOk = $false
                                     }
                                     elseif (-not [string]::Equals($runArtifactStatus, $indexArtifactStatus, [StringComparison]::OrdinalIgnoreCase)) {
-                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-artifact-control-mismatch" "Artifact '$artifactId' run '$runLabel' reports nr5ArtifactRiskStatus='$runArtifactStatus' but trace-index entry reports '$indexArtifactStatus'."
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-artifact-control-mismatch" "Artifact '$artifactId' run '$runLabel' reports candidateArtifactRiskStatus='$runArtifactStatus' but trace-index entry reports '$indexArtifactStatus'."
                                         $artifactValidationOk = $false
                                     }
                                 }
@@ -9808,9 +9808,9 @@ else {
                     -MetricComparisonsVerdict "missing")
                 $bundleRelativePaths = Test-Truthy (Get-JsonValue $artifactJson "bundleRelativePaths")
                 $absolutePaths = if ($tool -eq "compare-dsp-live-diagnostics-traces" -or $tool -eq "compare-dsp-live-diagnostics-matrix") { @(Get-LiveTraceComparisonAbsolutePaths $artifactJson) } else { @() }
-                $nr5WeakSignalSummary = Get-JsonValue $artifactJson "nr5WeakSignalComparisonSummary"
-                if ($null -eq $nr5WeakSignalSummary) {
-                    $nr5WeakSignalSummary = Get-JsonValue $artifactJson "nr5WeakSignalComparison"
+                $candidateWeakSignalSummary = Get-JsonValue $artifactJson "candidateWeakSignalComparisonSummary"
+                if ($null -eq $candidateWeakSignalSummary) {
+                    $candidateWeakSignalSummary = Get-JsonValue $artifactJson "candidateWeakSignalComparison"
                 }
                 $captureReadinessSummary = Get-LiveTraceCaptureReadinessSummary $artifactJson
                 if ($null -eq $captureReadinessSummary) {
@@ -10385,7 +10385,7 @@ else {
                 $liveTraceComparisonEvidence["metricCatalogScopeMismatchMetricIds"] = @($scopeMismatchMetricIds)
                 $liveTraceComparisonEvidence["metricCatalogAlignmentReady"] = $metricCatalogAlignmentReady
                 $liveTraceComparisonEvidence["metricCatalogAlignmentStatus"] = $metricCatalogAlignmentStatus
-                $liveTraceComparisonEvidence["nr5WeakSignalComparisonSummary"] = $nr5WeakSignalSummary
+                $liveTraceComparisonEvidence["candidateWeakSignalComparisonSummary"] = $candidateWeakSignalSummary
                 $liveTraceComparisonEvidence["captureReadinessComparisonSummary"] = $captureReadinessSummary
                 $liveTraceComparisonEvidence["rxAudioLevelerComparisonSummary"] = $rxAudioLevelerSummary
                 if ($null -ne $captureReadinessSummary) {
@@ -10398,21 +10398,21 @@ else {
                     $liveTraceComparisonEvidence["captureReadinessCandidateTopConstraintCounts"] = @(Get-JsonArray $captureReadinessSummary "candidateTopConstraintCounts")
                     $liveTraceComparisonEvidence["captureReadinessCandidateTopHardConstraintCounts"] = @(Get-JsonArray $captureReadinessSummary "candidateTopHardConstraintCounts")
                 }
-                if ($null -ne $nr5WeakSignalSummary) {
-                    $liveTraceComparisonEvidence["nr5WeakInputSampleDelta"] = [int](Get-NumericValue (Get-JsonValue $nr5WeakSignalSummary "weakInputSampleDelta"))
-                    $liveTraceComparisonEvidence["nr5WeakRecoveredSampleDelta"] = [int](Get-NumericValue (Get-JsonValue $nr5WeakSignalSummary "weakRecoveredSampleDelta"))
-                    $liveTraceComparisonEvidence["nr5WeakDropoutSampleDelta"] = [int](Get-NumericValue (Get-JsonValue $nr5WeakSignalSummary "weakDropoutSampleDelta"))
-                    $liveTraceComparisonEvidence["nr5HotMakeupSampleDelta"] = [int](Get-NumericValue (Get-JsonValue $nr5WeakSignalSummary "hotMakeupSampleDelta"))
-                    $liveTraceComparisonEvidence["nr5WeakRecoveryPctDelta"] = [Math]::Round([double](Get-NumericValue (Get-JsonValue $nr5WeakSignalSummary "weakRecoveryPctDelta")), 3)
-                    $liveTraceComparisonEvidence["nr5OutputMovementDbDelta"] = [Math]::Round([double](Get-NumericValueOrDefault (Get-JsonValue $nr5WeakSignalSummary "outputMovementDbDelta")), 3)
-                    $liveTraceComparisonEvidence["nr5MakeupMovementDbDelta"] = [Math]::Round([double](Get-NumericValueOrDefault (Get-JsonValue $nr5WeakSignalSummary "makeupMovementDbDelta")), 3)
-                    $liveTraceComparisonEvidence["nr5MakeupMaxDbDelta"] = [Math]::Round([double](Get-NumericValueOrDefault (Get-JsonValue $nr5WeakSignalSummary "makeupMaxDbDelta")), 3)
-                    $liveTraceComparisonEvidence["nr5RecoveryDriveMovementDelta"] = [Math]::Round([double](Get-NumericValueOrDefault (Get-JsonValue $nr5WeakSignalSummary "recoveryDriveMovementDelta")), 3)
-                    $liveTraceComparisonEvidence["nr5TextureFillAverageDelta"] = [Math]::Round([double](Get-NumericValueOrDefault (Get-JsonValue $nr5WeakSignalSummary "textureFillAverageDelta")), 3)
-                    $liveTraceComparisonEvidence["nr5OutputMovementRegressionCount"] = Get-RegressionCountFromSummary $nr5WeakSignalSummary "outputMovementRegressionCount" "outputMovementRegression"
-                    $liveTraceComparisonEvidence["nr5MakeupMovementRegressionCount"] = Get-RegressionCountFromSummary $nr5WeakSignalSummary "makeupMovementRegressionCount" "makeupMovementRegression"
-                    $liveTraceComparisonEvidence["nr5MakeupMaxRegressionCount"] = Get-RegressionCountFromSummary $nr5WeakSignalSummary "makeupMaxRegressionCount" "makeupMaxRegression"
-                    $liveTraceComparisonEvidence["nr5RecoveryDriveMovementRegressionCount"] = Get-RegressionCountFromSummary $nr5WeakSignalSummary "recoveryDriveMovementRegressionCount" "recoveryDriveMovementRegression"
+                if ($null -ne $candidateWeakSignalSummary) {
+                    $liveTraceComparisonEvidence["candidateWeakInputSampleDelta"] = [int](Get-NumericValue (Get-JsonValue $candidateWeakSignalSummary "weakInputSampleDelta"))
+                    $liveTraceComparisonEvidence["candidateWeakRecoveredSampleDelta"] = [int](Get-NumericValue (Get-JsonValue $candidateWeakSignalSummary "weakRecoveredSampleDelta"))
+                    $liveTraceComparisonEvidence["candidateWeakDropoutSampleDelta"] = [int](Get-NumericValue (Get-JsonValue $candidateWeakSignalSummary "weakDropoutSampleDelta"))
+                    $liveTraceComparisonEvidence["candidateHotMakeupSampleDelta"] = [int](Get-NumericValue (Get-JsonValue $candidateWeakSignalSummary "hotMakeupSampleDelta"))
+                    $liveTraceComparisonEvidence["candidateWeakRecoveryPctDelta"] = [Math]::Round([double](Get-NumericValue (Get-JsonValue $candidateWeakSignalSummary "weakRecoveryPctDelta")), 3)
+                    $liveTraceComparisonEvidence["candidateOutputMovementDbDelta"] = [Math]::Round([double](Get-NumericValueOrDefault (Get-JsonValue $candidateWeakSignalSummary "outputMovementDbDelta")), 3)
+                    $liveTraceComparisonEvidence["candidateMakeupMovementDbDelta"] = [Math]::Round([double](Get-NumericValueOrDefault (Get-JsonValue $candidateWeakSignalSummary "makeupMovementDbDelta")), 3)
+                    $liveTraceComparisonEvidence["candidateMakeupMaxDbDelta"] = [Math]::Round([double](Get-NumericValueOrDefault (Get-JsonValue $candidateWeakSignalSummary "makeupMaxDbDelta")), 3)
+                    $liveTraceComparisonEvidence["candidateRecoveryDriveMovementDelta"] = [Math]::Round([double](Get-NumericValueOrDefault (Get-JsonValue $candidateWeakSignalSummary "recoveryDriveMovementDelta")), 3)
+                    $liveTraceComparisonEvidence["candidateTextureFillAverageDelta"] = [Math]::Round([double](Get-NumericValueOrDefault (Get-JsonValue $candidateWeakSignalSummary "textureFillAverageDelta")), 3)
+                    $liveTraceComparisonEvidence["candidateOutputMovementRegressionCount"] = Get-RegressionCountFromSummary $candidateWeakSignalSummary "outputMovementRegressionCount" "outputMovementRegression"
+                    $liveTraceComparisonEvidence["candidateMakeupMovementRegressionCount"] = Get-RegressionCountFromSummary $candidateWeakSignalSummary "makeupMovementRegressionCount" "makeupMovementRegression"
+                    $liveTraceComparisonEvidence["candidateMakeupMaxRegressionCount"] = Get-RegressionCountFromSummary $candidateWeakSignalSummary "makeupMaxRegressionCount" "makeupMaxRegression"
+                    $liveTraceComparisonEvidence["candidateRecoveryDriveMovementRegressionCount"] = Get-RegressionCountFromSummary $candidateWeakSignalSummary "recoveryDriveMovementRegressionCount" "recoveryDriveMovementRegression"
                 }
                 if ($null -ne $rxAudioLevelerSummary) {
                     $liveTraceComparisonEvidence["rxAudioLevelerConstrainedSampleDelta"] = [int](Get-NumericValueOrDefault (Get-JsonValue $rxAudioLevelerSummary "constrainedSampleDelta"))
@@ -10504,31 +10504,31 @@ else {
                     $artifactValidationOk = $false
                 }
                 $traceCount = [int](Get-JsonValue $artifactJson "traceCount")
-                $nr5TraceCount = [int](Get-JsonValue $artifactJson "nr5TraceCount")
+                $candidateTraceCount = [int](Get-JsonValue $artifactJson "candidateTraceCount")
                 $readyTraceCount = [int](Get-JsonValue $artifactJson "readyTraceCount")
-                $readyNr5TraceCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "readyNr5TraceCount"))
-                $candidateReadyNr5TraceCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "candidateReadyNr5TraceCount"))
+                $readyCandidateTraceCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "readyCandidateTraceCount"))
+                $candidateReadyCandidateTraceCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "candidateReadyCandidateTraceCount"))
                 $latestTrace = Get-JsonValue $artifactJson "latestTrace"
-                $previousNr5Trace = Get-JsonValue $artifactJson "previousNr5Trace"
+                $previousCandidateTrace = Get-JsonValue $artifactJson "previousCandidateTrace"
                 $bestBalancedTrace = Get-JsonValue $artifactJson "bestBalancedTrace"
                 $bestWeakSignalTrace = Get-JsonValue $artifactJson "bestWeakSignalTrace"
                 $lowestPumpingTrace = Get-JsonValue $artifactJson "lowestPumpingTrace"
                 $mixedWeakStrongBestTrace = Get-JsonValue $artifactJson "mixedWeakStrongBestTrace"
-                $promotionDecision = Get-JsonValue $artifactJson "latestNr5Decision"
+                $promotionDecision = Get-JsonValue $artifactJson "latestCandidateDecision"
                 $legacyPromotionDecision = Get-JsonValue $artifactJson "promotionDecision"
                 if ($null -eq $promotionDecision) {
                     $promotionDecision = $legacyPromotionDecision
                 }
-                $readinessTrend = Get-JsonValue $artifactJson "latestVsPreviousNr5ReadinessGapTrend"
+                $readinessTrend = Get-JsonValue $artifactJson "latestVsPreviousCandidateReadinessGapTrend"
                 $legacyReadinessTrend = Get-JsonValue $artifactJson "latestVsPreviousReadinessTrend"
                 if ($null -eq $readinessTrend) {
                     $readinessTrend = $legacyReadinessTrend
                 }
-                $referenceReadinessTrend = Get-JsonValue $artifactJson "latestVsReferenceNr5ReadinessGapTrend"
+                $referenceReadinessTrend = Get-JsonValue $artifactJson "latestVsReferenceCandidateReadinessGapTrend"
                 $tuningActionPlan = Get-JsonValue $artifactJson "latestTuningActionPlan"
                 $liveExperimentPlan = Get-JsonValue $artifactJson "latestLiveExperimentPlan"
                 $liveExperimentCoverage = Get-JsonValue $artifactJson "latestLiveExperimentCoverage"
-                $latestVsPreviousNr5Delta = Get-JsonValue $artifactJson "latestVsPreviousNr5Delta"
+                $latestVsPreviousCandidateDelta = Get-JsonValue $artifactJson "latestVsPreviousCandidateDelta"
                 $thresholds = Get-JsonValue $artifactJson "thresholds"
                 $reviewStatusCounts = @(Get-JsonArray $artifactJson "reviewStatusCounts")
                 $traceRecords = @(Get-JsonArray $artifactJson "traces")
@@ -10563,17 +10563,17 @@ else {
                     "blocked-pumping",
                     "blocked-weak-signal",
                     "blocked-safety-signals",
-                    "no-nr5-history"
+                    "no-candidate-history"
                 )
                 $latestPromotionBlockerClasses = @(Get-JsonArray $latestTrace "promotionBlockerClasses" | ForEach-Object { [string]$_ })
                 $latestCandidateReady = Test-Truthy (Get-JsonValue $latestTrace "candidateComparisonReady")
                 $actualTraceCount = $traceRecords.Count
-                $actualNr5TraceCount = @($traceRecords | Where-Object { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "nr5SampleCount")) -gt 0 }).Count
+                $actualCandidateTraceCount = @($traceRecords | Where-Object { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "candidateSampleCount")) -gt 0 }).Count
                 $actualReadyTraceCount = @($traceRecords | Where-Object { Test-Truthy (Get-JsonValue $_ "readyForBenchmarkTrace") }).Count
-                $actualReadyNr5TraceCount = @($traceRecords | Where-Object { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "nr5SampleCount")) -gt 0 -and (Test-Truthy (Get-JsonValue $_ "readyForBenchmarkTrace")) }).Count
-                $actualCandidateReadyNr5TraceCount = @($traceRecords | Where-Object { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "nr5SampleCount")) -gt 0 -and (Test-Truthy (Get-JsonValue $_ "candidateComparisonReady")) }).Count
+                $actualReadyCandidateTraceCount = @($traceRecords | Where-Object { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "candidateSampleCount")) -gt 0 -and (Test-Truthy (Get-JsonValue $_ "readyForBenchmarkTrace")) }).Count
+                $actualCandidateReadyCandidateTraceCount = @($traceRecords | Where-Object { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "candidateSampleCount")) -gt 0 -and (Test-Truthy (Get-JsonValue $_ "candidateComparisonReady")) }).Count
                 $mixedWeakStrongTraceRecords = @($traceRecords | Where-Object {
-                        [int](Get-NumericValueOrDefault (Get-JsonValue $_ "nr5SampleCount")) -gt 0 -and
+                        [int](Get-NumericValueOrDefault (Get-JsonValue $_ "candidateSampleCount")) -gt 0 -and
                         [int](Get-NumericValueOrDefault (Get-JsonValue $_ "weakInputSampleCount")) -gt 0 -and
                         [int](Get-NumericValueOrDefault (Get-JsonValue $_ "strongInputSampleCount")) -gt 0
                     })
@@ -10585,15 +10585,15 @@ else {
                         -not (Test-Truthy (Get-JsonValue $_ "weakStrongOutputParityReady"))
                     })
                 $mixedWeakStrongFieldMissingTraceCount = @($traceRecords | Where-Object {
-                        [int](Get-NumericValueOrDefault (Get-JsonValue $_ "nr5SampleCount")) -gt 0 -and
+                        [int](Get-NumericValueOrDefault (Get-JsonValue $_ "candidateSampleCount")) -gt 0 -and
                         ($null -eq (Get-JsonValue $_ "strongInputSampleCount") -or
                             $null -eq (Get-JsonValue $_ "mixedWeakStrongEvidenceReady") -or
                             $null -eq (Get-JsonValue $_ "weakStrongOutputParityReady") -or
                             [string]::IsNullOrWhiteSpace([string](Get-JsonValue $_ "mixedWeakStrongEvidenceStatus")))
                     }).Count
-                $mixedWeakStrongMissingTraceCount = [Math]::Max(0, $actualNr5TraceCount - $mixedWeakStrongTraceRecords.Count)
-                $mixedWeakStrongEvidenceStatus = if ($actualNr5TraceCount -le 0) {
-                    "no-nr5-history"
+                $mixedWeakStrongMissingTraceCount = [Math]::Max(0, $actualCandidateTraceCount - $mixedWeakStrongTraceRecords.Count)
+                $mixedWeakStrongEvidenceStatus = if ($actualCandidateTraceCount -le 0) {
+                    "no-candidate-history"
                 }
                 elseif ($mixedWeakStrongTraceRecords.Count -eq 0) {
                     "missing-mixed-weak-strong"
@@ -10626,10 +10626,10 @@ else {
                     if (Test-Truthy $agcRiskValue) {
                         $agcPumpingRiskTraceCount++
                     }
-                    if ([int](Get-NumericValueOrDefault (Get-JsonValue $trace "nr5SampleCount")) -gt 0 -and
-                        ($null -eq (Get-JsonValue $trace "nr5ArtifactRiskScore") -or
-                            [string]::IsNullOrWhiteSpace([string](Get-JsonValue $trace "nr5ArtifactRiskStatus")) -or
-                            $null -eq (Get-JsonValue $trace "nr5LowEvidenceLiftedSampleCount"))) {
+                    if ([int](Get-NumericValueOrDefault (Get-JsonValue $trace "candidateSampleCount")) -gt 0 -and
+                        ($null -eq (Get-JsonValue $trace "candidateArtifactRiskScore") -or
+                            [string]::IsNullOrWhiteSpace([string](Get-JsonValue $trace "candidateArtifactRiskStatus")) -or
+                            $null -eq (Get-JsonValue $trace "candidateLowEvidenceLiftedSampleCount"))) {
                         $artifactControlFieldMissingTraceCount++
                     }
                     foreach ($signal in @(Get-JsonArray $trace "safetySignals")) {
@@ -10672,7 +10672,7 @@ else {
                     }
                 }
                 if (-not $traceOrderingFieldsPresent) {
-                    foreach ($trace in @($latestTrace, $previousNr5Trace, $bestBalancedTrace, $bestWeakSignalTrace, $lowestPumpingTrace)) {
+                    foreach ($trace in @($latestTrace, $previousCandidateTrace, $bestBalancedTrace, $bestWeakSignalTrace, $lowestPumpingTrace)) {
                         if ($null -ne $trace -and ($null -ne (Get-JsonValue $trace "traceSequenceUtc") -or $null -ne (Get-JsonValue $trace "sortKeySource"))) {
                             $traceOrderingFieldsPresent = $true
                             break
@@ -10688,14 +10688,14 @@ else {
                         if ($null -eq $sequence) { [Int64]::MinValue } else { $sequence.UtcDateTime.Ticks }
                     } }, `
                     @{ Expression = { [string](Get-JsonValue $_ "traceId") } })
-                $orderedNr5TraceRecordsBySequence = @($orderedTraceRecordsBySequence | Where-Object { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "nr5SampleCount")) -gt 0 })
+                $orderedCandidateTraceRecordsBySequence = @($orderedTraceRecordsBySequence | Where-Object { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "candidateSampleCount")) -gt 0 })
                 $expectedLatestTraceBySequence = $null
-                if ($orderedNr5TraceRecordsBySequence.Count -gt 0) {
-                    $expectedLatestTraceBySequence = $orderedNr5TraceRecordsBySequence[$orderedNr5TraceRecordsBySequence.Count - 1]
+                if ($orderedCandidateTraceRecordsBySequence.Count -gt 0) {
+                    $expectedLatestTraceBySequence = $orderedCandidateTraceRecordsBySequence[$orderedCandidateTraceRecordsBySequence.Count - 1]
                 }
-                $expectedPreviousNr5TraceBySequence = $null
-                if ($orderedNr5TraceRecordsBySequence.Count -gt 1) {
-                    $expectedPreviousNr5TraceBySequence = $orderedNr5TraceRecordsBySequence[$orderedNr5TraceRecordsBySequence.Count - 2]
+                $expectedPreviousCandidateTraceBySequence = $null
+                if ($orderedCandidateTraceRecordsBySequence.Count -gt 1) {
+                    $expectedPreviousCandidateTraceBySequence = $orderedCandidateTraceRecordsBySequence[$orderedCandidateTraceRecordsBySequence.Count - 2]
                 }
                 $allTraceSignals = New-Object System.Collections.Generic.List[object]
                 $readinessFieldsPresent = ($aggregateReadinessGaps.Count -gt 0)
@@ -10716,7 +10716,7 @@ else {
                 $expectedAggregateSafetyClassCounts = @(New-LiveHistorySafetyClassCountsFromSignals -Signals @($allTraceSignals.ToArray()))
                 $expectedAggregateReadinessGaps = @(New-LiveHistoryReadinessSummaryFromSignals -Signals @($allTraceSignals.ToArray()))
                 $latestFullTrace = Get-LiveHistoryTraceRecordById -Records $traceRecords -TraceId ([string](Get-JsonValue $latestTrace "traceId"))
-                $previousFullTrace = Get-LiveHistoryTraceRecordById -Records $traceRecords -TraceId ([string](Get-JsonValue $previousNr5Trace "traceId"))
+                $previousFullTrace = Get-LiveHistoryTraceRecordById -Records $traceRecords -TraceId ([string](Get-JsonValue $previousCandidateTrace "traceId"))
                 $expectedBestBalancedTrace = Select-LiveHistoryTraceForSummary -Records $traceRecords -Mode "best-balanced"
                 $expectedBestWeakSignalTrace = Select-LiveHistoryTraceForSummary -Records $traceRecords -Mode "best-weak"
                 $expectedLowestPumpingTrace = Select-LiveHistoryTraceForSummary -Records $traceRecords -Mode "lowest-pumping"
@@ -10739,8 +10739,8 @@ else {
                     -Trend (New-LiveHistoryReadinessTrend -Latest $latestFullTrace -Previous $previousFullTrace) `
                     -ComparisonScope "latest-vs-previous" `
                     -LatestTraceId ([string](Get-JsonValue $latestTrace "traceId")) `
-                    -ReferenceTraceId ([string](Get-JsonValue $previousNr5Trace "traceId")) `
-                    -ReferenceTraceRole "previous-nr5" `
+                    -ReferenceTraceId ([string](Get-JsonValue $previousCandidateTrace "traceId")) `
+                    -ReferenceTraceRole "previous-candidate" `
                     -RecommendedTraceId $expectedPromotionRecommendedTraceId
                 $referenceFullTrace = Get-LiveHistoryTraceRecordById -Records $traceRecords -TraceId $expectedPromotionReferenceTraceId
                 $expectedReferenceReadinessTrend = Add-LiveHistoryReadinessTrendContext `
@@ -10763,16 +10763,16 @@ else {
                 $expectedTuningActionPlan = New-LiveHistoryExpectedTuningActionPlan -Latest $latestFullTrace -PromotionDecision $expectedPromotionDecision -LatestVsPreviousTrend $expectedReadinessTrend -LatestVsReferenceTrend $expectedReferenceReadinessTrend
                 $expectedLiveExperimentPlan = New-LiveHistoryExpectedExperimentPlan -ActionPlan $expectedTuningActionPlan
                 $expectedLiveExperimentCoverage = New-LiveHistoryExperimentCoverage -Plan $expectedLiveExperimentPlan -Records $traceRecords
-                $expectedLatestVsPreviousNr5Delta = New-LiveHistoryExpectedLatestDelta -Latest $latestFullTrace -Previous $previousFullTrace
+                $expectedLatestVsPreviousCandidateDelta = New-LiveHistoryExpectedLatestDelta -Latest $latestFullTrace -Previous $previousFullTrace
                 $expectedThresholds = New-LiveHistoryExpectedThresholds
                 $expectedReviewStatusCounts = @(New-LiveHistoryExpectedReviewStatusCounts -Records $traceRecords)
                 $expectedRecommendations = @(New-LiveHistoryExpectedRecommendations -Latest $latestFullTrace -BestBalanced $bestBalancedFullTrace -BestWeak $bestWeakSignalFullTrace -LowestPumping $lowestPumpingFullTrace)
 
                 $liveDiagnosticsHistoryEvidence["traceCount"] = $traceCount
-                $liveDiagnosticsHistoryEvidence["nr5TraceCount"] = $nr5TraceCount
+                $liveDiagnosticsHistoryEvidence["candidateTraceCount"] = $candidateTraceCount
                 $liveDiagnosticsHistoryEvidence["readyTraceCount"] = $readyTraceCount
-                $liveDiagnosticsHistoryEvidence["readyNr5TraceCount"] = $readyNr5TraceCount
-                $liveDiagnosticsHistoryEvidence["candidateReadyNr5TraceCount"] = $candidateReadyNr5TraceCount
+                $liveDiagnosticsHistoryEvidence["readyCandidateTraceCount"] = $readyCandidateTraceCount
+                $liveDiagnosticsHistoryEvidence["candidateReadyCandidateTraceCount"] = $candidateReadyCandidateTraceCount
                 $liveDiagnosticsHistoryEvidence["latestTraceId"] = [string](Get-JsonValue $latestTrace "traceId")
                 $liveDiagnosticsHistoryEvidence["latestReviewStatus"] = [string](Get-JsonValue $latestTrace "reviewStatus")
                 $liveDiagnosticsHistoryEvidence["latestSafetyRiskScore"] = [int](Get-NumericValueOrDefault (Get-JsonValue $latestTrace "safetyRiskScore"))
@@ -10892,7 +10892,7 @@ else {
 
                     foreach ($entry in @(
                         [ordered]@{ name = "latestTrace"; trace = $latestTrace },
-                        [ordered]@{ name = "previousNr5Trace"; trace = $previousNr5Trace },
+                        [ordered]@{ name = "previousCandidateTrace"; trace = $previousCandidateTrace },
                         [ordered]@{ name = "bestBalancedTrace"; trace = $bestBalancedTrace },
                         [ordered]@{ name = "bestWeakSignalTrace"; trace = $bestWeakSignalTrace },
                         [ordered]@{ name = "lowestPumpingTrace"; trace = $lowestPumpingTrace },
@@ -10939,7 +10939,7 @@ else {
                                 $artifactValidationOk = $false
                             }
                         }
-                        foreach ($fieldName in @("hardBlockerSampleCount", "topHardConstraintCount", "weakDropoutSampleCount", "strongInputSampleCount", "weakRecoveryPct", "weakStrongOutputGapDb", "mixedWeakStrongEvidenceReady", "weakStrongOutputParityReady", "nr5OutputMovementDb", "audioRmsMovementDb", "rxAudioLevelerConstrainedSampleCount", "rxAudioLevelerConstrainedPct", "rxAudioLevelerBoostSlewLimitedSampleCount", "rxAudioLevelerPeakLimitedSampleCount", "rxAudioLevelerOutputLimitedSampleCount", "rxAudioLevelerOutputRmsMovementDb", "rxAudioLevelerAppliedGainMovementDb", "agcPumpingRisk", "agcActiveGainMovementDb", "agcVoiceLikeGainMovementDb", "agcQuietNoEvidenceGainMovementDb", "agcLevelerConstrainedGainMovementDb", "nr5TextureFillAverage", "nr5SignalProbabilityAverage", "nr5LowEvidenceLiftedSampleCount", "nr5LowEvidenceLiftedPct", "nr5LowEvidenceAlignmentMismatchPct", "nr5AudioAlignmentMismatchPct", "nr5ArtifactRiskScore", "safetyRiskScore", "promotionBlockerCount")) {
+                        foreach ($fieldName in @("hardBlockerSampleCount", "topHardConstraintCount", "weakDropoutSampleCount", "strongInputSampleCount", "weakRecoveryPct", "weakStrongOutputGapDb", "mixedWeakStrongEvidenceReady", "weakStrongOutputParityReady", "candidateOutputMovementDb", "audioRmsMovementDb", "rxAudioLevelerConstrainedSampleCount", "rxAudioLevelerConstrainedPct", "rxAudioLevelerBoostSlewLimitedSampleCount", "rxAudioLevelerPeakLimitedSampleCount", "rxAudioLevelerOutputLimitedSampleCount", "rxAudioLevelerOutputRmsMovementDb", "rxAudioLevelerAppliedGainMovementDb", "agcPumpingRisk", "agcActiveGainMovementDb", "agcVoiceLikeGainMovementDb", "agcQuietNoEvidenceGainMovementDb", "agcLevelerConstrainedGainMovementDb", "candidateTextureFillAverage", "candidateSignalProbabilityAverage", "candidateLowEvidenceLiftedSampleCount", "candidateLowEvidenceLiftedPct", "candidateLowEvidenceAlignmentMismatchPct", "candidateAudioAlignmentMismatchPct", "candidateArtifactRiskScore", "safetyRiskScore", "promotionBlockerCount")) {
                             if (-not (Test-LiveHistoryScalarEquivalent -Actual (Get-JsonValue $compactTrace $fieldName) -Expected (Get-JsonValue $fullTrace $fieldName))) {
                                 Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-compact-trace-decision-field-mismatch" "Artifact '$artifactId' $compactName.$fieldName does not match the full trace record for '$compactTraceId'."
                                 $artifactValidationOk = $false
@@ -10953,8 +10953,8 @@ else {
                             Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-compact-trace-decision-field-mismatch" "Artifact '$artifactId' $compactName.mixedWeakStrongEvidenceStatus does not match the full trace record for '$compactTraceId'."
                             $artifactValidationOk = $false
                         }
-                        if (-not [string]::Equals([string](Get-JsonValue $compactTrace "nr5ArtifactRiskStatus"), [string](Get-JsonValue $fullTrace "nr5ArtifactRiskStatus"), [StringComparison]::Ordinal)) {
-                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-compact-trace-decision-field-mismatch" "Artifact '$artifactId' $compactName.nr5ArtifactRiskStatus does not match the full trace record for '$compactTraceId'."
+                        if (-not [string]::Equals([string](Get-JsonValue $compactTrace "candidateArtifactRiskStatus"), [string](Get-JsonValue $fullTrace "candidateArtifactRiskStatus"), [StringComparison]::Ordinal)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-compact-trace-decision-field-mismatch" "Artifact '$artifactId' $compactName.candidateArtifactRiskStatus does not match the full trace record for '$compactTraceId'."
                             $artifactValidationOk = $false
                         }
                         if (-not [string]::Equals([string](Get-JsonValue $compactTrace "topHardConstraintName"), [string](Get-JsonValue $fullTrace "topHardConstraintName"), [StringComparison]::Ordinal)) {
@@ -10983,17 +10983,17 @@ else {
                         $expectedLatestTraceId = [string](Get-JsonValue $expectedLatestTraceBySequence "traceId")
                         $actualLatestTraceId = [string](Get-JsonValue $latestTrace "traceId")
                         if (-not [string]::Equals($actualLatestTraceId, $expectedLatestTraceId, [StringComparison]::OrdinalIgnoreCase)) {
-                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-latest-trace-sequence-mismatch" "Artifact '$artifactId' latestTrace.traceId='$actualLatestTraceId' does not match highest NR5 traceSequenceUtc trace '$expectedLatestTraceId'."
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-latest-trace-sequence-mismatch" "Artifact '$artifactId' latestTrace.traceId='$actualLatestTraceId' does not match highest Candidate traceSequenceUtc trace '$expectedLatestTraceId'."
                             $traceOrderingViolationCount++
                             $artifactValidationOk = $false
                         }
                     }
 
-                    if ($null -ne $expectedPreviousNr5TraceBySequence) {
-                        $expectedPreviousNr5TraceId = [string](Get-JsonValue $expectedPreviousNr5TraceBySequence "traceId")
-                        $actualPreviousNr5TraceId = [string](Get-JsonValue $previousNr5Trace "traceId")
-                        if (-not [string]::Equals($actualPreviousNr5TraceId, $expectedPreviousNr5TraceId, [StringComparison]::OrdinalIgnoreCase)) {
-                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-previous-nr5-sequence-mismatch" "Artifact '$artifactId' previousNr5Trace.traceId='$actualPreviousNr5TraceId' does not match second-highest NR5 traceSequenceUtc trace '$expectedPreviousNr5TraceId'."
+                    if ($null -ne $expectedPreviousCandidateTraceBySequence) {
+                        $expectedPreviousCandidateTraceId = [string](Get-JsonValue $expectedPreviousCandidateTraceBySequence "traceId")
+                        $actualPreviousCandidateTraceId = [string](Get-JsonValue $previousCandidateTrace "traceId")
+                        if (-not [string]::Equals($actualPreviousCandidateTraceId, $expectedPreviousCandidateTraceId, [StringComparison]::OrdinalIgnoreCase)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-previous-candidate-sequence-mismatch" "Artifact '$artifactId' previousCandidateTrace.traceId='$actualPreviousCandidateTraceId' does not match second-highest Candidate traceSequenceUtc trace '$expectedPreviousCandidateTraceId'."
                             $traceOrderingViolationCount++
                             $artifactValidationOk = $false
                         }
@@ -11038,24 +11038,24 @@ else {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-trace-count-mismatch" "Artifact '$artifactId' reports traceCount=$traceCount but contains $actualTraceCount trace record(s)."
                     $artifactValidationOk = $false
                 }
-                if ($nr5TraceCount -le 0) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-nr5-traces-missing" "Artifact '$artifactId' does not summarize any NR5 live diagnostics traces."
+                if ($candidateTraceCount -le 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-candidate-traces-missing" "Artifact '$artifactId' does not summarize any Candidate live diagnostics traces."
                     $artifactValidationOk = $false
                 }
-                if ($nr5TraceCount -ne $actualNr5TraceCount) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-nr5-count-mismatch" "Artifact '$artifactId' reports nr5TraceCount=$nr5TraceCount but contains $actualNr5TraceCount NR5 trace record(s)."
+                if ($candidateTraceCount -ne $actualCandidateTraceCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-candidate-count-mismatch" "Artifact '$artifactId' reports candidateTraceCount=$candidateTraceCount but contains $actualCandidateTraceCount Candidate trace record(s)."
                     $artifactValidationOk = $false
                 }
                 if ($readyTraceCount -ne $actualReadyTraceCount) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-ready-count-mismatch" "Artifact '$artifactId' reports readyTraceCount=$readyTraceCount but contains $actualReadyTraceCount benchmark-ready trace record(s)."
                     $artifactValidationOk = $false
                 }
-                if ($readyNr5TraceCount -ne $actualReadyNr5TraceCount) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-ready-nr5-count-mismatch" "Artifact '$artifactId' reports readyNr5TraceCount=$readyNr5TraceCount but contains $actualReadyNr5TraceCount benchmark-ready NR5 trace record(s)."
+                if ($readyCandidateTraceCount -ne $actualReadyCandidateTraceCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-ready-candidate-count-mismatch" "Artifact '$artifactId' reports readyCandidateTraceCount=$readyCandidateTraceCount but contains $actualReadyCandidateTraceCount benchmark-ready Candidate trace record(s)."
                     $artifactValidationOk = $false
                 }
-                if ($candidateReadyNr5TraceCount -ne $actualCandidateReadyNr5TraceCount) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-candidate-ready-nr5-count-mismatch" "Artifact '$artifactId' reports candidateReadyNr5TraceCount=$candidateReadyNr5TraceCount but contains $actualCandidateReadyNr5TraceCount candidate-ready NR5 trace record(s)."
+                if ($candidateReadyCandidateTraceCount -ne $actualCandidateReadyCandidateTraceCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-candidate-ready-candidate-count-mismatch" "Artifact '$artifactId' reports candidateReadyCandidateTraceCount=$candidateReadyCandidateTraceCount but contains $actualCandidateReadyCandidateTraceCount candidate-ready Candidate trace record(s)."
                     $artifactValidationOk = $false
                 }
                 if ($schemaVersion -ge 13 -and $agcStabilityMissingTraceCount -gt 0) {
@@ -11063,11 +11063,11 @@ else {
                     $artifactValidationOk = $false
                 }
                 if ($schemaVersion -ge 14 -and $mixedWeakStrongFieldMissingTraceCount -gt 0) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-mixed-weak-strong-fields-missing" "Artifact '$artifactId' schemaVersion=$schemaVersion is missing strongInputSampleCount/mixedWeakStrongEvidenceReady/weakStrongOutputParityReady/mixedWeakStrongEvidenceStatus on $mixedWeakStrongFieldMissingTraceCount NR5 trace record(s); rerun watch-dsp-live-diagnostics.ps1 and summarize-dsp-live-diagnostics-history.ps1 with mixed weak/strong evidence support."
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-mixed-weak-strong-fields-missing" "Artifact '$artifactId' schemaVersion=$schemaVersion is missing strongInputSampleCount/mixedWeakStrongEvidenceReady/weakStrongOutputParityReady/mixedWeakStrongEvidenceStatus on $mixedWeakStrongFieldMissingTraceCount Candidate trace record(s); rerun watch-dsp-live-diagnostics.ps1 and summarize-dsp-live-diagnostics-history.ps1 with mixed weak/strong evidence support."
                     $artifactValidationOk = $false
                 }
                 if ($schemaVersion -ge 15 -and $artifactControlFieldMissingTraceCount -gt 0) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-artifact-control-fields-missing" "Artifact '$artifactId' schemaVersion=$schemaVersion is missing NR5 artifact-control fields on $artifactControlFieldMissingTraceCount NR5 trace record(s); rerun summarize-dsp-live-diagnostics-history.ps1 with artifact-risk support."
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-artifact-control-fields-missing" "Artifact '$artifactId' schemaVersion=$schemaVersion is missing Candidate artifact-control fields on $artifactControlFieldMissingTraceCount Candidate trace record(s); rerun summarize-dsp-live-diagnostics-history.ps1 with artifact-risk support."
                     $artifactValidationOk = $false
                 }
                 $summaryArtifactControlSignalCountValue = Get-JsonValue $artifactJson "artifactControlSignalCount"
@@ -11123,15 +11123,15 @@ else {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-review-status-count-mismatch" "Artifact '$artifactId' reviewStatusCounts does not match the trace reviewStatus rollup."
                     $artifactValidationOk = $false
                 }
-                foreach ($fieldName in @("weakRecoveryPctMinimum", "nr5OutputMovementDbMaximum", "audioRmsMovementDbMaximum", "rxAudioLevelerConstrainedPctMaximum", "rxAudioLevelerOutputRmsMovementDbMaximum", "rxAudioLevelerAppliedGainMovementDbMaximum", "agcActiveGainMovementDbMaximum", "agcVoiceLikeGainMovementDbMaximum", "mixedWeakStrongMinimumWeakSamples", "mixedWeakStrongMinimumStrongSamples", "weakStrongOutputGapDbMaximum", "nr5ArtifactRiskScoreMaximum", "nr5LowEvidenceLiftedSampleCountMaximum", "nr5LowEvidenceLiftedPctMaximum", "nr5AudioAlignmentMismatchPctMaximum", "nr5MakeupMovementDbMaximum", "nr5RecoveryDriveMovementMaximum", "nr5MakeupMaxDbMaximum", "audioPeakMaxDbfsMaximum", "adcHeadroomMinDbMinimum")) {
+                foreach ($fieldName in @("weakRecoveryPctMinimum", "candidateOutputMovementDbMaximum", "audioRmsMovementDbMaximum", "rxAudioLevelerConstrainedPctMaximum", "rxAudioLevelerOutputRmsMovementDbMaximum", "rxAudioLevelerAppliedGainMovementDbMaximum", "agcActiveGainMovementDbMaximum", "agcVoiceLikeGainMovementDbMaximum", "mixedWeakStrongMinimumWeakSamples", "mixedWeakStrongMinimumStrongSamples", "weakStrongOutputGapDbMaximum", "candidateArtifactRiskScoreMaximum", "candidateLowEvidenceLiftedSampleCountMaximum", "candidateLowEvidenceLiftedPctMaximum", "candidateAudioAlignmentMismatchPctMaximum", "candidateMakeupMovementDbMaximum", "candidateRecoveryDriveMovementMaximum", "candidateMakeupMaxDbMaximum", "audioPeakMaxDbfsMaximum", "adcHeadroomMinDbMinimum")) {
                     if (-not (Test-LiveHistoryScalarEquivalent -Actual (Get-JsonValue $thresholds $fieldName) -Expected (Get-JsonValue $expectedThresholds $fieldName))) {
                         Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-thresholds-mismatch" "Artifact '$artifactId' thresholds.$fieldName does not match the summarizer tuning threshold."
                         $artifactValidationOk = $false
                     }
                 }
-                foreach ($fieldName in @("weakRecoveryPct", "weakDropoutSampleCount", "strongInputSampleCount", "weakStrongOutputGapDb", "nr5OutputMovementDb", "rxAudioLevelerConstrainedSampleCount", "rxAudioLevelerConstrainedPct", "rxAudioLevelerBoostSlewLimitedSampleCount", "rxAudioLevelerPeakLimitedSampleCount", "rxAudioLevelerOutputLimitedSampleCount", "rxAudioLevelerOutputRmsMovementDb", "rxAudioLevelerAppliedGainMovementDb", "agcPumpingRisk", "agcActiveGainMovementDb", "agcVoiceLikeGainMovementDb", "agcQuietNoEvidenceGainMovementDb", "agcLevelerConstrainedGainMovementDb", "nr5ArtifactRiskScore", "nr5LowEvidenceLiftedSampleCount", "nr5LowEvidenceLiftedPct", "nr5AudioAlignmentMismatchPct", "nr5MakeupMovementDb", "nr5RecoveryDriveMovement", "safetyRiskScore")) {
-                    if (-not (Test-LiveHistoryScalarEquivalent -Actual (Get-JsonValue $latestVsPreviousNr5Delta $fieldName) -Expected (Get-JsonValue $expectedLatestVsPreviousNr5Delta $fieldName))) {
-                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-latest-delta-mismatch" "Artifact '$artifactId' latestVsPreviousNr5Delta.$fieldName does not match latest and previous NR5 trace records."
+                foreach ($fieldName in @("weakRecoveryPct", "weakDropoutSampleCount", "strongInputSampleCount", "weakStrongOutputGapDb", "candidateOutputMovementDb", "rxAudioLevelerConstrainedSampleCount", "rxAudioLevelerConstrainedPct", "rxAudioLevelerBoostSlewLimitedSampleCount", "rxAudioLevelerPeakLimitedSampleCount", "rxAudioLevelerOutputLimitedSampleCount", "rxAudioLevelerOutputRmsMovementDb", "rxAudioLevelerAppliedGainMovementDb", "agcPumpingRisk", "agcActiveGainMovementDb", "agcVoiceLikeGainMovementDb", "agcQuietNoEvidenceGainMovementDb", "agcLevelerConstrainedGainMovementDb", "candidateArtifactRiskScore", "candidateLowEvidenceLiftedSampleCount", "candidateLowEvidenceLiftedPct", "candidateAudioAlignmentMismatchPct", "candidateMakeupMovementDb", "candidateRecoveryDriveMovement", "safetyRiskScore")) {
+                    if (-not (Test-LiveHistoryScalarEquivalent -Actual (Get-JsonValue $latestVsPreviousCandidateDelta $fieldName) -Expected (Get-JsonValue $expectedLatestVsPreviousCandidateDelta $fieldName))) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-latest-delta-mismatch" "Artifact '$artifactId' latestVsPreviousCandidateDelta.$fieldName does not match latest and previous Candidate trace records."
                         $artifactValidationOk = $false
                     }
                 }
@@ -11148,19 +11148,19 @@ else {
                     $artifactValidationOk = $false
                 }
                 if ($readinessTrendFieldsRequired -and -not (Test-LiveHistoryReadinessTrendMatches -Actual $readinessTrend -Expected $expectedReadinessTrend)) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-readiness-trend-mismatch" "Artifact '$artifactId' latestVsPreviousNr5ReadinessGapTrend does not match the latest and previous NR5 trace safetySignals."
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-readiness-trend-mismatch" "Artifact '$artifactId' latestVsPreviousCandidateReadinessGapTrend does not match the latest and previous Candidate trace safetySignals."
                     $artifactValidationOk = $false
                 }
                 if ($null -ne $readinessTrend -and $null -ne $legacyReadinessTrend -and -not (Test-LiveHistoryReadinessTrendMatches -Actual $legacyReadinessTrend -Expected $readinessTrend)) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-readiness-trend-alias-mismatch" "Artifact '$artifactId' latestVsPreviousReadinessTrend does not match latestVsPreviousNr5ReadinessGapTrend."
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-readiness-trend-alias-mismatch" "Artifact '$artifactId' latestVsPreviousReadinessTrend does not match latestVsPreviousCandidateReadinessGapTrend."
                     $artifactValidationOk = $false
                 }
                 if ($referenceTrendFieldsRequired -and $null -eq $referenceReadinessTrend) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-reference-readiness-trend-missing" "Artifact '$artifactId' schemaVersion=$schemaVersion must include latestVsReferenceNr5ReadinessGapTrend."
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-reference-readiness-trend-missing" "Artifact '$artifactId' schemaVersion=$schemaVersion must include latestVsReferenceCandidateReadinessGapTrend."
                     $artifactValidationOk = $false
                 }
                 elseif ($referenceTrendFieldsRequired -and -not (Test-LiveHistoryReadinessTrendMatches -Actual $referenceReadinessTrend -Expected $expectedReferenceReadinessTrend)) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-reference-readiness-trend-mismatch" "Artifact '$artifactId' latestVsReferenceNr5ReadinessGapTrend does not match the latest trace and promotion reference trace safetySignals."
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-reference-readiness-trend-mismatch" "Artifact '$artifactId' latestVsReferenceCandidateReadinessGapTrend does not match the latest trace and promotion reference trace safetySignals."
                     $artifactValidationOk = $false
                 }
                 if ($tuningActionPlanFieldsRequired -and $null -eq $tuningActionPlan) {
@@ -11471,7 +11471,7 @@ else {
                         if ([string]::IsNullOrWhiteSpace($missingComparisonSummary)) {
                             $missingComparisonSummary = "none-listed"
                         }
-                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-live-experiment-coverage-incomplete" "Artifact '$artifactId' latestLiveExperimentCoverage status='$coverageStatus' is missing $coverageMissingComparisonCount required live comparison(s): $missingComparisonSummary. Capture off-baseline, thetis-parity, current-zeus, and nr5-spnr windows before using live history as acceptance evidence."
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-live-experiment-coverage-incomplete" "Artifact '$artifactId' latestLiveExperimentCoverage status='$coverageStatus' is missing $coverageMissingComparisonCount required live comparison(s): $missingComparisonSummary. Capture off-baseline, thetis-parity, current-zeus, and candidate-under-test windows before using live history as acceptance evidence."
                         $artifactValidationOk = $false
                     }
                 }
@@ -11479,16 +11479,16 @@ else {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-ready-traces-missing" "Artifact '$artifactId' does not include any benchmark-ready live diagnostics traces."
                     $artifactValidationOk = $false
                 }
-                if ($nr5TraceCount -gt 0 -and $readyNr5TraceCount -le 0) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-ready-nr5-traces-missing" "Artifact '$artifactId' does not include any benchmark-ready NR5 live diagnostics traces."
+                if ($candidateTraceCount -gt 0 -and $readyCandidateTraceCount -le 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-ready-candidate-traces-missing" "Artifact '$artifactId' does not include any benchmark-ready Candidate live diagnostics traces."
                     $artifactValidationOk = $false
                 }
                 if ($null -eq $latestTrace) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-latest-trace-missing" "Artifact '$artifactId' does not identify a latest trace."
                     $artifactValidationOk = $false
                 }
-                if ($nr5TraceCount -gt 0 -and $null -eq $bestBalancedTrace) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-best-balanced-missing" "Artifact '$artifactId' does not identify a best balanced NR5 trace."
+                if ($candidateTraceCount -gt 0 -and $null -eq $bestBalancedTrace) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-best-balanced-missing" "Artifact '$artifactId' does not identify a best balanced Candidate trace."
                     $artifactValidationOk = $false
                 }
                 if ($null -eq $promotionDecision) {
@@ -11501,20 +11501,20 @@ else {
                             $canonicalValue = Get-JsonValue $promotionDecision $fieldName
                             $legacyValue = Get-JsonValue $legacyPromotionDecision $fieldName
                             if (-not (Test-LiveHistoryScalarEquivalent -Actual $legacyValue -Expected $canonicalValue)) {
-                                Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-promotion-alias-mismatch" "Artifact '$artifactId' latestNr5Decision.$fieldName does not match promotionDecision.$fieldName."
+                                Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-promotion-alias-mismatch" "Artifact '$artifactId' latestCandidateDecision.$fieldName does not match promotionDecision.$fieldName."
                                 $artifactValidationOk = $false
                             }
                         }
                         if (-not (Test-StringArraySame -Actual (Get-JsonArray $legacyPromotionDecision "blockerClasses") -Expected (Get-JsonArray $promotionDecision "blockerClasses"))) {
-                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-promotion-alias-mismatch" "Artifact '$artifactId' latestNr5Decision.blockerClasses does not match promotionDecision.blockerClasses."
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-promotion-alias-mismatch" "Artifact '$artifactId' latestCandidateDecision.blockerClasses does not match promotionDecision.blockerClasses."
                             $artifactValidationOk = $false
                         }
                         if (-not (Test-LiveHistorySafetyClassCountsMatch -Actual (Get-JsonArray $legacyPromotionDecision "blockerClassCounts") -Expected (Get-JsonArray $promotionDecision "blockerClassCounts"))) {
-                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-promotion-alias-mismatch" "Artifact '$artifactId' latestNr5Decision.blockerClassCounts does not match promotionDecision.blockerClassCounts."
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-promotion-alias-mismatch" "Artifact '$artifactId' latestCandidateDecision.blockerClassCounts does not match promotionDecision.blockerClassCounts."
                             $artifactValidationOk = $false
                         }
                         if (-not (Test-LiveHistoryPromotionBlockersMatch -Actual (Get-JsonArray $legacyPromotionDecision "blockers") -Expected (Get-JsonArray $promotionDecision "blockers"))) {
-                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-promotion-alias-mismatch" "Artifact '$artifactId' latestNr5Decision.blockers does not match promotionDecision.blockers."
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-promotion-alias-mismatch" "Artifact '$artifactId' latestCandidateDecision.blockers does not match promotionDecision.blockers."
                             $artifactValidationOk = $false
                         }
                     }
@@ -11577,7 +11577,7 @@ else {
                         $artifactValidationOk = $false
                     }
                     $validPromotionTraceRoles = @("latest", "best-balanced", "best-weak-signal", "lowest-pumping")
-                    if ($promotionStatus -ne "no-nr5-history") {
+                    if ($promotionStatus -ne "no-candidate-history") {
                         if ($validPromotionTraceRoles -notcontains $promotionRecommendedTraceRole) {
                             Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-promotion-role-invalid" "Artifact '$artifactId' promotionDecision.recommendedTraceRole='$promotionRecommendedTraceRole' is not a concrete trace role."
                             $artifactValidationOk = $false
@@ -11684,7 +11684,7 @@ else {
                         $traceId = [string](Get-JsonValue $trace "traceId")
                         $traceCandidateReady = Test-Truthy (Get-JsonValue $trace "candidateComparisonReady")
                         $tracePromotable = Test-Truthy (Get-JsonValue $trace "promotable")
-                        $traceNr5Samples = [int](Get-NumericValueOrDefault (Get-JsonValue $trace "nr5SampleCount"))
+                        $traceCandidateSamples = [int](Get-NumericValueOrDefault (Get-JsonValue $trace "candidateSampleCount"))
                         $traceReady = Test-Truthy (Get-JsonValue $trace "readyForBenchmarkTrace")
                         $traceBlockerCount = [int](Get-NumericValueOrDefault (Get-JsonValue $trace "promotionBlockerCount"))
                         $traceBlockerClassCounts = @(Get-JsonArray $trace "promotionBlockerClassCounts")
@@ -11803,9 +11803,9 @@ else {
                                     "endpoint",
                                     "sourceMode",
                                     "trendStatus",
-                                    "nr5TuningTraceStatus",
+                                    "candidateTuningTraceStatus",
                                     "agcStabilityStatus",
-                                    "nr5ArtifactRiskStatus",
+                                    "candidateArtifactRiskStatus",
                                     "topHardConstraintName",
                                     "reviewStatus"
                             ))
@@ -11893,10 +11893,10 @@ else {
                                     "hardBlockerSampleCount",
                                     "topHardConstraintCount",
                                     "readyForBenchmarkTrace",
-                                    "nr5TuningReadyTrace",
-                                    "nr5SampleCount",
-                                    "nr5ProbabilityDiagnosticSampleCount",
-                                    "nr5AgcDiagnosticSampleCount",
+                                    "candidateTuningReadyTrace",
+                                    "candidateSampleCount",
+                                    "candidateProbabilityDiagnosticSampleCount",
+                                    "candidateAgcDiagnosticSampleCount",
                                     "weakInputSampleCount",
                                     "weakRecoveredSampleCount",
                                     "weakDropoutSampleCount",
@@ -11907,7 +11907,7 @@ else {
                                     "mixedWeakStrongEvidenceReady",
                                     "weakStrongOutputParityReady",
                                     "mixedWeakStrongEvidenceStatus",
-                                    "nr5OutputMovementDb",
+                                    "candidateOutputMovementDb",
                                     "audioRmsMovementDb",
                                     "rxAudioLevelerConstrainedSampleCount",
                                     "rxAudioLevelerConstrainedPct",
@@ -11921,16 +11921,16 @@ else {
                                     "agcVoiceLikeGainMovementDb",
                                     "agcQuietNoEvidenceGainMovementDb",
                                     "agcLevelerConstrainedGainMovementDb",
-                                    "nr5MakeupMovementDb",
-                                    "nr5MakeupMaxDb",
-                                    "nr5RecoveryDriveMovement",
-                                    "nr5TextureFillAverage",
-                                    "nr5SignalProbabilityAverage",
-                                    "nr5LowEvidenceLiftedSampleCount",
-                                    "nr5LowEvidenceLiftedPct",
-                                    "nr5LowEvidenceAlignmentMismatchPct",
-                                    "nr5AudioAlignmentMismatchPct",
-                                    "nr5ArtifactRiskScore",
+                                    "candidateMakeupMovementDb",
+                                    "candidateMakeupMaxDb",
+                                    "candidateRecoveryDriveMovement",
+                                    "candidateTextureFillAverage",
+                                    "candidateSignalProbabilityAverage",
+                                    "candidateLowEvidenceLiftedSampleCount",
+                                    "candidateLowEvidenceLiftedPct",
+                                    "candidateLowEvidenceAlignmentMismatchPct",
+                                    "candidateAudioAlignmentMismatchPct",
+                                    "candidateArtifactRiskScore",
                                     "audioPeakMaxDbfs",
                                     "adcHeadroomMinDb",
                                     "monitorBacklogMaxSamples",
@@ -12012,8 +12012,8 @@ else {
                             Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-trace-blocker-count-mismatch" "Artifact '$artifactId' trace '$traceId' promotionBlockerCount does not match promotionBlockerClassCounts."
                             $artifactValidationOk = $false
                         }
-                        if ($traceCandidateReady -and ($traceNr5Samples -le 0 -or -not $traceReady -or $traceBlockerCount -gt 0 -or $traceBlockerClasses.Count -gt 0)) {
-                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-trace-readiness-inconsistent" "Artifact '$artifactId' trace '$traceId' is candidate-ready but has no NR5 samples, is not benchmark-ready, or still has blockers."
+                        if ($traceCandidateReady -and ($traceCandidateSamples -le 0 -or -not $traceReady -or $traceBlockerCount -gt 0 -or $traceBlockerClasses.Count -gt 0)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-trace-readiness-inconsistent" "Artifact '$artifactId' trace '$traceId' is candidate-ready but has no Candidate samples, is not benchmark-ready, or still has blockers."
                             $artifactValidationOk = $false
                         }
                         if (-not (Test-LiveHistorySafetyClassCountsMatch -Actual $traceSafetyClassCounts -Expected $expectedTraceSafetyClassCounts)) {
@@ -12926,7 +12926,7 @@ else {
                                 Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-plan-scenario-invalid" "Artifact '$artifactId' externalBakeoffPlan candidate '$candidateId' scenario is missing scenarioId or purpose."
                                 $artifactValidationOk = $false
                             }
-                            foreach ($comparisonId in @("current-zeus", "nr5-spnr", "candidate-external-engine-opt-in")) {
+                            foreach ($comparisonId in @("current-zeus", "candidate-under-test", "candidate-external-engine-opt-in")) {
                                 if ($scenarioComparisons -notcontains $comparisonId) {
                                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "external-bakeoff-plan-scenario-comparison-missing" "Artifact '$artifactId' externalBakeoffPlan candidate '$candidateId' scenario '$scenarioId' is missing comparison '$comparisonId'."
                                     $artifactValidationOk = $false
@@ -13111,10 +13111,16 @@ else {
                 foreach ($pathField in @(
                         "sourceValidationReportPath",
                         "sourceTriageReportPath",
-                        "baselineFixturePath",
-                        "candidateFixturePath",
+                        "benchmarkPlanPath",
+                        "metricCatalogPath",
+                        "fixtureMetricsPath",
+                        "fixtureAudioIndexPath",
+                        "fixtureSpectrumIndexPath",
+                        "runtimeAuditPath",
+                        "stageTimingReportPath",
                         "fixtureComparisonReportPath",
                         "fixtureComparisonMarkdownPath",
+                        "fixtureMatrixSummaryPath",
                         "liveIndexPath",
                         "liveReportPath",
                         "reportPath",
@@ -13134,7 +13140,7 @@ else {
                 $commandStepsJoined = $commandSteps -join "`n"
                 $expectedCommandNames = New-Object System.Collections.Generic.List[string]
                 if (-not $skipFixtureComparison) {
-                    $expectedCommandNames.Add("compare-dsp-fixture-metrics.ps1") | Out-Null
+                    $expectedCommandNames.Add("run-dsp-wdsp-fixture-matrix.ps1") | Out-Null
                 }
                 if (-not $skipLiveMatrix) {
                     $expectedCommandNames.Add("run-dsp-live-diagnostics-matrix.ps1") | Out-Null
@@ -13240,11 +13246,11 @@ else {
                 $frontendSuggestedFilterCenterOffsetHz = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "filterCenterOffsetHz")
                 $frontendSuggestedFilterDistanceHz = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "filterDistanceHz")
                 $frontendSuggestedTuneReason = [string](Get-JsonValue $frontendBestTuningHint "reason")
-                $requireNr5CaptureReady = Test-Truthy (Get-JsonValue $artifactJson "requireNr5CaptureReady")
+                $requireCandidateCaptureReady = Test-Truthy (Get-JsonValue $artifactJson "requireCandidateCaptureReady")
                 $baseCaptureQualifiedPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "baseCaptureQualifiedPollCount"))
-                $nr5CaptureReadyPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "nr5CaptureReadyPollCount"))
-                $nr5CaptureBlockedPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "nr5CaptureBlockedPollCount"))
-                $nr5CaptureAdvisoryPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "nr5CaptureAdvisoryPollCount"))
+                $candidateCaptureReadyPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "candidateCaptureReadyPollCount"))
+                $candidateCaptureBlockedPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "candidateCaptureBlockedPollCount"))
+                $candidateCaptureAdvisoryPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "candidateCaptureAdvisoryPollCount"))
                 $captureQualifiedPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "captureQualifiedPollCount"))
                 $readyCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "readyCaptureCount"))
                 $mixedWeakStrongReady = Test-Truthy (Get-JsonValue $artifactJson "mixedWeakStrongReady")
@@ -13403,11 +13409,11 @@ else {
                 $manualTuneObserverEvidence["frontendSuggestedFilterCenterOffsetHz"] = $frontendSuggestedFilterCenterOffsetHz
                 $manualTuneObserverEvidence["frontendSuggestedFilterDistanceHz"] = $frontendSuggestedFilterDistanceHz
                 $manualTuneObserverEvidence["frontendSuggestedTuneReason"] = $frontendSuggestedTuneReason
-                $manualTuneObserverEvidence["requireNr5CaptureReady"] = $requireNr5CaptureReady
+                $manualTuneObserverEvidence["requireCandidateCaptureReady"] = $requireCandidateCaptureReady
                 $manualTuneObserverEvidence["baseCaptureQualifiedPollCount"] = $baseCaptureQualifiedPollCount
-                $manualTuneObserverEvidence["nr5CaptureReadyPollCount"] = $nr5CaptureReadyPollCount
-                $manualTuneObserverEvidence["nr5CaptureBlockedPollCount"] = $nr5CaptureBlockedPollCount
-                $manualTuneObserverEvidence["nr5CaptureAdvisoryPollCount"] = $nr5CaptureAdvisoryPollCount
+                $manualTuneObserverEvidence["candidateCaptureReadyPollCount"] = $candidateCaptureReadyPollCount
+                $manualTuneObserverEvidence["candidateCaptureBlockedPollCount"] = $candidateCaptureBlockedPollCount
+                $manualTuneObserverEvidence["candidateCaptureAdvisoryPollCount"] = $candidateCaptureAdvisoryPollCount
                 $manualTuneObserverEvidence["captureQualifiedPollCount"] = $captureQualifiedPollCount
                 $manualTuneObserverEvidence["readyCaptureCount"] = $readyCaptureCount
                 $manualTuneObserverEvidence["mixedWeakStrongReady"] = $mixedWeakStrongReady
@@ -13719,7 +13725,7 @@ else {
                                     $watchOkRaw = Get-JsonValue $watchSummary "ok"
                                     $watchOk = if ($null -eq $watchOkRaw) { $true } else { Test-Truthy $watchOkRaw }
                                     $watchReadyForBenchmark = Test-Truthy (Get-JsonValue $watchSummary "readyForBenchmarkTrace")
-                                    $watchWeak = Get-JsonValue $watchSummary "nr5WeakSignalWatch"
+                                    $watchWeak = Get-JsonValue $watchSummary "candidateWeakSignalWatch"
                                     $watchWeakInputValue = Get-NumericValue (Get-JsonValue $watchWeak "weakInputSampleCount")
                                     $watchStrongInputValue = Get-NumericValue (Get-JsonValue $watchWeak "strongInputSampleCount")
                                     $watchNearStrongInputValue = Get-NumericValue (Get-JsonValue $watchWeak "nearStrongInputSampleCount")
@@ -13746,7 +13752,7 @@ else {
                                     if ($null -eq $watchWeakInputValue -or $null -eq $watchStrongInputValue -or $null -eq $watchNearStrongInputValue -or [string]::IsNullOrWhiteSpace($watchStatus)) {
                                         $captureRecord["sourceStatus"] = "watch-fields-missing"
                                         $captureOk = $false
-                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-capture-report-weak-watch-missing" "Artifact '$artifactId' capture vfoHz='$captureVfoHz' watcher summary '$captureReportPath' is missing nr5WeakSignalWatch weak/strong/near-strong counters or status."
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-capture-report-weak-watch-missing" "Artifact '$artifactId' capture vfoHz='$captureVfoHz' watcher summary '$captureReportPath' is missing candidateWeakSignalWatch weak/strong/near-strong counters or status."
                                         $artifactValidationOk = $false
                                     }
                                     else {
@@ -14149,7 +14155,7 @@ else {
                 $g2RxPeakHuntEvidence["liveDiagnosticsWdspNativeLoadable"] = Test-Truthy (Get-JsonValue $liveDiagnostics "wdspNativeLoadable")
                 $g2RxPeakHuntEvidence["liveDiagnosticsRequestedNrMode"] = [string](Get-JsonValue $liveDiagnostics "requestedNrMode")
                 $g2RxPeakHuntEvidence["liveDiagnosticsEffectiveNrMode"] = [string](Get-JsonValue $liveDiagnostics "effectiveNrMode")
-                $g2RxPeakHuntEvidence["liveDiagnosticsReadyForNr5Tuning"] = Test-Truthy (Get-JsonValue $liveDiagnostics "readyForNr5Tuning")
+                $g2RxPeakHuntEvidence["liveDiagnosticsReadyForCandidateTuning"] = Test-Truthy (Get-JsonValue $liveDiagnostics "readyForCandidateTuning")
                 $g2RxPeakHuntEvidence["liveDiagnosticsFrontendSceneFresh"] = Test-Truthy (Get-JsonValue $liveDiagnostics "frontendSceneFresh")
                 $g2RxPeakHuntEvidence["frontendSceneStatus"] = [string](Get-JsonValue $frontendScene "status")
                 $g2RxPeakHuntEvidence["frontendSceneFresh"] = Test-Truthy (Get-JsonValue $frontendScene "fresh")
@@ -14893,23 +14899,23 @@ else {
                         nrModeMismatchSampleCount = $null
                         nrOffRequestedSampleCount = $null
                         nrOffEffectiveSampleCount = $null
-                        nr5RequestedSampleCount = $null
-                        nr5EffectiveSampleCount = $null
-                        nr5SampleCount = $null
-                        nr5AlignedSampleCount = $null
-                        nr5AgcDiagnosticSampleCount = $null
-                        nr5ProbabilityDiagnosticSampleCount = $null
-                        nr5PeakDiagnosticSampleCount = $null
-                        indexNr5WeakInputSampleCount = $null
-                        indexNr5WeakRecoveredSampleCount = $null
-                        indexNr5WeakDropoutSampleCount = $null
-                        indexNr5HotMakeupSampleCount = $null
-                        nr5WeakInputSampleCount = $null
-                        nr5WeakRecoveredSampleCount = $null
-                        nr5WeakDropoutSampleCount = $null
-                        nr5HotMakeupSampleCount = $null
-                        nr5WeakCounterStatus = $null
-                        nr5WeakCounterMismatchCount = 0
+                        candidateRequestedSampleCount = $null
+                        candidateEffectiveSampleCount = $null
+                        candidateSampleCount = $null
+                        candidateAlignedSampleCount = $null
+                        candidateAgcDiagnosticSampleCount = $null
+                        candidateProbabilityDiagnosticSampleCount = $null
+                        candidatePeakDiagnosticSampleCount = $null
+                        indexCandidateWeakInputSampleCount = $null
+                        indexCandidateWeakRecoveredSampleCount = $null
+                        indexCandidateWeakDropoutSampleCount = $null
+                        indexCandidateHotMakeupSampleCount = $null
+                        candidateWeakInputSampleCount = $null
+                        candidateWeakRecoveredSampleCount = $null
+                        candidateWeakDropoutSampleCount = $null
+                        candidateHotMakeupSampleCount = $null
+                        candidateWeakCounterStatus = $null
+                        candidateWeakCounterMismatchCount = 0
                     }
                     $artifactReferencedFiles.Add($indexedRecord) | Out-Null
 
@@ -15075,13 +15081,13 @@ else {
                                     $indexTopCaptureConstraintCount = Get-NumericValue (Get-JsonValue $indexedFile "topCaptureConstraintCount")
                                     $indexTopCaptureHardConstraintName = [string](Get-JsonValue $indexedFile "topCaptureHardConstraintName")
                                     $indexTopCaptureHardConstraintCount = Get-NumericValue (Get-JsonValue $indexedFile "topCaptureHardConstraintCount")
-                                    $nr5SampleCount = [int](Get-JsonValue $summaryJson "nr5SampleCount")
-                                    $nr5AlignedSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nr5AlignedSampleCount"))
-                                    $nr5AgcDiagnosticSampleCount = [int](Get-JsonValue $summaryJson "nr5AgcDiagnosticSampleCount")
-                                    $nr5ProbabilityDiagnosticSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nr5ProbabilityDiagnosticSampleCount"))
-                                    $nr5PeakDiagnosticSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nr5PeakDiagnosticSampleCount"))
-                                    $nr5RequestedSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nr5RequestedSampleCount"))
-                                    $nr5EffectiveSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nr5EffectiveSampleCount"))
+                                    $candidateSampleCount = [int](Get-JsonValue $summaryJson "candidateSampleCount")
+                                    $candidateAlignedSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "candidateAlignedSampleCount"))
+                                    $candidateAgcDiagnosticSampleCount = [int](Get-JsonValue $summaryJson "candidateAgcDiagnosticSampleCount")
+                                    $candidateProbabilityDiagnosticSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "candidateProbabilityDiagnosticSampleCount"))
+                                    $candidatePeakDiagnosticSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "candidatePeakDiagnosticSampleCount"))
+                                    $candidateRequestedSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "candidateRequestedSampleCount"))
+                                    $candidateEffectiveSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "candidateEffectiveSampleCount"))
                                     $nrOffRequestedSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nrOffRequestedSampleCount"))
                                     $nrOffEffectiveSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nrOffEffectiveSampleCount"))
                                     $nrModeMismatchSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nrModeMismatchSampleCount"))
@@ -15092,15 +15098,15 @@ else {
                                     $indexComparisonStateStrictValue = Get-JsonValue $indexedFile "comparisonStateStrict"
                                     $indexComparisonStateReadyValue = Get-JsonValue $indexedFile "comparisonStateReady"
                                     $indexComparisonStateStatus = [string](Get-JsonValue $indexedFile "comparisonStateStatus")
-                                    $nr5Weak = Get-JsonValue $summaryJson "nr5WeakSignalWatch"
-                                    $nr5WeakInputSampleValue = Get-NumericValue (Get-JsonValue $nr5Weak "weakInputSampleCount")
-                                    $nr5WeakRecoveredSampleValue = Get-NumericValue (Get-JsonValue $nr5Weak "weakRecoveredSampleCount")
-                                    $nr5WeakDropoutSampleValue = Get-NumericValue (Get-JsonValue $nr5Weak "weakDropoutSampleCount")
-                                    $nr5HotMakeupSampleValue = Get-NumericValue (Get-JsonValue $nr5Weak "hotMakeupSampleCount")
-                                    $nr5WeakInputSampleCount = if ($null -ne $nr5WeakInputSampleValue) { [int]$nr5WeakInputSampleValue } else { 0 }
-                                    $nr5WeakRecoveredSampleCount = if ($null -ne $nr5WeakRecoveredSampleValue) { [int]$nr5WeakRecoveredSampleValue } else { 0 }
-                                    $nr5WeakDropoutSampleCount = if ($null -ne $nr5WeakDropoutSampleValue) { [int]$nr5WeakDropoutSampleValue } else { 0 }
-                                    $nr5HotMakeupSampleCount = if ($null -ne $nr5HotMakeupSampleValue) { [int]$nr5HotMakeupSampleValue } else { 0 }
+                                    $candidateWeak = Get-JsonValue $summaryJson "candidateWeakSignalWatch"
+                                    $candidateWeakInputSampleValue = Get-NumericValue (Get-JsonValue $candidateWeak "weakInputSampleCount")
+                                    $candidateWeakRecoveredSampleValue = Get-NumericValue (Get-JsonValue $candidateWeak "weakRecoveredSampleCount")
+                                    $candidateWeakDropoutSampleValue = Get-NumericValue (Get-JsonValue $candidateWeak "weakDropoutSampleCount")
+                                    $candidateHotMakeupSampleValue = Get-NumericValue (Get-JsonValue $candidateWeak "hotMakeupSampleCount")
+                                    $candidateWeakInputSampleCount = if ($null -ne $candidateWeakInputSampleValue) { [int]$candidateWeakInputSampleValue } else { 0 }
+                                    $candidateWeakRecoveredSampleCount = if ($null -ne $candidateWeakRecoveredSampleValue) { [int]$candidateWeakRecoveredSampleValue } else { 0 }
+                                    $candidateWeakDropoutSampleCount = if ($null -ne $candidateWeakDropoutSampleValue) { [int]$candidateWeakDropoutSampleValue } else { 0 }
+                                    $candidateHotMakeupSampleCount = if ($null -ne $candidateHotMakeupSampleValue) { [int]$candidateHotMakeupSampleValue } else { 0 }
 
                                     $indexedRecord["summaryOk"] = ($summaryTool -eq "watch-dsp-live-diagnostics")
                                     $indexedRecord["summaryScenarioId"] = $summaryScenarioId
@@ -15121,8 +15127,8 @@ else {
                                     $indexedRecord["nrModeMismatchSampleCount"] = $nrModeMismatchSampleCount
                                     $indexedRecord["nrOffRequestedSampleCount"] = $nrOffRequestedSampleCount
                                     $indexedRecord["nrOffEffectiveSampleCount"] = $nrOffEffectiveSampleCount
-                                    $indexedRecord["nr5RequestedSampleCount"] = $nr5RequestedSampleCount
-                                    $indexedRecord["nr5EffectiveSampleCount"] = $nr5EffectiveSampleCount
+                                    $indexedRecord["candidateRequestedSampleCount"] = $candidateRequestedSampleCount
+                                    $indexedRecord["candidateEffectiveSampleCount"] = $candidateEffectiveSampleCount
                                     $indexedRecord["indexCaptureReadinessStatus"] = $indexCaptureReadinessStatus
                                     $indexedRecord["captureReadinessStatus"] = $captureReadinessStatus
                                     $indexedRecord["indexHardGatePass"] = $indexHardGatePassValue
@@ -15145,15 +15151,15 @@ else {
                                     if ($null -ne $topCaptureHardConstraintCount) {
                                         $indexedRecord["topCaptureHardConstraintCount"] = [int]$topCaptureHardConstraintCount
                                     }
-                                    $indexedRecord["nr5SampleCount"] = $nr5SampleCount
-                                    $indexedRecord["nr5AlignedSampleCount"] = $nr5AlignedSampleCount
-                                    $indexedRecord["nr5AgcDiagnosticSampleCount"] = $nr5AgcDiagnosticSampleCount
-                                    $indexedRecord["nr5ProbabilityDiagnosticSampleCount"] = $nr5ProbabilityDiagnosticSampleCount
-                                    $indexedRecord["nr5PeakDiagnosticSampleCount"] = $nr5PeakDiagnosticSampleCount
-                                    $indexedRecord["nr5WeakInputSampleCount"] = $nr5WeakInputSampleCount
-                                    $indexedRecord["nr5WeakRecoveredSampleCount"] = $nr5WeakRecoveredSampleCount
-                                    $indexedRecord["nr5WeakDropoutSampleCount"] = $nr5WeakDropoutSampleCount
-                                    $indexedRecord["nr5HotMakeupSampleCount"] = $nr5HotMakeupSampleCount
+                                    $indexedRecord["candidateSampleCount"] = $candidateSampleCount
+                                    $indexedRecord["candidateAlignedSampleCount"] = $candidateAlignedSampleCount
+                                    $indexedRecord["candidateAgcDiagnosticSampleCount"] = $candidateAgcDiagnosticSampleCount
+                                    $indexedRecord["candidateProbabilityDiagnosticSampleCount"] = $candidateProbabilityDiagnosticSampleCount
+                                    $indexedRecord["candidatePeakDiagnosticSampleCount"] = $candidatePeakDiagnosticSampleCount
+                                    $indexedRecord["candidateWeakInputSampleCount"] = $candidateWeakInputSampleCount
+                                    $indexedRecord["candidateWeakRecoveredSampleCount"] = $candidateWeakRecoveredSampleCount
+                                    $indexedRecord["candidateWeakDropoutSampleCount"] = $candidateWeakDropoutSampleCount
+                                    $indexedRecord["candidateHotMakeupSampleCount"] = $candidateHotMakeupSampleCount
 
                                     $captureReadinessMismatchCount = 0
                                     if ($null -ne $captureReadiness) {
@@ -15321,10 +15327,10 @@ else {
                                     }
 
                                     $weakCounterSpecs = @(
-                                        @{ IndexName = "nr5WeakInputSampleCount"; RecordName = "indexNr5WeakInputSampleCount"; SummaryName = "weakInputSampleCount"; SummaryValue = $nr5WeakInputSampleValue; SummaryCount = $nr5WeakInputSampleCount },
-                                        @{ IndexName = "nr5WeakRecoveredSampleCount"; RecordName = "indexNr5WeakRecoveredSampleCount"; SummaryName = "weakRecoveredSampleCount"; SummaryValue = $nr5WeakRecoveredSampleValue; SummaryCount = $nr5WeakRecoveredSampleCount },
-                                        @{ IndexName = "nr5WeakDropoutSampleCount"; RecordName = "indexNr5WeakDropoutSampleCount"; SummaryName = "weakDropoutSampleCount"; SummaryValue = $nr5WeakDropoutSampleValue; SummaryCount = $nr5WeakDropoutSampleCount },
-                                        @{ IndexName = "nr5HotMakeupSampleCount"; RecordName = "indexNr5HotMakeupSampleCount"; SummaryName = "hotMakeupSampleCount"; SummaryValue = $nr5HotMakeupSampleValue; SummaryCount = $nr5HotMakeupSampleCount }
+                                        @{ IndexName = "candidateWeakInputSampleCount"; RecordName = "indexCandidateWeakInputSampleCount"; SummaryName = "weakInputSampleCount"; SummaryValue = $candidateWeakInputSampleValue; SummaryCount = $candidateWeakInputSampleCount },
+                                        @{ IndexName = "candidateWeakRecoveredSampleCount"; RecordName = "indexCandidateWeakRecoveredSampleCount"; SummaryName = "weakRecoveredSampleCount"; SummaryValue = $candidateWeakRecoveredSampleValue; SummaryCount = $candidateWeakRecoveredSampleCount },
+                                        @{ IndexName = "candidateWeakDropoutSampleCount"; RecordName = "indexCandidateWeakDropoutSampleCount"; SummaryName = "weakDropoutSampleCount"; SummaryValue = $candidateWeakDropoutSampleValue; SummaryCount = $candidateWeakDropoutSampleCount },
+                                        @{ IndexName = "candidateHotMakeupSampleCount"; RecordName = "indexCandidateHotMakeupSampleCount"; SummaryName = "hotMakeupSampleCount"; SummaryValue = $candidateHotMakeupSampleValue; SummaryCount = $candidateHotMakeupSampleCount }
                                     )
                                     $weakCounterIndexPresentCount = 0
                                     $weakCounterSummaryPresentCount = 0
@@ -15350,24 +15356,24 @@ else {
 
                                         $weakCounterCheckedCount++
                                         if ([int]$indexCounterValue -ne $summaryCounterCount) {
-                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-nr5-weak-counter-mismatch" "Artifact '$artifactId' index entry '$indexedPath' declares $indexCounterName=$([int]$indexCounterValue) but summary '$indexedSummaryPath' reports $summaryCounterName=$summaryCounterCount."
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-candidate-weak-counter-mismatch" "Artifact '$artifactId' index entry '$indexedPath' declares $indexCounterName=$([int]$indexCounterValue) but summary '$indexedSummaryPath' reports $summaryCounterName=$summaryCounterCount."
                                             $artifactValidationOk = $false
                                             $indexedRecord["ok"] = $false
                                             $weakCounterMismatchCount++
                                         }
                                     }
-                                    $indexedRecord["nr5WeakCounterMismatchCount"] = $weakCounterMismatchCount
+                                    $indexedRecord["candidateWeakCounterMismatchCount"] = $weakCounterMismatchCount
                                     if ($weakCounterMismatchCount -gt 0) {
-                                        $indexedRecord["nr5WeakCounterStatus"] = "mismatch"
+                                        $indexedRecord["candidateWeakCounterStatus"] = "mismatch"
                                     }
                                     elseif ($weakCounterCheckedCount -gt 0) {
-                                        $indexedRecord["nr5WeakCounterStatus"] = "matched"
+                                        $indexedRecord["candidateWeakCounterStatus"] = "matched"
                                     }
                                     elseif ($weakCounterIndexPresentCount -gt 0 -and $weakCounterSummaryPresentCount -eq 0) {
-                                        $indexedRecord["nr5WeakCounterStatus"] = "unchecked-summary-missing"
+                                        $indexedRecord["candidateWeakCounterStatus"] = "unchecked-summary-missing"
                                     }
                                     else {
-                                        $indexedRecord["nr5WeakCounterStatus"] = "legacy-missing-index"
+                                        $indexedRecord["candidateWeakCounterStatus"] = "legacy-missing-index"
                                     }
 
                                     if ($summaryTracePaths.Count -eq 0) {
@@ -15420,14 +15426,14 @@ else {
                                         $indexedRecord["ok"] = $false
                                     }
 
-                                    if ($trendStatus -eq "nr5-agc-diagnostics-missing") {
-                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-nr5-agc-diagnostics-missing" "Artifact '$artifactId' summary '$indexedSummaryPath' lacks NR5 AGC diagnostics; recapture after the backend exports GetRXASPNRAgcDiagnostics."
+                                    if ($trendStatus -eq "candidate-agc-diagnostics-missing") {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-candidate-agc-diagnostics-missing" "Artifact '$artifactId' summary '$indexedSummaryPath' lacks comparison AGC diagnostics; recapture after the backend is publishing the required comparison telemetry."
                                         $artifactValidationOk = $false
                                         $indexedRecord["ok"] = $false
                                     }
 
-                                    if ($nr5SampleCount -gt 0 -and $nr5AgcDiagnosticSampleCount -lt $nr5SampleCount) {
-                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-nr5-agc-coverage-incomplete" "Artifact '$artifactId' summary '$indexedSummaryPath' has NR5 AGC diagnostics for $nr5AgcDiagnosticSampleCount of $nr5SampleCount NR5 sample(s)."
+                                    if ($candidateSampleCount -gt 0 -and $candidateAgcDiagnosticSampleCount -lt $candidateSampleCount) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-candidate-agc-coverage-incomplete" "Artifact '$artifactId' summary '$indexedSummaryPath' has comparison AGC diagnostics for $candidateAgcDiagnosticSampleCount of $candidateSampleCount comparison sample(s)."
                                         $artifactValidationOk = $false
                                         $indexedRecord["ok"] = $false
                                     }
@@ -15907,11 +15913,11 @@ $report = [ordered]@{
     manualTuneObserverFrontendSuggestedFilterCenterOffsetHz = $manualTuneObserverEvidence.frontendSuggestedFilterCenterOffsetHz
     manualTuneObserverFrontendSuggestedFilterDistanceHz = $manualTuneObserverEvidence.frontendSuggestedFilterDistanceHz
     manualTuneObserverFrontendSuggestedTuneReason = $manualTuneObserverEvidence.frontendSuggestedTuneReason
-    manualTuneObserverRequireNr5CaptureReady = $manualTuneObserverEvidence.requireNr5CaptureReady
+    manualTuneObserverRequireCandidateCaptureReady = $manualTuneObserverEvidence.requireCandidateCaptureReady
     manualTuneObserverBaseCaptureQualifiedPollCount = $manualTuneObserverEvidence.baseCaptureQualifiedPollCount
-    manualTuneObserverNr5CaptureReadyPollCount = $manualTuneObserverEvidence.nr5CaptureReadyPollCount
-    manualTuneObserverNr5CaptureBlockedPollCount = $manualTuneObserverEvidence.nr5CaptureBlockedPollCount
-    manualTuneObserverNr5CaptureAdvisoryPollCount = $manualTuneObserverEvidence.nr5CaptureAdvisoryPollCount
+    manualTuneObserverCandidateCaptureReadyPollCount = $manualTuneObserverEvidence.candidateCaptureReadyPollCount
+    manualTuneObserverCandidateCaptureBlockedPollCount = $manualTuneObserverEvidence.candidateCaptureBlockedPollCount
+    manualTuneObserverCandidateCaptureAdvisoryPollCount = $manualTuneObserverEvidence.candidateCaptureAdvisoryPollCount
     manualTuneObserverCaptureQualifiedPollCount = $manualTuneObserverEvidence.captureQualifiedPollCount
     manualTuneObserverReadyCaptureCount = $manualTuneObserverEvidence.readyCaptureCount
     manualTuneObserverMixedWeakStrongReady = $manualTuneObserverEvidence.mixedWeakStrongReady
@@ -16082,7 +16088,7 @@ $report = [ordered]@{
     g2RxPeakHuntLiveDiagnosticsWdspNativeLoadable = $g2RxPeakHuntEvidence.liveDiagnosticsWdspNativeLoadable
     g2RxPeakHuntLiveDiagnosticsRequestedNrMode = $g2RxPeakHuntEvidence.liveDiagnosticsRequestedNrMode
     g2RxPeakHuntLiveDiagnosticsEffectiveNrMode = $g2RxPeakHuntEvidence.liveDiagnosticsEffectiveNrMode
-    g2RxPeakHuntLiveDiagnosticsReadyForNr5Tuning = $g2RxPeakHuntEvidence.liveDiagnosticsReadyForNr5Tuning
+    g2RxPeakHuntLiveDiagnosticsReadyForCandidateTuning = $g2RxPeakHuntEvidence.liveDiagnosticsReadyForCandidateTuning
     g2RxPeakHuntLiveDiagnosticsFrontendSceneFresh = $g2RxPeakHuntEvidence.liveDiagnosticsFrontendSceneFresh
     g2RxPeakHuntFrontendSceneStatus = $g2RxPeakHuntEvidence.frontendSceneStatus
     g2RxPeakHuntFrontendSceneFresh = $g2RxPeakHuntEvidence.frontendSceneFresh
@@ -16254,20 +16260,20 @@ $report = [ordered]@{
     liveTraceComparisonCaptureReadinessCandidateStatusCounts = @($liveTraceComparisonEvidence.captureReadinessCandidateStatusCounts)
     liveTraceComparisonCaptureReadinessCandidateTopConstraintCounts = @($liveTraceComparisonEvidence.captureReadinessCandidateTopConstraintCounts)
     liveTraceComparisonCaptureReadinessCandidateTopHardConstraintCounts = @($liveTraceComparisonEvidence.captureReadinessCandidateTopHardConstraintCounts)
-    liveTraceComparisonNr5WeakInputSampleDelta = $liveTraceComparisonEvidence.nr5WeakInputSampleDelta
-    liveTraceComparisonNr5WeakRecoveredSampleDelta = $liveTraceComparisonEvidence.nr5WeakRecoveredSampleDelta
-    liveTraceComparisonNr5WeakDropoutSampleDelta = $liveTraceComparisonEvidence.nr5WeakDropoutSampleDelta
-    liveTraceComparisonNr5HotMakeupSampleDelta = $liveTraceComparisonEvidence.nr5HotMakeupSampleDelta
-    liveTraceComparisonNr5WeakRecoveryPctDelta = $liveTraceComparisonEvidence.nr5WeakRecoveryPctDelta
-    liveTraceComparisonNr5OutputMovementDbDelta = $liveTraceComparisonEvidence.nr5OutputMovementDbDelta
-    liveTraceComparisonNr5MakeupMovementDbDelta = $liveTraceComparisonEvidence.nr5MakeupMovementDbDelta
-    liveTraceComparisonNr5MakeupMaxDbDelta = $liveTraceComparisonEvidence.nr5MakeupMaxDbDelta
-    liveTraceComparisonNr5RecoveryDriveMovementDelta = $liveTraceComparisonEvidence.nr5RecoveryDriveMovementDelta
-    liveTraceComparisonNr5TextureFillAverageDelta = $liveTraceComparisonEvidence.nr5TextureFillAverageDelta
-    liveTraceComparisonNr5OutputMovementRegressionCount = $liveTraceComparisonEvidence.nr5OutputMovementRegressionCount
-    liveTraceComparisonNr5MakeupMovementRegressionCount = $liveTraceComparisonEvidence.nr5MakeupMovementRegressionCount
-    liveTraceComparisonNr5MakeupMaxRegressionCount = $liveTraceComparisonEvidence.nr5MakeupMaxRegressionCount
-    liveTraceComparisonNr5RecoveryDriveMovementRegressionCount = $liveTraceComparisonEvidence.nr5RecoveryDriveMovementRegressionCount
+    liveTraceComparisonCandidateWeakInputSampleDelta = $liveTraceComparisonEvidence.candidateWeakInputSampleDelta
+    liveTraceComparisonCandidateWeakRecoveredSampleDelta = $liveTraceComparisonEvidence.candidateWeakRecoveredSampleDelta
+    liveTraceComparisonCandidateWeakDropoutSampleDelta = $liveTraceComparisonEvidence.candidateWeakDropoutSampleDelta
+    liveTraceComparisonCandidateHotMakeupSampleDelta = $liveTraceComparisonEvidence.candidateHotMakeupSampleDelta
+    liveTraceComparisonCandidateWeakRecoveryPctDelta = $liveTraceComparisonEvidence.candidateWeakRecoveryPctDelta
+    liveTraceComparisonCandidateOutputMovementDbDelta = $liveTraceComparisonEvidence.candidateOutputMovementDbDelta
+    liveTraceComparisonCandidateMakeupMovementDbDelta = $liveTraceComparisonEvidence.candidateMakeupMovementDbDelta
+    liveTraceComparisonCandidateMakeupMaxDbDelta = $liveTraceComparisonEvidence.candidateMakeupMaxDbDelta
+    liveTraceComparisonCandidateRecoveryDriveMovementDelta = $liveTraceComparisonEvidence.candidateRecoveryDriveMovementDelta
+    liveTraceComparisonCandidateTextureFillAverageDelta = $liveTraceComparisonEvidence.candidateTextureFillAverageDelta
+    liveTraceComparisonCandidateOutputMovementRegressionCount = $liveTraceComparisonEvidence.candidateOutputMovementRegressionCount
+    liveTraceComparisonCandidateMakeupMovementRegressionCount = $liveTraceComparisonEvidence.candidateMakeupMovementRegressionCount
+    liveTraceComparisonCandidateMakeupMaxRegressionCount = $liveTraceComparisonEvidence.candidateMakeupMaxRegressionCount
+    liveTraceComparisonCandidateRecoveryDriveMovementRegressionCount = $liveTraceComparisonEvidence.candidateRecoveryDriveMovementRegressionCount
     liveTraceComparisonRxAudioLevelerConstrainedSampleDelta = $liveTraceComparisonEvidence.rxAudioLevelerConstrainedSampleDelta
     liveTraceComparisonRxAudioLevelerConstrainedPctDelta = $liveTraceComparisonEvidence.rxAudioLevelerConstrainedPctDelta
     liveTraceComparisonRxAudioLevelerBoostSlewLimitedSampleDelta = $liveTraceComparisonEvidence.rxAudioLevelerBoostSlewLimitedSampleDelta
@@ -16313,10 +16319,10 @@ $report = [ordered]@{
     liveDiagnosticsHistoryPresent = $liveDiagnosticsHistoryEvidence.present
     liveDiagnosticsHistoryReady = $liveDiagnosticsHistoryEvidence.readyForReview
     liveDiagnosticsHistoryTraceCount = $liveDiagnosticsHistoryEvidence.traceCount
-    liveDiagnosticsHistoryNr5TraceCount = $liveDiagnosticsHistoryEvidence.nr5TraceCount
+    liveDiagnosticsHistoryCandidateTraceCount = $liveDiagnosticsHistoryEvidence.candidateTraceCount
     liveDiagnosticsHistoryReadyTraceCount = $liveDiagnosticsHistoryEvidence.readyTraceCount
-    liveDiagnosticsHistoryReadyNr5TraceCount = $liveDiagnosticsHistoryEvidence.readyNr5TraceCount
-    liveDiagnosticsHistoryCandidateReadyNr5TraceCount = $liveDiagnosticsHistoryEvidence.candidateReadyNr5TraceCount
+    liveDiagnosticsHistoryReadyCandidateTraceCount = $liveDiagnosticsHistoryEvidence.readyCandidateTraceCount
+    liveDiagnosticsHistoryCandidateReadyCandidateTraceCount = $liveDiagnosticsHistoryEvidence.candidateReadyCandidateTraceCount
     liveDiagnosticsHistoryLatestTraceId = $liveDiagnosticsHistoryEvidence.latestTraceId
     liveDiagnosticsHistoryLatestReviewStatus = $liveDiagnosticsHistoryEvidence.latestReviewStatus
     liveDiagnosticsHistoryLatestSafetyRiskScore = $liveDiagnosticsHistoryEvidence.latestSafetyRiskScore

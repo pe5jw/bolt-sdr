@@ -17,9 +17,9 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Mode: "USB",
         SignalProfile: "dx",
         SignalReason: "weak signal with profiled adjacent noise",
-        SmartNrProfile: "NR5",
+        SmartNrProfile: "NR4",
         SmartNrReason: "adjacent noise profile",
-        SmartNrRecommendation: "Use NR5 profiled weak-signal recovery",
+        SmartNrRecommendation: "Use NR4 profiled weak-signal recovery",
         SmartNrHeldByRxChain: false,
         SmartNrRxChainLabel: "RX chain optimized",
         SmartNrRxChainRecommendation: "Hold front-end settings",
@@ -53,9 +53,9 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
             Mode: "USB",
             SignalProfile: "dx",
             SignalReason: "scene top peaks",
-            SmartNrProfile: "NR5",
+            SmartNrProfile: "NR4",
             SmartNrReason: "leveler evidence",
-            SmartNrRecommendation: "Use NR5 leveler evidence",
+            SmartNrRecommendation: "Use NR4 leveler evidence",
             SmartNrHeldByRxChain: false,
             SmartNrRxChainLabel: "RX chain optimized",
             SmartNrRxChainRecommendation: "Hold front-end settings",
@@ -179,7 +179,7 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
     }
 
     [Fact]
-    public void TryGetFreshNr5LevelerTopPeak_PrefersNearestPassbandPeak()
+    public void TryGetFreshLevelerTopPeak_PrefersNearestPassbandPeak()
     {
         var service = new FrontendDspSceneDiagnosticsService();
         service.Update(SceneTopPeaksRequest(
@@ -205,14 +205,14 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
                 Confidence: 0.91,
                 Coherent: true)));
 
-        var peak = service.TryGetFreshNr5LevelerTopPeak();
+        var peak = service.TryGetFreshLevelerTopPeak();
 
         Assert.NotNull(peak);
         Assert.Equal(1_200, peak.OffsetHz);
     }
 
     [Fact]
-    public void TryGetFreshNr5LevelerTopPeak_UsesSignedFilterPassbandForUsb()
+    public void TryGetFreshLevelerTopPeak_UsesSignedFilterPassbandForUsb()
     {
         var service = new FrontendDspSceneDiagnosticsService();
         service.Update(SceneTopPeaksRequest(
@@ -231,14 +231,14 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
                 Confidence: 0.72,
                 Coherent: true)));
 
-        var peak = service.TryGetFreshNr5LevelerTopPeak(filterLowHz: 100, filterHighHz: 3_100);
+        var peak = service.TryGetFreshLevelerTopPeak(filterLowHz: 100, filterHighHz: 3_100);
 
         Assert.NotNull(peak);
         Assert.Equal(1_200, peak.OffsetHz);
     }
 
     [Fact]
-    public void TryGetFreshNr5LevelerTopPeak_TreatsWrongSidebandPeakAsOutOfPassband()
+    public void TryGetFreshLevelerTopPeak_TreatsWrongSidebandPeakAsOutOfPassband()
     {
         var service = new FrontendDspSceneDiagnosticsService();
         service.Update(SceneTopPeaksRequest(
@@ -257,14 +257,14 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
                 Confidence: 0.734,
                 Coherent: true)));
 
-        var peak = service.TryGetFreshNr5LevelerTopPeak(filterLowHz: 100, filterHighHz: 3_100);
+        var peak = service.TryGetFreshLevelerTopPeak(filterLowHz: 100, filterHighHz: 3_100);
 
         Assert.NotNull(peak);
         Assert.Equal(-559, peak.OffsetHz);
     }
 
     [Fact]
-    public void TryGetFreshNr5LevelerTopPeak_UsesDominantOffPassbandPeakWhenPassbandIsEmpty()
+    public void TryGetFreshLevelerTopPeak_UsesDominantOffPassbandPeakWhenPassbandIsEmpty()
     {
         var service = new FrontendDspSceneDiagnosticsService();
         service.Update(SceneTopPeaksRequest(
@@ -290,7 +290,7 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
                 Confidence: 0.912,
                 Coherent: true)));
 
-        var peak = service.TryGetFreshNr5LevelerTopPeak();
+        var peak = service.TryGetFreshLevelerTopPeak();
 
         Assert.NotNull(peak);
         Assert.Equal(-49_600, peak.OffsetHz);
@@ -375,7 +375,7 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
     }
 
     [Fact]
-    public void TryGetFreshAdjacentNoiseProfile_CoastsAgingSourceEvidenceForNr5()
+    public void TryGetFreshAdjacentNoiseProfile_CoastsAgingSourceEvidenceForLeveler()
     {
         var service = new FrontendDspSceneDiagnosticsService();
 
@@ -600,17 +600,17 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
     }
 
     [Fact]
-    public void SmartNrCondition_ReportsAlignedNr5Runtime()
+    public void SmartNrCondition_ReportsAlignedSbnrRuntime()
     {
         var service = new FrontendDspSceneDiagnosticsService();
-        PublishScene(service, smartNrProfile: "NR5");
+        PublishScene(service, smartNrProfile: "NR4");
 
         using var doc = JsonDocument.Parse(JsonSerializer.Serialize(
-            service.SmartNrCondition(Runtime(requested: "Nr5", effective: "Nr5")),
+            service.SmartNrCondition(Runtime(requested: "Sbnr", effective: "Sbnr")),
             CamelCaseJson));
         var root = doc.RootElement;
 
-        Assert.Equal("Nr5", root.GetProperty("expectedNrMode").GetString());
+        Assert.Equal("Sbnr", root.GetProperty("expectedNrMode").GetString());
         Assert.True(root.GetProperty("runtimeAligned").GetBoolean());
         Assert.Equal("aligned", root.GetProperty("runtimeAlignmentStatus").GetString());
     }
@@ -618,18 +618,18 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
     [Theory]
     [InlineData(null)]
     [InlineData("   ")]
-    public void SmartNrCondition_UsesRuntimeOnlyAlignmentWhenSceneHasNoProfileButNr5IsStable(string? smartNrProfile)
+    public void SmartNrCondition_UsesRuntimeOnlyAlignmentWhenSceneHasNoProfileButSbnrIsStable(string? smartNrProfile)
     {
         var service = new FrontendDspSceneDiagnosticsService();
         PublishScene(service, smartNrProfile);
 
         using var doc = JsonDocument.Parse(JsonSerializer.Serialize(
-            service.SmartNrCondition(Runtime(requested: "Nr5", effective: "Nr5")),
+            service.SmartNrCondition(Runtime(requested: "Sbnr", effective: "Sbnr")),
             CamelCaseJson));
         var root = doc.RootElement;
 
         Assert.True(root.GetProperty("profile").ValueKind is JsonValueKind.Null);
-        Assert.Equal("Nr5", root.GetProperty("expectedNrMode").GetString());
+        Assert.Equal("Sbnr", root.GetProperty("expectedNrMode").GetString());
         Assert.True(root.GetProperty("runtimeAligned").GetBoolean());
         Assert.Equal("runtime-only-aligned", root.GetProperty("runtimeAlignmentStatus").GetString());
         Assert.Contains("backend runtime evidence only", root.GetProperty("runtimeAlignmentRecommendation").GetString());
@@ -642,7 +642,7 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         PublishScene(service, smartNrProfile: null);
 
         using var doc = JsonDocument.Parse(JsonSerializer.Serialize(
-            service.SmartNrCondition(Runtime(requested: "Nr5", effective: "Emnr")),
+            service.SmartNrCondition(Runtime(requested: "Sbnr", effective: "Emnr")),
             CamelCaseJson));
         var root = doc.RootElement;
 
@@ -732,10 +732,7 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
             WdspNativeLoadable: true,
             WdspEmnrPost2Available: true,
             WdspNr4SbnrAvailable: true,
-            WdspNr5SpnrAvailable: true,
             Nr4Readiness: "available",
-            Nr5Readiness: "available",
             RequestedNrMode: requested,
-            EffectiveNrMode: effective,
-            Nr5SpnrDiagnostics: null);
+            EffectiveNrMode: effective);
 }

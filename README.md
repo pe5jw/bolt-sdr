@@ -29,12 +29,12 @@ long-running project a lot of the DSP heritage traces back to.
 ## What's in the box
 
 - **WebGL panadapter + waterfall** with zoom, click-to-tune, drag-pan gestures
-- **DSP panel**: NB, NR (NR1 / NR2 / NR4 / experimental NR5), ANF, SNB, NBP — NR2 (EMNR) at Thetis parity (Method, Trained, Post-Process), all driven by WDSP under the hood
+- **DSP panel**: NB, NR (NR1 / NR2 / NR4 / experimental Candidate), ANF, SNB, NBP — NR2 (EMNR) at Thetis parity (Method, Trained, Post-Process), all driven by WDSP under the hood
 - **Bands / modes / bandwidth / AGC / S-ATT step attenuator / PRE preamp / drive / mic gain**
 - **TX**: PTT, TUNE, mic uplink, TX stage meters, SWR-trip and TX-timeout
   protection
 - **PureSignal** (Protocol-2): four-patch convergence with AutoAttenuate loop
-- **TX Audio Tools**: 10-band CFC for voice shaping
+- **Audio Tools**: TX CFC voice shaping plus TX/RX Audio Suite controls
 - **S-meter** (live + demo), RX meter frame streaming
 - **Leaflet satellite map** with terminator and QRZ grid-square / beam heading
   — to interact with the map (pan / zoom), **press and hold the `M` key**.
@@ -59,7 +59,7 @@ Wiki jump-off points for the most-asked things:
 - [Panadapter and Waterfall](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Panadapter-and-Waterfall) — click-to-tune, zoom, palettes
 - [Modes and Bands](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Modes-and-Bands) and [Bandwidth and Filters](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Bandwidth-and-Filters)
 - [Frequency and VFO](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Frequency-and-VFO) and [Front-End and Gain](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Front-End-and-Gain)
-- [DSP Noise Controls](https://github.com/Kb2uka/openhpsdr-zeus/wiki/DSP), [Meters](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Meters), [TX Controls](https://github.com/Kb2uka/openhpsdr-zeus/wiki/TX-Controls), [TX Audio Tools](https://github.com/Kb2uka/openhpsdr-zeus/wiki/TX-Audio-Tools), [CW Keyer](https://github.com/Kb2uka/openhpsdr-zeus/wiki/CW-Keyer)
+- [DSP Noise Controls](https://github.com/Kb2uka/openhpsdr-zeus/wiki/DSP), [Meters](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Meters), [TX Controls](https://github.com/Kb2uka/openhpsdr-zeus/wiki/TX-Controls), [Audio Tools](https://github.com/Kb2uka/openhpsdr-zeus/wiki/TX-Audio-Tools), [CW Keyer](https://github.com/Kb2uka/openhpsdr-zeus/wiki/CW-Keyer)
 - [PureSignal (P2)](https://github.com/Kb2uka/openhpsdr-zeus/wiki/PureSignal-on-Protocol-2) and [PA Settings](https://github.com/Kb2uka/openhpsdr-zeus/wiki/PA-Settings)
 - [QRZ and World Map](https://github.com/Kb2uka/openhpsdr-zeus/wiki/QRZ-and-World-Map), [Logbook](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Logbook), [Keyboard & Mouse Shortcuts](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Shortcuts)
 - [Troubleshooting](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Troubleshooting) — known quirks, missing native libraries
@@ -85,6 +85,14 @@ page.
 > **Without this step, macOS Gatekeeper will refuse to launch Zeus** ("OpenHPSDR Zeus.app is damaged and can't be opened" or "cannot be opened because the developer cannot be verified"). Zeus is not yet signed by a registered Apple Developer; the command above strips the quarantine attribute so Gatekeeper allows the app to run. This is a one-time step per install. Skip the second line if you only installed the desktop app.
 
 ## Building from source
+
+**Clone with submodules** — the DeepCW model and the VST3 SDK live in git
+submodules, and the web build fails without them:
+
+```bash
+git clone --recurse-submodules https://github.com/Kb2uka/openhpsdr-zeus.git
+# already cloned? run: git submodule update --init --recursive
+```
 
 See the wiki's [Developer Guide](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Developer-Guide)
 for prerequisites, the two-terminal dev loop, project layout, tests, and

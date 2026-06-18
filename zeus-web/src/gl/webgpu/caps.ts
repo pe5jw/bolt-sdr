@@ -37,6 +37,20 @@ function unsupported(reason: string): WebGpuProbe {
 
 let cached: Promise<WebGpuProbe> | null = null;
 
+function isWindowsNavigator(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+  const platform = nav.userAgentData?.platform ?? nav.platform ?? '';
+  if (/\bwin/i.test(platform)) return true;
+  return /\bwindows\b/i.test(nav.userAgent ?? '');
+}
+
+function requestAdapterOptions(): GPURequestAdapterOptions | undefined {
+  // Chrome/Edge ignore powerPreference on Windows and log crbug.com/369219127.
+  // Omitting the option there keeps DevTools clean without changing behavior.
+  return isWindowsNavigator() ? undefined : { powerPreference: 'high-performance' };
+}
+
 /** Probe (once) for a usable WebGPU device. Cached: repeated mounts reuse the
  *  same device rather than requesting a new one each time. */
 export function probeWebGpu(): Promise<WebGpuProbe> {
@@ -51,7 +65,7 @@ async function probeWebGpuUncached(): Promise<WebGpuProbe> {
       return unsupported('navigator.gpu unavailable');
     }
     const gpu = navigator.gpu;
-    const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
+    const adapter = await gpu.requestAdapter(requestAdapterOptions());
     if (!adapter) return unsupported('requestAdapter returned null');
 
     const device = await adapter.requestDevice();

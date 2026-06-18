@@ -266,11 +266,14 @@ public sealed class TxService
 
         if (on) ClearTxMonitorForTransmitStart();
 
-        if (wasTunOn && on)
+        if (on)
         {
-            // TUN was up and MOX came on — drop the tune carrier before keying
-            // the mic chain so we don't briefly sum both.
+            // Force the WDSP PostGen tune carrier off before keying the mic
+            // chain. Usually wasTunOn tells us whether this is needed, but a
+            // stale engine-side PostGen latch is exactly the failure mode that
+            // makes a later PTT sound like TUN. SetTxTune(false) is idempotent.
             _pipeline.SetTxTune(false);
+            _radio.NotifyTunActive(false);
         }
 
         // Order: mute RX before keying TX on MOX-on; reverse on MOX-off.
@@ -280,10 +283,10 @@ public sealed class TxService
         _log.LogInformation("tx.mox.{Edge}.recv ts={Ts}",
             on ? "on" : "off", System.Diagnostics.Stopwatch.GetTimestamp());
         _radio.SetMox(on);
-        // MOX-edge unconditionally deactivates TUN on the drive-source side —
-        // MOX-on preempts TUN above, MOX-off should also leave the recompute
-        // pointing at _drivePct for the next half-key.
-        _radio.NotifyTunActive(false);
+        // MOX-off should leave the recompute pointing at _drivePct for the next
+        // half-key. MOX-on already did this before keying so the first frame
+        // cannot carry the stale TUN drive source.
+        if (!on) _radio.NotifyTunActive(false);
         _log.LogInformation("tx.mox on={On}", on);
         _hub.Broadcast(new MoxStateFrame(MoxOn: on, TunOn: false));
         error = null;

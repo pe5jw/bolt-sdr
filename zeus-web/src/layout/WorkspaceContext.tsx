@@ -44,6 +44,7 @@
 
 import { createContext, useContext, type FormEvent, type ReactNode, type RefObject } from 'react';
 import type { Contact } from '../components/design/data';
+import type { WorkedCallsignSummary } from '../api/log';
 import type { BackgroundImageFit, PanBackgroundMode } from '../state/display-settings-store';
 
 export interface EffectiveHome {
@@ -81,6 +82,8 @@ export interface WorkspaceCtx {
   enriching: boolean;
   lookupKey: number;
   contact: Contact | null;
+  workedSummary: WorkedCallsignSummary | null;
+  workedSummaryLoading: boolean;
   qrzLookupError: string | null;
   qrzActive: boolean;
   mapAvailable: boolean;

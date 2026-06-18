@@ -47,7 +47,7 @@ export type SmartNrRecommendation = {
 
 export type SmartNrDspCapabilities = Pick<
   HardwareDspDiagnosticsDto,
-  'wdspActive' | 'wdspEmnrPost2Available' | 'wdspNr4SbnrAvailable' | 'wdspNr5SpnrAvailable'
+  'wdspActive' | 'wdspEmnrPost2Available' | 'wdspNr4SbnrAvailable'
 >;
 
 export type SmartNrCapabilityAdaptation = {
@@ -80,7 +80,6 @@ export type SmartNrRxContext = {
 
 export function labelSmartNrProfile(nr: NrConfigDto): string {
   if (nr.nbMode !== 'Off' && nr.snbEnabled) return `${nr.nbMode}+SNB`;
-  if (nr.nrMode === 'Nr5') return 'NR5';
   if (nr.nrMode === 'Sbnr') return 'NR4';
   if (nr.nrMode === 'Emnr') return 'NR2';
   if (nr.nrMode === 'Anr') return 'NR1';
@@ -157,19 +156,6 @@ export function adaptSmartNrToDspCapabilities(
 
   let next = nr;
   const notes: string[] = [];
-  if (next.nrMode === 'Nr5' && capabilities.wdspNr5SpnrAvailable === false) {
-    next = {
-      ...next,
-      nrMode: 'Sbnr',
-      nr4ReductionAmount: 7,
-      nr4SmoothingFactor: 6,
-      nr4WhiteningFactor: 10,
-      nr4PostFilterThreshold: -9,
-      nr4NoiseScalingType: next.snbEnabled ? 1 : 0,
-    };
-    notes.push('NR5/SPNR unavailable in the active WDSP build; using NR4/SBNR fallback.');
-  }
-
   if (next.nrMode === 'Sbnr' && capabilities.wdspNr4SbnrAvailable === false) {
     next = {
       ...next,
@@ -519,14 +505,14 @@ export function recommendSmartNr(input: SmartNrInput): SmartNrRecommendation | n
       ? withNr4(input.current, condition, input.mode)
       : quietProfile(input.current, condition);
     reason = condition.rxAssistedWeakSignal
-      ? 'Weak-signal assist: AGC/RX telemetry confirms a marginal copy; use NR4/SBNR and keep NR5 out of the operator path.'
+      ? 'Weak-signal assist: AGC/RX telemetry confirms a marginal copy; use conservative NR4/SBNR.'
       : condition.coherentSubthresholdSignal
-      ? 'Coherent subthreshold profile: temporal confidence sees a buried ridge; use conservative NR4/SBNR instead of legacy NR5.'
+      ? 'Coherent subthreshold profile: temporal confidence sees a buried ridge; use conservative NR4/SBNR.'
       : condition.weakSparse
       ? 'Weak narrow-signal profile: NR4/SBNR with mild whitening.'
       : condition.impulsiveNoise
-        ? 'Impulsive-noise profile: engage NB2/SNB while keeping spectral NR conservative.'
-      : 'CW/digital profile: spectral NR with conservative blanking.';
+        ? 'Impulsive-noise profile: engage NB2/SNB while keeping NR2/NR4 conservative.'
+      : 'CW/digital profile: NR2/NR4 with conservative blanking.';
   } else if (isVoiceSsb(input.mode)) {
     nr = condition.weakSparse || condition.denseNoise || condition.coherentCopySignal
       ? withNr2(input.current, condition)

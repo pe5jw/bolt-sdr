@@ -291,7 +291,7 @@ Requirements:
     Arch:           sudo pacman -S webkit2gtk-4.1
 
 For more information:
-https://github.com/brianbruff/openhpsdr-zeus
+https://github.com/Kb2uka/openhpsdr-zeus
 
 License: GNU GPL v2 or later
 Copyright (C) 2025-2026 Brian Keating (EI6LF), Douglas J. Cerrato (KB2UKA), and contributors

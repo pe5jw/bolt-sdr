@@ -152,9 +152,9 @@ function ConvertTo-ComparisonId {
         "current-zeus" { return "current-zeus" }
         "zeus-current" { return "current-zeus" }
         "zeus" { return "current-zeus" }
-        "nr5" { return "nr5-spnr" }
-        "spnr" { return "nr5-spnr" }
-        "nr5-spnr" { return "nr5-spnr" }
+        "candidate" { return "candidate-under-test" }
+        "candidate" { return "candidate-under-test" }
+        "candidate-under-test" { return "candidate-under-test" }
         "candidate" { return "candidate-under-test" }
         "candidate-under-test" { return "candidate-under-test" }
         "external" { return "candidate-external-engine-opt-in" }

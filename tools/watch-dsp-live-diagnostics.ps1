@@ -517,7 +517,7 @@ function Get-GapExcessDb {
     return [Math]::Round([Math]::Max(0.0, [Math]::Abs([double]$gap) - $ThresholdDb), 3)
 }
 
-function New-Nr5ClassifiedInputSample {
+function New-CandidateClassifiedInputSample {
     param(
         [Parameter(Mandatory = $true)][string]$Class,
         $Sample,
@@ -595,8 +595,8 @@ function New-Nr5ClassifiedInputSample {
         speechQualified = $SpeechQualified
         passbandQualified = $PassbandQualified
         lowEvidence = $LowEvidence
-        nr5AudioAlignmentMismatch = $AudioAlignmentMismatch
-        nr5AudioInputDeltaDb = Get-NumericValue $AudioInputDeltaDb
+        candidateAudioAlignmentMismatch = $AudioAlignmentMismatch
+        candidateAudioInputDeltaDb = Get-NumericValue $AudioInputDeltaDb
     }
 }
 
@@ -727,7 +727,7 @@ function ConvertTo-NrModeName {
 
     switch ($text.ToLowerInvariant()) {
         "off" { return "Off" }
-        "nr5" { return "Nr5" }
+        "candidate" { return "Off" }
         default { return $text }
     }
 }
@@ -754,9 +754,9 @@ function Get-CountPercent {
     return [Math]::Round(100.0 * [double]$Count / [double]$SampleCount, 1)
 }
 
-function Test-Nr5LevelerNormalizedSpeechAlignment {
+function Test-CandidateLevelerNormalizedSpeechAlignment {
     param(
-        $Nr5OutputDbfs,
+        $CandidateOutputDbfs,
         $LevelerInputRmsDbfs,
         $LevelerOutputRmsDbfs,
         $LevelerAppliedGainDb,
@@ -765,10 +765,10 @@ function Test-Nr5LevelerNormalizedSpeechAlignment {
         [bool]$LevelerOutputLimited
     )
 
-    $nr5Output = Get-NumericValue $Nr5OutputDbfs
+    $candidateOutput = Get-NumericValue $CandidateOutputDbfs
     $levelerInput = Get-NumericValue $LevelerInputRmsDbfs
     $levelerOutput = Get-NumericValue $LevelerOutputRmsDbfs
-    if ($null -eq $nr5Output -or $null -eq $levelerInput -or $null -eq $levelerOutput) {
+    if ($null -eq $candidateOutput -or $null -eq $levelerInput -or $null -eq $levelerOutput) {
         return $false
     }
 
@@ -783,12 +783,12 @@ function Test-Nr5LevelerNormalizedSpeechAlignment {
     }
 
     return (
-        $nr5Output -ge -43.0 -and
-        $nr5Output -le -30.0 -and
+        $candidateOutput -ge -43.0 -and
+        $candidateOutput -le -30.0 -and
         $levelerInput -le -42.0 -and
         $levelerOutput -ge -23.5 -and
         $levelerOutput -le -15.0 -and
-        ($levelerOutput - $nr5Output) -ge 12.0 -and
+        ($levelerOutput - $candidateOutput) -ge 12.0 -and
         ($observedGainDb -ge 18.0 -or $appliedGain -ge 18.0))
 }
 
@@ -817,7 +817,7 @@ function Get-CaptureReadinessAction {
         "wdsp-native-unloadable" { return "Fix native WDSP packaging/loading before judging DSP quality." }
         "wdsp-inactive" { return "Connect the radio or restart the DSP engine so live WDSP telemetry is available." }
         "nr4-sbnr-exports-missing" { return "Rebuild or install WDSP with NR4/SBNR exports before evaluating NR4." }
-        "nr5-spnr-exports-missing" { return "Rebuild or install WDSP with NR5/SPNR exports before evaluating NR5 weak-signal behavior." }
+        "candidate-under-test-exports-missing" { return "Recapture this comparison with the current runtime; this stale trace references diagnostics that are not available now." }
         "rx-state-drift" { return "Keep VFO, LO, mode, filter, CTUN, and sample rate fixed for the capture window; restart the trace after tuning settles." }
         default { return "Inspect liveRecommendedActions and sampleSummaries for affected samples before using this trace as acceptance evidence." }
     }
@@ -969,7 +969,7 @@ function Test-HardConstraint {
         "frontend-dsp-scene-stale",
         "frontend-clock-skew",
         "nr4-sbnr-exports-missing",
-        "nr5-spnr-exports-missing",
+        "candidate-under-test-exports-missing",
         "smart-nr-runtime-misaligned",
         "rx-chain-protect",
         "final-audio-not-fresh",
@@ -1194,12 +1194,12 @@ function New-SampleSummary {
 
     $diagnostics = Get-JsonValue $Sample "diagnostics"
     $runtime = Get-JsonValue $diagnostics "runtimeEvidence"
-    $nr5 = Get-JsonValue $diagnostics "nr5SpnrDiagnostics"
-    $nr5InputDbfs = Get-NumericValue (Get-JsonValue $nr5 "inputDbfs")
-    $nr5OutputDbfs = Get-NumericValue (Get-JsonValue $nr5 "outputDbfs")
-    $nr5OutputMinusInputDb = $null
-    if ($null -ne $nr5InputDbfs -and $null -ne $nr5OutputDbfs) {
-        $nr5OutputMinusInputDb = [Math]::Round($nr5OutputDbfs - $nr5InputDbfs, 1)
+    $candidate = Get-JsonValue $diagnostics "candidateDspDiagnostics"
+    $candidateInputDbfs = Get-NumericValue (Get-JsonValue $candidate "inputDbfs")
+    $candidateOutputDbfs = Get-NumericValue (Get-JsonValue $candidate "outputDbfs")
+    $candidateOutputMinusInputDb = $null
+    if ($null -ne $candidateInputDbfs -and $null -ne $candidateOutputDbfs) {
+        $candidateOutputMinusInputDb = [Math]::Round($candidateOutputDbfs - $candidateInputDbfs, 1)
     }
     $runtimeLevelerInputRmsDbfs = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerInputRmsDbfs")
     $runtimeLevelerOutputRmsDbfs = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerOutputRmsDbfs")
@@ -1207,30 +1207,30 @@ function New-SampleSummary {
     $rxAudioLevelerBoostSlewLimited = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerBoostSlewLimited")
     $rxAudioLevelerPeakLimited = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerPeakLimited")
     $rxAudioLevelerOutputLimited = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerOutputLimited")
-    $nr5AudioInputDeltaDb = $null
-    if ($null -ne $nr5OutputDbfs -and $null -ne $runtimeLevelerInputRmsDbfs) {
-        $nr5AudioInputDeltaDb = [Math]::Round($runtimeLevelerInputRmsDbfs - $nr5OutputDbfs, 1)
+    $candidateAudioInputDeltaDb = $null
+    if ($null -ne $candidateOutputDbfs -and $null -ne $runtimeLevelerInputRmsDbfs) {
+        $candidateAudioInputDeltaDb = [Math]::Round($runtimeLevelerInputRmsDbfs - $candidateOutputDbfs, 1)
     }
-    $nr5AudioOutputDeltaDb = $null
-    if ($null -ne $nr5OutputDbfs -and $null -ne $runtimeLevelerOutputRmsDbfs) {
-        $nr5AudioOutputDeltaDb = [Math]::Round($runtimeLevelerOutputRmsDbfs - $nr5OutputDbfs, 1)
+    $candidateAudioOutputDeltaDb = $null
+    if ($null -ne $candidateOutputDbfs -and $null -ne $runtimeLevelerOutputRmsDbfs) {
+        $candidateAudioOutputDeltaDb = [Math]::Round($runtimeLevelerOutputRmsDbfs - $candidateOutputDbfs, 1)
     }
-    $nr5AudioAlignedAfterLeveler = ($null -ne $nr5AudioOutputDeltaDb -and [Math]::Abs($nr5AudioOutputDeltaDb) -le 12.0)
-    $nr5AudioLevelerNormalized = Test-Nr5LevelerNormalizedSpeechAlignment `
-        -Nr5OutputDbfs $nr5OutputDbfs `
+    $candidateAudioAlignedAfterLeveler = ($null -ne $candidateAudioOutputDeltaDb -and [Math]::Abs($candidateAudioOutputDeltaDb) -le 12.0)
+    $candidateAudioLevelerNormalized = Test-CandidateLevelerNormalizedSpeechAlignment `
+        -CandidateOutputDbfs $candidateOutputDbfs `
         -LevelerInputRmsDbfs $runtimeLevelerInputRmsDbfs `
         -LevelerOutputRmsDbfs $runtimeLevelerOutputRmsDbfs `
         -LevelerAppliedGainDb $runtimeLevelerAppliedGainDb `
         -LevelerBoostSlewLimited $rxAudioLevelerBoostSlewLimited `
         -LevelerPeakLimited $rxAudioLevelerPeakLimited `
         -LevelerOutputLimited $rxAudioLevelerOutputLimited
-    $nr5AudioAlignmentMismatch = $false
-    if ($null -ne $nr5AudioInputDeltaDb -and [Math]::Abs($nr5AudioInputDeltaDb) -gt 12.0 -and
-        -not $nr5AudioAlignedAfterLeveler -and
-        -not $nr5AudioLevelerNormalized) {
-        $nr5AudioAlignmentMismatch = $true
+    $candidateAudioAlignmentMismatch = $false
+    if ($null -ne $candidateAudioInputDeltaDb -and [Math]::Abs($candidateAudioInputDeltaDb) -gt 12.0 -and
+        -not $candidateAudioAlignedAfterLeveler -and
+        -not $candidateAudioLevelerNormalized) {
+        $candidateAudioAlignmentMismatch = $true
     }
-    $nr5Tuning = Get-Nr5TuningReadiness $diagnostics
+    $candidateTuning = Get-CandidateTuningReadiness $diagnostics
     $frontendTopPeaks = @(Get-JsonArray $diagnostics "frontendTopPeaks")
     $frontendNearestTopPeak = Get-NearestFrontendTopPeak $frontendTopPeaks
     $frontendStrongestTopPeak = Get-StrongestFrontendTopPeak $frontendTopPeaks
@@ -1244,10 +1244,10 @@ function New-SampleSummary {
         qualityTone = [string](Get-JsonValue $diagnostics "qualityTone")
         readinessScore = Get-JsonValue $diagnostics "readinessScore"
         readyForLiveBenchmark = Test-Truthy (Get-JsonValue $diagnostics "readyForLiveBenchmark")
-        readyForNr5Tuning = Test-Truthy $nr5Tuning["ready"]
-        nr5TuningStatus = [string]$nr5Tuning["status"]
-        nr5TuningReadinessSource = [string]$nr5Tuning["source"]
-        nr5TuningConstraints = @($nr5Tuning["constraints"])
+        readyForCandidateTuning = Test-Truthy $candidateTuning["ready"]
+        candidateTuningStatus = [string]$candidateTuning["status"]
+        candidateTuningReadinessSource = [string]$candidateTuning["source"]
+        candidateTuningConstraints = @($candidateTuning["constraints"])
         frontendSceneStatus = [string](Get-JsonValue $diagnostics "frontendSceneStatus")
         frontendSceneFresh = Test-Truthy (Get-JsonValue $diagnostics "frontendSceneFresh")
         frontendSceneAgeMs = Get-JsonValue $diagnostics "frontendSceneAgeMs"
@@ -1287,14 +1287,14 @@ function New-SampleSummary {
         rxAudioLevelerOutputLimitReductionDb = Get-JsonValue $runtime "rxAudioLevelerOutputLimitReductionDb"
         rxAudioLevelerOutputLimitSampleCount = Get-JsonValue $runtime "rxAudioLevelerOutputLimitSampleCount"
         rxAudioLevelerPauseHoldBlocks = Get-JsonValue $runtime "rxAudioLevelerPauseHoldBlocks"
-        rxAudioLevelerNr5SpeechHoldBlocks = Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHoldBlocks"
-        rxAudioLevelerNr5SpeechHangoverBlocks = Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHangoverBlocks"
-        rxAudioLevelerNr5HybridSpeechPrior = Get-JsonValue $runtime "rxAudioLevelerNr5HybridSpeechPrior"
-        rxAudioLevelerNr5NoSignalNoisePrior = Get-JsonValue $runtime "rxAudioLevelerNr5NoSignalNoisePrior"
-        rxAudioLevelerNr5NoiseProfilePrior = Get-JsonValue $runtime "rxAudioLevelerNr5NoiseProfilePrior"
-        rxAudioLevelerNr5NoSignalNoiseCap = Get-JsonValue $runtime "rxAudioLevelerNr5NoSignalNoiseCap"
-        rxAudioLevelerNr5FarPeakNoiseCap = Get-JsonValue $runtime "rxAudioLevelerNr5FarPeakNoiseCap"
-        rxAudioLevelerNr5NoProofNoiseCap = Get-JsonValue $runtime "rxAudioLevelerNr5NoProofNoiseCap"
+        rxAudioLevelerCandidateSpeechHoldBlocks = Get-JsonValue $runtime "rxAudioLevelerCandidateSpeechHoldBlocks"
+        rxAudioLevelerCandidateSpeechHangoverBlocks = Get-JsonValue $runtime "rxAudioLevelerCandidateSpeechHangoverBlocks"
+        rxAudioLevelerCandidateHybridSpeechPrior = Get-JsonValue $runtime "rxAudioLevelerCandidateHybridSpeechPrior"
+        rxAudioLevelerCandidateNoSignalNoisePrior = Get-JsonValue $runtime "rxAudioLevelerCandidateNoSignalNoisePrior"
+        rxAudioLevelerCandidateNoiseProfilePrior = Get-JsonValue $runtime "rxAudioLevelerCandidateNoiseProfilePrior"
+        rxAudioLevelerCandidateNoSignalNoiseCap = Get-JsonValue $runtime "rxAudioLevelerCandidateNoSignalNoiseCap"
+        rxAudioLevelerCandidateFarPeakNoiseCap = Get-JsonValue $runtime "rxAudioLevelerCandidateFarPeakNoiseCap"
+        rxAudioLevelerCandidateNoProofNoiseCap = Get-JsonValue $runtime "rxAudioLevelerCandidateNoProofNoiseCap"
         rxAudioLevelerBoostSlewLimited = Get-JsonValue $runtime "rxAudioLevelerBoostSlewLimited"
         rxAudioLevelerPeakLimited = Get-JsonValue $runtime "rxAudioLevelerPeakLimited"
         rxAudioLevelerOutputLimited = Get-JsonValue $runtime "rxAudioLevelerOutputLimited"
@@ -1311,48 +1311,48 @@ function New-SampleSummary {
         rxChainFilterHighHz = Get-JsonValue $diagnostics "rxChainFilterHighHz"
         rxChainFilterWidthHz = Get-JsonValue $diagnostics "rxChainFilterWidthHz"
         rxChainFilterPresetName = Get-JsonValue $diagnostics "rxChainFilterPresetName"
-        nr5LearnedFrames = Get-JsonValue $nr5 "learnedFrames"
-        nr5InputDbfs = $nr5InputDbfs
-        nr5OutputDbfs = $nr5OutputDbfs
-        nr5OutputMinusInputDb = $nr5OutputMinusInputDb
-        nr5AudioInputDeltaDb = $nr5AudioInputDeltaDb
-        nr5AudioOutputDeltaDb = $nr5AudioOutputDeltaDb
-        nr5AudioAlignedAfterLeveler = $nr5AudioAlignedAfterLeveler
-        nr5AudioLevelerNormalized = $nr5AudioLevelerNormalized
-        nr5AudioAlignmentMismatch = $nr5AudioAlignmentMismatch
-        nr5MeanGain = Get-JsonValue $nr5 "meanGain"
-        nr5SignalConfidence = Get-JsonValue $nr5 "signalConfidence"
-        nr5AgcGate = Get-JsonValue $nr5 "agcGate"
-        nr5SignalProbability = Get-JsonValue $nr5 "signalProbability"
-        nr5TextureFill = Get-JsonValue $nr5 "textureFill"
-        nr5MaskSmoothing = Get-JsonValue $nr5 "maskSmoothing"
-        nr5LevelDrive = Get-JsonValue $nr5 "levelDrive"
-        nr5RecoveryDrive = Get-JsonValue $nr5 "recoveryDrive"
-        nr5WeakSignalMemory = Get-JsonValue $nr5 "weakSignalMemory"
-        nr5MakeupGainDb = Get-JsonValue $nr5 "makeupGainDb"
-        nr5OutputPeakDbfs = Get-JsonValue $nr5 "outputPeakDbfs"
-        nr5PeakEvidence = Get-JsonValue $nr5 "peakEvidence"
-        nr5PeakLimitDbfs = Get-JsonValue $nr5 "peakLimitDbfs"
-        nr5PeakReductionDb = Get-JsonValue $nr5 "peakReductionDb"
-        nr5ManagedChannelGeneration = Get-JsonValue $nr5 "managedChannelGeneration"
-        nr5ManagedNr5ApplyCount = Get-JsonValue $nr5 "managedNr5ApplyCount"
-        nr5ManagedNr5PositionApplyCount = Get-JsonValue $nr5 "managedNr5PositionApplyCount"
-        nr5ManagedNr5PolicyApplyCount = Get-JsonValue $nr5 "managedNr5PolicyApplyCount"
-        nr5ManagedNr5NoopApplyCount = Get-JsonValue $nr5 "managedNr5NoopApplyCount"
-        nr5ManagedNr5RunApplyCount = Get-JsonValue $nr5 "managedNr5RunApplyCount"
-        nr5ManagedNr5LastApplyReason = [string](Get-JsonValue $nr5 "managedNr5LastApplyReason")
-        nr5AdjacentNoiseUsable = Get-JsonValue $nr5 "adjacentNoiseUsable"
-        nr5AdjacentNoiseBins = Get-JsonValue $nr5 "adjacentNoiseBins"
-        nr5AdjacentNoiseFloorDb = Get-JsonValue $nr5 "adjacentNoiseFloorDb"
-        nr5AdjacentNoiseTrust = Get-JsonValue $nr5 "adjacentNoiseTrust"
-        nr5AdjacentNoiseDrive = Get-JsonValue $nr5 "adjacentNoiseDrive"
-        nr5AdjacentNoiseRejectedPct = Get-JsonValue $nr5 "adjacentNoiseRejectedPct"
-        nr5AdjacentNoiseLeftBins = Get-JsonValue $nr5 "adjacentNoiseLeftBins"
-        nr5AdjacentNoiseRightBins = Get-JsonValue $nr5 "adjacentNoiseRightBins"
-        nr5AdjacentNoiseLeftFloorDb = Get-JsonValue $nr5 "adjacentNoiseLeftFloorDb"
-        nr5AdjacentNoiseRightFloorDb = Get-JsonValue $nr5 "adjacentNoiseRightFloorDb"
-        nr5AdjacentNoiseSideBalance = Get-JsonValue $nr5 "adjacentNoiseSideBalance"
-        nr5AdjacentNoiseAsymmetryDb = Get-JsonValue $nr5 "adjacentNoiseAsymmetryDb"
+        candidateLearnedFrames = Get-JsonValue $candidate "learnedFrames"
+        candidateInputDbfs = $candidateInputDbfs
+        candidateOutputDbfs = $candidateOutputDbfs
+        candidateOutputMinusInputDb = $candidateOutputMinusInputDb
+        candidateAudioInputDeltaDb = $candidateAudioInputDeltaDb
+        candidateAudioOutputDeltaDb = $candidateAudioOutputDeltaDb
+        candidateAudioAlignedAfterLeveler = $candidateAudioAlignedAfterLeveler
+        candidateAudioLevelerNormalized = $candidateAudioLevelerNormalized
+        candidateAudioAlignmentMismatch = $candidateAudioAlignmentMismatch
+        candidateMeanGain = Get-JsonValue $candidate "meanGain"
+        candidateSignalConfidence = Get-JsonValue $candidate "signalConfidence"
+        candidateAgcGate = Get-JsonValue $candidate "agcGate"
+        candidateSignalProbability = Get-JsonValue $candidate "signalProbability"
+        candidateTextureFill = Get-JsonValue $candidate "textureFill"
+        candidateMaskSmoothing = Get-JsonValue $candidate "maskSmoothing"
+        candidateLevelDrive = Get-JsonValue $candidate "levelDrive"
+        candidateRecoveryDrive = Get-JsonValue $candidate "recoveryDrive"
+        candidateWeakSignalMemory = Get-JsonValue $candidate "weakSignalMemory"
+        candidateMakeupGainDb = Get-JsonValue $candidate "makeupGainDb"
+        candidateOutputPeakDbfs = Get-JsonValue $candidate "outputPeakDbfs"
+        candidatePeakEvidence = Get-JsonValue $candidate "peakEvidence"
+        candidatePeakLimitDbfs = Get-JsonValue $candidate "peakLimitDbfs"
+        candidatePeakReductionDb = Get-JsonValue $candidate "peakReductionDb"
+        candidateManagedChannelGeneration = Get-JsonValue $candidate "managedChannelGeneration"
+        candidateManagedCandidateApplyCount = Get-JsonValue $candidate "managedCandidateApplyCount"
+        candidateManagedCandidatePositionApplyCount = Get-JsonValue $candidate "managedCandidatePositionApplyCount"
+        candidateManagedCandidatePolicyApplyCount = Get-JsonValue $candidate "managedCandidatePolicyApplyCount"
+        candidateManagedCandidateNoopApplyCount = Get-JsonValue $candidate "managedCandidateNoopApplyCount"
+        candidateManagedCandidateRunApplyCount = Get-JsonValue $candidate "managedCandidateRunApplyCount"
+        candidateManagedCandidateLastApplyReason = [string](Get-JsonValue $candidate "managedCandidateLastApplyReason")
+        candidateAdjacentNoiseUsable = Get-JsonValue $candidate "adjacentNoiseUsable"
+        candidateAdjacentNoiseBins = Get-JsonValue $candidate "adjacentNoiseBins"
+        candidateAdjacentNoiseFloorDb = Get-JsonValue $candidate "adjacentNoiseFloorDb"
+        candidateAdjacentNoiseTrust = Get-JsonValue $candidate "adjacentNoiseTrust"
+        candidateAdjacentNoiseDrive = Get-JsonValue $candidate "adjacentNoiseDrive"
+        candidateAdjacentNoiseRejectedPct = Get-JsonValue $candidate "adjacentNoiseRejectedPct"
+        candidateAdjacentNoiseLeftBins = Get-JsonValue $candidate "adjacentNoiseLeftBins"
+        candidateAdjacentNoiseRightBins = Get-JsonValue $candidate "adjacentNoiseRightBins"
+        candidateAdjacentNoiseLeftFloorDb = Get-JsonValue $candidate "adjacentNoiseLeftFloorDb"
+        candidateAdjacentNoiseRightFloorDb = Get-JsonValue $candidate "adjacentNoiseRightFloorDb"
+        candidateAdjacentNoiseSideBalance = Get-JsonValue $candidate "adjacentNoiseSideBalance"
+        candidateAdjacentNoiseAsymmetryDb = Get-JsonValue $candidate "adjacentNoiseAsymmetryDb"
         constraints = @(Get-JsonArray $diagnostics "constraints")
     }
 }
@@ -1367,25 +1367,25 @@ function Write-RealtimeSample {
     $summary = New-SampleSummary $Sample
     $okText = if (Test-Truthy (Get-JsonValue $Sample "ok")) { "ok" } else { "fail" }
     $modeText = "$($summary["requestedNrMode"])->$($summary["effectiveNrMode"])"
-    $nr5ReadyText = if (Test-Truthy $summary["readyForNr5Tuning"]) { "nr5-tune=yes" } else { "nr5-tune=no" }
+    $candidateReadyText = if (Test-Truthy $summary["readyForCandidateTuning"]) { "candidate-tune=yes" } else { "candidate-tune=no" }
     $benchmarkText = if (Test-Truthy $summary["readyForLiveBenchmark"]) { "bench=yes" } else { "bench=no" }
     $weakText = ""
-    $inputDb = Get-NumericValue $summary["nr5InputDbfs"]
-    $outputDb = Get-NumericValue $summary["nr5OutputDbfs"]
+    $inputDb = Get-NumericValue $summary["candidateInputDbfs"]
+    $outputDb = Get-NumericValue $summary["candidateOutputDbfs"]
     if ($null -ne $inputDb -and $null -ne $outputDb) {
-        $delta = Get-NumericValue $summary["nr5OutputMinusInputDb"]
+        $delta = Get-NumericValue $summary["candidateOutputMinusInputDb"]
         $weakText = " in=$([Math]::Round($inputDb, 1)) out=$([Math]::Round($outputDb, 1)) delta=$delta"
     }
-    $makeup = Get-NumericValue $summary["nr5MakeupGainDb"]
+    $makeup = Get-NumericValue $summary["candidateMakeupGainDb"]
     $makeupText = if ($null -eq $makeup) { "" } else { " makeup=$([Math]::Round($makeup, 1))dB" }
-    $probability = Get-NumericValue $summary["nr5SignalProbability"]
+    $probability = Get-NumericValue $summary["candidateSignalProbability"]
     $probabilityText = if ($null -eq $probability) { "" } else { " prob=$([Math]::Round($probability, 2))" }
-    $memory = Get-NumericValue $summary["nr5WeakSignalMemory"]
+    $memory = Get-NumericValue $summary["candidateWeakSignalMemory"]
     $memoryText = if ($null -eq $memory) { "" } else { " mem=$([Math]::Round($memory, 2))" }
-    $peakReduction = Get-NumericValue $summary["nr5PeakReductionDb"]
+    $peakReduction = Get-NumericValue $summary["candidatePeakReductionDb"]
     $peakText = if ($null -eq $peakReduction) { "" } else { " peakRed=$([Math]::Round($peakReduction, 1))dB" }
-    $adjacentTrust = Get-NumericValue $summary["nr5AdjacentNoiseTrust"]
-    $adjacentDrive = Get-NumericValue $summary["nr5AdjacentNoiseDrive"]
+    $adjacentTrust = Get-NumericValue $summary["candidateAdjacentNoiseTrust"]
+    $adjacentDrive = Get-NumericValue $summary["candidateAdjacentNoiseDrive"]
     $adjacentText = ""
     if ($null -ne $adjacentTrust) {
         if ($null -eq $adjacentDrive) { $adjacentDrive = 0.0 }
@@ -1400,7 +1400,7 @@ function Write-RealtimeSample {
         $summary["sampleIndex"],
         $okText,
         $modeText,
-        $nr5ReadyText,
+        $candidateReadyText,
         $benchmarkText,
         $weakText,
         $makeupText,
@@ -1411,16 +1411,16 @@ function Write-RealtimeSample {
         $levelerText)
 }
 
-function Get-Nr5TuningReadiness {
+function Get-CandidateTuningReadiness {
     param($Diagnostics)
 
-    $endpointReady = Get-JsonValue $Diagnostics "readyForNr5Tuning"
-    $endpointStatus = [string](Get-JsonValue $Diagnostics "nr5TuningStatus")
-    $endpointConstraints = @(Get-JsonArray $Diagnostics "nr5TuningConstraints")
+    $endpointReady = Get-JsonValue $Diagnostics "readyForCandidateTuning"
+    $endpointStatus = [string](Get-JsonValue $Diagnostics "candidateTuningStatus")
+    $endpointConstraints = @(Get-JsonArray $Diagnostics "candidateTuningConstraints")
     if ($null -ne $endpointReady -or -not [string]::IsNullOrWhiteSpace($endpointStatus) -or $endpointConstraints.Count -gt 0) {
         return [ordered]@{
             ready = Test-Truthy $endpointReady
-            status = if ([string]::IsNullOrWhiteSpace($endpointStatus)) { "nr5-tuning-watch" } else { $endpointStatus }
+            status = if ([string]::IsNullOrWhiteSpace($endpointStatus)) { "candidate-tuning-watch" } else { $endpointStatus }
             constraints = $endpointConstraints
             source = "endpoint"
         }
@@ -1429,29 +1429,26 @@ function Get-Nr5TuningReadiness {
     $constraints = New-Object System.Collections.Generic.List[string]
     $requested = [string](Get-JsonValue $Diagnostics "requestedNrMode")
     $effective = [string](Get-JsonValue $Diagnostics "effectiveNrMode")
-    $nr5 = Get-JsonValue $Diagnostics "nr5SpnrDiagnostics"
+    $candidate = Get-JsonValue $Diagnostics "candidateDspDiagnostics"
     $runtime = Get-JsonValue $Diagnostics "runtimeEvidence"
 
-    if ($requested -ne "Nr5") {
-        $constraints.Add("nr5-not-requested") | Out-Null
+    if ($requested -ne "Off") {
+        $constraints.Add("candidate-not-requested") | Out-Null
     }
-    if ($effective -ne "Nr5") {
-        $constraints.Add("nr5-not-effective") | Out-Null
+    if ($effective -ne "Off") {
+        $constraints.Add("candidate-not-effective") | Out-Null
     }
-    if ($null -eq $nr5) {
-        $constraints.Add("nr5-diagnostics-missing") | Out-Null
-    }
-    else {
-        if (-not (Test-Truthy (Get-JsonValue $nr5 "run"))) {
-            $constraints.Add("nr5-not-running") | Out-Null
+    if ($null -ne $candidate) {
+        if (-not (Test-Truthy (Get-JsonValue $candidate "run"))) {
+            $constraints.Add("candidate-not-running") | Out-Null
         }
-        $learned = Get-NumericValue (Get-JsonValue $nr5 "learnedFrames")
+        $learned = Get-NumericValue (Get-JsonValue $candidate "learnedFrames")
         if ($null -eq $learned -or $learned -lt 20) {
-            $constraints.Add("nr5-learning") | Out-Null
+            $constraints.Add("candidate-learning") | Out-Null
         }
-        $agcRunValue = Get-JsonValue $nr5 "agcRun"
+        $agcRunValue = Get-JsonValue $candidate "agcRun"
         if ($null -ne $agcRunValue -and -not (Test-Truthy $agcRunValue)) {
-            $constraints.Add("nr5-agc-disabled") | Out-Null
+            $constraints.Add("candidate-agc-disabled") | Out-Null
         }
     }
 
@@ -1475,9 +1472,10 @@ function Get-Nr5TuningReadiness {
     }
 
     $uniqueConstraints = @($constraints.ToArray() | Select-Object -Unique)
+    $ready = ($uniqueConstraints.Count -eq 0)
     return [ordered]@{
-        ready = ($uniqueConstraints.Count -eq 0)
-        status = if ($uniqueConstraints.Count -eq 0) { "ready-for-nr5-live-tuning" } else { "nr5-tuning-preflight-required" }
+        ready = $ready
+        status = if ($ready) { "candidate-preflight-ready" } else { "candidate-tuning-preflight-required" }
         constraints = $uniqueConstraints
         source = "watcher-fallback"
     }
@@ -1529,8 +1527,8 @@ function Build-Report {
     $audioStatusCounts = @{}
     $requestedNrModeCounts = @{}
     $effectiveNrModeCounts = @{}
-    $nr5TuningStatusCounts = @{}
-    $nr5TuningConstraintCounts = @{}
+    $candidateTuningStatusCounts = @{}
+    $candidateTuningConstraintCounts = @{}
     $constraintCounts = @{}
     $hardConstraintCounts = @{}
     $latencies = New-Object System.Collections.Generic.List[double]
@@ -1563,11 +1561,11 @@ function Build-Report {
     $rxAudioLevelerOutputLimitReductionValues = New-Object System.Collections.Generic.List[double]
     $rxAudioLevelerOutputLimitSampleCountValues = New-Object System.Collections.Generic.List[double]
     $rxAudioLevelerPauseHoldBlockValues = New-Object System.Collections.Generic.List[double]
-    $rxAudioLevelerNr5SpeechHoldBlockValues = New-Object System.Collections.Generic.List[double]
-    $rxAudioLevelerNr5SpeechHangoverBlockValues = New-Object System.Collections.Generic.List[double]
-    $rxAudioLevelerNr5HybridSpeechPriorValues = New-Object System.Collections.Generic.List[double]
-    $rxAudioLevelerNr5NoSignalNoisePriorValues = New-Object System.Collections.Generic.List[double]
-    $rxAudioLevelerNr5NoiseProfilePriorValues = New-Object System.Collections.Generic.List[double]
+    $rxAudioLevelerCandidateSpeechHoldBlockValues = New-Object System.Collections.Generic.List[double]
+    $rxAudioLevelerCandidateSpeechHangoverBlockValues = New-Object System.Collections.Generic.List[double]
+    $rxAudioLevelerCandidateHybridSpeechPriorValues = New-Object System.Collections.Generic.List[double]
+    $rxAudioLevelerCandidateNoSignalNoisePriorValues = New-Object System.Collections.Generic.List[double]
+    $rxAudioLevelerCandidateNoiseProfilePriorValues = New-Object System.Collections.Generic.List[double]
     $backlogValues = New-Object System.Collections.Generic.List[double]
     $frontendSceneAgeValues = New-Object System.Collections.Generic.List[double]
     $frontendTopPeakCountValues = New-Object System.Collections.Generic.List[double]
@@ -1582,128 +1580,128 @@ function Build-Report {
     $frontendAdjacentNoiseRejectedValues = New-Object System.Collections.Generic.List[double]
     $rxMetersAgeValues = New-Object System.Collections.Generic.List[double]
     $audioAgeValues = New-Object System.Collections.Generic.List[double]
-    $nr5InputValues = New-Object System.Collections.Generic.List[double]
-    $nr5OutputValues = New-Object System.Collections.Generic.List[double]
-    $nr5InputOutputXValues = New-Object System.Collections.Generic.List[double]
-    $nr5InputOutputYValues = New-Object System.Collections.Generic.List[double]
-    $nr5OutputMinusInputValues = New-Object System.Collections.Generic.List[double]
-    $nr5WeakOutputValues = New-Object System.Collections.Generic.List[double]
-    $nr5StrongOutputValues = New-Object System.Collections.Generic.List[double]
-    $nr5WeakFinalAudioValues = New-Object System.Collections.Generic.List[double]
-    $nr5StrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
-    $nr5NearStrongOutputValues = New-Object System.Collections.Generic.List[double]
-    $nr5NearStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
-    $nr5SpeechQualifiedWeakOutputValues = New-Object System.Collections.Generic.List[double]
-    $nr5SpeechQualifiedStrongOutputValues = New-Object System.Collections.Generic.List[double]
-    $nr5SpeechQualifiedNearStrongOutputValues = New-Object System.Collections.Generic.List[double]
-    $nr5SpeechQualifiedNearStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
-    $nr5SpeechQualifiedWeakFinalAudioValues = New-Object System.Collections.Generic.List[double]
-    $nr5SpeechQualifiedStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
-    $nr5PassbandQualifiedWeakOutputValues = New-Object System.Collections.Generic.List[double]
-    $nr5PassbandQualifiedStrongOutputValues = New-Object System.Collections.Generic.List[double]
-    $nr5PassbandQualifiedNearStrongOutputValues = New-Object System.Collections.Generic.List[double]
-    $nr5PassbandQualifiedNearStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
-    $nr5PassbandQualifiedWeakFinalAudioValues = New-Object System.Collections.Generic.List[double]
-    $nr5PassbandQualifiedStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
-    $nr5MeanGainValues = New-Object System.Collections.Generic.List[double]
-    $nr5FloorReductionValues = New-Object System.Collections.Generic.List[double]
-    $nr5DynamicRangeValues = New-Object System.Collections.Generic.List[double]
-    $nr5SignalConfidenceValues = New-Object System.Collections.Generic.List[double]
-    $nr5AgcGateValues = New-Object System.Collections.Generic.List[double]
-    $nr5SignalProbabilityValues = New-Object System.Collections.Generic.List[double]
-    $nr5TextureFillValues = New-Object System.Collections.Generic.List[double]
-    $nr5MaskSmoothingValues = New-Object System.Collections.Generic.List[double]
-    $nr5LevelDriveValues = New-Object System.Collections.Generic.List[double]
-    $nr5RecoveryDriveValues = New-Object System.Collections.Generic.List[double]
-    $nr5WeakSignalMemoryValues = New-Object System.Collections.Generic.List[double]
-    $nr5MakeupGainDbValues = New-Object System.Collections.Generic.List[double]
-    $nr5OutputPeakDbfsValues = New-Object System.Collections.Generic.List[double]
-    $nr5PeakEvidenceValues = New-Object System.Collections.Generic.List[double]
-    $nr5PeakLimitDbfsValues = New-Object System.Collections.Generic.List[double]
-    $nr5PeakReductionDbValues = New-Object System.Collections.Generic.List[double]
-    $nr5AdjacentNoiseTrustValues = New-Object System.Collections.Generic.List[double]
-    $nr5AdjacentNoiseDriveValues = New-Object System.Collections.Generic.List[double]
-    $nr5AdjacentNoiseFloorValues = New-Object System.Collections.Generic.List[double]
-    $nr5AdjacentNoiseRejectedValues = New-Object System.Collections.Generic.List[double]
-    $nr5AdjacentNoiseSideBalanceValues = New-Object System.Collections.Generic.List[double]
-    $nr5AdjacentNoiseAsymmetryValues = New-Object System.Collections.Generic.List[double]
-    $nr5AudioInputDeltaValues = New-Object System.Collections.Generic.List[double]
-    $nr5AudioOutputDeltaValues = New-Object System.Collections.Generic.List[double]
-    $nr5LearnedFrameValues = New-Object System.Collections.Generic.List[double]
-    $nr5ManagedChannelGenerationValues = New-Object System.Collections.Generic.List[double]
-    $nr5ManagedApplyCountValues = New-Object System.Collections.Generic.List[double]
-    $nr5ManagedPositionApplyCountValues = New-Object System.Collections.Generic.List[double]
-    $nr5ManagedPolicyApplyCountValues = New-Object System.Collections.Generic.List[double]
-    $nr5ManagedNoopApplyCountValues = New-Object System.Collections.Generic.List[double]
-    $nr5ManagedRunApplyCountValues = New-Object System.Collections.Generic.List[double]
+    $candidateInputValues = New-Object System.Collections.Generic.List[double]
+    $candidateOutputValues = New-Object System.Collections.Generic.List[double]
+    $candidateInputOutputXValues = New-Object System.Collections.Generic.List[double]
+    $candidateInputOutputYValues = New-Object System.Collections.Generic.List[double]
+    $candidateOutputMinusInputValues = New-Object System.Collections.Generic.List[double]
+    $candidateWeakOutputValues = New-Object System.Collections.Generic.List[double]
+    $candidateStrongOutputValues = New-Object System.Collections.Generic.List[double]
+    $candidateWeakFinalAudioValues = New-Object System.Collections.Generic.List[double]
+    $candidateStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
+    $candidateNearStrongOutputValues = New-Object System.Collections.Generic.List[double]
+    $candidateNearStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
+    $candidateSpeechQualifiedWeakOutputValues = New-Object System.Collections.Generic.List[double]
+    $candidateSpeechQualifiedStrongOutputValues = New-Object System.Collections.Generic.List[double]
+    $candidateSpeechQualifiedNearStrongOutputValues = New-Object System.Collections.Generic.List[double]
+    $candidateSpeechQualifiedNearStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
+    $candidateSpeechQualifiedWeakFinalAudioValues = New-Object System.Collections.Generic.List[double]
+    $candidateSpeechQualifiedStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
+    $candidatePassbandQualifiedWeakOutputValues = New-Object System.Collections.Generic.List[double]
+    $candidatePassbandQualifiedStrongOutputValues = New-Object System.Collections.Generic.List[double]
+    $candidatePassbandQualifiedNearStrongOutputValues = New-Object System.Collections.Generic.List[double]
+    $candidatePassbandQualifiedNearStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
+    $candidatePassbandQualifiedWeakFinalAudioValues = New-Object System.Collections.Generic.List[double]
+    $candidatePassbandQualifiedStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
+    $candidateMeanGainValues = New-Object System.Collections.Generic.List[double]
+    $candidateFloorReductionValues = New-Object System.Collections.Generic.List[double]
+    $candidateDynamicRangeValues = New-Object System.Collections.Generic.List[double]
+    $candidateSignalConfidenceValues = New-Object System.Collections.Generic.List[double]
+    $candidateAgcGateValues = New-Object System.Collections.Generic.List[double]
+    $candidateSignalProbabilityValues = New-Object System.Collections.Generic.List[double]
+    $candidateTextureFillValues = New-Object System.Collections.Generic.List[double]
+    $candidateMaskSmoothingValues = New-Object System.Collections.Generic.List[double]
+    $candidateLevelDriveValues = New-Object System.Collections.Generic.List[double]
+    $candidateRecoveryDriveValues = New-Object System.Collections.Generic.List[double]
+    $candidateWeakSignalMemoryValues = New-Object System.Collections.Generic.List[double]
+    $candidateMakeupGainDbValues = New-Object System.Collections.Generic.List[double]
+    $candidateOutputPeakDbfsValues = New-Object System.Collections.Generic.List[double]
+    $candidatePeakEvidenceValues = New-Object System.Collections.Generic.List[double]
+    $candidatePeakLimitDbfsValues = New-Object System.Collections.Generic.List[double]
+    $candidatePeakReductionDbValues = New-Object System.Collections.Generic.List[double]
+    $candidateAdjacentNoiseTrustValues = New-Object System.Collections.Generic.List[double]
+    $candidateAdjacentNoiseDriveValues = New-Object System.Collections.Generic.List[double]
+    $candidateAdjacentNoiseFloorValues = New-Object System.Collections.Generic.List[double]
+    $candidateAdjacentNoiseRejectedValues = New-Object System.Collections.Generic.List[double]
+    $candidateAdjacentNoiseSideBalanceValues = New-Object System.Collections.Generic.List[double]
+    $candidateAdjacentNoiseAsymmetryValues = New-Object System.Collections.Generic.List[double]
+    $candidateAudioInputDeltaValues = New-Object System.Collections.Generic.List[double]
+    $candidateAudioOutputDeltaValues = New-Object System.Collections.Generic.List[double]
+    $candidateLearnedFrameValues = New-Object System.Collections.Generic.List[double]
+    $candidateManagedChannelGenerationValues = New-Object System.Collections.Generic.List[double]
+    $candidateManagedApplyCountValues = New-Object System.Collections.Generic.List[double]
+    $candidateManagedPositionApplyCountValues = New-Object System.Collections.Generic.List[double]
+    $candidateManagedPolicyApplyCountValues = New-Object System.Collections.Generic.List[double]
+    $candidateManagedNoopApplyCountValues = New-Object System.Collections.Generic.List[double]
+    $candidateManagedRunApplyCountValues = New-Object System.Collections.Generic.List[double]
     $sampleSummaries = New-Object System.Collections.Generic.List[object]
     $recommendations = New-Object System.Collections.Generic.List[string]
-    $nr5WeakInputSamples = New-Object System.Collections.Generic.List[object]
-    $nr5StrongInputSamples = New-Object System.Collections.Generic.List[object]
-    $nr5SpeechQualifiedWeakInputSamples = New-Object System.Collections.Generic.List[object]
-    $nr5SpeechQualifiedStrongInputSamples = New-Object System.Collections.Generic.List[object]
-    $nr5PassbandQualifiedWeakInputSamples = New-Object System.Collections.Generic.List[object]
-    $nr5PassbandQualifiedStrongInputSamples = New-Object System.Collections.Generic.List[object]
-    $nr5WeakDropoutSamples = New-Object System.Collections.Generic.List[object]
-    $nr5WeakDropoutFinalAudibleSamples = New-Object System.Collections.Generic.List[object]
-    $nr5WeakDropoutCandidateLossSamples = New-Object System.Collections.Generic.List[object]
-    $nr5HotMakeupSamples = New-Object System.Collections.Generic.List[object]
-    $nr5NearStrongInputSamples = New-Object System.Collections.Generic.List[object]
-    $nr5LowEvidenceLiftSamples = New-Object System.Collections.Generic.List[object]
-    $nr5LowEvidenceSuppressedSamples = New-Object System.Collections.Generic.List[object]
-    $nr5AudioAlignmentMismatchSamples = New-Object System.Collections.Generic.List[object]
-    $nr5AudioLevelerNormalizedSamples = New-Object System.Collections.Generic.List[object]
-    $nr5LearnerResetSamples = New-Object System.Collections.Generic.List[object]
-    $nr5ManagedReapplySamples = New-Object System.Collections.Generic.List[object]
-    $nr5ManagedGenerationChangeSamples = New-Object System.Collections.Generic.List[object]
+    $candidateWeakInputSamples = New-Object System.Collections.Generic.List[object]
+    $candidateStrongInputSamples = New-Object System.Collections.Generic.List[object]
+    $candidateSpeechQualifiedWeakInputSamples = New-Object System.Collections.Generic.List[object]
+    $candidateSpeechQualifiedStrongInputSamples = New-Object System.Collections.Generic.List[object]
+    $candidatePassbandQualifiedWeakInputSamples = New-Object System.Collections.Generic.List[object]
+    $candidatePassbandQualifiedStrongInputSamples = New-Object System.Collections.Generic.List[object]
+    $candidateWeakDropoutSamples = New-Object System.Collections.Generic.List[object]
+    $candidateWeakDropoutFinalAudibleSamples = New-Object System.Collections.Generic.List[object]
+    $candidateWeakDropoutCandidateLossSamples = New-Object System.Collections.Generic.List[object]
+    $candidateHotMakeupSamples = New-Object System.Collections.Generic.List[object]
+    $candidateNearStrongInputSamples = New-Object System.Collections.Generic.List[object]
+    $candidateLowEvidenceLiftSamples = New-Object System.Collections.Generic.List[object]
+    $candidateLowEvidenceSuppressedSamples = New-Object System.Collections.Generic.List[object]
+    $candidateAudioAlignmentMismatchSamples = New-Object System.Collections.Generic.List[object]
+    $candidateAudioLevelerNormalizedSamples = New-Object System.Collections.Generic.List[object]
+    $candidateLearnerResetSamples = New-Object System.Collections.Generic.List[object]
+    $candidateManagedReapplySamples = New-Object System.Collections.Generic.List[object]
+    $candidateManagedGenerationChangeSamples = New-Object System.Collections.Generic.List[object]
     $rxAudioLevelerBoostSlewLimitedSamples = New-Object System.Collections.Generic.List[object]
     $rxAudioLevelerPeakLimitedSamples = New-Object System.Collections.Generic.List[object]
     $rxAudioLevelerOutputLimitedSamples = New-Object System.Collections.Generic.List[object]
     $rxAudioLevelerConstrainedSamples = New-Object System.Collections.Generic.List[object]
-    $rxAudioLevelerNr5NoSignalNoiseCapSamples = New-Object System.Collections.Generic.List[object]
-    $nr5SpeechContinuitySamples = New-Object System.Collections.Generic.List[object]
-    $nr5SpeechContinuityOutputValues = New-Object System.Collections.Generic.List[double]
-    $nr5SpeechContinuityGainValues = New-Object System.Collections.Generic.List[double]
+    $rxAudioLevelerCandidateNoSignalNoiseCapSamples = New-Object System.Collections.Generic.List[object]
+    $candidateSpeechContinuitySamples = New-Object System.Collections.Generic.List[object]
+    $candidateSpeechContinuityOutputValues = New-Object System.Collections.Generic.List[double]
+    $candidateSpeechContinuityGainValues = New-Object System.Collections.Generic.List[double]
     $frontendTopPeakSamples = New-Object System.Collections.Generic.List[object]
     $frontendNearPassbandPeakSamples = New-Object System.Collections.Generic.List[object]
     $frontendFilterPassbandPeakSamples = New-Object System.Collections.Generic.List[object]
     $passbandAudioSamples = New-Object System.Collections.Generic.List[object]
     $offPassbandAudioSamples = New-Object System.Collections.Generic.List[object]
-    $nr5FrontendStrongPassbandSubthresholdSamples = New-Object System.Collections.Generic.List[object]
-    $nr5FrontendStrongPassbandSubthresholdDistanceValues = New-Object System.Collections.Generic.List[double]
+    $candidateFrontendStrongPassbandSubthresholdSamples = New-Object System.Collections.Generic.List[object]
+    $candidateFrontendStrongPassbandSubthresholdDistanceValues = New-Object System.Collections.Generic.List[double]
     $frontendTopPeakSampleCount = 0
     $frontendNearPassbandPeakSampleCount = 0
     $frontendFilterPassbandPeakSampleCount = 0
     $frontendAdjacentNoiseUsableCount = 0
-    $nr5AdjacentNoiseUsableCount = 0
-    $nr5AdjacentNoiseDriveCount = 0
+    $candidateAdjacentNoiseUsableCount = 0
+    $candidateAdjacentNoiseDriveCount = 0
 
-    $nr5LowEvidenceInputThresholdDbfs = -30.0
-    $nr5LowEvidenceConfidenceThreshold = 0.32
-    $nr5LowEvidenceProbabilityThreshold = 0.18
-    $nr5LowEvidenceAgcGateThreshold = 0.50
-    $nr5LowEvidenceOutputThresholdDbfs = -28.0
-    $nr5LowEvidenceAudioThresholdDbfs = -20.0
+    $candidateLowEvidenceInputThresholdDbfs = -30.0
+    $candidateLowEvidenceConfidenceThreshold = 0.32
+    $candidateLowEvidenceProbabilityThreshold = 0.18
+    $candidateLowEvidenceAgcGateThreshold = 0.50
+    $candidateLowEvidenceOutputThresholdDbfs = -28.0
+    $candidateLowEvidenceAudioThresholdDbfs = -20.0
     $signalFloorAudioThresholdDbfs = -70.0
     $signalActiveAudioThresholdDbfs = -45.0
     $signalEvidenceConfidenceThreshold = 0.30
     $signalEvidenceProbabilityThreshold = 0.16
     $signalEvidenceAgcGateThreshold = 0.30
-    $nr5SpeechContinuityHybridThreshold = 0.25
-    $nr5SpeechContinuityNoSignalMax = 0.18
-    $nr5SpeechContinuityFadeThresholdDbfs = -28.0
-    $nr5SpeechContinuityDropoutThresholdDbfs = -45.0
-    $nr5SpeechContinuityOutputMovementThresholdDb = 6.0
-    $nr5SpeechContinuityGainMovementThresholdDb = 8.0
+    $candidateSpeechContinuityHybridThreshold = 0.25
+    $candidateSpeechContinuityNoSignalMax = 0.18
+    $candidateSpeechContinuityFadeThresholdDbfs = -28.0
+    $candidateSpeechContinuityDropoutThresholdDbfs = -45.0
+    $candidateSpeechContinuityOutputMovementThresholdDb = 6.0
+    $candidateSpeechContinuityGainMovementThresholdDb = 8.0
     $frontendNearPassbandThresholdHz = 3000.0
     $frontendFilterPassbandEdgeToleranceHz = 0.0
     $frontendStrongPassbandSnrThresholdDb = 20.0
     $frontendStrongPassbandDbfsThreshold = -85.0
-    $nr5StrongInputThresholdDbfs = -22.0
-    $nr5NearStrongInputThresholdDbfs = -26.0
-    $nr5WeakDropoutFinalAudibleThresholdDbfs = $signalActiveAudioThresholdDbfs
-    $nr5WeakDropoutNativeLiftThresholdDb = 6.0
-    $nr5WeakDropoutBelowInputThresholdDb = 1.0
+    $candidateStrongInputThresholdDbfs = -22.0
+    $candidateNearStrongInputThresholdDbfs = -26.0
+    $candidateWeakDropoutFinalAudibleThresholdDbfs = $signalActiveAudioThresholdDbfs
+    $candidateWeakDropoutNativeLiftThresholdDb = 6.0
+    $candidateWeakDropoutBelowInputThresholdDb = 1.0
 
     $okCount = 0
     $failedCount = 0
@@ -1716,51 +1714,51 @@ function Build-Report {
     $squelchClosedCount = 0
     $squelchTailCount = 0
     $rxAudioLevelerDiagnosticCount = 0
-    $rxAudioLevelerNr5NoSignalNoiseCapCount = 0
-    $rxAudioLevelerNr5FarPeakNoiseCapCount = 0
-    $rxAudioLevelerNr5NoProofNoiseCapCount = 0
-    $nr5SpeechContinuitySampleCount = 0
-    $nr5SpeechContinuityFadeCount = 0
-    $nr5SpeechContinuityDropoutCount = 0
+    $rxAudioLevelerCandidateNoSignalNoiseCapCount = 0
+    $rxAudioLevelerCandidateFarPeakNoiseCapCount = 0
+    $rxAudioLevelerCandidateNoProofNoiseCapCount = 0
+    $candidateSpeechContinuitySampleCount = 0
+    $candidateSpeechContinuityFadeCount = 0
+    $candidateSpeechContinuityDropoutCount = 0
     $rxAudioLevelerBoostSlewLimitedCount = 0
     $rxAudioLevelerPeakLimitedCount = 0
     $rxAudioLevelerOutputLimitedCount = 0
     $hardBlockerSampleCount = 0
-    $nr5SampleCount = 0
-    $nr5AlignedCount = 0
-    $nr5TuningReadyCount = 0
-    $nr5AgcDiagnosticCount = 0
-    $nr5ProbabilityDiagnosticCount = 0
-    $nr5PeakDiagnosticCount = 0
-    $nr5LearnedFrameSampleCount = 0
-    $nr5ManagedCounterSampleCount = 0
-    $nr5ManagedPositionReapplyCount = 0
-    $nr5ManagedPolicyReapplyCount = 0
-    $nr5ManagedGenerationChangeCount = 0
-    $nr5AudioAlignmentSampleCount = 0
-    $nr5AudioAlignedAfterLevelerCount = 0
-    $nr5AudioLevelerNormalizedCount = 0
-    $nr5AudioAlignmentMismatchCount = 0
-    $nr5WeakInputCount = 0
-    $nr5WeakRecoveredCount = 0
-    $nr5WeakDropoutCount = 0
-    $nr5WeakDropoutFinalAudibleCount = 0
-    $nr5WeakDropoutNativeLiftedCount = 0
-    $nr5WeakDropoutCandidateLossCount = 0
-    $nr5WeakBelowInputCount = 0
-    $nr5WeakNearTargetCount = 0
-    $nr5StrongInputCount = 0
-    $nr5NearStrongInputCount = 0
-    $nr5HotMakeupCount = 0
-    $nr5RequestedSampleCount = 0
-    $nr5EffectiveSampleCount = 0
+    $candidateSampleCount = 0
+    $candidateAlignedCount = 0
+    $candidateTuningReadyCount = 0
+    $candidateAgcDiagnosticCount = 0
+    $candidateProbabilityDiagnosticCount = 0
+    $candidatePeakDiagnosticCount = 0
+    $candidateLearnedFrameSampleCount = 0
+    $candidateManagedCounterSampleCount = 0
+    $candidateManagedPositionReapplyCount = 0
+    $candidateManagedPolicyReapplyCount = 0
+    $candidateManagedGenerationChangeCount = 0
+    $candidateAudioAlignmentSampleCount = 0
+    $candidateAudioAlignedAfterLevelerCount = 0
+    $candidateAudioLevelerNormalizedCount = 0
+    $candidateAudioAlignmentMismatchCount = 0
+    $candidateWeakInputCount = 0
+    $candidateWeakRecoveredCount = 0
+    $candidateWeakDropoutCount = 0
+    $candidateWeakDropoutFinalAudibleCount = 0
+    $candidateWeakDropoutNativeLiftedCount = 0
+    $candidateWeakDropoutCandidateLossCount = 0
+    $candidateWeakBelowInputCount = 0
+    $candidateWeakNearTargetCount = 0
+    $candidateStrongInputCount = 0
+    $candidateNearStrongInputCount = 0
+    $candidateHotMakeupCount = 0
+    $candidateRequestedSampleCount = 0
+    $candidateEffectiveSampleCount = 0
     $nrOffRequestedSampleCount = 0
     $nrOffEffectiveSampleCount = 0
     $nrModeMismatchSampleCount = 0
-    $nr5LowEvidenceSampleCount = 0
-    $nr5LowEvidenceLiftCount = 0
-    $nr5LowEvidenceAlignmentMismatchCount = 0
-    $nr5LowEvidenceSuppressedCount = 0
+    $candidateLowEvidenceSampleCount = 0
+    $candidateLowEvidenceLiftCount = 0
+    $candidateLowEvidenceAlignmentMismatchCount = 0
+    $candidateLowEvidenceSuppressedCount = 0
     $signalFloorAudioCount = 0
     $signalActiveAudioCount = 0
     $signalVoiceLikeEvidenceCount = 0
@@ -1783,11 +1781,11 @@ function Build-Report {
     $rxStateFilterCounts = @{}
     $rxStateCtunCounts = @{}
     $rxStateEvidenceSampleCount = 0
-    $nr5PreviousLearnedFrames = $null
-    $nr5PreviousManagedChannelGeneration = $null
-    $nr5PreviousManagedApplyCount = $null
-    $nr5PreviousManagedPositionApplyCount = $null
-    $nr5PreviousManagedPolicyApplyCount = $null
+    $candidatePreviousLearnedFrames = $null
+    $candidatePreviousManagedChannelGeneration = $null
+    $candidatePreviousManagedApplyCount = $null
+    $candidatePreviousManagedPositionApplyCount = $null
+    $candidatePreviousManagedPolicyApplyCount = $null
 
     foreach ($sample in @($SampleRecords)) {
         if (-not (Test-Truthy (Get-JsonValue $sample "ok"))) {
@@ -1800,7 +1798,7 @@ function Build-Report {
         Add-Number $latencies (Get-JsonValue $sample "latencyMs")
         $diagnostics = Get-JsonValue $sample "diagnostics"
         $runtime = Get-JsonValue $diagnostics "runtimeEvidence"
-        $nr5 = Get-JsonValue $diagnostics "nr5SpnrDiagnostics"
+        $candidate = Get-JsonValue $diagnostics "candidateDspDiagnostics"
         $status = [string](Get-JsonValue $diagnostics "status")
         $tone = [string](Get-JsonValue $diagnostics "qualityTone")
         $requestedNrMode = ConvertTo-NrModeName ([string](Get-JsonValue $diagnostics "requestedNrMode"))
@@ -1815,11 +1813,11 @@ function Build-Report {
         Add-Count $toneCounts $tone
         Add-Count $requestedNrModeCounts $requestedNrMode
         Add-Count $effectiveNrModeCounts $effectiveNrMode
-        if (Test-NrModeName $requestedNrMode "Nr5") {
-            $nr5RequestedSampleCount++
+        if (Test-NrModeName $requestedNrMode "Off") {
+            $candidateRequestedSampleCount++
         }
-        if (Test-NrModeName $effectiveNrMode "Nr5") {
-            $nr5EffectiveSampleCount++
+        if (Test-NrModeName $effectiveNrMode "Off") {
+            $candidateEffectiveSampleCount++
         }
         if (Test-NrModeName $requestedNrMode "Off") {
             $nrOffRequestedSampleCount++
@@ -1837,11 +1835,11 @@ function Build-Report {
         if (Test-Truthy (Get-JsonValue $diagnostics "readyForLiveBenchmark")) {
             $readyCount++
         }
-        $nr5Tuning = Get-Nr5TuningReadiness $diagnostics
-        if (Test-Truthy $nr5Tuning["ready"]) {
-            $nr5TuningReadyCount++
+        $candidateTuning = Get-CandidateTuningReadiness $diagnostics
+        if (Test-Truthy $candidateTuning["ready"]) {
+            $candidateTuningReadyCount++
         }
-        Add-Count $nr5TuningStatusCounts ([string]$nr5Tuning["status"])
+        Add-Count $candidateTuningStatusCounts ([string]$candidateTuning["status"])
         Add-Number $frontendSceneAgeValues (Get-JsonValue $diagnostics "frontendSceneAgeMs")
         $frontendTopPeaks = @(Get-JsonArray $diagnostics "frontendTopPeaks")
         $nearestOffset = $null
@@ -1983,8 +1981,8 @@ function Build-Report {
         Add-Number $frontendAdjacentNoiseP50Values (Get-JsonValue $diagnostics "frontendAdjacentNoiseP50Db")
         Add-Number $frontendAdjacentNoiseSlopeValues (Get-JsonValue $diagnostics "frontendAdjacentNoiseSlopeDbPerKhz")
         Add-Number $frontendAdjacentNoiseRejectedValues (Get-JsonValue $diagnostics "frontendAdjacentNoiseRejectedPct")
-        foreach ($constraint in @($nr5Tuning["constraints"])) {
-            Add-Count $nr5TuningConstraintCounts ([string]$constraint)
+        foreach ($constraint in @($candidateTuning["constraints"])) {
+            Add-Count $candidateTuningConstraintCounts ([string]$constraint)
         }
 
         $sampleHasHardBlocker = $false
@@ -2008,209 +2006,209 @@ function Build-Report {
             }
         }
 
-        $nr5ConfidenceNumber = $null
-        $nr5AgcGateNumber = $null
-        $nr5SignalProbabilityNumber = $null
-        $nr5TextureFillNumber = $null
-        $nr5MaskSmoothingNumber = $null
-        $nr5RecoveryDriveNumber = $null
-        $nr5WeakSignalMemoryNumber = $null
-        $nr5MakeupGainDbNumber = $null
-        $nr5PeakEvidenceNumber = $null
+        $candidateConfidenceNumber = $null
+        $candidateAgcGateNumber = $null
+        $candidateSignalProbabilityNumber = $null
+        $candidateTextureFillNumber = $null
+        $candidateMaskSmoothingNumber = $null
+        $candidateRecoveryDriveNumber = $null
+        $candidateWeakSignalMemoryNumber = $null
+        $candidateMakeupGainDbNumber = $null
+        $candidatePeakEvidenceNumber = $null
 
-        if ($null -ne $nr5) {
-            $nr5SampleCount++
-            $nr5LearnedFramesNumber = Get-NumericValue (Get-JsonValue $nr5 "learnedFrames")
-            $nr5ManagedChannelGenerationNumber = Get-NumericValue (Get-JsonValue $nr5 "managedChannelGeneration")
-            $nr5ManagedApplyCountNumber = Get-NumericValue (Get-JsonValue $nr5 "managedNr5ApplyCount")
-            $nr5ManagedPositionApplyCountNumber = Get-NumericValue (Get-JsonValue $nr5 "managedNr5PositionApplyCount")
-            $nr5ManagedPolicyApplyCountNumber = Get-NumericValue (Get-JsonValue $nr5 "managedNr5PolicyApplyCount")
-            $nr5ManagedNoopApplyCountNumber = Get-NumericValue (Get-JsonValue $nr5 "managedNr5NoopApplyCount")
-            $nr5ManagedRunApplyCountNumber = Get-NumericValue (Get-JsonValue $nr5 "managedNr5RunApplyCount")
-            $nr5ManagedLastApplyReason = [string](Get-JsonValue $nr5 "managedNr5LastApplyReason")
-            Add-Number $nr5LearnedFrameValues $nr5LearnedFramesNumber
-            Add-Number $nr5ManagedChannelGenerationValues $nr5ManagedChannelGenerationNumber
-            Add-Number $nr5ManagedApplyCountValues $nr5ManagedApplyCountNumber
-            Add-Number $nr5ManagedPositionApplyCountValues $nr5ManagedPositionApplyCountNumber
-            Add-Number $nr5ManagedPolicyApplyCountValues $nr5ManagedPolicyApplyCountNumber
-            Add-Number $nr5ManagedNoopApplyCountValues $nr5ManagedNoopApplyCountNumber
-            Add-Number $nr5ManagedRunApplyCountValues $nr5ManagedRunApplyCountNumber
-            if ($null -ne $nr5LearnedFramesNumber) {
-                $nr5LearnedFrameSampleCount++
+        if ($null -ne $candidate) {
+            $candidateSampleCount++
+            $candidateLearnedFramesNumber = Get-NumericValue (Get-JsonValue $candidate "learnedFrames")
+            $candidateManagedChannelGenerationNumber = Get-NumericValue (Get-JsonValue $candidate "managedChannelGeneration")
+            $candidateManagedApplyCountNumber = Get-NumericValue (Get-JsonValue $candidate "managedCandidateApplyCount")
+            $candidateManagedPositionApplyCountNumber = Get-NumericValue (Get-JsonValue $candidate "managedCandidatePositionApplyCount")
+            $candidateManagedPolicyApplyCountNumber = Get-NumericValue (Get-JsonValue $candidate "managedCandidatePolicyApplyCount")
+            $candidateManagedNoopApplyCountNumber = Get-NumericValue (Get-JsonValue $candidate "managedCandidateNoopApplyCount")
+            $candidateManagedRunApplyCountNumber = Get-NumericValue (Get-JsonValue $candidate "managedCandidateRunApplyCount")
+            $candidateManagedLastApplyReason = [string](Get-JsonValue $candidate "managedCandidateLastApplyReason")
+            Add-Number $candidateLearnedFrameValues $candidateLearnedFramesNumber
+            Add-Number $candidateManagedChannelGenerationValues $candidateManagedChannelGenerationNumber
+            Add-Number $candidateManagedApplyCountValues $candidateManagedApplyCountNumber
+            Add-Number $candidateManagedPositionApplyCountValues $candidateManagedPositionApplyCountNumber
+            Add-Number $candidateManagedPolicyApplyCountValues $candidateManagedPolicyApplyCountNumber
+            Add-Number $candidateManagedNoopApplyCountValues $candidateManagedNoopApplyCountNumber
+            Add-Number $candidateManagedRunApplyCountValues $candidateManagedRunApplyCountNumber
+            if ($null -ne $candidateLearnedFramesNumber) {
+                $candidateLearnedFrameSampleCount++
             }
             $sampleHasManagedCounters = (
-                $null -ne $nr5ManagedPositionApplyCountNumber -and
-                $null -ne $nr5ManagedPolicyApplyCountNumber)
+                $null -ne $candidateManagedPositionApplyCountNumber -and
+                $null -ne $candidateManagedPolicyApplyCountNumber)
             if ($sampleHasManagedCounters) {
-                $nr5ManagedCounterSampleCount++
+                $candidateManagedCounterSampleCount++
             }
-            $nr5SameManagedGeneration = $true
-            if ($null -ne $nr5PreviousManagedChannelGeneration -and $null -ne $nr5ManagedChannelGenerationNumber -and
-                [double]$nr5ManagedChannelGenerationNumber -ne [double]$nr5PreviousManagedChannelGeneration) {
-                $nr5SameManagedGeneration = $false
-                $nr5ManagedGenerationChangeCount++
-                $nr5ManagedGenerationChangeSamples.Add([ordered]@{
+            $candidateSameManagedGeneration = $true
+            if ($null -ne $candidatePreviousManagedChannelGeneration -and $null -ne $candidateManagedChannelGenerationNumber -and
+                [double]$candidateManagedChannelGenerationNumber -ne [double]$candidatePreviousManagedChannelGeneration) {
+                $candidateSameManagedGeneration = $false
+                $candidateManagedGenerationChangeCount++
+                $candidateManagedGenerationChangeSamples.Add([ordered]@{
                     sampleIndex = [int](Get-JsonValue $sample "sampleIndex")
                     sampledUtc = Get-JsonValue $sample "sampledUtc"
-                    previousGeneration = [int][Math]::Round([double]$nr5PreviousManagedChannelGeneration)
-                    generation = [int][Math]::Round([double]$nr5ManagedChannelGenerationNumber)
-                    previousLearnedFrames = if ($null -ne $nr5PreviousLearnedFrames) { [int][Math]::Round([double]$nr5PreviousLearnedFrames) } else { $null }
-                    learnedFrames = if ($null -ne $nr5LearnedFramesNumber) { [int][Math]::Round([double]$nr5LearnedFramesNumber) } else { $null }
-                    lastApplyReason = $nr5ManagedLastApplyReason
+                    previousGeneration = [int][Math]::Round([double]$candidatePreviousManagedChannelGeneration)
+                    generation = [int][Math]::Round([double]$candidateManagedChannelGenerationNumber)
+                    previousLearnedFrames = if ($null -ne $candidatePreviousLearnedFrames) { [int][Math]::Round([double]$candidatePreviousLearnedFrames) } else { $null }
+                    learnedFrames = if ($null -ne $candidateLearnedFramesNumber) { [int][Math]::Round([double]$candidateLearnedFramesNumber) } else { $null }
+                    lastApplyReason = $candidateManagedLastApplyReason
                 }) | Out-Null
             }
-            if ($null -ne $nr5PreviousLearnedFrames -and $null -ne $nr5LearnedFramesNumber -and
-                [double]$nr5LearnedFramesNumber -lt [double]$nr5PreviousLearnedFrames -and
-                $nr5SameManagedGeneration) {
-                $nr5LearnerResetSamples.Add([ordered]@{
+            if ($null -ne $candidatePreviousLearnedFrames -and $null -ne $candidateLearnedFramesNumber -and
+                [double]$candidateLearnedFramesNumber -lt [double]$candidatePreviousLearnedFrames -and
+                $candidateSameManagedGeneration) {
+                $candidateLearnerResetSamples.Add([ordered]@{
                     sampleIndex = [int](Get-JsonValue $sample "sampleIndex")
                     sampledUtc = Get-JsonValue $sample "sampledUtc"
-                    previousLearnedFrames = [int][Math]::Round([double]$nr5PreviousLearnedFrames)
-                    learnedFrames = [int][Math]::Round([double]$nr5LearnedFramesNumber)
-                    channelGeneration = if ($null -ne $nr5ManagedChannelGenerationNumber) { [int][Math]::Round([double]$nr5ManagedChannelGenerationNumber) } else { $null }
-                    managedNr5ApplyCount = if ($null -ne $nr5ManagedApplyCountNumber) { [int][Math]::Round([double]$nr5ManagedApplyCountNumber) } else { $null }
-                    managedNr5PositionApplyCount = if ($null -ne $nr5ManagedPositionApplyCountNumber) { [int][Math]::Round([double]$nr5ManagedPositionApplyCountNumber) } else { $null }
-                    managedNr5PolicyApplyCount = if ($null -ne $nr5ManagedPolicyApplyCountNumber) { [int][Math]::Round([double]$nr5ManagedPolicyApplyCountNumber) } else { $null }
-                    lastApplyReason = $nr5ManagedLastApplyReason
+                    previousLearnedFrames = [int][Math]::Round([double]$candidatePreviousLearnedFrames)
+                    learnedFrames = [int][Math]::Round([double]$candidateLearnedFramesNumber)
+                    channelGeneration = if ($null -ne $candidateManagedChannelGenerationNumber) { [int][Math]::Round([double]$candidateManagedChannelGenerationNumber) } else { $null }
+                    managedCandidateApplyCount = if ($null -ne $candidateManagedApplyCountNumber) { [int][Math]::Round([double]$candidateManagedApplyCountNumber) } else { $null }
+                    managedCandidatePositionApplyCount = if ($null -ne $candidateManagedPositionApplyCountNumber) { [int][Math]::Round([double]$candidateManagedPositionApplyCountNumber) } else { $null }
+                    managedCandidatePolicyApplyCount = if ($null -ne $candidateManagedPolicyApplyCountNumber) { [int][Math]::Round([double]$candidateManagedPolicyApplyCountNumber) } else { $null }
+                    lastApplyReason = $candidateManagedLastApplyReason
                 }) | Out-Null
             }
-            $nr5ManagedApplyDelta = $null
-            $nr5ManagedPositionApplyDelta = $null
-            $nr5ManagedPolicyApplyDelta = $null
-            if ($nr5SameManagedGeneration) {
-                if ($null -ne $nr5PreviousManagedApplyCount -and $null -ne $nr5ManagedApplyCountNumber) {
-                    $nr5ManagedApplyDelta = [double]$nr5ManagedApplyCountNumber - [double]$nr5PreviousManagedApplyCount
+            $candidateManagedApplyDelta = $null
+            $candidateManagedPositionApplyDelta = $null
+            $candidateManagedPolicyApplyDelta = $null
+            if ($candidateSameManagedGeneration) {
+                if ($null -ne $candidatePreviousManagedApplyCount -and $null -ne $candidateManagedApplyCountNumber) {
+                    $candidateManagedApplyDelta = [double]$candidateManagedApplyCountNumber - [double]$candidatePreviousManagedApplyCount
                 }
-                if ($null -ne $nr5PreviousManagedPositionApplyCount -and $null -ne $nr5ManagedPositionApplyCountNumber) {
-                    $nr5ManagedPositionApplyDelta = [double]$nr5ManagedPositionApplyCountNumber - [double]$nr5PreviousManagedPositionApplyCount
+                if ($null -ne $candidatePreviousManagedPositionApplyCount -and $null -ne $candidateManagedPositionApplyCountNumber) {
+                    $candidateManagedPositionApplyDelta = [double]$candidateManagedPositionApplyCountNumber - [double]$candidatePreviousManagedPositionApplyCount
                 }
-                if ($null -ne $nr5PreviousManagedPolicyApplyCount -and $null -ne $nr5ManagedPolicyApplyCountNumber) {
-                    $nr5ManagedPolicyApplyDelta = [double]$nr5ManagedPolicyApplyCountNumber - [double]$nr5PreviousManagedPolicyApplyCount
+                if ($null -ne $candidatePreviousManagedPolicyApplyCount -and $null -ne $candidateManagedPolicyApplyCountNumber) {
+                    $candidateManagedPolicyApplyDelta = [double]$candidateManagedPolicyApplyCountNumber - [double]$candidatePreviousManagedPolicyApplyCount
                 }
-                if (($null -ne $nr5ManagedPositionApplyDelta -and $nr5ManagedPositionApplyDelta -gt 0.0) -or
-                    ($null -ne $nr5ManagedPolicyApplyDelta -and $nr5ManagedPolicyApplyDelta -gt 0.0)) {
-                    if ($null -ne $nr5ManagedPositionApplyDelta -and $nr5ManagedPositionApplyDelta -gt 0.0) {
-                        $nr5ManagedPositionReapplyCount++
+                if (($null -ne $candidateManagedPositionApplyDelta -and $candidateManagedPositionApplyDelta -gt 0.0) -or
+                    ($null -ne $candidateManagedPolicyApplyDelta -and $candidateManagedPolicyApplyDelta -gt 0.0)) {
+                    if ($null -ne $candidateManagedPositionApplyDelta -and $candidateManagedPositionApplyDelta -gt 0.0) {
+                        $candidateManagedPositionReapplyCount++
                     }
-                    if ($null -ne $nr5ManagedPolicyApplyDelta -and $nr5ManagedPolicyApplyDelta -gt 0.0) {
-                        $nr5ManagedPolicyReapplyCount++
+                    if ($null -ne $candidateManagedPolicyApplyDelta -and $candidateManagedPolicyApplyDelta -gt 0.0) {
+                        $candidateManagedPolicyReapplyCount++
                     }
-                    $nr5ManagedReapplySamples.Add([ordered]@{
+                    $candidateManagedReapplySamples.Add([ordered]@{
                         sampleIndex = [int](Get-JsonValue $sample "sampleIndex")
                         sampledUtc = Get-JsonValue $sample "sampledUtc"
-                        channelGeneration = if ($null -ne $nr5ManagedChannelGenerationNumber) { [int][Math]::Round([double]$nr5ManagedChannelGenerationNumber) } else { $null }
-                        learnedFrames = if ($null -ne $nr5LearnedFramesNumber) { [int][Math]::Round([double]$nr5LearnedFramesNumber) } else { $null }
-                        managedNr5ApplyDelta = if ($null -ne $nr5ManagedApplyDelta) { [int][Math]::Round([double]$nr5ManagedApplyDelta) } else { $null }
-                        managedNr5PositionApplyDelta = if ($null -ne $nr5ManagedPositionApplyDelta) { [int][Math]::Round([double]$nr5ManagedPositionApplyDelta) } else { $null }
-                        managedNr5PolicyApplyDelta = if ($null -ne $nr5ManagedPolicyApplyDelta) { [int][Math]::Round([double]$nr5ManagedPolicyApplyDelta) } else { $null }
-                        managedNr5ApplyCount = if ($null -ne $nr5ManagedApplyCountNumber) { [int][Math]::Round([double]$nr5ManagedApplyCountNumber) } else { $null }
-                        managedNr5PositionApplyCount = if ($null -ne $nr5ManagedPositionApplyCountNumber) { [int][Math]::Round([double]$nr5ManagedPositionApplyCountNumber) } else { $null }
-                        managedNr5PolicyApplyCount = if ($null -ne $nr5ManagedPolicyApplyCountNumber) { [int][Math]::Round([double]$nr5ManagedPolicyApplyCountNumber) } else { $null }
-                        lastApplyReason = $nr5ManagedLastApplyReason
+                        channelGeneration = if ($null -ne $candidateManagedChannelGenerationNumber) { [int][Math]::Round([double]$candidateManagedChannelGenerationNumber) } else { $null }
+                        learnedFrames = if ($null -ne $candidateLearnedFramesNumber) { [int][Math]::Round([double]$candidateLearnedFramesNumber) } else { $null }
+                        managedCandidateApplyDelta = if ($null -ne $candidateManagedApplyDelta) { [int][Math]::Round([double]$candidateManagedApplyDelta) } else { $null }
+                        managedCandidatePositionApplyDelta = if ($null -ne $candidateManagedPositionApplyDelta) { [int][Math]::Round([double]$candidateManagedPositionApplyDelta) } else { $null }
+                        managedCandidatePolicyApplyDelta = if ($null -ne $candidateManagedPolicyApplyDelta) { [int][Math]::Round([double]$candidateManagedPolicyApplyDelta) } else { $null }
+                        managedCandidateApplyCount = if ($null -ne $candidateManagedApplyCountNumber) { [int][Math]::Round([double]$candidateManagedApplyCountNumber) } else { $null }
+                        managedCandidatePositionApplyCount = if ($null -ne $candidateManagedPositionApplyCountNumber) { [int][Math]::Round([double]$candidateManagedPositionApplyCountNumber) } else { $null }
+                        managedCandidatePolicyApplyCount = if ($null -ne $candidateManagedPolicyApplyCountNumber) { [int][Math]::Round([double]$candidateManagedPolicyApplyCountNumber) } else { $null }
+                        lastApplyReason = $candidateManagedLastApplyReason
                     }) | Out-Null
                 }
             }
-            if ($null -ne $nr5LearnedFramesNumber) {
-                $nr5PreviousLearnedFrames = $nr5LearnedFramesNumber
+            if ($null -ne $candidateLearnedFramesNumber) {
+                $candidatePreviousLearnedFrames = $candidateLearnedFramesNumber
             }
-            if ($null -ne $nr5ManagedChannelGenerationNumber) {
-                $nr5PreviousManagedChannelGeneration = $nr5ManagedChannelGenerationNumber
+            if ($null -ne $candidateManagedChannelGenerationNumber) {
+                $candidatePreviousManagedChannelGeneration = $candidateManagedChannelGenerationNumber
             }
-            if ($null -ne $nr5ManagedApplyCountNumber) {
-                $nr5PreviousManagedApplyCount = $nr5ManagedApplyCountNumber
+            if ($null -ne $candidateManagedApplyCountNumber) {
+                $candidatePreviousManagedApplyCount = $candidateManagedApplyCountNumber
             }
-            if ($null -ne $nr5ManagedPositionApplyCountNumber) {
-                $nr5PreviousManagedPositionApplyCount = $nr5ManagedPositionApplyCountNumber
+            if ($null -ne $candidateManagedPositionApplyCountNumber) {
+                $candidatePreviousManagedPositionApplyCount = $candidateManagedPositionApplyCountNumber
             }
-            if ($null -ne $nr5ManagedPolicyApplyCountNumber) {
-                $nr5PreviousManagedPolicyApplyCount = $nr5ManagedPolicyApplyCountNumber
+            if ($null -ne $candidateManagedPolicyApplyCountNumber) {
+                $candidatePreviousManagedPolicyApplyCount = $candidateManagedPolicyApplyCountNumber
             }
-            Add-Number $nr5InputValues (Get-JsonValue $nr5 "inputDbfs")
-            Add-Number $nr5OutputValues (Get-JsonValue $nr5 "outputDbfs")
-            Add-Number $nr5MeanGainValues (Get-JsonValue $nr5 "meanGain")
-            Add-Number $nr5FloorReductionValues (Get-JsonValue $nr5 "floorReductionDb")
-            Add-Number $nr5DynamicRangeValues (Get-JsonValue $nr5 "dynamicRangeDb")
-            $nr5SignalConfidence = Get-JsonValue $nr5 "signalConfidence"
-            $nr5AgcGate = Get-JsonValue $nr5 "agcGate"
-            Add-Number $nr5SignalConfidenceValues $nr5SignalConfidence
-            Add-Number $nr5AgcGateValues $nr5AgcGate
-            $nr5SignalProbability = Get-JsonValue $nr5 "signalProbability"
-            $nr5TextureFill = Get-JsonValue $nr5 "textureFill"
-            $nr5MaskSmoothing = Get-JsonValue $nr5 "maskSmoothing"
-            Add-Number $nr5SignalProbabilityValues $nr5SignalProbability
-            Add-Number $nr5TextureFillValues $nr5TextureFill
-            Add-Number $nr5MaskSmoothingValues $nr5MaskSmoothing
-            if ($null -ne $nr5SignalProbability -and $null -ne $nr5TextureFill -and $null -ne $nr5MaskSmoothing) {
-                $nr5ProbabilityDiagnosticCount++
+            Add-Number $candidateInputValues (Get-JsonValue $candidate "inputDbfs")
+            Add-Number $candidateOutputValues (Get-JsonValue $candidate "outputDbfs")
+            Add-Number $candidateMeanGainValues (Get-JsonValue $candidate "meanGain")
+            Add-Number $candidateFloorReductionValues (Get-JsonValue $candidate "floorReductionDb")
+            Add-Number $candidateDynamicRangeValues (Get-JsonValue $candidate "dynamicRangeDb")
+            $candidateSignalConfidence = Get-JsonValue $candidate "signalConfidence"
+            $candidateAgcGate = Get-JsonValue $candidate "agcGate"
+            Add-Number $candidateSignalConfidenceValues $candidateSignalConfidence
+            Add-Number $candidateAgcGateValues $candidateAgcGate
+            $candidateSignalProbability = Get-JsonValue $candidate "signalProbability"
+            $candidateTextureFill = Get-JsonValue $candidate "textureFill"
+            $candidateMaskSmoothing = Get-JsonValue $candidate "maskSmoothing"
+            Add-Number $candidateSignalProbabilityValues $candidateSignalProbability
+            Add-Number $candidateTextureFillValues $candidateTextureFill
+            Add-Number $candidateMaskSmoothingValues $candidateMaskSmoothing
+            if ($null -ne $candidateSignalProbability -and $null -ne $candidateTextureFill -and $null -ne $candidateMaskSmoothing) {
+                $candidateProbabilityDiagnosticCount++
             }
-            $nr5LevelDrive = Get-JsonValue $nr5 "levelDrive"
-            $nr5RecoveryDrive = Get-JsonValue $nr5 "recoveryDrive"
-            $nr5WeakSignalMemory = Get-JsonValue $nr5 "weakSignalMemory"
-            $nr5MakeupGainDb = Get-JsonValue $nr5 "makeupGainDb"
-            Add-Number $nr5LevelDriveValues $nr5LevelDrive
-            Add-Number $nr5RecoveryDriveValues $nr5RecoveryDrive
-            Add-Number $nr5WeakSignalMemoryValues $nr5WeakSignalMemory
-            Add-Number $nr5MakeupGainDbValues $nr5MakeupGainDb
-            if ($null -ne $nr5LevelDrive -and $null -ne $nr5RecoveryDrive -and $null -ne $nr5MakeupGainDb) {
-                $nr5AgcDiagnosticCount++
+            $candidateLevelDrive = Get-JsonValue $candidate "levelDrive"
+            $candidateRecoveryDrive = Get-JsonValue $candidate "recoveryDrive"
+            $candidateWeakSignalMemory = Get-JsonValue $candidate "weakSignalMemory"
+            $candidateMakeupGainDb = Get-JsonValue $candidate "makeupGainDb"
+            Add-Number $candidateLevelDriveValues $candidateLevelDrive
+            Add-Number $candidateRecoveryDriveValues $candidateRecoveryDrive
+            Add-Number $candidateWeakSignalMemoryValues $candidateWeakSignalMemory
+            Add-Number $candidateMakeupGainDbValues $candidateMakeupGainDb
+            if ($null -ne $candidateLevelDrive -and $null -ne $candidateRecoveryDrive -and $null -ne $candidateMakeupGainDb) {
+                $candidateAgcDiagnosticCount++
             }
-            $nr5OutputPeakDbfs = Get-JsonValue $nr5 "outputPeakDbfs"
-            $nr5PeakEvidence = Get-JsonValue $nr5 "peakEvidence"
-            $nr5PeakLimitDbfs = Get-JsonValue $nr5 "peakLimitDbfs"
-            $nr5PeakReductionDb = Get-JsonValue $nr5 "peakReductionDb"
-            Add-Number $nr5OutputPeakDbfsValues $nr5OutputPeakDbfs
-            Add-Number $nr5PeakEvidenceValues $nr5PeakEvidence
-            Add-Number $nr5PeakLimitDbfsValues $nr5PeakLimitDbfs
-            Add-Number $nr5PeakReductionDbValues $nr5PeakReductionDb
-            if ($null -ne $nr5OutputPeakDbfs -and $null -ne $nr5PeakEvidence -and
-                $null -ne $nr5PeakLimitDbfs -and $null -ne $nr5PeakReductionDb) {
-                $nr5PeakDiagnosticCount++
+            $candidateOutputPeakDbfs = Get-JsonValue $candidate "outputPeakDbfs"
+            $candidatePeakEvidence = Get-JsonValue $candidate "peakEvidence"
+            $candidatePeakLimitDbfs = Get-JsonValue $candidate "peakLimitDbfs"
+            $candidatePeakReductionDb = Get-JsonValue $candidate "peakReductionDb"
+            Add-Number $candidateOutputPeakDbfsValues $candidateOutputPeakDbfs
+            Add-Number $candidatePeakEvidenceValues $candidatePeakEvidence
+            Add-Number $candidatePeakLimitDbfsValues $candidatePeakLimitDbfs
+            Add-Number $candidatePeakReductionDbValues $candidatePeakReductionDb
+            if ($null -ne $candidateOutputPeakDbfs -and $null -ne $candidatePeakEvidence -and
+                $null -ne $candidatePeakLimitDbfs -and $null -ne $candidatePeakReductionDb) {
+                $candidatePeakDiagnosticCount++
             }
-            $nr5AdjacentNoiseUsable = Get-JsonValue $nr5 "adjacentNoiseUsable"
-            $nr5AdjacentNoiseTrust = Get-JsonValue $nr5 "adjacentNoiseTrust"
-            $nr5AdjacentNoiseDrive = Get-JsonValue $nr5 "adjacentNoiseDrive"
-            $nr5AdjacentNoiseFloor = Get-JsonValue $nr5 "adjacentNoiseFloorDb"
-            $nr5AdjacentNoiseRejected = Get-JsonValue $nr5 "adjacentNoiseRejectedPct"
-            $nr5AdjacentNoiseSideBalance = Get-JsonValue $nr5 "adjacentNoiseSideBalance"
-            $nr5AdjacentNoiseAsymmetry = Get-JsonValue $nr5 "adjacentNoiseAsymmetryDb"
-            Add-Number $nr5AdjacentNoiseTrustValues $nr5AdjacentNoiseTrust
-            Add-Number $nr5AdjacentNoiseDriveValues $nr5AdjacentNoiseDrive
-            Add-Number $nr5AdjacentNoiseFloorValues $nr5AdjacentNoiseFloor
-            Add-Number $nr5AdjacentNoiseRejectedValues $nr5AdjacentNoiseRejected
-            Add-Number $nr5AdjacentNoiseSideBalanceValues $nr5AdjacentNoiseSideBalance
-            Add-Number $nr5AdjacentNoiseAsymmetryValues $nr5AdjacentNoiseAsymmetry
-            if (Test-Truthy $nr5AdjacentNoiseUsable) {
-                $nr5AdjacentNoiseUsableCount++
+            $candidateAdjacentNoiseUsable = Get-JsonValue $candidate "adjacentNoiseUsable"
+            $candidateAdjacentNoiseTrust = Get-JsonValue $candidate "adjacentNoiseTrust"
+            $candidateAdjacentNoiseDrive = Get-JsonValue $candidate "adjacentNoiseDrive"
+            $candidateAdjacentNoiseFloor = Get-JsonValue $candidate "adjacentNoiseFloorDb"
+            $candidateAdjacentNoiseRejected = Get-JsonValue $candidate "adjacentNoiseRejectedPct"
+            $candidateAdjacentNoiseSideBalance = Get-JsonValue $candidate "adjacentNoiseSideBalance"
+            $candidateAdjacentNoiseAsymmetry = Get-JsonValue $candidate "adjacentNoiseAsymmetryDb"
+            Add-Number $candidateAdjacentNoiseTrustValues $candidateAdjacentNoiseTrust
+            Add-Number $candidateAdjacentNoiseDriveValues $candidateAdjacentNoiseDrive
+            Add-Number $candidateAdjacentNoiseFloorValues $candidateAdjacentNoiseFloor
+            Add-Number $candidateAdjacentNoiseRejectedValues $candidateAdjacentNoiseRejected
+            Add-Number $candidateAdjacentNoiseSideBalanceValues $candidateAdjacentNoiseSideBalance
+            Add-Number $candidateAdjacentNoiseAsymmetryValues $candidateAdjacentNoiseAsymmetry
+            if (Test-Truthy $candidateAdjacentNoiseUsable) {
+                $candidateAdjacentNoiseUsableCount++
             }
-            $nr5AdjacentNoiseDriveNumber = Get-NumericValue $nr5AdjacentNoiseDrive
-            if ($null -ne $nr5AdjacentNoiseDriveNumber -and $nr5AdjacentNoiseDriveNumber -gt 0.001) {
-                $nr5AdjacentNoiseDriveCount++
-            }
-
-            if ((Test-NrModeName $requestedNrMode "Nr5") -and (Test-NrModeName $effectiveNrMode "Nr5") -and
-                (Test-Truthy (Get-JsonValue $nr5 "run"))) {
-                $nr5AlignedCount++
+            $candidateAdjacentNoiseDriveNumber = Get-NumericValue $candidateAdjacentNoiseDrive
+            if ($null -ne $candidateAdjacentNoiseDriveNumber -and $candidateAdjacentNoiseDriveNumber -gt 0.001) {
+                $candidateAdjacentNoiseDriveCount++
             }
 
-            $nr5InputDbfs = Get-NumericValue (Get-JsonValue $nr5 "inputDbfs")
-            $nr5OutputDbfs = Get-NumericValue (Get-JsonValue $nr5 "outputDbfs")
-            $nr5ConfidenceNumber = Get-NumericValue $nr5SignalConfidence
-            $nr5AgcGateNumber = Get-NumericValue $nr5AgcGate
-            $nr5SignalProbabilityNumber = Get-NumericValue $nr5SignalProbability
-            $nr5TextureFillNumber = Get-NumericValue $nr5TextureFill
-            $nr5MaskSmoothingNumber = Get-NumericValue $nr5MaskSmoothing
-            $nr5RecoveryDriveNumber = Get-NumericValue $nr5RecoveryDrive
-            $nr5WeakSignalMemoryNumber = Get-NumericValue $nr5WeakSignalMemory
-            $nr5MakeupGainDbNumber = Get-NumericValue $nr5MakeupGainDb
-            $nr5PeakEvidenceNumber = Get-NumericValue $nr5PeakEvidence
+            if ((Test-NrModeName $requestedNrMode "Off") -and (Test-NrModeName $effectiveNrMode "Off") -and
+                (Test-Truthy (Get-JsonValue $candidate "run"))) {
+                $candidateAlignedCount++
+            }
+
+            $candidateInputDbfs = Get-NumericValue (Get-JsonValue $candidate "inputDbfs")
+            $candidateOutputDbfs = Get-NumericValue (Get-JsonValue $candidate "outputDbfs")
+            $candidateConfidenceNumber = Get-NumericValue $candidateSignalConfidence
+            $candidateAgcGateNumber = Get-NumericValue $candidateAgcGate
+            $candidateSignalProbabilityNumber = Get-NumericValue $candidateSignalProbability
+            $candidateTextureFillNumber = Get-NumericValue $candidateTextureFill
+            $candidateMaskSmoothingNumber = Get-NumericValue $candidateMaskSmoothing
+            $candidateRecoveryDriveNumber = Get-NumericValue $candidateRecoveryDrive
+            $candidateWeakSignalMemoryNumber = Get-NumericValue $candidateWeakSignalMemory
+            $candidateMakeupGainDbNumber = Get-NumericValue $candidateMakeupGainDb
+            $candidatePeakEvidenceNumber = Get-NumericValue $candidatePeakEvidence
             $runtimeAudioRmsDbfsNumber = Get-NumericValue (Get-JsonValue $runtime "audioRmsDbfs")
             $runtimeIsRxAudio = Test-RuntimeRxAudio $runtime
             $runtimeLevelerInputRmsDbfsNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerInputRmsDbfs")
             $runtimeLevelerOutputRmsDbfsNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerOutputRmsDbfs")
             $runtimeLevelerAppliedGainDbNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerAppliedGainDb")
             $runtimeLevelerPauseHoldBlocksNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerPauseHoldBlocks")
-            $runtimeLevelerNr5SpeechHoldBlocksNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHoldBlocks")
-            $runtimeLevelerNr5SpeechHangoverBlocksNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHangoverBlocks")
+            $runtimeLevelerCandidateSpeechHoldBlocksNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerCandidateSpeechHoldBlocks")
+            $runtimeLevelerCandidateSpeechHangoverBlocksNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerCandidateSpeechHangoverBlocks")
             $runtimeFinalAudioRmsDbfsNumber = if (-not $runtimeIsRxAudio) {
                 $null
             }
@@ -2223,62 +2221,62 @@ function Build-Report {
             $rxAudioLevelerBoostSlewLimited = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerBoostSlewLimited")
             $rxAudioLevelerPeakLimited = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerPeakLimited")
             $rxAudioLevelerOutputLimited = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerOutputLimited")
-            $nr5AudioInputDeltaDb = $null
-            $nr5AudioOutputDeltaDb = $null
-            $nr5AudioAlignedAfterLeveler = $false
-            $nr5AudioLevelerNormalized = $false
-            $nr5AudioAlignmentMismatch = $false
-            if ($null -ne $nr5OutputDbfs -and $null -ne $runtimeLevelerInputRmsDbfsNumber) {
-                $nr5AudioInputDeltaDb = [Math]::Round($runtimeLevelerInputRmsDbfsNumber - $nr5OutputDbfs, 1)
-                Add-Number $nr5AudioInputDeltaValues $nr5AudioInputDeltaDb
-                $nr5AudioAlignmentSampleCount++
+            $candidateAudioInputDeltaDb = $null
+            $candidateAudioOutputDeltaDb = $null
+            $candidateAudioAlignedAfterLeveler = $false
+            $candidateAudioLevelerNormalized = $false
+            $candidateAudioAlignmentMismatch = $false
+            if ($null -ne $candidateOutputDbfs -and $null -ne $runtimeLevelerInputRmsDbfsNumber) {
+                $candidateAudioInputDeltaDb = [Math]::Round($runtimeLevelerInputRmsDbfsNumber - $candidateOutputDbfs, 1)
+                Add-Number $candidateAudioInputDeltaValues $candidateAudioInputDeltaDb
+                $candidateAudioAlignmentSampleCount++
             }
-            if ($null -ne $nr5OutputDbfs -and $null -ne $runtimeLevelerOutputRmsDbfsNumber) {
-                $nr5AudioOutputDeltaDb = [Math]::Round($runtimeLevelerOutputRmsDbfsNumber - $nr5OutputDbfs, 1)
-                Add-Number $nr5AudioOutputDeltaValues $nr5AudioOutputDeltaDb
-                if ([Math]::Abs($nr5AudioOutputDeltaDb) -le 12.0) {
-                    $nr5AudioAlignedAfterLeveler = $true
-                    $nr5AudioAlignedAfterLevelerCount++
+            if ($null -ne $candidateOutputDbfs -and $null -ne $runtimeLevelerOutputRmsDbfsNumber) {
+                $candidateAudioOutputDeltaDb = [Math]::Round($runtimeLevelerOutputRmsDbfsNumber - $candidateOutputDbfs, 1)
+                Add-Number $candidateAudioOutputDeltaValues $candidateAudioOutputDeltaDb
+                if ([Math]::Abs($candidateAudioOutputDeltaDb) -le 12.0) {
+                    $candidateAudioAlignedAfterLeveler = $true
+                    $candidateAudioAlignedAfterLevelerCount++
                 }
             }
-            $nr5AudioLevelerNormalized = Test-Nr5LevelerNormalizedSpeechAlignment `
-                -Nr5OutputDbfs $nr5OutputDbfs `
+            $candidateAudioLevelerNormalized = Test-CandidateLevelerNormalizedSpeechAlignment `
+                -CandidateOutputDbfs $candidateOutputDbfs `
                 -LevelerInputRmsDbfs $runtimeLevelerInputRmsDbfsNumber `
                 -LevelerOutputRmsDbfs $runtimeLevelerOutputRmsDbfsNumber `
                 -LevelerAppliedGainDb $runtimeLevelerAppliedGainDbNumber `
                 -LevelerBoostSlewLimited $rxAudioLevelerBoostSlewLimited `
                 -LevelerPeakLimited $rxAudioLevelerPeakLimited `
                 -LevelerOutputLimited $rxAudioLevelerOutputLimited
-            if ($nr5AudioLevelerNormalized) {
-                $nr5AudioLevelerNormalizedCount++
-                $nr5AudioLevelerNormalizedSamples.Add([ordered]@{
+            if ($candidateAudioLevelerNormalized) {
+                $candidateAudioLevelerNormalizedCount++
+                $candidateAudioLevelerNormalizedSamples.Add([ordered]@{
                     sampleIndex = [int](Get-JsonValue $sample "sampleIndex")
-                    nr5OutputDbfs = $nr5OutputDbfs
+                    candidateOutputDbfs = $candidateOutputDbfs
                     rxAudioLevelerInputRmsDbfs = $runtimeLevelerInputRmsDbfsNumber
                     rxAudioLevelerOutputRmsDbfs = $runtimeLevelerOutputRmsDbfsNumber
                     rxAudioLevelerAppliedGainDb = $runtimeLevelerAppliedGainDbNumber
-                    inputDeltaDb = $nr5AudioInputDeltaDb
-                    outputDeltaDb = $nr5AudioOutputDeltaDb
+                    inputDeltaDb = $candidateAudioInputDeltaDb
+                    outputDeltaDb = $candidateAudioOutputDeltaDb
                     audioRmsDbfs = $runtimeAudioRmsDbfsNumber
                     audioLastSeq = Get-JsonValue $runtime "audioLastSeq"
                     audioFramesBroadcast = Get-JsonValue $runtime "audioFramesBroadcast"
                     audioAgeMs = Get-JsonValue $runtime "audioAgeMs"
                 }) | Out-Null
             }
-            if ($null -ne $nr5AudioInputDeltaDb) {
-                if ([Math]::Abs($nr5AudioInputDeltaDb) -gt 12.0 -and
-                    -not $nr5AudioAlignedAfterLeveler -and
-                    -not $nr5AudioLevelerNormalized) {
-                    $nr5AudioAlignmentMismatch = $true
-                    $nr5AudioAlignmentMismatchCount++
-                    $nr5AudioAlignmentMismatchSamples.Add([ordered]@{
+            if ($null -ne $candidateAudioInputDeltaDb) {
+                if ([Math]::Abs($candidateAudioInputDeltaDb) -gt 12.0 -and
+                    -not $candidateAudioAlignedAfterLeveler -and
+                    -not $candidateAudioLevelerNormalized) {
+                    $candidateAudioAlignmentMismatch = $true
+                    $candidateAudioAlignmentMismatchCount++
+                    $candidateAudioAlignmentMismatchSamples.Add([ordered]@{
                         sampleIndex = [int](Get-JsonValue $sample "sampleIndex")
-                        nr5OutputDbfs = $nr5OutputDbfs
+                        candidateOutputDbfs = $candidateOutputDbfs
                         rxAudioLevelerInputRmsDbfs = $runtimeLevelerInputRmsDbfsNumber
                         rxAudioLevelerOutputRmsDbfs = $runtimeLevelerOutputRmsDbfsNumber
-                        inputDeltaDb = $nr5AudioInputDeltaDb
-                        outputDeltaDb = $nr5AudioOutputDeltaDb
-                        deltaDb = if ($null -ne $nr5AudioOutputDeltaDb) { $nr5AudioOutputDeltaDb } else { $nr5AudioInputDeltaDb }
+                        inputDeltaDb = $candidateAudioInputDeltaDb
+                        outputDeltaDb = $candidateAudioOutputDeltaDb
+                        deltaDb = if ($null -ne $candidateAudioOutputDeltaDb) { $candidateAudioOutputDeltaDb } else { $candidateAudioInputDeltaDb }
                         audioRmsDbfs = $runtimeAudioRmsDbfsNumber
                         audioLastSeq = Get-JsonValue $runtime "audioLastSeq"
                         audioFramesBroadcast = Get-JsonValue $runtime "audioFramesBroadcast"
@@ -2286,10 +2284,10 @@ function Build-Report {
                     }) | Out-Null
                 }
             }
-            if ($null -ne $nr5InputDbfs -and $null -ne $nr5OutputDbfs) {
-                $nr5InputOutputXValues.Add([double]$nr5InputDbfs) | Out-Null
-                $nr5InputOutputYValues.Add([double]$nr5OutputDbfs) | Out-Null
-                $nr5OutputMinusInputValues.Add([double]($nr5OutputDbfs - $nr5InputDbfs)) | Out-Null
+            if ($null -ne $candidateInputDbfs -and $null -ne $candidateOutputDbfs) {
+                $candidateInputOutputXValues.Add([double]$candidateInputDbfs) | Out-Null
+                $candidateInputOutputYValues.Add([double]$candidateOutputDbfs) | Out-Null
+                $candidateOutputMinusInputValues.Add([double]($candidateOutputDbfs - $candidateInputDbfs)) | Out-Null
             }
             $frontendPassbandEvidencePeak = $null
             if ($sampleHasFilterPassbandPeak) {
@@ -2304,20 +2302,20 @@ function Build-Report {
                 (($null -ne $frontendPassbandPeakSnrDb -and [double]$frontendPassbandPeakSnrDb -ge $frontendStrongPassbandSnrThresholdDb) -or
                     ($null -ne $frontendPassbandPeakDbfs -and [double]$frontendPassbandPeakDbfs -ge $frontendStrongPassbandDbfsThreshold)))
             if ($frontendPassbandPeakLooksStrong -and
-                $null -ne $nr5InputDbfs -and
-                [double]$nr5InputDbfs -lt $nr5StrongInputThresholdDbfs) {
-                $distanceToStrongThresholdDb = [Math]::Round([Math]::Max(0.0, [double]$nr5StrongInputThresholdDbfs - [double]$nr5InputDbfs), 3)
-                $distanceToNearStrongThresholdDb = [Math]::Round([Math]::Max(0.0, [double]$nr5NearStrongInputThresholdDbfs - [double]$nr5InputDbfs), 3)
-                $nr5FrontendStrongPassbandSubthresholdDistanceValues.Add([double]$distanceToStrongThresholdDb) | Out-Null
-                $nr5FrontendStrongPassbandSubthresholdSamples.Add([ordered]@{
+                $null -ne $candidateInputDbfs -and
+                [double]$candidateInputDbfs -lt $candidateStrongInputThresholdDbfs) {
+                $distanceToStrongThresholdDb = [Math]::Round([Math]::Max(0.0, [double]$candidateStrongInputThresholdDbfs - [double]$candidateInputDbfs), 3)
+                $distanceToNearStrongThresholdDb = [Math]::Round([Math]::Max(0.0, [double]$candidateNearStrongInputThresholdDbfs - [double]$candidateInputDbfs), 3)
+                $candidateFrontendStrongPassbandSubthresholdDistanceValues.Add([double]$distanceToStrongThresholdDb) | Out-Null
+                $candidateFrontendStrongPassbandSubthresholdSamples.Add([ordered]@{
                     sampleIndex = [int](Get-JsonValue $sample "sampleIndex")
-                    inputDbfs = $nr5InputDbfs
-                    outputDbfs = $nr5OutputDbfs
+                    inputDbfs = $candidateInputDbfs
+                    outputDbfs = $candidateOutputDbfs
                     finalAudioRmsDbfs = $runtimeFinalAudioRmsDbfsNumber
-                    inputClass = if ([double]$nr5InputDbfs -ge $nr5NearStrongInputThresholdDbfs) {
+                    inputClass = if ([double]$candidateInputDbfs -ge $candidateNearStrongInputThresholdDbfs) {
                         "near-strong"
                     }
-                    elseif ([double]$nr5InputDbfs -le $nr5LowEvidenceInputThresholdDbfs) {
+                    elseif ([double]$candidateInputDbfs -le $candidateLowEvidenceInputThresholdDbfs) {
                         "weak"
                     }
                     else {
@@ -2333,344 +2331,344 @@ function Build-Report {
                     filterPassbandPeak = $sampleHasFilterPassbandPeak
                     passbandEvidencePeak = $sampleHasPassbandEvidencePeak
                     nearestFilterPassbandDistanceHz = $frontendNearestFilterPassbandDistanceHz
-                    signalConfidence = $nr5ConfidenceNumber
-                    agcGate = $nr5AgcGateNumber
-                    signalProbability = $nr5SignalProbabilityNumber
-                    peakEvidence = $nr5PeakEvidenceNumber
-                    audioAlignmentMismatch = $nr5AudioAlignmentMismatch
+                    signalConfidence = $candidateConfidenceNumber
+                    agcGate = $candidateAgcGateNumber
+                    signalProbability = $candidateSignalProbabilityNumber
+                    peakEvidence = $candidatePeakEvidenceNumber
+                    audioAlignmentMismatch = $candidateAudioAlignmentMismatch
                 }) | Out-Null
             }
-            $isLowEvidenceWeakInput = ($null -ne $nr5InputDbfs -and
-                $nr5InputDbfs -le $nr5LowEvidenceInputThresholdDbfs -and
-                $null -ne $nr5ConfidenceNumber -and
-                $nr5ConfidenceNumber -le $nr5LowEvidenceConfidenceThreshold -and
-                $null -ne $nr5SignalProbabilityNumber -and
-                $nr5SignalProbabilityNumber -le $nr5LowEvidenceProbabilityThreshold -and
-                $null -ne $nr5AgcGateNumber -and
-                $nr5AgcGateNumber -le $nr5LowEvidenceAgcGateThreshold)
+            $isLowEvidenceWeakInput = ($null -ne $candidateInputDbfs -and
+                $candidateInputDbfs -le $candidateLowEvidenceInputThresholdDbfs -and
+                $null -ne $candidateConfidenceNumber -and
+                $candidateConfidenceNumber -le $candidateLowEvidenceConfidenceThreshold -and
+                $null -ne $candidateSignalProbabilityNumber -and
+                $candidateSignalProbabilityNumber -le $candidateLowEvidenceProbabilityThreshold -and
+                $null -ne $candidateAgcGateNumber -and
+                $candidateAgcGateNumber -le $candidateLowEvidenceAgcGateThreshold)
             if ($isLowEvidenceWeakInput) {
-                $nr5LowEvidenceSampleCount++
-                $nr5OutputLiftedLowEvidence = ($null -ne $nr5OutputDbfs -and
-                    $nr5OutputDbfs -ge $nr5LowEvidenceOutputThresholdDbfs)
-                $runtimeLiftedLowEvidence = (-not $nr5AudioAlignmentMismatch -and
+                $candidateLowEvidenceSampleCount++
+                $candidateOutputLiftedLowEvidence = ($null -ne $candidateOutputDbfs -and
+                    $candidateOutputDbfs -ge $candidateLowEvidenceOutputThresholdDbfs)
+                $runtimeLiftedLowEvidence = (-not $candidateAudioAlignmentMismatch -and
                     $null -ne $runtimeFinalAudioRmsDbfsNumber -and
-                    $runtimeFinalAudioRmsDbfsNumber -ge $nr5LowEvidenceAudioThresholdDbfs)
-                $nr5LiftedLowEvidence = $nr5OutputLiftedLowEvidence -or $runtimeLiftedLowEvidence
-                if ($nr5AudioAlignmentMismatch) {
-                    $nr5LowEvidenceAlignmentMismatchCount++
+                    $runtimeFinalAudioRmsDbfsNumber -ge $candidateLowEvidenceAudioThresholdDbfs)
+                $candidateLiftedLowEvidence = $candidateOutputLiftedLowEvidence -or $runtimeLiftedLowEvidence
+                if ($candidateAudioAlignmentMismatch) {
+                    $candidateLowEvidenceAlignmentMismatchCount++
                 }
-                if ($nr5LiftedLowEvidence) {
-                    $nr5LowEvidenceLiftCount++
-                    $nr5LowEvidenceLiftSamples.Add([ordered]@{
+                if ($candidateLiftedLowEvidence) {
+                    $candidateLowEvidenceLiftCount++
+                    $candidateLowEvidenceLiftSamples.Add([ordered]@{
                         sampleIndex = [int](Get-JsonValue $sample "sampleIndex")
-                        inputDbfs = $nr5InputDbfs
-                        outputDbfs = $nr5OutputDbfs
-                        signalConfidence = $nr5ConfidenceNumber
-                        agcGate = $nr5AgcGateNumber
-                        signalProbability = $nr5SignalProbabilityNumber
-                        textureFill = $nr5TextureFillNumber
-                        maskSmoothing = $nr5MaskSmoothingNumber
-                        recoveryDrive = $nr5RecoveryDriveNumber
-                        weakSignalMemory = $nr5WeakSignalMemoryNumber
-                        makeupGainDb = $nr5MakeupGainDbNumber
+                        inputDbfs = $candidateInputDbfs
+                        outputDbfs = $candidateOutputDbfs
+                        signalConfidence = $candidateConfidenceNumber
+                        agcGate = $candidateAgcGateNumber
+                        signalProbability = $candidateSignalProbabilityNumber
+                        textureFill = $candidateTextureFillNumber
+                        maskSmoothing = $candidateMaskSmoothingNumber
+                        recoveryDrive = $candidateRecoveryDriveNumber
+                        weakSignalMemory = $candidateWeakSignalMemoryNumber
+                        makeupGainDb = $candidateMakeupGainDbNumber
                         audioRmsDbfs = $runtimeAudioRmsDbfsNumber
                         rxAudioLevelerInputRmsDbfs = $runtimeLevelerInputRmsDbfsNumber
                         rxAudioLevelerOutputRmsDbfs = $runtimeLevelerOutputRmsDbfsNumber
                         rxAudioLevelerAppliedGainDb = $runtimeLevelerAppliedGainDbNumber
                         rxAudioLevelerPauseHoldBlocks = $runtimeLevelerPauseHoldBlocksNumber
-                        rxAudioLevelerNr5SpeechHoldBlocks = $runtimeLevelerNr5SpeechHoldBlocksNumber
-                        rxAudioLevelerNr5SpeechHangoverBlocks = $runtimeLevelerNr5SpeechHangoverBlocksNumber
-                        nr5AudioInputDeltaDb = $nr5AudioInputDeltaDb
-                        nr5AudioAlignmentMismatch = $nr5AudioAlignmentMismatch
+                        rxAudioLevelerCandidateSpeechHoldBlocks = $runtimeLevelerCandidateSpeechHoldBlocksNumber
+                        rxAudioLevelerCandidateSpeechHangoverBlocks = $runtimeLevelerCandidateSpeechHangoverBlocksNumber
+                        candidateAudioInputDeltaDb = $candidateAudioInputDeltaDb
+                        candidateAudioAlignmentMismatch = $candidateAudioAlignmentMismatch
                     }) | Out-Null
                 }
-                elseif (-not $nr5AudioAlignmentMismatch -and $null -ne $nr5OutputDbfs -and $nr5OutputDbfs -le -35.0) {
-                    $nr5LowEvidenceSuppressedCount++
-                    $nr5LowEvidenceSuppressedSamples.Add([ordered]@{
+                elseif (-not $candidateAudioAlignmentMismatch -and $null -ne $candidateOutputDbfs -and $candidateOutputDbfs -le -35.0) {
+                    $candidateLowEvidenceSuppressedCount++
+                    $candidateLowEvidenceSuppressedSamples.Add([ordered]@{
                         sampleIndex = [int](Get-JsonValue $sample "sampleIndex")
-                        inputDbfs = $nr5InputDbfs
-                        outputDbfs = $nr5OutputDbfs
-                        signalConfidence = $nr5ConfidenceNumber
-                        agcGate = $nr5AgcGateNumber
-                        signalProbability = $nr5SignalProbabilityNumber
-                        textureFill = $nr5TextureFillNumber
-                        maskSmoothing = $nr5MaskSmoothingNumber
-                        recoveryDrive = $nr5RecoveryDriveNumber
-                        weakSignalMemory = $nr5WeakSignalMemoryNumber
-                        makeupGainDb = $nr5MakeupGainDbNumber
+                        inputDbfs = $candidateInputDbfs
+                        outputDbfs = $candidateOutputDbfs
+                        signalConfidence = $candidateConfidenceNumber
+                        agcGate = $candidateAgcGateNumber
+                        signalProbability = $candidateSignalProbabilityNumber
+                        textureFill = $candidateTextureFillNumber
+                        maskSmoothing = $candidateMaskSmoothingNumber
+                        recoveryDrive = $candidateRecoveryDriveNumber
+                        weakSignalMemory = $candidateWeakSignalMemoryNumber
+                        makeupGainDb = $candidateMakeupGainDbNumber
                         audioRmsDbfs = $runtimeAudioRmsDbfsNumber
                         rxAudioLevelerInputRmsDbfs = $runtimeLevelerInputRmsDbfsNumber
                         rxAudioLevelerOutputRmsDbfs = $runtimeLevelerOutputRmsDbfsNumber
                         rxAudioLevelerAppliedGainDb = $runtimeLevelerAppliedGainDbNumber
                         rxAudioLevelerPauseHoldBlocks = $runtimeLevelerPauseHoldBlocksNumber
-                        rxAudioLevelerNr5SpeechHoldBlocks = $runtimeLevelerNr5SpeechHoldBlocksNumber
-                        rxAudioLevelerNr5SpeechHangoverBlocks = $runtimeLevelerNr5SpeechHangoverBlocksNumber
-                        nr5AudioInputDeltaDb = $nr5AudioInputDeltaDb
-                        nr5AudioAlignmentMismatch = $nr5AudioAlignmentMismatch
+                        rxAudioLevelerCandidateSpeechHoldBlocks = $runtimeLevelerCandidateSpeechHoldBlocksNumber
+                        rxAudioLevelerCandidateSpeechHangoverBlocks = $runtimeLevelerCandidateSpeechHangoverBlocksNumber
+                        candidateAudioInputDeltaDb = $candidateAudioInputDeltaDb
+                        candidateAudioAlignmentMismatch = $candidateAudioAlignmentMismatch
                     }) | Out-Null
                 }
             }
-            if ($null -ne $nr5InputDbfs -and $nr5InputDbfs -le -30.0) {
-                $nr5WeakInputCount++
-                if ($null -ne $nr5OutputDbfs) {
-                    $nr5WeakOutputValues.Add([double]$nr5OutputDbfs) | Out-Null
+            if ($null -ne $candidateInputDbfs -and $candidateInputDbfs -le -30.0) {
+                $candidateWeakInputCount++
+                if ($null -ne $candidateOutputDbfs) {
+                    $candidateWeakOutputValues.Add([double]$candidateOutputDbfs) | Out-Null
                 }
-                Add-Number $nr5WeakFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
-                $nr5SpeechQualifiedWeakInput = (
+                Add-Number $candidateWeakFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
+                $candidateSpeechQualifiedWeakInput = (
                     $runtimeIsRxAudio -and
                     -not $isLowEvidenceWeakInput -and
-                    -not $nr5AudioAlignmentMismatch -and
-                    $null -ne $nr5OutputDbfs -and
-                    $nr5OutputDbfs -ge -40.0 -and
+                    -not $candidateAudioAlignmentMismatch -and
+                    $null -ne $candidateOutputDbfs -and
+                    $candidateOutputDbfs -ge -40.0 -and
                     ($sampleHasPassbandEvidencePeak -or
-                        ($null -ne $nr5PeakEvidenceNumber -and $nr5PeakEvidenceNumber -ge 0.08) -or
-                        ($null -ne $nr5ConfidenceNumber -and $nr5ConfidenceNumber -ge 0.30 -and
-                            $null -ne $nr5SignalProbabilityNumber -and $nr5SignalProbabilityNumber -ge 0.14)))
-                if ($nr5SpeechQualifiedWeakInput) {
-                    $nr5SpeechQualifiedWeakOutputValues.Add([double]$nr5OutputDbfs) | Out-Null
-                    Add-Number $nr5SpeechQualifiedWeakFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
+                        ($null -ne $candidatePeakEvidenceNumber -and $candidatePeakEvidenceNumber -ge 0.08) -or
+                        ($null -ne $candidateConfidenceNumber -and $candidateConfidenceNumber -ge 0.30 -and
+                            $null -ne $candidateSignalProbabilityNumber -and $candidateSignalProbabilityNumber -ge 0.14)))
+                if ($candidateSpeechQualifiedWeakInput) {
+                    $candidateSpeechQualifiedWeakOutputValues.Add([double]$candidateOutputDbfs) | Out-Null
+                    Add-Number $candidateSpeechQualifiedWeakFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
                 }
-                $nr5PassbandQualifiedWeakInput = (
-                    $nr5SpeechQualifiedWeakInput -and
+                $candidatePassbandQualifiedWeakInput = (
+                    $candidateSpeechQualifiedWeakInput -and
                     $sampleHasNearPassbandPeak -and
                     $null -ne $runtimeFinalAudioRmsDbfsNumber -and
-                    $runtimeFinalAudioRmsDbfsNumber -ge $nr5WeakDropoutFinalAudibleThresholdDbfs)
-                if ($nr5PassbandQualifiedWeakInput) {
-                    $nr5PassbandQualifiedWeakOutputValues.Add([double]$nr5OutputDbfs) | Out-Null
-                    Add-Number $nr5PassbandQualifiedWeakFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
+                    $runtimeFinalAudioRmsDbfsNumber -ge $candidateWeakDropoutFinalAudibleThresholdDbfs)
+                if ($candidatePassbandQualifiedWeakInput) {
+                    $candidatePassbandQualifiedWeakOutputValues.Add([double]$candidateOutputDbfs) | Out-Null
+                    Add-Number $candidatePassbandQualifiedWeakFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
                 }
-                $nr5WeakInputSample = New-Nr5ClassifiedInputSample `
+                $candidateWeakInputSample = New-CandidateClassifiedInputSample `
                     -Class "weak" `
                     -Sample $sample `
-                    -InputDbfs $nr5InputDbfs `
-                    -OutputDbfs $nr5OutputDbfs `
+                    -InputDbfs $candidateInputDbfs `
+                    -OutputDbfs $candidateOutputDbfs `
                     -FinalAudioRmsDbfs $runtimeFinalAudioRmsDbfsNumber `
                     -LevelerInputRmsDbfs $runtimeLevelerInputRmsDbfsNumber `
                     -LevelerOutputRmsDbfs $runtimeLevelerOutputRmsDbfsNumber `
                     -LevelerAppliedGainDb $runtimeLevelerAppliedGainDbNumber `
-                    -SignalConfidence $nr5ConfidenceNumber `
-                    -AgcGate $nr5AgcGateNumber `
-                    -SignalProbability $nr5SignalProbabilityNumber `
-                    -PeakEvidence $nr5PeakEvidenceNumber `
-                    -MakeupGainDb $nr5MakeupGainDbNumber `
-                    -RecoveryDrive $nr5RecoveryDriveNumber `
-                    -WeakSignalMemory $nr5WeakSignalMemoryNumber `
+                    -SignalConfidence $candidateConfidenceNumber `
+                    -AgcGate $candidateAgcGateNumber `
+                    -SignalProbability $candidateSignalProbabilityNumber `
+                    -PeakEvidence $candidatePeakEvidenceNumber `
+                    -MakeupGainDb $candidateMakeupGainDbNumber `
+                    -RecoveryDrive $candidateRecoveryDriveNumber `
+                    -WeakSignalMemory $candidateWeakSignalMemoryNumber `
                     -NearPassbandPeak $sampleHasNearPassbandPeak `
                     -FilterPassbandPeak $sampleHasFilterPassbandPeak `
                     -PassbandEvidencePeak $sampleHasPassbandEvidencePeak `
                     -NearestFilterPassbandDistanceHz $frontendNearestFilterPassbandDistanceHz `
                     -NearestPeak $nearestFrontendPeak `
                     -StrongestPeak $strongestFrontendPeak `
-                    -SpeechQualified $nr5SpeechQualifiedWeakInput `
-                    -PassbandQualified $nr5PassbandQualifiedWeakInput `
+                    -SpeechQualified $candidateSpeechQualifiedWeakInput `
+                    -PassbandQualified $candidatePassbandQualifiedWeakInput `
                     -LowEvidence $isLowEvidenceWeakInput `
-                    -AudioAlignmentMismatch $nr5AudioAlignmentMismatch `
-                    -AudioInputDeltaDb $nr5AudioInputDeltaDb
-                $nr5WeakInputSamples.Add($nr5WeakInputSample) | Out-Null
-                if ($nr5SpeechQualifiedWeakInput) {
-                    $nr5SpeechQualifiedWeakInputSamples.Add($nr5WeakInputSample) | Out-Null
+                    -AudioAlignmentMismatch $candidateAudioAlignmentMismatch `
+                    -AudioInputDeltaDb $candidateAudioInputDeltaDb
+                $candidateWeakInputSamples.Add($candidateWeakInputSample) | Out-Null
+                if ($candidateSpeechQualifiedWeakInput) {
+                    $candidateSpeechQualifiedWeakInputSamples.Add($candidateWeakInputSample) | Out-Null
                 }
-                if ($nr5PassbandQualifiedWeakInput) {
-                    $nr5PassbandQualifiedWeakInputSamples.Add($nr5WeakInputSample) | Out-Null
+                if ($candidatePassbandQualifiedWeakInput) {
+                    $candidatePassbandQualifiedWeakInputSamples.Add($candidateWeakInputSample) | Out-Null
                 }
-                if ($null -ne $nr5OutputDbfs -and $nr5OutputDbfs -ge -30.0) {
-                    $nr5WeakRecoveredCount++
+                if ($null -ne $candidateOutputDbfs -and $candidateOutputDbfs -ge -30.0) {
+                    $candidateWeakRecoveredCount++
                 }
-                if ($null -ne $nr5OutputDbfs -and $nr5OutputDbfs -lt ($nr5InputDbfs - 1.0)) {
-                    $nr5WeakBelowInputCount++
+                if ($null -ne $candidateOutputDbfs -and $candidateOutputDbfs -lt ($candidateInputDbfs - 1.0)) {
+                    $candidateWeakBelowInputCount++
                 }
-                if ($null -ne $nr5OutputDbfs -and $nr5OutputDbfs -ge -31.5 -and $nr5OutputDbfs -le -20.0) {
-                    $nr5WeakNearTargetCount++
+                if ($null -ne $candidateOutputDbfs -and $candidateOutputDbfs -ge -31.5 -and $candidateOutputDbfs -le -20.0) {
+                    $candidateWeakNearTargetCount++
                 }
-                if (-not $isLowEvidenceWeakInput -and -not $nr5AudioAlignmentMismatch -and
-                    $null -ne $nr5OutputDbfs -and $nr5OutputDbfs -le -35.0) {
-                    $nr5WeakDropoutCount++
-                    $nr5WeakDropoutFinalAudible = (
+                if (-not $isLowEvidenceWeakInput -and -not $candidateAudioAlignmentMismatch -and
+                    $null -ne $candidateOutputDbfs -and $candidateOutputDbfs -le -35.0) {
+                    $candidateWeakDropoutCount++
+                    $candidateWeakDropoutFinalAudible = (
                         $null -ne $runtimeFinalAudioRmsDbfsNumber -and
-                        $runtimeFinalAudioRmsDbfsNumber -ge $nr5WeakDropoutFinalAudibleThresholdDbfs)
-                    $nr5WeakDropoutNativeLifted = ($nr5OutputDbfs -ge ($nr5InputDbfs + $nr5WeakDropoutNativeLiftThresholdDb))
-                    $nr5WeakDropoutBelowInput = ($nr5OutputDbfs -lt ($nr5InputDbfs - $nr5WeakDropoutBelowInputThresholdDb))
-                    $nr5WeakDropoutCandidateLoss = (-not $nr5WeakDropoutFinalAudible -and
-                        -not $nr5WeakDropoutNativeLifted -and
-                        $nr5WeakDropoutBelowInput)
-                    $nr5WeakDropoutClass = if ($nr5WeakDropoutFinalAudible) {
+                        $runtimeFinalAudioRmsDbfsNumber -ge $candidateWeakDropoutFinalAudibleThresholdDbfs)
+                    $candidateWeakDropoutNativeLifted = ($candidateOutputDbfs -ge ($candidateInputDbfs + $candidateWeakDropoutNativeLiftThresholdDb))
+                    $candidateWeakDropoutBelowInput = ($candidateOutputDbfs -lt ($candidateInputDbfs - $candidateWeakDropoutBelowInputThresholdDb))
+                    $candidateWeakDropoutCandidateLoss = (-not $candidateWeakDropoutFinalAudible -and
+                        -not $candidateWeakDropoutNativeLifted -and
+                        $candidateWeakDropoutBelowInput)
+                    $candidateWeakDropoutClass = if ($candidateWeakDropoutFinalAudible) {
                         "final-audible"
                     }
-                    elseif ($nr5WeakDropoutNativeLifted) {
+                    elseif ($candidateWeakDropoutNativeLifted) {
                         "native-lifted-still-low"
                     }
-                    elseif ($nr5WeakDropoutCandidateLoss) {
+                    elseif ($candidateWeakDropoutCandidateLoss) {
                         "candidate-weak-loss"
                     }
                     else {
                         "strict-low-output"
                     }
-                    if ($nr5WeakDropoutFinalAudible) {
-                        $nr5WeakDropoutFinalAudibleCount++
+                    if ($candidateWeakDropoutFinalAudible) {
+                        $candidateWeakDropoutFinalAudibleCount++
                     }
-                    if ($nr5WeakDropoutNativeLifted) {
-                        $nr5WeakDropoutNativeLiftedCount++
+                    if ($candidateWeakDropoutNativeLifted) {
+                        $candidateWeakDropoutNativeLiftedCount++
                     }
-                    if ($nr5WeakDropoutCandidateLoss) {
-                        $nr5WeakDropoutCandidateLossCount++
+                    if ($candidateWeakDropoutCandidateLoss) {
+                        $candidateWeakDropoutCandidateLossCount++
                     }
-                    $nr5WeakDropoutSample = [ordered]@{
+                    $candidateWeakDropoutSample = [ordered]@{
                         sampleIndex = [int](Get-JsonValue $sample "sampleIndex")
-                        dropoutClass = $nr5WeakDropoutClass
-                        inputDbfs = $nr5InputDbfs
-                        outputDbfs = $nr5OutputDbfs
-                        signalConfidence = $nr5ConfidenceNumber
-                        agcGate = $nr5AgcGateNumber
-                        signalProbability = $nr5SignalProbabilityNumber
-                        textureFill = $nr5TextureFillNumber
-                        maskSmoothing = $nr5MaskSmoothingNumber
-                        recoveryDrive = $nr5RecoveryDriveNumber
-                        weakSignalMemory = $nr5WeakSignalMemoryNumber
-                        makeupGainDb = $nr5MakeupGainDbNumber
+                        dropoutClass = $candidateWeakDropoutClass
+                        inputDbfs = $candidateInputDbfs
+                        outputDbfs = $candidateOutputDbfs
+                        signalConfidence = $candidateConfidenceNumber
+                        agcGate = $candidateAgcGateNumber
+                        signalProbability = $candidateSignalProbabilityNumber
+                        textureFill = $candidateTextureFillNumber
+                        maskSmoothing = $candidateMaskSmoothingNumber
+                        recoveryDrive = $candidateRecoveryDriveNumber
+                        weakSignalMemory = $candidateWeakSignalMemoryNumber
+                        makeupGainDb = $candidateMakeupGainDbNumber
                         audioRmsDbfs = $runtimeAudioRmsDbfsNumber
                         rxAudioLevelerInputRmsDbfs = $runtimeLevelerInputRmsDbfsNumber
                         rxAudioLevelerOutputRmsDbfs = $runtimeLevelerOutputRmsDbfsNumber
-                        finalAudible = $nr5WeakDropoutFinalAudible
-                        nativeLifted = $nr5WeakDropoutNativeLifted
-                        candidateWeakLoss = $nr5WeakDropoutCandidateLoss
-                        nr5AudioInputDeltaDb = $nr5AudioInputDeltaDb
-                        nr5AudioAlignmentMismatch = $nr5AudioAlignmentMismatch
+                        finalAudible = $candidateWeakDropoutFinalAudible
+                        nativeLifted = $candidateWeakDropoutNativeLifted
+                        candidateWeakLoss = $candidateWeakDropoutCandidateLoss
+                        candidateAudioInputDeltaDb = $candidateAudioInputDeltaDb
+                        candidateAudioAlignmentMismatch = $candidateAudioAlignmentMismatch
                     }
-                    $nr5WeakDropoutSamples.Add($nr5WeakDropoutSample) | Out-Null
-                    if ($nr5WeakDropoutFinalAudible) {
-                        $nr5WeakDropoutFinalAudibleSamples.Add($nr5WeakDropoutSample) | Out-Null
+                    $candidateWeakDropoutSamples.Add($candidateWeakDropoutSample) | Out-Null
+                    if ($candidateWeakDropoutFinalAudible) {
+                        $candidateWeakDropoutFinalAudibleSamples.Add($candidateWeakDropoutSample) | Out-Null
                     }
-                    if ($nr5WeakDropoutCandidateLoss) {
-                        $nr5WeakDropoutCandidateLossSamples.Add($nr5WeakDropoutSample) | Out-Null
+                    if ($candidateWeakDropoutCandidateLoss) {
+                        $candidateWeakDropoutCandidateLossSamples.Add($candidateWeakDropoutSample) | Out-Null
                     }
                 }
             }
-            elseif ($null -ne $nr5InputDbfs -and $nr5InputDbfs -ge $nr5StrongInputThresholdDbfs) {
-                $nr5StrongInputCount++
-                if ($null -ne $nr5OutputDbfs) {
-                    $nr5StrongOutputValues.Add([double]$nr5OutputDbfs) | Out-Null
+            elseif ($null -ne $candidateInputDbfs -and $candidateInputDbfs -ge $candidateStrongInputThresholdDbfs) {
+                $candidateStrongInputCount++
+                if ($null -ne $candidateOutputDbfs) {
+                    $candidateStrongOutputValues.Add([double]$candidateOutputDbfs) | Out-Null
                 }
-                Add-Number $nr5StrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
-                $nr5SpeechQualifiedStrongInput = (
-                    -not $nr5AudioAlignmentMismatch -and
-                    $null -ne $nr5OutputDbfs -and
-                    $nr5OutputDbfs -ge -26.0 -and
+                Add-Number $candidateStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
+                $candidateSpeechQualifiedStrongInput = (
+                    -not $candidateAudioAlignmentMismatch -and
+                    $null -ne $candidateOutputDbfs -and
+                    $candidateOutputDbfs -ge -26.0 -and
                     $null -ne $runtimeFinalAudioRmsDbfsNumber -and
                     $runtimeFinalAudioRmsDbfsNumber -ge -30.0 -and
                     ($sampleHasNearPassbandPeak -or
-                        ($null -ne $nr5PeakEvidenceNumber -and $nr5PeakEvidenceNumber -ge 0.08) -or
-                        ($null -ne $nr5ConfidenceNumber -and $nr5ConfidenceNumber -ge 0.30 -and
-                            $null -ne $nr5SignalProbabilityNumber -and $nr5SignalProbabilityNumber -ge 0.14)))
-                if ($nr5SpeechQualifiedStrongInput) {
-                    $nr5SpeechQualifiedStrongOutputValues.Add([double]$nr5OutputDbfs) | Out-Null
-                    Add-Number $nr5SpeechQualifiedStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
+                        ($null -ne $candidatePeakEvidenceNumber -and $candidatePeakEvidenceNumber -ge 0.08) -or
+                        ($null -ne $candidateConfidenceNumber -and $candidateConfidenceNumber -ge 0.30 -and
+                            $null -ne $candidateSignalProbabilityNumber -and $candidateSignalProbabilityNumber -ge 0.14)))
+                if ($candidateSpeechQualifiedStrongInput) {
+                    $candidateSpeechQualifiedStrongOutputValues.Add([double]$candidateOutputDbfs) | Out-Null
+                    Add-Number $candidateSpeechQualifiedStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
                 }
-                $nr5PassbandQualifiedStrongInput = (
-                    $nr5SpeechQualifiedStrongInput -and
+                $candidatePassbandQualifiedStrongInput = (
+                    $candidateSpeechQualifiedStrongInput -and
                     $sampleHasNearPassbandPeak)
-                if ($nr5PassbandQualifiedStrongInput) {
-                    $nr5PassbandQualifiedStrongOutputValues.Add([double]$nr5OutputDbfs) | Out-Null
-                    Add-Number $nr5PassbandQualifiedStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
+                if ($candidatePassbandQualifiedStrongInput) {
+                    $candidatePassbandQualifiedStrongOutputValues.Add([double]$candidateOutputDbfs) | Out-Null
+                    Add-Number $candidatePassbandQualifiedStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
                 }
-                $nr5StrongInputSample = New-Nr5ClassifiedInputSample `
+                $candidateStrongInputSample = New-CandidateClassifiedInputSample `
                     -Class "strong" `
                     -Sample $sample `
-                    -InputDbfs $nr5InputDbfs `
-                    -OutputDbfs $nr5OutputDbfs `
+                    -InputDbfs $candidateInputDbfs `
+                    -OutputDbfs $candidateOutputDbfs `
                     -FinalAudioRmsDbfs $runtimeFinalAudioRmsDbfsNumber `
                     -LevelerInputRmsDbfs $runtimeLevelerInputRmsDbfsNumber `
                     -LevelerOutputRmsDbfs $runtimeLevelerOutputRmsDbfsNumber `
                     -LevelerAppliedGainDb $runtimeLevelerAppliedGainDbNumber `
-                    -SignalConfidence $nr5ConfidenceNumber `
-                    -AgcGate $nr5AgcGateNumber `
-                    -SignalProbability $nr5SignalProbabilityNumber `
-                    -PeakEvidence $nr5PeakEvidenceNumber `
-                    -MakeupGainDb $nr5MakeupGainDbNumber `
-                    -RecoveryDrive $nr5RecoveryDriveNumber `
-                    -WeakSignalMemory $nr5WeakSignalMemoryNumber `
+                    -SignalConfidence $candidateConfidenceNumber `
+                    -AgcGate $candidateAgcGateNumber `
+                    -SignalProbability $candidateSignalProbabilityNumber `
+                    -PeakEvidence $candidatePeakEvidenceNumber `
+                    -MakeupGainDb $candidateMakeupGainDbNumber `
+                    -RecoveryDrive $candidateRecoveryDriveNumber `
+                    -WeakSignalMemory $candidateWeakSignalMemoryNumber `
                     -NearPassbandPeak $sampleHasNearPassbandPeak `
                     -FilterPassbandPeak $sampleHasFilterPassbandPeak `
                     -PassbandEvidencePeak $sampleHasPassbandEvidencePeak `
                     -NearestFilterPassbandDistanceHz $frontendNearestFilterPassbandDistanceHz `
                     -NearestPeak $nearestFrontendPeak `
                     -StrongestPeak $strongestFrontendPeak `
-                    -SpeechQualified $nr5SpeechQualifiedStrongInput `
-                    -PassbandQualified $nr5PassbandQualifiedStrongInput `
+                    -SpeechQualified $candidateSpeechQualifiedStrongInput `
+                    -PassbandQualified $candidatePassbandQualifiedStrongInput `
                     -LowEvidence $false `
-                    -AudioAlignmentMismatch $nr5AudioAlignmentMismatch `
-                    -AudioInputDeltaDb $nr5AudioInputDeltaDb
-                $nr5StrongInputSamples.Add($nr5StrongInputSample) | Out-Null
-                if ($nr5SpeechQualifiedStrongInput) {
-                    $nr5SpeechQualifiedStrongInputSamples.Add($nr5StrongInputSample) | Out-Null
+                    -AudioAlignmentMismatch $candidateAudioAlignmentMismatch `
+                    -AudioInputDeltaDb $candidateAudioInputDeltaDb
+                $candidateStrongInputSamples.Add($candidateStrongInputSample) | Out-Null
+                if ($candidateSpeechQualifiedStrongInput) {
+                    $candidateSpeechQualifiedStrongInputSamples.Add($candidateStrongInputSample) | Out-Null
                 }
-                if ($nr5PassbandQualifiedStrongInput) {
-                    $nr5PassbandQualifiedStrongInputSamples.Add($nr5StrongInputSample) | Out-Null
+                if ($candidatePassbandQualifiedStrongInput) {
+                    $candidatePassbandQualifiedStrongInputSamples.Add($candidateStrongInputSample) | Out-Null
                 }
             }
-            elseif ($null -ne $nr5InputDbfs -and $nr5InputDbfs -ge $nr5NearStrongInputThresholdDbfs) {
-                $nr5NearStrongInputCount++
-                if ($null -ne $nr5OutputDbfs) {
-                    $nr5NearStrongOutputValues.Add([double]$nr5OutputDbfs) | Out-Null
+            elseif ($null -ne $candidateInputDbfs -and $candidateInputDbfs -ge $candidateNearStrongInputThresholdDbfs) {
+                $candidateNearStrongInputCount++
+                if ($null -ne $candidateOutputDbfs) {
+                    $candidateNearStrongOutputValues.Add([double]$candidateOutputDbfs) | Out-Null
                 }
-                Add-Number $nr5NearStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
-                $nr5SpeechQualifiedNearStrongInput = (
-                    -not $nr5AudioAlignmentMismatch -and
-                    $null -ne $nr5OutputDbfs -and
-                    $nr5OutputDbfs -ge -28.0 -and
+                Add-Number $candidateNearStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
+                $candidateSpeechQualifiedNearStrongInput = (
+                    -not $candidateAudioAlignmentMismatch -and
+                    $null -ne $candidateOutputDbfs -and
+                    $candidateOutputDbfs -ge -28.0 -and
                     $null -ne $runtimeFinalAudioRmsDbfsNumber -and
                     $runtimeFinalAudioRmsDbfsNumber -ge -35.0 -and
                     ($sampleHasNearPassbandPeak -or
-                        ($null -ne $nr5PeakEvidenceNumber -and $nr5PeakEvidenceNumber -ge 0.08) -or
-                        ($null -ne $nr5ConfidenceNumber -and $nr5ConfidenceNumber -ge 0.30 -and
-                            $null -ne $nr5SignalProbabilityNumber -and $nr5SignalProbabilityNumber -ge 0.14)))
-                if ($nr5SpeechQualifiedNearStrongInput) {
-                    $nr5SpeechQualifiedNearStrongOutputValues.Add([double]$nr5OutputDbfs) | Out-Null
-                    Add-Number $nr5SpeechQualifiedNearStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
+                        ($null -ne $candidatePeakEvidenceNumber -and $candidatePeakEvidenceNumber -ge 0.08) -or
+                        ($null -ne $candidateConfidenceNumber -and $candidateConfidenceNumber -ge 0.30 -and
+                            $null -ne $candidateSignalProbabilityNumber -and $candidateSignalProbabilityNumber -ge 0.14)))
+                if ($candidateSpeechQualifiedNearStrongInput) {
+                    $candidateSpeechQualifiedNearStrongOutputValues.Add([double]$candidateOutputDbfs) | Out-Null
+                    Add-Number $candidateSpeechQualifiedNearStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
                 }
-                $nr5PassbandQualifiedNearStrongInput = (
-                    $nr5SpeechQualifiedNearStrongInput -and
+                $candidatePassbandQualifiedNearStrongInput = (
+                    $candidateSpeechQualifiedNearStrongInput -and
                     $sampleHasPassbandEvidencePeak)
-                if ($nr5PassbandQualifiedNearStrongInput) {
-                    $nr5PassbandQualifiedNearStrongOutputValues.Add([double]$nr5OutputDbfs) | Out-Null
-                    Add-Number $nr5PassbandQualifiedNearStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
+                if ($candidatePassbandQualifiedNearStrongInput) {
+                    $candidatePassbandQualifiedNearStrongOutputValues.Add([double]$candidateOutputDbfs) | Out-Null
+                    Add-Number $candidatePassbandQualifiedNearStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
                 }
 
-                $nr5NearStrongInputSamples.Add([ordered]@{
+                $candidateNearStrongInputSamples.Add([ordered]@{
                     sampleIndex = [int](Get-JsonValue $sample "sampleIndex")
-                    inputDbfs = $nr5InputDbfs
-                    outputDbfs = $nr5OutputDbfs
+                    inputDbfs = $candidateInputDbfs
+                    outputDbfs = $candidateOutputDbfs
                     finalAudioRmsDbfs = $runtimeFinalAudioRmsDbfsNumber
                     rxAudioLevelerInputRmsDbfs = $runtimeLevelerInputRmsDbfsNumber
                     rxAudioLevelerOutputRmsDbfs = $runtimeLevelerOutputRmsDbfsNumber
-                    distanceToStrongThresholdDb = [Math]::Round([Math]::Max(0.0, [double]$nr5StrongInputThresholdDbfs - [double]$nr5InputDbfs), 3)
-                    signalConfidence = $nr5ConfidenceNumber
-                    agcGate = $nr5AgcGateNumber
-                    signalProbability = $nr5SignalProbabilityNumber
-                    peakEvidence = $nr5PeakEvidenceNumber
+                    distanceToStrongThresholdDb = [Math]::Round([Math]::Max(0.0, [double]$candidateStrongInputThresholdDbfs - [double]$candidateInputDbfs), 3)
+                    signalConfidence = $candidateConfidenceNumber
+                    agcGate = $candidateAgcGateNumber
+                    signalProbability = $candidateSignalProbabilityNumber
+                    peakEvidence = $candidatePeakEvidenceNumber
                     nearPassbandPeak = $sampleHasNearPassbandPeak
                     filterPassbandPeak = $sampleHasFilterPassbandPeak
                     passbandEvidencePeak = $sampleHasPassbandEvidencePeak
                     nearestFilterPassbandDistanceHz = $frontendNearestFilterPassbandDistanceHz
                     nearest = Convert-FrontendTopPeak $nearestFrontendPeak
                     strongest = Convert-FrontendTopPeak $strongestFrontendPeak
-                    speechQualified = $nr5SpeechQualifiedNearStrongInput
-                    passbandQualified = $nr5PassbandQualifiedNearStrongInput
+                    speechQualified = $candidateSpeechQualifiedNearStrongInput
+                    passbandQualified = $candidatePassbandQualifiedNearStrongInput
                 }) | Out-Null
             }
-            if ($null -ne $nr5MakeupGainDbNumber -and $nr5MakeupGainDbNumber -ge 12.0) {
-                $nr5HotMakeupCount++
-                $nr5HotMakeupSamples.Add([ordered]@{
+            if ($null -ne $candidateMakeupGainDbNumber -and $candidateMakeupGainDbNumber -ge 12.0) {
+                $candidateHotMakeupCount++
+                $candidateHotMakeupSamples.Add([ordered]@{
                     sampleIndex = [int](Get-JsonValue $sample "sampleIndex")
-                    inputDbfs = $nr5InputDbfs
-                    outputDbfs = $nr5OutputDbfs
-                    signalConfidence = $nr5ConfidenceNumber
-                    agcGate = $nr5AgcGateNumber
-                    signalProbability = $nr5SignalProbabilityNumber
-                    textureFill = $nr5TextureFillNumber
-                    maskSmoothing = $nr5MaskSmoothingNumber
-                    recoveryDrive = $nr5RecoveryDriveNumber
-                    weakSignalMemory = $nr5WeakSignalMemoryNumber
-                    makeupGainDb = $nr5MakeupGainDbNumber
+                    inputDbfs = $candidateInputDbfs
+                    outputDbfs = $candidateOutputDbfs
+                    signalConfidence = $candidateConfidenceNumber
+                    agcGate = $candidateAgcGateNumber
+                    signalProbability = $candidateSignalProbabilityNumber
+                    textureFill = $candidateTextureFillNumber
+                    maskSmoothing = $candidateMaskSmoothingNumber
+                    recoveryDrive = $candidateRecoveryDriveNumber
+                    weakSignalMemory = $candidateWeakSignalMemoryNumber
+                    makeupGainDb = $candidateMakeupGainDbNumber
                 }) | Out-Null
             }
         }
@@ -2692,9 +2690,9 @@ function Build-Report {
                 $runtimeAudioRmsDbfsNumber -le $signalFloorAudioThresholdDbfs)
             $audioIsActive = ($runtimeIsRxAudio -and $null -ne $runtimeAudioRmsDbfsNumber -and
                 $runtimeAudioRmsDbfsNumber -ge $signalActiveAudioThresholdDbfs)
-            $voiceLikeEvidence = ($null -ne $nr5ConfidenceNumber -and $nr5ConfidenceNumber -ge $signalEvidenceConfidenceThreshold) -or
-                ($null -ne $nr5SignalProbabilityNumber -and $nr5SignalProbabilityNumber -ge $signalEvidenceProbabilityThreshold) -or
-                ($null -ne $nr5AgcGateNumber -and $nr5AgcGateNumber -ge $signalEvidenceAgcGateThreshold)
+            $voiceLikeEvidence = ($null -ne $candidateConfidenceNumber -and $candidateConfidenceNumber -ge $signalEvidenceConfidenceThreshold) -or
+                ($null -ne $candidateSignalProbabilityNumber -and $candidateSignalProbabilityNumber -ge $signalEvidenceProbabilityThreshold) -or
+                ($null -ne $candidateAgcGateNumber -and $candidateAgcGateNumber -ge $signalEvidenceAgcGateThreshold)
             if ($audioIsFloor) {
                 $signalFloorAudioCount++
                 Add-Number $floorAudioRmsValues $runtimeAudioRmsDbfsNumber
@@ -2765,18 +2763,18 @@ function Build-Report {
             $rxAudioLevelerOutputLimitReductionDb = Get-JsonValue $runtime "rxAudioLevelerOutputLimitReductionDb"
             $rxAudioLevelerOutputLimitSampleCount = Get-JsonValue $runtime "rxAudioLevelerOutputLimitSampleCount"
             $rxAudioLevelerPauseHoldBlocks = Get-JsonValue $runtime "rxAudioLevelerPauseHoldBlocks"
-            $rxAudioLevelerNr5SpeechHoldBlocks = Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHoldBlocks"
-            $rxAudioLevelerNr5SpeechHangoverBlocks = Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHangoverBlocks"
-            $rxAudioLevelerNr5HybridSpeechPrior = Get-JsonValue $runtime "rxAudioLevelerNr5HybridSpeechPrior"
-            $rxAudioLevelerNr5NoSignalNoisePrior = Get-JsonValue $runtime "rxAudioLevelerNr5NoSignalNoisePrior"
-            $rxAudioLevelerNr5NoiseProfilePrior = Get-JsonValue $runtime "rxAudioLevelerNr5NoiseProfilePrior"
+            $rxAudioLevelerCandidateSpeechHoldBlocks = Get-JsonValue $runtime "rxAudioLevelerCandidateSpeechHoldBlocks"
+            $rxAudioLevelerCandidateSpeechHangoverBlocks = Get-JsonValue $runtime "rxAudioLevelerCandidateSpeechHangoverBlocks"
+            $rxAudioLevelerCandidateHybridSpeechPrior = Get-JsonValue $runtime "rxAudioLevelerCandidateHybridSpeechPrior"
+            $rxAudioLevelerCandidateNoSignalNoisePrior = Get-JsonValue $runtime "rxAudioLevelerCandidateNoSignalNoisePrior"
+            $rxAudioLevelerCandidateNoiseProfilePrior = Get-JsonValue $runtime "rxAudioLevelerCandidateNoiseProfilePrior"
             $rxAudioLevelerOutputRmsDbfsNumber = Get-NumericValue $rxAudioLevelerOutputRmsDbfs
             $rxAudioLevelerAppliedGainDbNumber = Get-NumericValue $rxAudioLevelerAppliedGainDb
-            $rxAudioLevelerNr5SpeechHoldBlocksNumber = Get-NumericValue $rxAudioLevelerNr5SpeechHoldBlocks
-            $rxAudioLevelerNr5SpeechHangoverBlocksNumber = Get-NumericValue $rxAudioLevelerNr5SpeechHangoverBlocks
-            $rxAudioLevelerNr5HybridSpeechPriorNumber = Get-NumericValue $rxAudioLevelerNr5HybridSpeechPrior
-            $rxAudioLevelerNr5NoSignalNoisePriorNumber = Get-NumericValue $rxAudioLevelerNr5NoSignalNoisePrior
-            $rxAudioLevelerNr5NoiseProfilePriorNumber = Get-NumericValue $rxAudioLevelerNr5NoiseProfilePrior
+            $rxAudioLevelerCandidateSpeechHoldBlocksNumber = Get-NumericValue $rxAudioLevelerCandidateSpeechHoldBlocks
+            $rxAudioLevelerCandidateSpeechHangoverBlocksNumber = Get-NumericValue $rxAudioLevelerCandidateSpeechHangoverBlocks
+            $rxAudioLevelerCandidateHybridSpeechPriorNumber = Get-NumericValue $rxAudioLevelerCandidateHybridSpeechPrior
+            $rxAudioLevelerCandidateNoSignalNoisePriorNumber = Get-NumericValue $rxAudioLevelerCandidateNoSignalNoisePrior
+            $rxAudioLevelerCandidateNoiseProfilePriorNumber = Get-NumericValue $rxAudioLevelerCandidateNoiseProfilePrior
             Add-Number $rxAudioLevelerInputRmsValues $rxAudioLevelerInputRmsDbfs
             Add-Number $rxAudioLevelerOutputRmsValues $rxAudioLevelerOutputRmsDbfs
             Add-Number $rxAudioLevelerInputPeakValues $rxAudioLevelerInputPeakDbfs
@@ -2789,62 +2787,62 @@ function Build-Report {
             Add-Number $rxAudioLevelerOutputLimitReductionValues $rxAudioLevelerOutputLimitReductionDb
             Add-Number $rxAudioLevelerOutputLimitSampleCountValues $rxAudioLevelerOutputLimitSampleCount
             Add-Number $rxAudioLevelerPauseHoldBlockValues $rxAudioLevelerPauseHoldBlocks
-            Add-Number $rxAudioLevelerNr5SpeechHoldBlockValues $rxAudioLevelerNr5SpeechHoldBlocks
-            Add-Number $rxAudioLevelerNr5SpeechHangoverBlockValues $rxAudioLevelerNr5SpeechHangoverBlocks
-            Add-Number $rxAudioLevelerNr5HybridSpeechPriorValues $rxAudioLevelerNr5HybridSpeechPrior
-            Add-Number $rxAudioLevelerNr5NoSignalNoisePriorValues $rxAudioLevelerNr5NoSignalNoisePrior
-            Add-Number $rxAudioLevelerNr5NoiseProfilePriorValues $rxAudioLevelerNr5NoiseProfilePrior
+            Add-Number $rxAudioLevelerCandidateSpeechHoldBlockValues $rxAudioLevelerCandidateSpeechHoldBlocks
+            Add-Number $rxAudioLevelerCandidateSpeechHangoverBlockValues $rxAudioLevelerCandidateSpeechHangoverBlocks
+            Add-Number $rxAudioLevelerCandidateHybridSpeechPriorValues $rxAudioLevelerCandidateHybridSpeechPrior
+            Add-Number $rxAudioLevelerCandidateNoSignalNoisePriorValues $rxAudioLevelerCandidateNoSignalNoisePrior
+            Add-Number $rxAudioLevelerCandidateNoiseProfilePriorValues $rxAudioLevelerCandidateNoiseProfilePrior
             if ($null -ne $rxAudioLevelerInputRmsDbfs -and $null -ne $rxAudioLevelerOutputRmsDbfs -and
                 $null -ne $rxAudioLevelerDesiredGainDb -and $null -ne $rxAudioLevelerAppliedGainDb) {
                 $rxAudioLevelerDiagnosticCount++
             }
-            $rxAudioLevelerNr5NoSignalNoiseCap = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerNr5NoSignalNoiseCap")
-            $rxAudioLevelerNr5FarPeakNoiseCap = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerNr5FarPeakNoiseCap")
-            $rxAudioLevelerNr5NoProofNoiseCap = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerNr5NoProofNoiseCap")
-            $nr5SpeechContinuityHeld =
-                ($null -ne $rxAudioLevelerNr5SpeechHoldBlocksNumber -and $rxAudioLevelerNr5SpeechHoldBlocksNumber -ge 8.0) -or
-                ($null -ne $rxAudioLevelerNr5SpeechHangoverBlocksNumber -and $rxAudioLevelerNr5SpeechHangoverBlocksNumber -ge 16.0)
-            $nr5SpeechContinuityHybrid =
-                $null -ne $rxAudioLevelerNr5HybridSpeechPriorNumber -and
-                $rxAudioLevelerNr5HybridSpeechPriorNumber -ge $nr5SpeechContinuityHybridThreshold
-            $nr5SpeechContinuityNoiseLow =
-                $null -eq $rxAudioLevelerNr5NoSignalNoisePriorNumber -or
-                $rxAudioLevelerNr5NoSignalNoisePriorNumber -le $nr5SpeechContinuityNoSignalMax
-            $nr5SpeechContinuityFrame =
+            $rxAudioLevelerCandidateNoSignalNoiseCap = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerCandidateNoSignalNoiseCap")
+            $rxAudioLevelerCandidateFarPeakNoiseCap = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerCandidateFarPeakNoiseCap")
+            $rxAudioLevelerCandidateNoProofNoiseCap = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerCandidateNoProofNoiseCap")
+            $candidateSpeechContinuityHeld =
+                ($null -ne $rxAudioLevelerCandidateSpeechHoldBlocksNumber -and $rxAudioLevelerCandidateSpeechHoldBlocksNumber -ge 8.0) -or
+                ($null -ne $rxAudioLevelerCandidateSpeechHangoverBlocksNumber -and $rxAudioLevelerCandidateSpeechHangoverBlocksNumber -ge 16.0)
+            $candidateSpeechContinuityHybrid =
+                $null -ne $rxAudioLevelerCandidateHybridSpeechPriorNumber -and
+                $rxAudioLevelerCandidateHybridSpeechPriorNumber -ge $candidateSpeechContinuityHybridThreshold
+            $candidateSpeechContinuityNoiseLow =
+                $null -eq $rxAudioLevelerCandidateNoSignalNoisePriorNumber -or
+                $rxAudioLevelerCandidateNoSignalNoisePriorNumber -le $candidateSpeechContinuityNoSignalMax
+            $candidateSpeechContinuityFrame =
                 $runtimeIsRxAudio -and
                 $null -ne $rxAudioLevelerOutputRmsDbfsNumber -and
                 $voiceLikeEvidence -and
-                $nr5SpeechContinuityNoiseLow -and
-                ($nr5SpeechContinuityHybrid -or $nr5SpeechContinuityHeld)
-            if ($nr5SpeechContinuityFrame) {
-                $nr5SpeechContinuitySampleCount++
-                Add-Number $nr5SpeechContinuityOutputValues $rxAudioLevelerOutputRmsDbfsNumber
-                Add-Number $nr5SpeechContinuityGainValues $rxAudioLevelerAppliedGainDbNumber
-                if ($rxAudioLevelerOutputRmsDbfsNumber -le $nr5SpeechContinuityFadeThresholdDbfs) {
-                    $nr5SpeechContinuityFadeCount++
+                $candidateSpeechContinuityNoiseLow -and
+                ($candidateSpeechContinuityHybrid -or $candidateSpeechContinuityHeld)
+            if ($candidateSpeechContinuityFrame) {
+                $candidateSpeechContinuitySampleCount++
+                Add-Number $candidateSpeechContinuityOutputValues $rxAudioLevelerOutputRmsDbfsNumber
+                Add-Number $candidateSpeechContinuityGainValues $rxAudioLevelerAppliedGainDbNumber
+                if ($rxAudioLevelerOutputRmsDbfsNumber -le $candidateSpeechContinuityFadeThresholdDbfs) {
+                    $candidateSpeechContinuityFadeCount++
                 }
-                if ($rxAudioLevelerOutputRmsDbfsNumber -le $nr5SpeechContinuityDropoutThresholdDbfs) {
-                    $nr5SpeechContinuityDropoutCount++
+                if ($rxAudioLevelerOutputRmsDbfsNumber -le $candidateSpeechContinuityDropoutThresholdDbfs) {
+                    $candidateSpeechContinuityDropoutCount++
                 }
-                $nr5SpeechContinuitySamples.Add([ordered]@{
+                $candidateSpeechContinuitySamples.Add([ordered]@{
                     sampleIndex = Get-JsonValue $sample "sampleIndex"
                     sampledUtc = Get-JsonValue $sample "sampledUtc"
                     audioRmsDbfs = Get-NumericValue (Get-JsonValue $runtime "audioRmsDbfs")
                     finalAudioRmsDbfs = $rxAudioLevelerOutputRmsDbfsNumber
-                    nr5InputDbfs = Get-NumericValue (Get-JsonValue $nr5 "inputDbfs")
-                    nr5OutputDbfs = Get-NumericValue (Get-JsonValue $nr5 "outputDbfs")
-                    nr5SignalConfidence = $nr5ConfidenceNumber
-                    nr5SignalProbability = $nr5SignalProbabilityNumber
-                    nr5AgcGate = $nr5AgcGateNumber
-                    nr5PeakEvidence = $nr5PeakEvidenceNumber
+                    candidateInputDbfs = Get-NumericValue (Get-JsonValue $candidate "inputDbfs")
+                    candidateOutputDbfs = Get-NumericValue (Get-JsonValue $candidate "outputDbfs")
+                    candidateSignalConfidence = $candidateConfidenceNumber
+                    candidateSignalProbability = $candidateSignalProbabilityNumber
+                    candidateAgcGate = $candidateAgcGateNumber
+                    candidatePeakEvidence = $candidatePeakEvidenceNumber
                     appliedGainDb = $rxAudioLevelerAppliedGainDbNumber
-                    nr5SpeechHoldBlocks = $rxAudioLevelerNr5SpeechHoldBlocksNumber
-                    nr5SpeechHangoverBlocks = $rxAudioLevelerNr5SpeechHangoverBlocksNumber
-                    nr5HybridSpeechPrior = $rxAudioLevelerNr5HybridSpeechPriorNumber
-                    nr5NoSignalNoisePrior = $rxAudioLevelerNr5NoSignalNoisePriorNumber
-                    nr5NoiseProfilePrior = $rxAudioLevelerNr5NoiseProfilePriorNumber
-                    belowFadeThreshold = ($rxAudioLevelerOutputRmsDbfsNumber -le $nr5SpeechContinuityFadeThresholdDbfs)
-                    belowDropoutThreshold = ($rxAudioLevelerOutputRmsDbfsNumber -le $nr5SpeechContinuityDropoutThresholdDbfs)
+                    candidateSpeechHoldBlocks = $rxAudioLevelerCandidateSpeechHoldBlocksNumber
+                    candidateSpeechHangoverBlocks = $rxAudioLevelerCandidateSpeechHangoverBlocksNumber
+                    candidateHybridSpeechPrior = $rxAudioLevelerCandidateHybridSpeechPriorNumber
+                    candidateNoSignalNoisePrior = $rxAudioLevelerCandidateNoSignalNoisePriorNumber
+                    candidateNoiseProfilePrior = $rxAudioLevelerCandidateNoiseProfilePriorNumber
+                    belowFadeThreshold = ($rxAudioLevelerOutputRmsDbfsNumber -le $candidateSpeechContinuityFadeThresholdDbfs)
+                    belowDropoutThreshold = ($rxAudioLevelerOutputRmsDbfsNumber -le $candidateSpeechContinuityDropoutThresholdDbfs)
                     nearest = Convert-FrontendTopPeak $nearestFrontendPeak
                 }) | Out-Null
             }
@@ -2860,8 +2858,8 @@ function Build-Report {
                     sampledUtc = Get-JsonValue $sample "sampledUtc"
                     audioRmsDbfs = Get-NumericValue (Get-JsonValue $runtime "audioRmsDbfs")
                     audioPeakDbfs = Get-NumericValue (Get-JsonValue $runtime "audioPeakDbfs")
-                    nr5InputDbfs = Get-NumericValue (Get-JsonValue $nr5 "inputDbfs")
-                    nr5OutputDbfs = Get-NumericValue (Get-JsonValue $nr5 "outputDbfs")
+                    candidateInputDbfs = Get-NumericValue (Get-JsonValue $candidate "inputDbfs")
+                    candidateOutputDbfs = Get-NumericValue (Get-JsonValue $candidate "outputDbfs")
                     inputRmsDbfs = Get-NumericValue $rxAudioLevelerInputRmsDbfs
                     outputRmsDbfs = Get-NumericValue $rxAudioLevelerOutputRmsDbfs
                     inputPeakDbfs = Get-NumericValue $rxAudioLevelerInputPeakDbfs
@@ -2874,46 +2872,46 @@ function Build-Report {
                     outputLimitReductionDb = Get-NumericValue $rxAudioLevelerOutputLimitReductionDb
                     outputLimitSampleCount = Get-NumericValue $rxAudioLevelerOutputLimitSampleCount
                     pauseHoldBlocks = Get-NumericValue $rxAudioLevelerPauseHoldBlocks
-                    nr5SpeechHoldBlocks = Get-NumericValue $rxAudioLevelerNr5SpeechHoldBlocks
-                    nr5SpeechHangoverBlocks = Get-NumericValue $rxAudioLevelerNr5SpeechHangoverBlocks
-                    nr5HybridSpeechPrior = Get-NumericValue $rxAudioLevelerNr5HybridSpeechPrior
-                    nr5NoSignalNoisePrior = Get-NumericValue $rxAudioLevelerNr5NoSignalNoisePrior
-                    nr5NoiseProfilePrior = Get-NumericValue $rxAudioLevelerNr5NoiseProfilePrior
-                    nr5NoSignalNoiseCap = $rxAudioLevelerNr5NoSignalNoiseCap
-                    nr5FarPeakNoiseCap = $rxAudioLevelerNr5FarPeakNoiseCap
-                    nr5NoProofNoiseCap = $rxAudioLevelerNr5NoProofNoiseCap
+                    candidateSpeechHoldBlocks = Get-NumericValue $rxAudioLevelerCandidateSpeechHoldBlocks
+                    candidateSpeechHangoverBlocks = Get-NumericValue $rxAudioLevelerCandidateSpeechHangoverBlocks
+                    candidateHybridSpeechPrior = Get-NumericValue $rxAudioLevelerCandidateHybridSpeechPrior
+                    candidateNoSignalNoisePrior = Get-NumericValue $rxAudioLevelerCandidateNoSignalNoisePrior
+                    candidateNoiseProfilePrior = Get-NumericValue $rxAudioLevelerCandidateNoiseProfilePrior
+                    candidateNoSignalNoiseCap = $rxAudioLevelerCandidateNoSignalNoiseCap
+                    candidateFarPeakNoiseCap = $rxAudioLevelerCandidateFarPeakNoiseCap
+                    candidateNoProofNoiseCap = $rxAudioLevelerCandidateNoProofNoiseCap
                     boostSlewLimited = $rxAudioLevelerBoostSlewLimited
                     peakLimited = $rxAudioLevelerPeakLimited
                     outputLimited = $rxAudioLevelerOutputLimited
                 }
                 $rxAudioLevelerConstrainedSamples.Add($rxAudioLevelerConstrainedSample) | Out-Null
             }
-            if ($rxAudioLevelerNr5NoSignalNoiseCap) {
-                $rxAudioLevelerNr5NoSignalNoiseCapCount++
-                $rxAudioLevelerNr5NoSignalNoiseCapSamples.Add([ordered]@{
+            if ($rxAudioLevelerCandidateNoSignalNoiseCap) {
+                $rxAudioLevelerCandidateNoSignalNoiseCapCount++
+                $rxAudioLevelerCandidateNoSignalNoiseCapSamples.Add([ordered]@{
                     sampleIndex = Get-JsonValue $sample "sampleIndex"
                     sampledUtc = Get-JsonValue $sample "sampledUtc"
                     audioRmsDbfs = Get-NumericValue (Get-JsonValue $runtime "audioRmsDbfs")
-                    nr5InputDbfs = Get-NumericValue (Get-JsonValue $nr5 "inputDbfs")
-                    nr5OutputDbfs = Get-NumericValue (Get-JsonValue $nr5 "outputDbfs")
+                    candidateInputDbfs = Get-NumericValue (Get-JsonValue $candidate "inputDbfs")
+                    candidateOutputDbfs = Get-NumericValue (Get-JsonValue $candidate "outputDbfs")
                     inputRmsDbfs = Get-NumericValue $rxAudioLevelerInputRmsDbfs
                     outputRmsDbfs = Get-NumericValue $rxAudioLevelerOutputRmsDbfs
                     desiredGainDb = Get-NumericValue $rxAudioLevelerDesiredGainDb
                     appliedGainDb = Get-NumericValue $rxAudioLevelerAppliedGainDb
-                    nr5SpeechHoldBlocks = Get-NumericValue $rxAudioLevelerNr5SpeechHoldBlocks
-                    nr5SpeechHangoverBlocks = Get-NumericValue $rxAudioLevelerNr5SpeechHangoverBlocks
-                    nr5HybridSpeechPrior = Get-NumericValue $rxAudioLevelerNr5HybridSpeechPrior
-                    nr5NoSignalNoisePrior = Get-NumericValue $rxAudioLevelerNr5NoSignalNoisePrior
-                    nr5NoiseProfilePrior = Get-NumericValue $rxAudioLevelerNr5NoiseProfilePrior
-                    nr5FarPeakNoiseCap = $rxAudioLevelerNr5FarPeakNoiseCap
-                    nr5NoProofNoiseCap = $rxAudioLevelerNr5NoProofNoiseCap
+                    candidateSpeechHoldBlocks = Get-NumericValue $rxAudioLevelerCandidateSpeechHoldBlocks
+                    candidateSpeechHangoverBlocks = Get-NumericValue $rxAudioLevelerCandidateSpeechHangoverBlocks
+                    candidateHybridSpeechPrior = Get-NumericValue $rxAudioLevelerCandidateHybridSpeechPrior
+                    candidateNoSignalNoisePrior = Get-NumericValue $rxAudioLevelerCandidateNoSignalNoisePrior
+                    candidateNoiseProfilePrior = Get-NumericValue $rxAudioLevelerCandidateNoiseProfilePrior
+                    candidateFarPeakNoiseCap = $rxAudioLevelerCandidateFarPeakNoiseCap
+                    candidateNoProofNoiseCap = $rxAudioLevelerCandidateNoProofNoiseCap
                 }) | Out-Null
             }
-            if ($rxAudioLevelerNr5FarPeakNoiseCap) {
-                $rxAudioLevelerNr5FarPeakNoiseCapCount++
+            if ($rxAudioLevelerCandidateFarPeakNoiseCap) {
+                $rxAudioLevelerCandidateFarPeakNoiseCapCount++
             }
-            if ($rxAudioLevelerNr5NoProofNoiseCap) {
-                $rxAudioLevelerNr5NoProofNoiseCapCount++
+            if ($rxAudioLevelerCandidateNoProofNoiseCap) {
+                $rxAudioLevelerCandidateNoProofNoiseCapCount++
             }
             if ($rxAudioLevelerBoostSlewLimited) {
                 $rxAudioLevelerBoostSlewLimitedCount++
@@ -2982,13 +2980,13 @@ function Build-Report {
     $rxAudioLevelerOutputLimitReductionStats = Get-NumberStats $rxAudioLevelerOutputLimitReductionValues
     $rxAudioLevelerOutputLimitSampleCountStats = Get-NumberStats $rxAudioLevelerOutputLimitSampleCountValues
     $rxAudioLevelerPauseHoldBlockStats = Get-NumberStats $rxAudioLevelerPauseHoldBlockValues
-    $rxAudioLevelerNr5SpeechHoldBlockStats = Get-NumberStats $rxAudioLevelerNr5SpeechHoldBlockValues
-    $rxAudioLevelerNr5SpeechHangoverBlockStats = Get-NumberStats $rxAudioLevelerNr5SpeechHangoverBlockValues
-    $rxAudioLevelerNr5HybridSpeechPriorStats = Get-NumberStats $rxAudioLevelerNr5HybridSpeechPriorValues
-    $rxAudioLevelerNr5NoSignalNoisePriorStats = Get-NumberStats $rxAudioLevelerNr5NoSignalNoisePriorValues
-    $rxAudioLevelerNr5NoiseProfilePriorStats = Get-NumberStats $rxAudioLevelerNr5NoiseProfilePriorValues
-    $nr5SpeechContinuityOutputStats = Get-NumberStats $nr5SpeechContinuityOutputValues
-    $nr5SpeechContinuityGainStats = Get-NumberStats $nr5SpeechContinuityGainValues
+    $rxAudioLevelerCandidateSpeechHoldBlockStats = Get-NumberStats $rxAudioLevelerCandidateSpeechHoldBlockValues
+    $rxAudioLevelerCandidateSpeechHangoverBlockStats = Get-NumberStats $rxAudioLevelerCandidateSpeechHangoverBlockValues
+    $rxAudioLevelerCandidateHybridSpeechPriorStats = Get-NumberStats $rxAudioLevelerCandidateHybridSpeechPriorValues
+    $rxAudioLevelerCandidateNoSignalNoisePriorStats = Get-NumberStats $rxAudioLevelerCandidateNoSignalNoisePriorValues
+    $rxAudioLevelerCandidateNoiseProfilePriorStats = Get-NumberStats $rxAudioLevelerCandidateNoiseProfilePriorValues
+    $candidateSpeechContinuityOutputStats = Get-NumberStats $candidateSpeechContinuityOutputValues
+    $candidateSpeechContinuityGainStats = Get-NumberStats $candidateSpeechContinuityGainValues
     $backlogStats = Get-NumberStats $backlogValues
     $frontendSceneAgeStats = Get-NumberStats $frontendSceneAgeValues
     $frontendTopPeakCountStats = Get-NumberStats $frontendTopPeakCountValues
@@ -2996,7 +2994,7 @@ function Build-Report {
     $frontendNearestTopPeakAbsOffsetStats = Get-NumberStats $frontendNearestTopPeakAbsOffsetValues
     $frontendStrongestTopPeakSnrStats = Get-NumberStats $frontendStrongestTopPeakSnrValues
     $frontendNearestFilterPassbandDistanceStats = Get-NumberStats $frontendNearestFilterPassbandDistanceValues
-    $nr5FrontendStrongPassbandSubthresholdDistanceStats = Get-NumberStats $nr5FrontendStrongPassbandSubthresholdDistanceValues
+    $candidateFrontendStrongPassbandSubthresholdDistanceStats = Get-NumberStats $candidateFrontendStrongPassbandSubthresholdDistanceValues
     $frontendAdjacentNoiseBinStats = Get-NumberStats $frontendAdjacentNoiseBinValues
     $frontendAdjacentNoiseFloorStats = Get-NumberStats $frontendAdjacentNoiseFloorValues
     $frontendAdjacentNoiseP50Stats = Get-NumberStats $frontendAdjacentNoiseP50Values
@@ -3004,155 +3002,155 @@ function Build-Report {
     $frontendAdjacentNoiseRejectedStats = Get-NumberStats $frontendAdjacentNoiseRejectedValues
     $rxMetersAgeStats = Get-NumberStats $rxMetersAgeValues
     $audioAgeStats = Get-NumberStats $audioAgeValues
-    $nr5InputStats = Get-NumberStats $nr5InputValues
-    $nr5OutputStats = Get-NumberStats $nr5OutputValues
-    $nr5InputOutputStats = Get-PairStats $nr5InputOutputXValues $nr5InputOutputYValues
-    $nr5OutputMinusInputStats = Get-NumberStats $nr5OutputMinusInputValues
-    $nr5WeakOutputStats = Get-NumberStats $nr5WeakOutputValues
-    $nr5StrongOutputStats = Get-NumberStats $nr5StrongOutputValues
-    $nr5WeakFinalAudioStats = Get-NumberStats $nr5WeakFinalAudioValues
-    $nr5StrongFinalAudioStats = Get-NumberStats $nr5StrongFinalAudioValues
-    $nr5NearStrongOutputStats = Get-NumberStats $nr5NearStrongOutputValues
-    $nr5NearStrongFinalAudioStats = Get-NumberStats $nr5NearStrongFinalAudioValues
-    $nr5SpeechQualifiedWeakOutputStats = Get-NumberStats $nr5SpeechQualifiedWeakOutputValues
-    $nr5SpeechQualifiedStrongOutputStats = Get-NumberStats $nr5SpeechQualifiedStrongOutputValues
-    $nr5SpeechQualifiedWeakFinalAudioStats = Get-NumberStats $nr5SpeechQualifiedWeakFinalAudioValues
-    $nr5SpeechQualifiedStrongFinalAudioStats = Get-NumberStats $nr5SpeechQualifiedStrongFinalAudioValues
-    $nr5SpeechQualifiedNearStrongOutputStats = Get-NumberStats $nr5SpeechQualifiedNearStrongOutputValues
-    $nr5SpeechQualifiedNearStrongFinalAudioStats = Get-NumberStats $nr5SpeechQualifiedNearStrongFinalAudioValues
-    $nr5PassbandQualifiedWeakOutputStats = Get-NumberStats $nr5PassbandQualifiedWeakOutputValues
-    $nr5PassbandQualifiedStrongOutputStats = Get-NumberStats $nr5PassbandQualifiedStrongOutputValues
-    $nr5PassbandQualifiedWeakFinalAudioStats = Get-NumberStats $nr5PassbandQualifiedWeakFinalAudioValues
-    $nr5PassbandQualifiedStrongFinalAudioStats = Get-NumberStats $nr5PassbandQualifiedStrongFinalAudioValues
-    $nr5PassbandQualifiedNearStrongOutputStats = Get-NumberStats $nr5PassbandQualifiedNearStrongOutputValues
-    $nr5PassbandQualifiedNearStrongFinalAudioStats = Get-NumberStats $nr5PassbandQualifiedNearStrongFinalAudioValues
-    $nr5MeanGainStats = Get-NumberStats $nr5MeanGainValues
-    $nr5FloorReductionStats = Get-NumberStats $nr5FloorReductionValues
-    $nr5DynamicRangeStats = Get-NumberStats $nr5DynamicRangeValues
-    $nr5SignalConfidenceStats = Get-NumberStats $nr5SignalConfidenceValues
-    $nr5AgcGateStats = Get-NumberStats $nr5AgcGateValues
-    $nr5SignalProbabilityStats = Get-NumberStats $nr5SignalProbabilityValues
-    $nr5TextureFillStats = Get-NumberStats $nr5TextureFillValues
-    $nr5MaskSmoothingStats = Get-NumberStats $nr5MaskSmoothingValues
-    $nr5LevelDriveStats = Get-NumberStats $nr5LevelDriveValues
-    $nr5RecoveryDriveStats = Get-NumberStats $nr5RecoveryDriveValues
-    $nr5WeakSignalMemoryStats = Get-NumberStats $nr5WeakSignalMemoryValues
-    $nr5MakeupGainDbStats = Get-NumberStats $nr5MakeupGainDbValues
-    $nr5OutputPeakDbfsStats = Get-NumberStats $nr5OutputPeakDbfsValues
-    $nr5PeakEvidenceStats = Get-NumberStats $nr5PeakEvidenceValues
-    $nr5PeakLimitDbfsStats = Get-NumberStats $nr5PeakLimitDbfsValues
-    $nr5PeakReductionDbStats = Get-NumberStats $nr5PeakReductionDbValues
-    $nr5AdjacentNoiseTrustStats = Get-NumberStats $nr5AdjacentNoiseTrustValues
-    $nr5AdjacentNoiseDriveStats = Get-NumberStats $nr5AdjacentNoiseDriveValues
-    $nr5AdjacentNoiseFloorStats = Get-NumberStats $nr5AdjacentNoiseFloorValues
-    $nr5AdjacentNoiseRejectedStats = Get-NumberStats $nr5AdjacentNoiseRejectedValues
-    $nr5AdjacentNoiseSideBalanceStats = Get-NumberStats $nr5AdjacentNoiseSideBalanceValues
-    $nr5AdjacentNoiseAsymmetryStats = Get-NumberStats $nr5AdjacentNoiseAsymmetryValues
-    $nr5AudioInputDeltaStats = Get-NumberStats $nr5AudioInputDeltaValues
-    $nr5AudioOutputDeltaStats = Get-NumberStats $nr5AudioOutputDeltaValues
-    $nr5LearnedFrameStats = Get-NumberStats $nr5LearnedFrameValues
-    $nr5ManagedChannelGenerationStats = Get-NumberStats $nr5ManagedChannelGenerationValues
-    $nr5ManagedApplyCountStats = Get-NumberStats $nr5ManagedApplyCountValues
-    $nr5ManagedPositionApplyCountStats = Get-NumberStats $nr5ManagedPositionApplyCountValues
-    $nr5ManagedPolicyApplyCountStats = Get-NumberStats $nr5ManagedPolicyApplyCountValues
-    $nr5ManagedNoopApplyCountStats = Get-NumberStats $nr5ManagedNoopApplyCountValues
-    $nr5ManagedRunApplyCountStats = Get-NumberStats $nr5ManagedRunApplyCountValues
-    $nr5LearnerResetSampleCount = @($nr5LearnerResetSamples.ToArray()).Count
-    $nr5ManagedReapplySampleCount = @($nr5ManagedReapplySamples.ToArray()).Count
-    $nr5ManagedCounterCoveragePct = Get-CountPercent -Count $nr5ManagedCounterSampleCount -SampleCount $nr5SampleCount
-    $nr5LearnedFrameCoveragePct = Get-CountPercent -Count $nr5LearnedFrameSampleCount -SampleCount $nr5SampleCount
-    $nr5ManagedCountersComplete = ($nr5SampleCount -gt 0 -and $nr5ManagedCounterSampleCount -eq $nr5SampleCount)
-    $nr5LearnedFramesComplete = ($nr5SampleCount -gt 0 -and $nr5LearnedFrameSampleCount -eq $nr5SampleCount)
-    $nr5LearnerMonotonic = ($nr5LearnerResetSampleCount -eq 0)
-    $nr5LearnerStabilityStatus = if ($nr5SampleCount -eq 0) {
+    $candidateInputStats = Get-NumberStats $candidateInputValues
+    $candidateOutputStats = Get-NumberStats $candidateOutputValues
+    $candidateInputOutputStats = Get-PairStats $candidateInputOutputXValues $candidateInputOutputYValues
+    $candidateOutputMinusInputStats = Get-NumberStats $candidateOutputMinusInputValues
+    $candidateWeakOutputStats = Get-NumberStats $candidateWeakOutputValues
+    $candidateStrongOutputStats = Get-NumberStats $candidateStrongOutputValues
+    $candidateWeakFinalAudioStats = Get-NumberStats $candidateWeakFinalAudioValues
+    $candidateStrongFinalAudioStats = Get-NumberStats $candidateStrongFinalAudioValues
+    $candidateNearStrongOutputStats = Get-NumberStats $candidateNearStrongOutputValues
+    $candidateNearStrongFinalAudioStats = Get-NumberStats $candidateNearStrongFinalAudioValues
+    $candidateSpeechQualifiedWeakOutputStats = Get-NumberStats $candidateSpeechQualifiedWeakOutputValues
+    $candidateSpeechQualifiedStrongOutputStats = Get-NumberStats $candidateSpeechQualifiedStrongOutputValues
+    $candidateSpeechQualifiedWeakFinalAudioStats = Get-NumberStats $candidateSpeechQualifiedWeakFinalAudioValues
+    $candidateSpeechQualifiedStrongFinalAudioStats = Get-NumberStats $candidateSpeechQualifiedStrongFinalAudioValues
+    $candidateSpeechQualifiedNearStrongOutputStats = Get-NumberStats $candidateSpeechQualifiedNearStrongOutputValues
+    $candidateSpeechQualifiedNearStrongFinalAudioStats = Get-NumberStats $candidateSpeechQualifiedNearStrongFinalAudioValues
+    $candidatePassbandQualifiedWeakOutputStats = Get-NumberStats $candidatePassbandQualifiedWeakOutputValues
+    $candidatePassbandQualifiedStrongOutputStats = Get-NumberStats $candidatePassbandQualifiedStrongOutputValues
+    $candidatePassbandQualifiedWeakFinalAudioStats = Get-NumberStats $candidatePassbandQualifiedWeakFinalAudioValues
+    $candidatePassbandQualifiedStrongFinalAudioStats = Get-NumberStats $candidatePassbandQualifiedStrongFinalAudioValues
+    $candidatePassbandQualifiedNearStrongOutputStats = Get-NumberStats $candidatePassbandQualifiedNearStrongOutputValues
+    $candidatePassbandQualifiedNearStrongFinalAudioStats = Get-NumberStats $candidatePassbandQualifiedNearStrongFinalAudioValues
+    $candidateMeanGainStats = Get-NumberStats $candidateMeanGainValues
+    $candidateFloorReductionStats = Get-NumberStats $candidateFloorReductionValues
+    $candidateDynamicRangeStats = Get-NumberStats $candidateDynamicRangeValues
+    $candidateSignalConfidenceStats = Get-NumberStats $candidateSignalConfidenceValues
+    $candidateAgcGateStats = Get-NumberStats $candidateAgcGateValues
+    $candidateSignalProbabilityStats = Get-NumberStats $candidateSignalProbabilityValues
+    $candidateTextureFillStats = Get-NumberStats $candidateTextureFillValues
+    $candidateMaskSmoothingStats = Get-NumberStats $candidateMaskSmoothingValues
+    $candidateLevelDriveStats = Get-NumberStats $candidateLevelDriveValues
+    $candidateRecoveryDriveStats = Get-NumberStats $candidateRecoveryDriveValues
+    $candidateWeakSignalMemoryStats = Get-NumberStats $candidateWeakSignalMemoryValues
+    $candidateMakeupGainDbStats = Get-NumberStats $candidateMakeupGainDbValues
+    $candidateOutputPeakDbfsStats = Get-NumberStats $candidateOutputPeakDbfsValues
+    $candidatePeakEvidenceStats = Get-NumberStats $candidatePeakEvidenceValues
+    $candidatePeakLimitDbfsStats = Get-NumberStats $candidatePeakLimitDbfsValues
+    $candidatePeakReductionDbStats = Get-NumberStats $candidatePeakReductionDbValues
+    $candidateAdjacentNoiseTrustStats = Get-NumberStats $candidateAdjacentNoiseTrustValues
+    $candidateAdjacentNoiseDriveStats = Get-NumberStats $candidateAdjacentNoiseDriveValues
+    $candidateAdjacentNoiseFloorStats = Get-NumberStats $candidateAdjacentNoiseFloorValues
+    $candidateAdjacentNoiseRejectedStats = Get-NumberStats $candidateAdjacentNoiseRejectedValues
+    $candidateAdjacentNoiseSideBalanceStats = Get-NumberStats $candidateAdjacentNoiseSideBalanceValues
+    $candidateAdjacentNoiseAsymmetryStats = Get-NumberStats $candidateAdjacentNoiseAsymmetryValues
+    $candidateAudioInputDeltaStats = Get-NumberStats $candidateAudioInputDeltaValues
+    $candidateAudioOutputDeltaStats = Get-NumberStats $candidateAudioOutputDeltaValues
+    $candidateLearnedFrameStats = Get-NumberStats $candidateLearnedFrameValues
+    $candidateManagedChannelGenerationStats = Get-NumberStats $candidateManagedChannelGenerationValues
+    $candidateManagedApplyCountStats = Get-NumberStats $candidateManagedApplyCountValues
+    $candidateManagedPositionApplyCountStats = Get-NumberStats $candidateManagedPositionApplyCountValues
+    $candidateManagedPolicyApplyCountStats = Get-NumberStats $candidateManagedPolicyApplyCountValues
+    $candidateManagedNoopApplyCountStats = Get-NumberStats $candidateManagedNoopApplyCountValues
+    $candidateManagedRunApplyCountStats = Get-NumberStats $candidateManagedRunApplyCountValues
+    $candidateLearnerResetSampleCount = @($candidateLearnerResetSamples.ToArray()).Count
+    $candidateManagedReapplySampleCount = @($candidateManagedReapplySamples.ToArray()).Count
+    $candidateManagedCounterCoveragePct = Get-CountPercent -Count $candidateManagedCounterSampleCount -SampleCount $candidateSampleCount
+    $candidateLearnedFrameCoveragePct = Get-CountPercent -Count $candidateLearnedFrameSampleCount -SampleCount $candidateSampleCount
+    $candidateManagedCountersComplete = ($candidateSampleCount -gt 0 -and $candidateManagedCounterSampleCount -eq $candidateSampleCount)
+    $candidateLearnedFramesComplete = ($candidateSampleCount -gt 0 -and $candidateLearnedFrameSampleCount -eq $candidateSampleCount)
+    $candidateLearnerMonotonic = ($candidateLearnerResetSampleCount -eq 0)
+    $candidateLearnerStabilityStatus = if ($candidateSampleCount -eq 0) {
         "not-observed"
     }
-    elseif (-not $nr5LearnedFramesComplete) {
+    elseif (-not $candidateLearnedFramesComplete) {
         "learned-frames-missing"
     }
-    elseif ($nr5LearnerResetSampleCount -gt 0) {
+    elseif ($candidateLearnerResetSampleCount -gt 0) {
         "learner-reset-watch"
     }
-    elseif ($nr5ManagedReapplySampleCount -gt 0) {
+    elseif ($candidateManagedReapplySampleCount -gt 0) {
         "managed-reapply-watch"
     }
-    elseif ($nr5ManagedGenerationChangeCount -gt 0) {
+    elseif ($candidateManagedGenerationChangeCount -gt 0) {
         "channel-generation-changed"
     }
-    elseif ($nr5ManagedCounterSampleCount -eq 0) {
+    elseif ($candidateManagedCounterSampleCount -eq 0) {
         "managed-counters-missing"
     }
-    elseif (-not $nr5ManagedCountersComplete) {
+    elseif (-not $candidateManagedCountersComplete) {
         "managed-counters-partial"
     }
-    elseif ([int]$nr5LearnedFrameStats["count"] -gt 0 -and [double]$nr5LearnedFrameStats["max"] -lt 20.0) {
+    elseif ([int]$candidateLearnedFrameStats["count"] -gt 0 -and [double]$candidateLearnedFrameStats["max"] -lt 20.0) {
         "warming"
     }
     else {
         "stable"
     }
-    $nr5ManagedReplayEvidenceReady = (
-        [string]::Equals($nr5LearnerStabilityStatus, "stable", [StringComparison]::OrdinalIgnoreCase) -and
-        $nr5ManagedCountersComplete -and
-        $nr5LearnedFramesComplete)
-    $nr5WeakInputTopSamples = @($nr5WeakInputSamples.ToArray() |
+    $candidateManagedReplayEvidenceReady = (
+        [string]::Equals($candidateLearnerStabilityStatus, "stable", [StringComparison]::OrdinalIgnoreCase) -and
+        $candidateManagedCountersComplete -and
+        $candidateLearnedFramesComplete)
+    $candidateWeakInputTopSamples = @($candidateWeakInputSamples.ToArray() |
         Sort-Object @{Expression = { $v = Get-NumericValue (Get-JsonValue $_ "finalAudioRmsDbfs"); if ($null -eq $v) { [double]::PositiveInfinity } else { [double]$v } }; Ascending = $true },
             @{Expression = { $v = Get-NumericValue (Get-JsonValue $_ "outputDbfs"); if ($null -eq $v) { [double]::PositiveInfinity } else { [double]$v } }; Ascending = $true } |
         Select-Object -First 8)
-    $nr5StrongInputTopSamples = @($nr5StrongInputSamples.ToArray() |
+    $candidateStrongInputTopSamples = @($candidateStrongInputSamples.ToArray() |
         Sort-Object @{Expression = { $v = Get-NumericValue (Get-JsonValue $_ "finalAudioRmsDbfs"); if ($null -eq $v) { [double]::NegativeInfinity } else { [double]$v } }; Descending = $true },
             @{Expression = { $v = Get-NumericValue (Get-JsonValue $_ "outputDbfs"); if ($null -eq $v) { [double]::NegativeInfinity } else { [double]$v } }; Descending = $true } |
         Select-Object -First 8)
-    $nr5SpeechQualifiedWeakInputTopSamples = @($nr5SpeechQualifiedWeakInputSamples.ToArray() |
+    $candidateSpeechQualifiedWeakInputTopSamples = @($candidateSpeechQualifiedWeakInputSamples.ToArray() |
         Sort-Object @{Expression = { $v = Get-NumericValue (Get-JsonValue $_ "finalAudioRmsDbfs"); if ($null -eq $v) { [double]::PositiveInfinity } else { [double]$v } }; Ascending = $true },
             @{Expression = { $v = Get-NumericValue (Get-JsonValue $_ "outputDbfs"); if ($null -eq $v) { [double]::PositiveInfinity } else { [double]$v } }; Ascending = $true } |
         Select-Object -First 8)
-    $nr5SpeechQualifiedStrongInputTopSamples = @($nr5SpeechQualifiedStrongInputSamples.ToArray() |
+    $candidateSpeechQualifiedStrongInputTopSamples = @($candidateSpeechQualifiedStrongInputSamples.ToArray() |
         Sort-Object @{Expression = { $v = Get-NumericValue (Get-JsonValue $_ "finalAudioRmsDbfs"); if ($null -eq $v) { [double]::NegativeInfinity } else { [double]$v } }; Descending = $true },
             @{Expression = { $v = Get-NumericValue (Get-JsonValue $_ "outputDbfs"); if ($null -eq $v) { [double]::NegativeInfinity } else { [double]$v } }; Descending = $true } |
         Select-Object -First 8)
-    $nr5PassbandQualifiedWeakInputTopSamples = @($nr5PassbandQualifiedWeakInputSamples.ToArray() |
+    $candidatePassbandQualifiedWeakInputTopSamples = @($candidatePassbandQualifiedWeakInputSamples.ToArray() |
         Sort-Object @{Expression = { $v = Get-NumericValue (Get-JsonValue $_ "finalAudioRmsDbfs"); if ($null -eq $v) { [double]::PositiveInfinity } else { [double]$v } }; Ascending = $true },
             @{Expression = { $v = Get-NumericValue (Get-JsonValue $_ "outputDbfs"); if ($null -eq $v) { [double]::PositiveInfinity } else { [double]$v } }; Ascending = $true } |
         Select-Object -First 8)
-    $nr5PassbandQualifiedStrongInputTopSamples = @($nr5PassbandQualifiedStrongInputSamples.ToArray() |
+    $candidatePassbandQualifiedStrongInputTopSamples = @($candidatePassbandQualifiedStrongInputSamples.ToArray() |
         Sort-Object @{Expression = { $v = Get-NumericValue (Get-JsonValue $_ "finalAudioRmsDbfs"); if ($null -eq $v) { [double]::NegativeInfinity } else { [double]$v } }; Descending = $true },
             @{Expression = { $v = Get-NumericValue (Get-JsonValue $_ "outputDbfs"); if ($null -eq $v) { [double]::NegativeInfinity } else { [double]$v } }; Descending = $true } |
         Select-Object -First 8)
-    $nr5WeakDropoutTopSamples = @($nr5WeakDropoutSamples.ToArray() | Sort-Object outputDbfs | Select-Object -First 8)
-    $nr5WeakDropoutFinalAudibleTopSamples = @($nr5WeakDropoutFinalAudibleSamples.ToArray() |
+    $candidateWeakDropoutTopSamples = @($candidateWeakDropoutSamples.ToArray() | Sort-Object outputDbfs | Select-Object -First 8)
+    $candidateWeakDropoutFinalAudibleTopSamples = @($candidateWeakDropoutFinalAudibleSamples.ToArray() |
         Sort-Object @{Expression = "audioRmsDbfs"; Descending = $true }, @{Expression = "outputDbfs"; Descending = $true } |
         Select-Object -First 8)
-    $nr5WeakDropoutCandidateLossTopSamples = @($nr5WeakDropoutCandidateLossSamples.ToArray() |
+    $candidateWeakDropoutCandidateLossTopSamples = @($candidateWeakDropoutCandidateLossSamples.ToArray() |
         Sort-Object outputDbfs |
         Select-Object -First 8)
-    $nr5HotMakeupTopSamples = @($nr5HotMakeupSamples.ToArray() | Sort-Object makeupGainDb -Descending | Select-Object -First 8)
-    $nr5NearStrongInputTopSamples = @($nr5NearStrongInputSamples.ToArray() |
+    $candidateHotMakeupTopSamples = @($candidateHotMakeupSamples.ToArray() | Sort-Object makeupGainDb -Descending | Select-Object -First 8)
+    $candidateNearStrongInputTopSamples = @($candidateNearStrongInputSamples.ToArray() |
         Sort-Object @{Expression = "distanceToStrongThresholdDb"; Descending = $false }, @{Expression = "inputDbfs"; Descending = $true } |
         Select-Object -First 8)
-    $nr5FrontendStrongPassbandSubthresholdTopSamples = @($nr5FrontendStrongPassbandSubthresholdSamples.ToArray() |
+    $candidateFrontendStrongPassbandSubthresholdTopSamples = @($candidateFrontendStrongPassbandSubthresholdSamples.ToArray() |
         Sort-Object @{Expression = "distanceToStrongThresholdDb"; Descending = $false },
             @{Expression = { $v = Get-NumericValue (Get-JsonValue (Get-JsonValue $_ "frontendPassbandPeak") "snrDb"); if ($null -eq $v) { [double]::NegativeInfinity } else { [double]$v } }; Descending = $true } |
         Select-Object -First 8)
-    $nr5AudioAlignmentMismatchTopSamples = @($nr5AudioAlignmentMismatchSamples.ToArray() |
+    $candidateAudioAlignmentMismatchTopSamples = @($candidateAudioAlignmentMismatchSamples.ToArray() |
         Sort-Object @{Expression = { [Math]::Abs([double]$_.deltaDb) }; Descending = $true } |
         Select-Object -First 8)
-    $nr5AudioLevelerNormalizedTopSamples = @($nr5AudioLevelerNormalizedSamples.ToArray() |
+    $candidateAudioLevelerNormalizedTopSamples = @($candidateAudioLevelerNormalizedSamples.ToArray() |
         Sort-Object @{Expression = { [Math]::Abs([double]$_.outputDeltaDb) }; Descending = $true } |
         Select-Object -First 8)
-    $nr5LearnerResetTopSamples = @($nr5LearnerResetSamples.ToArray() |
+    $candidateLearnerResetTopSamples = @($candidateLearnerResetSamples.ToArray() |
         Sort-Object sampleIndex |
         Select-Object -First 8)
-    $nr5ManagedReapplyTopSamples = @($nr5ManagedReapplySamples.ToArray() |
+    $candidateManagedReapplyTopSamples = @($candidateManagedReapplySamples.ToArray() |
         Sort-Object sampleIndex |
         Select-Object -First 8)
-    $nr5ManagedGenerationChangeTopSamples = @($nr5ManagedGenerationChangeSamples.ToArray() |
+    $candidateManagedGenerationChangeTopSamples = @($candidateManagedGenerationChangeSamples.ToArray() |
         Sort-Object sampleIndex |
         Select-Object -First 8)
-    $nr5LowEvidenceLiftTopSamples = @($nr5LowEvidenceLiftSamples.ToArray() |
+    $candidateLowEvidenceLiftTopSamples = @($candidateLowEvidenceLiftSamples.ToArray() |
         Sort-Object @{Expression = "audioRmsDbfs"; Descending = $true }, @{Expression = "outputDbfs"; Descending = $true } |
         Select-Object -First 8)
-    $nr5LowEvidenceSuppressedTopSamples = @($nr5LowEvidenceSuppressedSamples.ToArray() |
+    $candidateLowEvidenceSuppressedTopSamples = @($candidateLowEvidenceSuppressedSamples.ToArray() |
         Sort-Object outputDbfs |
         Select-Object -First 8)
     $rxAudioLevelerBoostSlewLimitedTopSamples = @($rxAudioLevelerBoostSlewLimitedSamples.ToArray() |
@@ -3164,13 +3162,13 @@ function Build-Report {
     $rxAudioLevelerOutputLimitedTopSamples = @($rxAudioLevelerOutputLimitedSamples.ToArray() |
         Sort-Object @{Expression = "outputLimitReductionDb"; Descending = $true }, @{Expression = "outputLimitSampleCount"; Descending = $true } |
         Select-Object -First 8)
-    $nr5SpeechContinuityTopSamples = @($nr5SpeechContinuitySamples.ToArray() |
+    $candidateSpeechContinuityTopSamples = @($candidateSpeechContinuitySamples.ToArray() |
         Sort-Object @{Expression = "belowDropoutThreshold"; Descending = $true },
             @{Expression = "belowFadeThreshold"; Descending = $true },
             @{Expression = { $v = Get-NumericValue (Get-JsonValue $_ "finalAudioRmsDbfs"); if ($null -eq $v) { [double]::PositiveInfinity } else { [double]$v } }; Ascending = $true } |
         Select-Object -First 8)
-    $rxAudioLevelerNr5NoSignalNoiseCapTopSamples = @($rxAudioLevelerNr5NoSignalNoiseCapSamples.ToArray() |
-        Sort-Object @{Expression = "nr5NoiseProfilePrior"; Descending = $true }, @{Expression = "nr5NoSignalNoisePrior"; Descending = $true } |
+    $rxAudioLevelerCandidateNoSignalNoiseCapTopSamples = @($rxAudioLevelerCandidateNoSignalNoiseCapSamples.ToArray() |
+        Sort-Object @{Expression = "candidateNoiseProfilePrior"; Descending = $true }, @{Expression = "candidateNoSignalNoisePrior"; Descending = $true } |
         Select-Object -First 8)
     $passbandAudioTopSamples = @($passbandAudioSamples.ToArray() |
         Sort-Object @{Expression = "finalAudioRmsDbfs"; Descending = $true } |
@@ -3192,280 +3190,280 @@ function Build-Report {
         -Samples @($frontendTopPeakSamples.ToArray()) `
         -MaxCount 6 `
         -TuneStepHz $TuneStepHz)
-    $nr5NormalizationCompressionDb = $null
-    $nr5WeakStrongOutputGapDb = $null
-    $nr5WeakStrongFinalAudioGapDb = $null
-    $nr5SpeechQualifiedWeakStrongOutputGapDb = $null
-    $nr5SpeechQualifiedWeakStrongFinalAudioGapDb = $null
-    $nr5PassbandQualifiedWeakStrongOutputGapDb = $null
-    $nr5PassbandQualifiedWeakStrongFinalAudioGapDb = $null
-    $nr5MixedWeakStrongGapThresholdDb = 6.0
-    $nr5MixedWeakStrongFinalAudioGapThresholdDb = 4.0
-    $nr5MinimumMixedWeakInputSampleCount = 3
-    $nr5MinimumMixedStrongInputSampleCount = 3
-    $nr5MinimumMixedEvidenceQualifiedWeakInputSampleCount = 3
-    $nr5MinimumQualifiedWeakStrongInputSampleCount = 2
-    $nr5SpeechQualifiedWeakStrongEvidenceReady = $false
-    $nr5SpeechQualifiedWeakStrongOutputParityReady = $false
-    $nr5SpeechQualifiedWeakStrongFinalAudioParityReady = $false
-    $nr5SpeechQualifiedWeakStrongEvidenceStatus = "not-evaluated"
-    $nr5PassbandQualifiedWeakStrongEvidenceReady = $false
-    $nr5PassbandQualifiedWeakStrongOutputParityReady = $false
-    $nr5PassbandQualifiedWeakStrongFinalAudioParityReady = $false
-    $nr5PassbandQualifiedWeakStrongEvidenceStatus = "not-evaluated"
-    $nr5MixedWeakStrongEvidenceReady = $false
-    $nr5WeakStrongOutputParityReady = $false
-    $nr5WeakStrongFinalAudioParityReady = $false
-    $nr5MixedWeakStrongEvidenceStatus = "not-evaluated"
-    $nr5LowEvidenceWeakInputCount = $nr5LowEvidenceSampleCount
-    $nr5EvidenceQualifiedWeakInputCount = [Math]::Max(0, $nr5WeakInputCount - $nr5LowEvidenceWeakInputCount)
-    $nr5LowEvidenceLiftPct = $null
-    $nr5LowEvidenceSuppressedPct = $null
-    $nr5AudioAlignmentMismatchPct = $null
-    $nr5AudioAlignedAfterLevelerPct = $null
-    $nr5AudioLevelerNormalizedPct = $null
-    $nr5LowEvidenceAlignmentMismatchPct = $null
-    $nr5WeakDropoutFinalAudiblePct = Get-CountPercent -Count $nr5WeakDropoutFinalAudibleCount -SampleCount $nr5WeakDropoutCount
-    $nr5WeakDropoutNativeLiftedPct = Get-CountPercent -Count $nr5WeakDropoutNativeLiftedCount -SampleCount $nr5WeakDropoutCount
-    $nr5WeakDropoutCandidateLossPct = Get-CountPercent -Count $nr5WeakDropoutCandidateLossCount -SampleCount $nr5WeakDropoutCount
-    if ($null -ne $nr5InputStats["movement"] -and $null -ne $nr5OutputStats["movement"]) {
-        $nr5NormalizationCompressionDb = [Math]::Round([double]$nr5InputStats["movement"] - [double]$nr5OutputStats["movement"], 3)
+    $candidateNormalizationCompressionDb = $null
+    $candidateWeakStrongOutputGapDb = $null
+    $candidateWeakStrongFinalAudioGapDb = $null
+    $candidateSpeechQualifiedWeakStrongOutputGapDb = $null
+    $candidateSpeechQualifiedWeakStrongFinalAudioGapDb = $null
+    $candidatePassbandQualifiedWeakStrongOutputGapDb = $null
+    $candidatePassbandQualifiedWeakStrongFinalAudioGapDb = $null
+    $candidateMixedWeakStrongGapThresholdDb = 6.0
+    $candidateMixedWeakStrongFinalAudioGapThresholdDb = 4.0
+    $candidateMinimumMixedWeakInputSampleCount = 3
+    $candidateMinimumMixedStrongInputSampleCount = 3
+    $candidateMinimumMixedEvidenceQualifiedWeakInputSampleCount = 3
+    $candidateMinimumQualifiedWeakStrongInputSampleCount = 2
+    $candidateSpeechQualifiedWeakStrongEvidenceReady = $false
+    $candidateSpeechQualifiedWeakStrongOutputParityReady = $false
+    $candidateSpeechQualifiedWeakStrongFinalAudioParityReady = $false
+    $candidateSpeechQualifiedWeakStrongEvidenceStatus = "not-evaluated"
+    $candidatePassbandQualifiedWeakStrongEvidenceReady = $false
+    $candidatePassbandQualifiedWeakStrongOutputParityReady = $false
+    $candidatePassbandQualifiedWeakStrongFinalAudioParityReady = $false
+    $candidatePassbandQualifiedWeakStrongEvidenceStatus = "not-evaluated"
+    $candidateMixedWeakStrongEvidenceReady = $false
+    $candidateWeakStrongOutputParityReady = $false
+    $candidateWeakStrongFinalAudioParityReady = $false
+    $candidateMixedWeakStrongEvidenceStatus = "not-evaluated"
+    $candidateLowEvidenceWeakInputCount = $candidateLowEvidenceSampleCount
+    $candidateEvidenceQualifiedWeakInputCount = [Math]::Max(0, $candidateWeakInputCount - $candidateLowEvidenceWeakInputCount)
+    $candidateLowEvidenceLiftPct = $null
+    $candidateLowEvidenceSuppressedPct = $null
+    $candidateAudioAlignmentMismatchPct = $null
+    $candidateAudioAlignedAfterLevelerPct = $null
+    $candidateAudioLevelerNormalizedPct = $null
+    $candidateLowEvidenceAlignmentMismatchPct = $null
+    $candidateWeakDropoutFinalAudiblePct = Get-CountPercent -Count $candidateWeakDropoutFinalAudibleCount -SampleCount $candidateWeakDropoutCount
+    $candidateWeakDropoutNativeLiftedPct = Get-CountPercent -Count $candidateWeakDropoutNativeLiftedCount -SampleCount $candidateWeakDropoutCount
+    $candidateWeakDropoutCandidateLossPct = Get-CountPercent -Count $candidateWeakDropoutCandidateLossCount -SampleCount $candidateWeakDropoutCount
+    if ($null -ne $candidateInputStats["movement"] -and $null -ne $candidateOutputStats["movement"]) {
+        $candidateNormalizationCompressionDb = [Math]::Round([double]$candidateInputStats["movement"] - [double]$candidateOutputStats["movement"], 3)
     }
-    if ($null -ne $nr5WeakOutputStats["average"] -and $null -ne $nr5StrongOutputStats["average"]) {
-        $nr5WeakStrongOutputGapDb = [Math]::Round([double]$nr5StrongOutputStats["average"] - [double]$nr5WeakOutputStats["average"], 3)
+    if ($null -ne $candidateWeakOutputStats["average"] -and $null -ne $candidateStrongOutputStats["average"]) {
+        $candidateWeakStrongOutputGapDb = [Math]::Round([double]$candidateStrongOutputStats["average"] - [double]$candidateWeakOutputStats["average"], 3)
     }
-    if ($null -ne $nr5WeakFinalAudioStats["average"] -and $null -ne $nr5StrongFinalAudioStats["average"]) {
-        $nr5WeakStrongFinalAudioGapDb = [Math]::Round([double]$nr5StrongFinalAudioStats["average"] - [double]$nr5WeakFinalAudioStats["average"], 3)
+    if ($null -ne $candidateWeakFinalAudioStats["average"] -and $null -ne $candidateStrongFinalAudioStats["average"]) {
+        $candidateWeakStrongFinalAudioGapDb = [Math]::Round([double]$candidateStrongFinalAudioStats["average"] - [double]$candidateWeakFinalAudioStats["average"], 3)
     }
-    if ($null -ne $nr5SpeechQualifiedWeakOutputStats["average"] -and $null -ne $nr5SpeechQualifiedStrongOutputStats["average"]) {
-        $nr5SpeechQualifiedWeakStrongOutputGapDb = [Math]::Round([double]$nr5SpeechQualifiedStrongOutputStats["average"] - [double]$nr5SpeechQualifiedWeakOutputStats["average"], 3)
+    if ($null -ne $candidateSpeechQualifiedWeakOutputStats["average"] -and $null -ne $candidateSpeechQualifiedStrongOutputStats["average"]) {
+        $candidateSpeechQualifiedWeakStrongOutputGapDb = [Math]::Round([double]$candidateSpeechQualifiedStrongOutputStats["average"] - [double]$candidateSpeechQualifiedWeakOutputStats["average"], 3)
     }
-    if ($null -ne $nr5SpeechQualifiedWeakFinalAudioStats["average"] -and $null -ne $nr5SpeechQualifiedStrongFinalAudioStats["average"]) {
-        $nr5SpeechQualifiedWeakStrongFinalAudioGapDb = [Math]::Round([double]$nr5SpeechQualifiedStrongFinalAudioStats["average"] - [double]$nr5SpeechQualifiedWeakFinalAudioStats["average"], 3)
+    if ($null -ne $candidateSpeechQualifiedWeakFinalAudioStats["average"] -and $null -ne $candidateSpeechQualifiedStrongFinalAudioStats["average"]) {
+        $candidateSpeechQualifiedWeakStrongFinalAudioGapDb = [Math]::Round([double]$candidateSpeechQualifiedStrongFinalAudioStats["average"] - [double]$candidateSpeechQualifiedWeakFinalAudioStats["average"], 3)
     }
-    if ($null -ne $nr5PassbandQualifiedWeakOutputStats["average"] -and $null -ne $nr5PassbandQualifiedStrongOutputStats["average"]) {
-        $nr5PassbandQualifiedWeakStrongOutputGapDb = [Math]::Round([double]$nr5PassbandQualifiedStrongOutputStats["average"] - [double]$nr5PassbandQualifiedWeakOutputStats["average"], 3)
+    if ($null -ne $candidatePassbandQualifiedWeakOutputStats["average"] -and $null -ne $candidatePassbandQualifiedStrongOutputStats["average"]) {
+        $candidatePassbandQualifiedWeakStrongOutputGapDb = [Math]::Round([double]$candidatePassbandQualifiedStrongOutputStats["average"] - [double]$candidatePassbandQualifiedWeakOutputStats["average"], 3)
     }
-    if ($null -ne $nr5PassbandQualifiedWeakFinalAudioStats["average"] -and $null -ne $nr5PassbandQualifiedStrongFinalAudioStats["average"]) {
-        $nr5PassbandQualifiedWeakStrongFinalAudioGapDb = [Math]::Round([double]$nr5PassbandQualifiedStrongFinalAudioStats["average"] - [double]$nr5PassbandQualifiedWeakFinalAudioStats["average"], 3)
+    if ($null -ne $candidatePassbandQualifiedWeakFinalAudioStats["average"] -and $null -ne $candidatePassbandQualifiedStrongFinalAudioStats["average"]) {
+        $candidatePassbandQualifiedWeakStrongFinalAudioGapDb = [Math]::Round([double]$candidatePassbandQualifiedStrongFinalAudioStats["average"] - [double]$candidatePassbandQualifiedWeakFinalAudioStats["average"], 3)
     }
-    if ($nr5SampleCount -le 0) {
-        $nr5SpeechQualifiedWeakStrongEvidenceStatus = "no-nr5-samples"
+    if ($candidateSampleCount -le 0) {
+        $candidateSpeechQualifiedWeakStrongEvidenceStatus = "no-candidate-samples"
     }
-    elseif ($nr5SpeechQualifiedWeakOutputValues.Count -le 0 -and $nr5SpeechQualifiedStrongOutputValues.Count -le 0) {
-        $nr5SpeechQualifiedWeakStrongEvidenceStatus = "missing-weak-and-strong-speech"
+    elseif ($candidateSpeechQualifiedWeakOutputValues.Count -le 0 -and $candidateSpeechQualifiedStrongOutputValues.Count -le 0) {
+        $candidateSpeechQualifiedWeakStrongEvidenceStatus = "missing-weak-and-strong-speech"
     }
-    elseif ($nr5SpeechQualifiedWeakOutputValues.Count -le 0) {
-        $nr5SpeechQualifiedWeakStrongEvidenceStatus = "missing-weak-speech"
+    elseif ($candidateSpeechQualifiedWeakOutputValues.Count -le 0) {
+        $candidateSpeechQualifiedWeakStrongEvidenceStatus = "missing-weak-speech"
     }
-    elseif ($nr5SpeechQualifiedStrongOutputValues.Count -le 0) {
-        $nr5SpeechQualifiedWeakStrongEvidenceStatus = "missing-strong-speech"
+    elseif ($candidateSpeechQualifiedStrongOutputValues.Count -le 0) {
+        $candidateSpeechQualifiedWeakStrongEvidenceStatus = "missing-strong-speech"
     }
-    elseif ($nr5SpeechQualifiedWeakOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount -and
-        $nr5SpeechQualifiedStrongOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount) {
-        $nr5SpeechQualifiedWeakStrongEvidenceStatus = "insufficient-weak-and-strong-speech-evidence"
+    elseif ($candidateSpeechQualifiedWeakOutputValues.Count -lt $candidateMinimumQualifiedWeakStrongInputSampleCount -and
+        $candidateSpeechQualifiedStrongOutputValues.Count -lt $candidateMinimumQualifiedWeakStrongInputSampleCount) {
+        $candidateSpeechQualifiedWeakStrongEvidenceStatus = "insufficient-weak-and-strong-speech-evidence"
     }
-    elseif ($nr5SpeechQualifiedWeakOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount) {
-        $nr5SpeechQualifiedWeakStrongEvidenceStatus = "insufficient-weak-speech-evidence"
+    elseif ($candidateSpeechQualifiedWeakOutputValues.Count -lt $candidateMinimumQualifiedWeakStrongInputSampleCount) {
+        $candidateSpeechQualifiedWeakStrongEvidenceStatus = "insufficient-weak-speech-evidence"
     }
-    elseif ($nr5SpeechQualifiedStrongOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount) {
-        $nr5SpeechQualifiedWeakStrongEvidenceStatus = "insufficient-strong-speech-evidence"
+    elseif ($candidateSpeechQualifiedStrongOutputValues.Count -lt $candidateMinimumQualifiedWeakStrongInputSampleCount) {
+        $candidateSpeechQualifiedWeakStrongEvidenceStatus = "insufficient-strong-speech-evidence"
     }
-    elseif ($null -ne $nr5SpeechQualifiedWeakStrongFinalAudioGapDb -and
-        [Math]::Abs([double]$nr5SpeechQualifiedWeakStrongFinalAudioGapDb) -le $nr5MixedWeakStrongFinalAudioGapThresholdDb) {
-        $nr5SpeechQualifiedWeakStrongEvidenceStatus = "ready-final-audio"
+    elseif ($null -ne $candidateSpeechQualifiedWeakStrongFinalAudioGapDb -and
+        [Math]::Abs([double]$candidateSpeechQualifiedWeakStrongFinalAudioGapDb) -le $candidateMixedWeakStrongFinalAudioGapThresholdDb) {
+        $candidateSpeechQualifiedWeakStrongEvidenceStatus = "ready-final-audio"
     }
-    elseif ($null -ne $nr5SpeechQualifiedWeakStrongOutputGapDb -and
-        [Math]::Abs([double]$nr5SpeechQualifiedWeakStrongOutputGapDb) -le $nr5MixedWeakStrongGapThresholdDb) {
-        $nr5SpeechQualifiedWeakStrongEvidenceStatus = "ready-output"
-    }
-    else {
-        $nr5SpeechQualifiedWeakStrongEvidenceStatus = "weak-strong-speech-gap-watch"
-    }
-    $nr5SpeechQualifiedWeakStrongSampleCountReady = ($nr5SpeechQualifiedWeakOutputValues.Count -ge $nr5MinimumQualifiedWeakStrongInputSampleCount -and
-        $nr5SpeechQualifiedStrongOutputValues.Count -ge $nr5MinimumQualifiedWeakStrongInputSampleCount)
-    $nr5SpeechQualifiedWeakStrongEvidenceReady = ($nr5SpeechQualifiedWeakStrongSampleCountReady -and (
-        [string]::Equals($nr5SpeechQualifiedWeakStrongEvidenceStatus, "ready-final-audio", [StringComparison]::OrdinalIgnoreCase) -or
-        [string]::Equals($nr5SpeechQualifiedWeakStrongEvidenceStatus, "ready-output", [StringComparison]::OrdinalIgnoreCase)))
-    $nr5SpeechQualifiedWeakStrongOutputParityReady = ($nr5SpeechQualifiedWeakStrongSampleCountReady -and
-        $null -ne $nr5SpeechQualifiedWeakStrongOutputGapDb -and
-        [Math]::Abs([double]$nr5SpeechQualifiedWeakStrongOutputGapDb) -le $nr5MixedWeakStrongGapThresholdDb)
-    $nr5SpeechQualifiedWeakStrongFinalAudioParityReady = ($nr5SpeechQualifiedWeakStrongSampleCountReady -and
-        $null -ne $nr5SpeechQualifiedWeakStrongFinalAudioGapDb -and
-        [Math]::Abs([double]$nr5SpeechQualifiedWeakStrongFinalAudioGapDb) -le $nr5MixedWeakStrongFinalAudioGapThresholdDb)
-    if ($nr5SampleCount -le 0) {
-        $nr5PassbandQualifiedWeakStrongEvidenceStatus = "no-nr5-samples"
-    }
-    elseif ($nr5PassbandQualifiedWeakOutputValues.Count -le 0 -and $nr5PassbandQualifiedStrongOutputValues.Count -le 0) {
-        $nr5PassbandQualifiedWeakStrongEvidenceStatus = "missing-weak-and-strong-passband-speech"
-    }
-    elseif ($nr5PassbandQualifiedWeakOutputValues.Count -le 0) {
-        $nr5PassbandQualifiedWeakStrongEvidenceStatus = "missing-weak-passband-speech"
-    }
-    elseif ($nr5PassbandQualifiedStrongOutputValues.Count -le 0) {
-        $nr5PassbandQualifiedWeakStrongEvidenceStatus = "missing-strong-passband-speech"
-    }
-    elseif ($nr5PassbandQualifiedWeakOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount -and
-        $nr5PassbandQualifiedStrongOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount) {
-        $nr5PassbandQualifiedWeakStrongEvidenceStatus = "insufficient-weak-and-strong-passband-speech-evidence"
-    }
-    elseif ($nr5PassbandQualifiedWeakOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount) {
-        $nr5PassbandQualifiedWeakStrongEvidenceStatus = "insufficient-weak-passband-speech-evidence"
-    }
-    elseif ($nr5PassbandQualifiedStrongOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount) {
-        $nr5PassbandQualifiedWeakStrongEvidenceStatus = "insufficient-strong-passband-speech-evidence"
-    }
-    elseif ($null -ne $nr5PassbandQualifiedWeakStrongFinalAudioGapDb -and
-        [Math]::Abs([double]$nr5PassbandQualifiedWeakStrongFinalAudioGapDb) -le $nr5MixedWeakStrongFinalAudioGapThresholdDb) {
-        $nr5PassbandQualifiedWeakStrongEvidenceStatus = "ready-final-audio"
-    }
-    elseif ($null -ne $nr5PassbandQualifiedWeakStrongOutputGapDb -and
-        [Math]::Abs([double]$nr5PassbandQualifiedWeakStrongOutputGapDb) -le $nr5MixedWeakStrongGapThresholdDb) {
-        $nr5PassbandQualifiedWeakStrongEvidenceStatus = "ready-output"
+    elseif ($null -ne $candidateSpeechQualifiedWeakStrongOutputGapDb -and
+        [Math]::Abs([double]$candidateSpeechQualifiedWeakStrongOutputGapDb) -le $candidateMixedWeakStrongGapThresholdDb) {
+        $candidateSpeechQualifiedWeakStrongEvidenceStatus = "ready-output"
     }
     else {
-        $nr5PassbandQualifiedWeakStrongEvidenceStatus = "weak-strong-passband-speech-gap-watch"
+        $candidateSpeechQualifiedWeakStrongEvidenceStatus = "weak-strong-speech-gap-watch"
     }
-    $nr5PassbandQualifiedWeakStrongSampleCountReady = ($nr5PassbandQualifiedWeakOutputValues.Count -ge $nr5MinimumQualifiedWeakStrongInputSampleCount -and
-        $nr5PassbandQualifiedStrongOutputValues.Count -ge $nr5MinimumQualifiedWeakStrongInputSampleCount)
-    $nr5PassbandQualifiedWeakStrongEvidenceReady = ($nr5PassbandQualifiedWeakStrongSampleCountReady -and (
-        [string]::Equals($nr5PassbandQualifiedWeakStrongEvidenceStatus, "ready-final-audio", [StringComparison]::OrdinalIgnoreCase) -or
-        [string]::Equals($nr5PassbandQualifiedWeakStrongEvidenceStatus, "ready-output", [StringComparison]::OrdinalIgnoreCase)))
-    $nr5PassbandQualifiedWeakStrongOutputParityReady = ($nr5PassbandQualifiedWeakStrongSampleCountReady -and
-        $null -ne $nr5PassbandQualifiedWeakStrongOutputGapDb -and
-        [Math]::Abs([double]$nr5PassbandQualifiedWeakStrongOutputGapDb) -le $nr5MixedWeakStrongGapThresholdDb)
-    $nr5PassbandQualifiedWeakStrongFinalAudioParityReady = ($nr5PassbandQualifiedWeakStrongSampleCountReady -and
-        $null -ne $nr5PassbandQualifiedWeakStrongFinalAudioGapDb -and
-        [Math]::Abs([double]$nr5PassbandQualifiedWeakStrongFinalAudioGapDb) -le $nr5MixedWeakStrongFinalAudioGapThresholdDb)
-    if ($nr5SampleCount -le 0) {
-        $nr5MixedWeakStrongEvidenceStatus = "no-nr5-samples"
+    $candidateSpeechQualifiedWeakStrongSampleCountReady = ($candidateSpeechQualifiedWeakOutputValues.Count -ge $candidateMinimumQualifiedWeakStrongInputSampleCount -and
+        $candidateSpeechQualifiedStrongOutputValues.Count -ge $candidateMinimumQualifiedWeakStrongInputSampleCount)
+    $candidateSpeechQualifiedWeakStrongEvidenceReady = ($candidateSpeechQualifiedWeakStrongSampleCountReady -and (
+        [string]::Equals($candidateSpeechQualifiedWeakStrongEvidenceStatus, "ready-final-audio", [StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($candidateSpeechQualifiedWeakStrongEvidenceStatus, "ready-output", [StringComparison]::OrdinalIgnoreCase)))
+    $candidateSpeechQualifiedWeakStrongOutputParityReady = ($candidateSpeechQualifiedWeakStrongSampleCountReady -and
+        $null -ne $candidateSpeechQualifiedWeakStrongOutputGapDb -and
+        [Math]::Abs([double]$candidateSpeechQualifiedWeakStrongOutputGapDb) -le $candidateMixedWeakStrongGapThresholdDb)
+    $candidateSpeechQualifiedWeakStrongFinalAudioParityReady = ($candidateSpeechQualifiedWeakStrongSampleCountReady -and
+        $null -ne $candidateSpeechQualifiedWeakStrongFinalAudioGapDb -and
+        [Math]::Abs([double]$candidateSpeechQualifiedWeakStrongFinalAudioGapDb) -le $candidateMixedWeakStrongFinalAudioGapThresholdDb)
+    if ($candidateSampleCount -le 0) {
+        $candidatePassbandQualifiedWeakStrongEvidenceStatus = "no-candidate-samples"
     }
-    elseif ($nr5WeakInputCount -le 0 -and $nr5StrongInputCount -le 0) {
-        $nr5MixedWeakStrongEvidenceStatus = "missing-weak-and-strong-input"
+    elseif ($candidatePassbandQualifiedWeakOutputValues.Count -le 0 -and $candidatePassbandQualifiedStrongOutputValues.Count -le 0) {
+        $candidatePassbandQualifiedWeakStrongEvidenceStatus = "missing-weak-and-strong-passband-speech"
     }
-    elseif ($nr5WeakInputCount -le 0) {
-        $nr5MixedWeakStrongEvidenceStatus = "missing-weak-input"
+    elseif ($candidatePassbandQualifiedWeakOutputValues.Count -le 0) {
+        $candidatePassbandQualifiedWeakStrongEvidenceStatus = "missing-weak-passband-speech"
     }
-    elseif ($nr5StrongInputCount -le 0) {
-        $nr5MixedWeakStrongEvidenceStatus = "missing-strong-input"
+    elseif ($candidatePassbandQualifiedStrongOutputValues.Count -le 0) {
+        $candidatePassbandQualifiedWeakStrongEvidenceStatus = "missing-strong-passband-speech"
     }
-    elseif ($nr5EvidenceQualifiedWeakInputCount -le 0) {
-        $nr5MixedWeakStrongEvidenceStatus = "low-evidence-weak-input"
+    elseif ($candidatePassbandQualifiedWeakOutputValues.Count -lt $candidateMinimumQualifiedWeakStrongInputSampleCount -and
+        $candidatePassbandQualifiedStrongOutputValues.Count -lt $candidateMinimumQualifiedWeakStrongInputSampleCount) {
+        $candidatePassbandQualifiedWeakStrongEvidenceStatus = "insufficient-weak-and-strong-passband-speech-evidence"
     }
-    elseif ($nr5WeakInputCount -lt $nr5MinimumMixedWeakInputSampleCount -or
-        $nr5EvidenceQualifiedWeakInputCount -lt $nr5MinimumMixedEvidenceQualifiedWeakInputSampleCount) {
-        $nr5MixedWeakStrongEvidenceStatus = "insufficient-weak-input-evidence"
+    elseif ($candidatePassbandQualifiedWeakOutputValues.Count -lt $candidateMinimumQualifiedWeakStrongInputSampleCount) {
+        $candidatePassbandQualifiedWeakStrongEvidenceStatus = "insufficient-weak-passband-speech-evidence"
     }
-    elseif ($nr5StrongInputCount -lt $nr5MinimumMixedStrongInputSampleCount) {
-        $nr5MixedWeakStrongEvidenceStatus = "insufficient-strong-input-evidence"
+    elseif ($candidatePassbandQualifiedStrongOutputValues.Count -lt $candidateMinimumQualifiedWeakStrongInputSampleCount) {
+        $candidatePassbandQualifiedWeakStrongEvidenceStatus = "insufficient-strong-passband-speech-evidence"
     }
-    elseif ($null -eq $nr5WeakStrongOutputGapDb -and $null -eq $nr5WeakStrongFinalAudioGapDb) {
-        $nr5MixedWeakStrongEvidenceStatus = "missing-output-gap"
+    elseif ($null -ne $candidatePassbandQualifiedWeakStrongFinalAudioGapDb -and
+        [Math]::Abs([double]$candidatePassbandQualifiedWeakStrongFinalAudioGapDb) -le $candidateMixedWeakStrongFinalAudioGapThresholdDb) {
+        $candidatePassbandQualifiedWeakStrongEvidenceStatus = "ready-final-audio"
     }
-    elseif ($nr5SpeechQualifiedWeakStrongFinalAudioParityReady -or
-        $nr5PassbandQualifiedWeakStrongFinalAudioParityReady) {
-        $nr5MixedWeakStrongEvidenceStatus = "ready-final-audio"
-    }
-    elseif ($null -ne $nr5WeakStrongFinalAudioGapDb -and
-        [Math]::Abs([double]$nr5WeakStrongFinalAudioGapDb) -le $nr5MixedWeakStrongFinalAudioGapThresholdDb) {
-        $nr5MixedWeakStrongEvidenceStatus = "ready-final-audio"
-    }
-    elseif ($null -ne $nr5WeakStrongOutputGapDb -and
-        [Math]::Abs([double]$nr5WeakStrongOutputGapDb) -gt $nr5MixedWeakStrongGapThresholdDb) {
-        $nr5MixedWeakStrongEvidenceStatus = "weak-strong-output-gap-watch"
-    }
-    elseif ($null -ne $nr5WeakStrongFinalAudioGapDb -and
-        [Math]::Abs([double]$nr5WeakStrongFinalAudioGapDb) -gt $nr5MixedWeakStrongFinalAudioGapThresholdDb) {
-        $nr5MixedWeakStrongEvidenceStatus = "weak-strong-output-gap-watch"
-    }
-    elseif ($null -eq $nr5WeakStrongOutputGapDb) {
-        $nr5MixedWeakStrongEvidenceStatus = "missing-output-gap"
+    elseif ($null -ne $candidatePassbandQualifiedWeakStrongOutputGapDb -and
+        [Math]::Abs([double]$candidatePassbandQualifiedWeakStrongOutputGapDb) -le $candidateMixedWeakStrongGapThresholdDb) {
+        $candidatePassbandQualifiedWeakStrongEvidenceStatus = "ready-output"
     }
     else {
-        $nr5MixedWeakStrongEvidenceStatus = "ready"
+        $candidatePassbandQualifiedWeakStrongEvidenceStatus = "weak-strong-passband-speech-gap-watch"
     }
-    $nr5MixedWeakStrongEvidenceReady =
-        [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "ready", [StringComparison]::OrdinalIgnoreCase) -or
-        [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "ready-final-audio", [StringComparison]::OrdinalIgnoreCase)
-    $nr5MixedWeakStrongInputEvidenceInsufficient =
-        [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "insufficient-weak-input-evidence", [StringComparison]::OrdinalIgnoreCase) -or
-        [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "insufficient-strong-input-evidence", [StringComparison]::OrdinalIgnoreCase)
-    $nr5WeakStrongOutputParityReady = ($null -ne $nr5WeakStrongOutputGapDb -and
-        [Math]::Abs([double]$nr5WeakStrongOutputGapDb) -le $nr5MixedWeakStrongGapThresholdDb)
-    $nr5WeakStrongFinalAudioParityReady = ($null -ne $nr5WeakStrongFinalAudioGapDb -and
-        [Math]::Abs([double]$nr5WeakStrongFinalAudioGapDb) -le $nr5MixedWeakStrongFinalAudioGapThresholdDb)
-    $nr5MixedWeakStrongOutputGapDirection = Get-GapDirection `
-        -GapDb $nr5WeakStrongOutputGapDb `
-        -ThresholdDb $nr5MixedWeakStrongGapThresholdDb
-    $nr5MixedWeakStrongFinalAudioGapDirection = Get-GapDirection `
-        -GapDb $nr5WeakStrongFinalAudioGapDb `
-        -ThresholdDb $nr5MixedWeakStrongFinalAudioGapThresholdDb
-    $nr5MixedWeakStrongOutputGapExcessDb = Get-GapExcessDb `
-        -GapDb $nr5WeakStrongOutputGapDb `
-        -ThresholdDb $nr5MixedWeakStrongGapThresholdDb
-    $nr5MixedWeakStrongFinalAudioGapExcessDb = Get-GapExcessDb `
-        -GapDb $nr5WeakStrongFinalAudioGapDb `
-        -ThresholdDb $nr5MixedWeakStrongFinalAudioGapThresholdDb
-    $nr5WeakOutputLiftNeededDb = $null
-    $nr5WeakOutputTrimNeededDb = $null
-    if ([string]::Equals($nr5MixedWeakStrongOutputGapDirection, "weak-too-low", [StringComparison]::OrdinalIgnoreCase)) {
-        $nr5WeakOutputLiftNeededDb = $nr5MixedWeakStrongOutputGapExcessDb
-        $nr5WeakOutputTrimNeededDb = 0.0
+    $candidatePassbandQualifiedWeakStrongSampleCountReady = ($candidatePassbandQualifiedWeakOutputValues.Count -ge $candidateMinimumQualifiedWeakStrongInputSampleCount -and
+        $candidatePassbandQualifiedStrongOutputValues.Count -ge $candidateMinimumQualifiedWeakStrongInputSampleCount)
+    $candidatePassbandQualifiedWeakStrongEvidenceReady = ($candidatePassbandQualifiedWeakStrongSampleCountReady -and (
+        [string]::Equals($candidatePassbandQualifiedWeakStrongEvidenceStatus, "ready-final-audio", [StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($candidatePassbandQualifiedWeakStrongEvidenceStatus, "ready-output", [StringComparison]::OrdinalIgnoreCase)))
+    $candidatePassbandQualifiedWeakStrongOutputParityReady = ($candidatePassbandQualifiedWeakStrongSampleCountReady -and
+        $null -ne $candidatePassbandQualifiedWeakStrongOutputGapDb -and
+        [Math]::Abs([double]$candidatePassbandQualifiedWeakStrongOutputGapDb) -le $candidateMixedWeakStrongGapThresholdDb)
+    $candidatePassbandQualifiedWeakStrongFinalAudioParityReady = ($candidatePassbandQualifiedWeakStrongSampleCountReady -and
+        $null -ne $candidatePassbandQualifiedWeakStrongFinalAudioGapDb -and
+        [Math]::Abs([double]$candidatePassbandQualifiedWeakStrongFinalAudioGapDb) -le $candidateMixedWeakStrongFinalAudioGapThresholdDb)
+    if ($candidateSampleCount -le 0) {
+        $candidateMixedWeakStrongEvidenceStatus = "no-candidate-samples"
     }
-    elseif ([string]::Equals($nr5MixedWeakStrongOutputGapDirection, "weak-too-hot", [StringComparison]::OrdinalIgnoreCase)) {
-        $nr5WeakOutputLiftNeededDb = 0.0
-        $nr5WeakOutputTrimNeededDb = $nr5MixedWeakStrongOutputGapExcessDb
+    elseif ($candidateWeakInputCount -le 0 -and $candidateStrongInputCount -le 0) {
+        $candidateMixedWeakStrongEvidenceStatus = "missing-weak-and-strong-input"
     }
-    elseif (-not [string]::Equals($nr5MixedWeakStrongOutputGapDirection, "unknown", [StringComparison]::OrdinalIgnoreCase)) {
-        $nr5WeakOutputLiftNeededDb = 0.0
-        $nr5WeakOutputTrimNeededDb = 0.0
+    elseif ($candidateWeakInputCount -le 0) {
+        $candidateMixedWeakStrongEvidenceStatus = "missing-weak-input"
     }
-    $nr5WeakFinalAudioLiftNeededDb = $null
-    $nr5WeakFinalAudioTrimNeededDb = $null
-    if ([string]::Equals($nr5MixedWeakStrongFinalAudioGapDirection, "weak-too-low", [StringComparison]::OrdinalIgnoreCase)) {
-        $nr5WeakFinalAudioLiftNeededDb = $nr5MixedWeakStrongFinalAudioGapExcessDb
-        $nr5WeakFinalAudioTrimNeededDb = 0.0
+    elseif ($candidateStrongInputCount -le 0) {
+        $candidateMixedWeakStrongEvidenceStatus = "missing-strong-input"
     }
-    elseif ([string]::Equals($nr5MixedWeakStrongFinalAudioGapDirection, "weak-too-hot", [StringComparison]::OrdinalIgnoreCase)) {
-        $nr5WeakFinalAudioLiftNeededDb = 0.0
-        $nr5WeakFinalAudioTrimNeededDb = $nr5MixedWeakStrongFinalAudioGapExcessDb
+    elseif ($candidateEvidenceQualifiedWeakInputCount -le 0) {
+        $candidateMixedWeakStrongEvidenceStatus = "low-evidence-weak-input"
     }
-    elseif (-not [string]::Equals($nr5MixedWeakStrongFinalAudioGapDirection, "unknown", [StringComparison]::OrdinalIgnoreCase)) {
-        $nr5WeakFinalAudioLiftNeededDb = 0.0
-        $nr5WeakFinalAudioTrimNeededDb = 0.0
+    elseif ($candidateSpeechQualifiedWeakStrongFinalAudioParityReady -or
+        $candidatePassbandQualifiedWeakStrongFinalAudioParityReady) {
+        $candidateMixedWeakStrongEvidenceStatus = "ready-final-audio"
     }
-    $nr5MixedWeakStrongPreferredAction = switch ($nr5MixedWeakStrongEvidenceStatus) {
+    elseif ($null -ne $candidateWeakStrongFinalAudioGapDb -and
+        [Math]::Abs([double]$candidateWeakStrongFinalAudioGapDb) -le $candidateMixedWeakStrongFinalAudioGapThresholdDb) {
+        $candidateMixedWeakStrongEvidenceStatus = "ready-final-audio"
+    }
+    elseif ($candidateWeakInputCount -lt $candidateMinimumMixedWeakInputSampleCount -or
+        $candidateEvidenceQualifiedWeakInputCount -lt $candidateMinimumMixedEvidenceQualifiedWeakInputSampleCount) {
+        $candidateMixedWeakStrongEvidenceStatus = "insufficient-weak-input-evidence"
+    }
+    elseif ($candidateStrongInputCount -lt $candidateMinimumMixedStrongInputSampleCount) {
+        $candidateMixedWeakStrongEvidenceStatus = "insufficient-strong-input-evidence"
+    }
+    elseif ($null -eq $candidateWeakStrongOutputGapDb -and $null -eq $candidateWeakStrongFinalAudioGapDb) {
+        $candidateMixedWeakStrongEvidenceStatus = "missing-output-gap"
+    }
+    elseif ($null -ne $candidateWeakStrongOutputGapDb -and
+        [Math]::Abs([double]$candidateWeakStrongOutputGapDb) -gt $candidateMixedWeakStrongGapThresholdDb) {
+        $candidateMixedWeakStrongEvidenceStatus = "weak-strong-output-gap-watch"
+    }
+    elseif ($null -ne $candidateWeakStrongFinalAudioGapDb -and
+        [Math]::Abs([double]$candidateWeakStrongFinalAudioGapDb) -gt $candidateMixedWeakStrongFinalAudioGapThresholdDb) {
+        $candidateMixedWeakStrongEvidenceStatus = "weak-strong-output-gap-watch"
+    }
+    elseif ($null -eq $candidateWeakStrongOutputGapDb) {
+        $candidateMixedWeakStrongEvidenceStatus = "missing-output-gap"
+    }
+    else {
+        $candidateMixedWeakStrongEvidenceStatus = "ready"
+    }
+    $candidateMixedWeakStrongEvidenceReady =
+        [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "ready", [StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "ready-final-audio", [StringComparison]::OrdinalIgnoreCase)
+    $candidateMixedWeakStrongInputEvidenceInsufficient =
+        [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "insufficient-weak-input-evidence", [StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "insufficient-strong-input-evidence", [StringComparison]::OrdinalIgnoreCase)
+    $candidateWeakStrongOutputParityReady = ($null -ne $candidateWeakStrongOutputGapDb -and
+        [Math]::Abs([double]$candidateWeakStrongOutputGapDb) -le $candidateMixedWeakStrongGapThresholdDb)
+    $candidateWeakStrongFinalAudioParityReady = ($null -ne $candidateWeakStrongFinalAudioGapDb -and
+        [Math]::Abs([double]$candidateWeakStrongFinalAudioGapDb) -le $candidateMixedWeakStrongFinalAudioGapThresholdDb)
+    $candidateMixedWeakStrongOutputGapDirection = Get-GapDirection `
+        -GapDb $candidateWeakStrongOutputGapDb `
+        -ThresholdDb $candidateMixedWeakStrongGapThresholdDb
+    $candidateMixedWeakStrongFinalAudioGapDirection = Get-GapDirection `
+        -GapDb $candidateWeakStrongFinalAudioGapDb `
+        -ThresholdDb $candidateMixedWeakStrongFinalAudioGapThresholdDb
+    $candidateMixedWeakStrongOutputGapExcessDb = Get-GapExcessDb `
+        -GapDb $candidateWeakStrongOutputGapDb `
+        -ThresholdDb $candidateMixedWeakStrongGapThresholdDb
+    $candidateMixedWeakStrongFinalAudioGapExcessDb = Get-GapExcessDb `
+        -GapDb $candidateWeakStrongFinalAudioGapDb `
+        -ThresholdDb $candidateMixedWeakStrongFinalAudioGapThresholdDb
+    $candidateWeakOutputLiftNeededDb = $null
+    $candidateWeakOutputTrimNeededDb = $null
+    if ([string]::Equals($candidateMixedWeakStrongOutputGapDirection, "weak-too-low", [StringComparison]::OrdinalIgnoreCase)) {
+        $candidateWeakOutputLiftNeededDb = $candidateMixedWeakStrongOutputGapExcessDb
+        $candidateWeakOutputTrimNeededDb = 0.0
+    }
+    elseif ([string]::Equals($candidateMixedWeakStrongOutputGapDirection, "weak-too-hot", [StringComparison]::OrdinalIgnoreCase)) {
+        $candidateWeakOutputLiftNeededDb = 0.0
+        $candidateWeakOutputTrimNeededDb = $candidateMixedWeakStrongOutputGapExcessDb
+    }
+    elseif (-not [string]::Equals($candidateMixedWeakStrongOutputGapDirection, "unknown", [StringComparison]::OrdinalIgnoreCase)) {
+        $candidateWeakOutputLiftNeededDb = 0.0
+        $candidateWeakOutputTrimNeededDb = 0.0
+    }
+    $candidateWeakFinalAudioLiftNeededDb = $null
+    $candidateWeakFinalAudioTrimNeededDb = $null
+    if ([string]::Equals($candidateMixedWeakStrongFinalAudioGapDirection, "weak-too-low", [StringComparison]::OrdinalIgnoreCase)) {
+        $candidateWeakFinalAudioLiftNeededDb = $candidateMixedWeakStrongFinalAudioGapExcessDb
+        $candidateWeakFinalAudioTrimNeededDb = 0.0
+    }
+    elseif ([string]::Equals($candidateMixedWeakStrongFinalAudioGapDirection, "weak-too-hot", [StringComparison]::OrdinalIgnoreCase)) {
+        $candidateWeakFinalAudioLiftNeededDb = 0.0
+        $candidateWeakFinalAudioTrimNeededDb = $candidateMixedWeakStrongFinalAudioGapExcessDb
+    }
+    elseif (-not [string]::Equals($candidateMixedWeakStrongFinalAudioGapDirection, "unknown", [StringComparison]::OrdinalIgnoreCase)) {
+        $candidateWeakFinalAudioLiftNeededDb = 0.0
+        $candidateWeakFinalAudioTrimNeededDb = 0.0
+    }
+    $candidateMixedWeakStrongPreferredAction = switch ($candidateMixedWeakStrongEvidenceStatus) {
         "weak-strong-output-gap-watch" {
-            if ([string]::Equals($nr5MixedWeakStrongFinalAudioGapDirection, "within-parity", [StringComparison]::OrdinalIgnoreCase)) {
+            if ([string]::Equals($candidateMixedWeakStrongFinalAudioGapDirection, "within-parity", [StringComparison]::OrdinalIgnoreCase)) {
                 "post-leveler-parity-ready-inspect-native-gap-before-changing-makeup"
             }
-            elseif ([string]::Equals($nr5MixedWeakStrongFinalAudioGapDirection, "weak-too-low", [StringComparison]::OrdinalIgnoreCase)) {
+            elseif ([string]::Equals($candidateMixedWeakStrongFinalAudioGapDirection, "weak-too-low", [StringComparison]::OrdinalIgnoreCase)) {
                 "tune-bounded-weak-speech-lift-from-top-weak-and-strong-input-rows"
             }
-            elseif ([string]::Equals($nr5MixedWeakStrongFinalAudioGapDirection, "weak-too-hot", [StringComparison]::OrdinalIgnoreCase)) {
+            elseif ([string]::Equals($candidateMixedWeakStrongFinalAudioGapDirection, "weak-too-hot", [StringComparison]::OrdinalIgnoreCase)) {
                 "tighten-weak-branch-boost-or-release-from-top-weak-input-rows"
             }
             else {
-                "inspect-top-weak-and-strong-input-rows-before-changing-nr5-makeup"
+                "inspect-top-weak-and-strong-input-rows-before-changing-candidate-makeup"
             }
             break
         }
         "missing-strong-input" { "retune-or-extend-dwell-using-frontend-candidates-and-near-strong-rows"; break }
         "missing-weak-input" { "capture-weaker-or-fading-speech-before-volume-parity-tuning"; break }
         "missing-weak-and-strong-input" { "retune-or-extend-capture-before-using-trace-for-mixed-evidence"; break }
-        "missing-output-gap" { "inspect-nr5-output-diagnostics-before-parity-tuning"; break }
+        "missing-output-gap" { "inspect-candidate-output-diagnostics-before-parity-tuning"; break }
         "low-evidence-weak-input" { "capture-speech-qualified-weak-input-before-accepting-final-audio-parity"; break }
         "insufficient-weak-input-evidence" { "extend-dwell-or-capture-more-qualified-weak-input-before-tuning"; break }
         "insufficient-strong-input-evidence" { "extend-dwell-or-capture-more-strong-input-before-tuning"; break }
         "ready-final-audio" { "post-leveler-final-audio-parity-ready"; break }
         "ready" {
-            if ([string]::Equals($nr5MixedWeakStrongFinalAudioGapDirection, "within-parity", [StringComparison]::OrdinalIgnoreCase)) {
+            if ([string]::Equals($candidateMixedWeakStrongFinalAudioGapDirection, "within-parity", [StringComparison]::OrdinalIgnoreCase)) {
                 "native-output-and-final-audio-parity-ready"
             }
-            elseif ([string]::Equals($nr5MixedWeakStrongFinalAudioGapDirection, "weak-too-low", [StringComparison]::OrdinalIgnoreCase)) {
+            elseif ([string]::Equals($candidateMixedWeakStrongFinalAudioGapDirection, "weak-too-low", [StringComparison]::OrdinalIgnoreCase)) {
                 "native-output-parity-ready-but-final-audio-needs-bounded-weak-lift"
             }
-            elseif ([string]::Equals($nr5MixedWeakStrongFinalAudioGapDirection, "weak-too-hot", [StringComparison]::OrdinalIgnoreCase)) {
+            elseif ([string]::Equals($candidateMixedWeakStrongFinalAudioGapDirection, "weak-too-hot", [StringComparison]::OrdinalIgnoreCase)) {
                 "native-output-parity-ready-but-final-audio-weak-branch-too-hot"
             }
             else {
@@ -3473,65 +3471,65 @@ function Build-Report {
             }
             break
         }
-        default { "collect-ready-nr5-mixed-weak-strong-trace"; break }
+        default { "collect-ready-candidate-mixed-weak-strong-trace"; break }
     }
-    if ([string]::Equals($nr5MixedWeakStrongEvidenceStatus, "missing-strong-input", [StringComparison]::OrdinalIgnoreCase) -and
-        $nr5FrontendStrongPassbandSubthresholdSamples.Count -gt 0) {
-        $nr5MixedWeakStrongPreferredAction = "inspect-frontend-strong-passband-subthreshold-nr5-inputs-before-changing-dsp"
+    if ([string]::Equals($candidateMixedWeakStrongEvidenceStatus, "missing-strong-input", [StringComparison]::OrdinalIgnoreCase) -and
+        $candidateFrontendStrongPassbandSubthresholdSamples.Count -gt 0) {
+        $candidateMixedWeakStrongPreferredAction = "inspect-frontend-strong-passband-subthreshold-inputs-before-changing-dsp"
     }
-    $nr5MixedWeakStrongTuningFocus = [ordered]@{
-        status = $nr5MixedWeakStrongEvidenceStatus
-        preferredAction = $nr5MixedWeakStrongPreferredAction
-        weakInputSampleCount = $nr5WeakInputCount
-        lowEvidenceWeakInputSampleCount = $nr5LowEvidenceWeakInputCount
-        evidenceQualifiedWeakInputSampleCount = $nr5EvidenceQualifiedWeakInputCount
-        strongInputSampleCount = $nr5StrongInputCount
-        nearStrongInputSampleCount = $nr5NearStrongInputCount
-        frontendStrongPassbandNr5SubthresholdSampleCount = $nr5FrontendStrongPassbandSubthresholdSamples.Count
-        minimumWeakInputSampleCount = $nr5MinimumMixedWeakInputSampleCount
-        minimumEvidenceQualifiedWeakInputSampleCount = $nr5MinimumMixedEvidenceQualifiedWeakInputSampleCount
-        minimumStrongInputSampleCount = $nr5MinimumMixedStrongInputSampleCount
-        minimumQualifiedWeakStrongInputSampleCount = $nr5MinimumQualifiedWeakStrongInputSampleCount
-        weakInputSampleDeficit = [Math]::Max(0, $nr5MinimumMixedWeakInputSampleCount - $nr5WeakInputCount)
-        evidenceQualifiedWeakInputSampleDeficit = [Math]::Max(0, $nr5MinimumMixedEvidenceQualifiedWeakInputSampleCount - $nr5EvidenceQualifiedWeakInputCount)
-        strongInputSampleDeficit = [Math]::Max(0, $nr5MinimumMixedStrongInputSampleCount - $nr5StrongInputCount)
-        speechQualifiedWeakInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5SpeechQualifiedWeakOutputValues.Count)
-        speechQualifiedStrongInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5SpeechQualifiedStrongOutputValues.Count)
-        passbandQualifiedWeakInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5PassbandQualifiedWeakOutputValues.Count)
-        passbandQualifiedStrongInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5PassbandQualifiedStrongOutputValues.Count)
-        outputGapDb = $nr5WeakStrongOutputGapDb
-        outputGapDirection = $nr5MixedWeakStrongOutputGapDirection
-        outputGapExcessDb = $nr5MixedWeakStrongOutputGapExcessDb
-        weakOutputLiftNeededDb = $nr5WeakOutputLiftNeededDb
-        weakOutputTrimNeededDb = $nr5WeakOutputTrimNeededDb
-        finalAudioGapDb = $nr5WeakStrongFinalAudioGapDb
-        finalAudioGapDirection = $nr5MixedWeakStrongFinalAudioGapDirection
-        finalAudioGapExcessDb = $nr5MixedWeakStrongFinalAudioGapExcessDb
-        weakFinalAudioLiftNeededDb = $nr5WeakFinalAudioLiftNeededDb
-        weakFinalAudioTrimNeededDb = $nr5WeakFinalAudioTrimNeededDb
-        speechQualifiedOutputGapDb = $nr5SpeechQualifiedWeakStrongOutputGapDb
-        speechQualifiedFinalAudioGapDb = $nr5SpeechQualifiedWeakStrongFinalAudioGapDb
-        speechQualifiedStatus = $nr5SpeechQualifiedWeakStrongEvidenceStatus
-        passbandQualifiedOutputGapDb = $nr5PassbandQualifiedWeakStrongOutputGapDb
-        passbandQualifiedFinalAudioGapDb = $nr5PassbandQualifiedWeakStrongFinalAudioGapDb
-        passbandQualifiedStatus = $nr5PassbandQualifiedWeakStrongEvidenceStatus
-        topWeakInputs = @($nr5WeakInputTopSamples)
-        topStrongInputs = @($nr5StrongInputTopSamples)
-        topSpeechQualifiedWeakInputs = @($nr5SpeechQualifiedWeakInputTopSamples)
-        topSpeechQualifiedStrongInputs = @($nr5SpeechQualifiedStrongInputTopSamples)
-        topPassbandQualifiedWeakInputs = @($nr5PassbandQualifiedWeakInputTopSamples)
-        topPassbandQualifiedStrongInputs = @($nr5PassbandQualifiedStrongInputTopSamples)
-        topFrontendStrongPassbandNr5SubthresholdInputs = @($nr5FrontendStrongPassbandSubthresholdTopSamples)
+    $candidateMixedWeakStrongTuningFocus = [ordered]@{
+        status = $candidateMixedWeakStrongEvidenceStatus
+        preferredAction = $candidateMixedWeakStrongPreferredAction
+        weakInputSampleCount = $candidateWeakInputCount
+        lowEvidenceWeakInputSampleCount = $candidateLowEvidenceWeakInputCount
+        evidenceQualifiedWeakInputSampleCount = $candidateEvidenceQualifiedWeakInputCount
+        strongInputSampleCount = $candidateStrongInputCount
+        nearStrongInputSampleCount = $candidateNearStrongInputCount
+        frontendStrongPassbandCandidateSubthresholdSampleCount = $candidateFrontendStrongPassbandSubthresholdSamples.Count
+        minimumWeakInputSampleCount = $candidateMinimumMixedWeakInputSampleCount
+        minimumEvidenceQualifiedWeakInputSampleCount = $candidateMinimumMixedEvidenceQualifiedWeakInputSampleCount
+        minimumStrongInputSampleCount = $candidateMinimumMixedStrongInputSampleCount
+        minimumQualifiedWeakStrongInputSampleCount = $candidateMinimumQualifiedWeakStrongInputSampleCount
+        weakInputSampleDeficit = [Math]::Max(0, $candidateMinimumMixedWeakInputSampleCount - $candidateWeakInputCount)
+        evidenceQualifiedWeakInputSampleDeficit = [Math]::Max(0, $candidateMinimumMixedEvidenceQualifiedWeakInputSampleCount - $candidateEvidenceQualifiedWeakInputCount)
+        strongInputSampleDeficit = [Math]::Max(0, $candidateMinimumMixedStrongInputSampleCount - $candidateStrongInputCount)
+        speechQualifiedWeakInputSampleDeficit = [Math]::Max(0, $candidateMinimumQualifiedWeakStrongInputSampleCount - $candidateSpeechQualifiedWeakOutputValues.Count)
+        speechQualifiedStrongInputSampleDeficit = [Math]::Max(0, $candidateMinimumQualifiedWeakStrongInputSampleCount - $candidateSpeechQualifiedStrongOutputValues.Count)
+        passbandQualifiedWeakInputSampleDeficit = [Math]::Max(0, $candidateMinimumQualifiedWeakStrongInputSampleCount - $candidatePassbandQualifiedWeakOutputValues.Count)
+        passbandQualifiedStrongInputSampleDeficit = [Math]::Max(0, $candidateMinimumQualifiedWeakStrongInputSampleCount - $candidatePassbandQualifiedStrongOutputValues.Count)
+        outputGapDb = $candidateWeakStrongOutputGapDb
+        outputGapDirection = $candidateMixedWeakStrongOutputGapDirection
+        outputGapExcessDb = $candidateMixedWeakStrongOutputGapExcessDb
+        weakOutputLiftNeededDb = $candidateWeakOutputLiftNeededDb
+        weakOutputTrimNeededDb = $candidateWeakOutputTrimNeededDb
+        finalAudioGapDb = $candidateWeakStrongFinalAudioGapDb
+        finalAudioGapDirection = $candidateMixedWeakStrongFinalAudioGapDirection
+        finalAudioGapExcessDb = $candidateMixedWeakStrongFinalAudioGapExcessDb
+        weakFinalAudioLiftNeededDb = $candidateWeakFinalAudioLiftNeededDb
+        weakFinalAudioTrimNeededDb = $candidateWeakFinalAudioTrimNeededDb
+        speechQualifiedOutputGapDb = $candidateSpeechQualifiedWeakStrongOutputGapDb
+        speechQualifiedFinalAudioGapDb = $candidateSpeechQualifiedWeakStrongFinalAudioGapDb
+        speechQualifiedStatus = $candidateSpeechQualifiedWeakStrongEvidenceStatus
+        passbandQualifiedOutputGapDb = $candidatePassbandQualifiedWeakStrongOutputGapDb
+        passbandQualifiedFinalAudioGapDb = $candidatePassbandQualifiedWeakStrongFinalAudioGapDb
+        passbandQualifiedStatus = $candidatePassbandQualifiedWeakStrongEvidenceStatus
+        topWeakInputs = @($candidateWeakInputTopSamples)
+        topStrongInputs = @($candidateStrongInputTopSamples)
+        topSpeechQualifiedWeakInputs = @($candidateSpeechQualifiedWeakInputTopSamples)
+        topSpeechQualifiedStrongInputs = @($candidateSpeechQualifiedStrongInputTopSamples)
+        topPassbandQualifiedWeakInputs = @($candidatePassbandQualifiedWeakInputTopSamples)
+        topPassbandQualifiedStrongInputs = @($candidatePassbandQualifiedStrongInputTopSamples)
+        topFrontendStrongPassbandCandidateSubthresholdInputs = @($candidateFrontendStrongPassbandSubthresholdTopSamples)
     }
-    if ($nr5LowEvidenceSampleCount -gt 0) {
-        $nr5LowEvidenceLiftPct = [Math]::Round(100.0 * $nr5LowEvidenceLiftCount / $nr5LowEvidenceSampleCount, 1)
-        $nr5LowEvidenceSuppressedPct = [Math]::Round(100.0 * $nr5LowEvidenceSuppressedCount / $nr5LowEvidenceSampleCount, 1)
-        $nr5LowEvidenceAlignmentMismatchPct = [Math]::Round(100.0 * $nr5LowEvidenceAlignmentMismatchCount / $nr5LowEvidenceSampleCount, 1)
+    if ($candidateLowEvidenceSampleCount -gt 0) {
+        $candidateLowEvidenceLiftPct = [Math]::Round(100.0 * $candidateLowEvidenceLiftCount / $candidateLowEvidenceSampleCount, 1)
+        $candidateLowEvidenceSuppressedPct = [Math]::Round(100.0 * $candidateLowEvidenceSuppressedCount / $candidateLowEvidenceSampleCount, 1)
+        $candidateLowEvidenceAlignmentMismatchPct = [Math]::Round(100.0 * $candidateLowEvidenceAlignmentMismatchCount / $candidateLowEvidenceSampleCount, 1)
     }
-    if ($nr5AudioAlignmentSampleCount -gt 0) {
-        $nr5AudioAlignmentMismatchPct = [Math]::Round(100.0 * $nr5AudioAlignmentMismatchCount / $nr5AudioAlignmentSampleCount, 1)
-        $nr5AudioAlignedAfterLevelerPct = [Math]::Round(100.0 * $nr5AudioAlignedAfterLevelerCount / $nr5AudioAlignmentSampleCount, 1)
-        $nr5AudioLevelerNormalizedPct = [Math]::Round(100.0 * $nr5AudioLevelerNormalizedCount / $nr5AudioAlignmentSampleCount, 1)
+    if ($candidateAudioAlignmentSampleCount -gt 0) {
+        $candidateAudioAlignmentMismatchPct = [Math]::Round(100.0 * $candidateAudioAlignmentMismatchCount / $candidateAudioAlignmentSampleCount, 1)
+        $candidateAudioAlignedAfterLevelerPct = [Math]::Round(100.0 * $candidateAudioAlignedAfterLevelerCount / $candidateAudioAlignmentSampleCount, 1)
+        $candidateAudioLevelerNormalizedPct = [Math]::Round(100.0 * $candidateAudioLevelerNormalizedCount / $candidateAudioAlignmentSampleCount, 1)
     }
     $signalFloorAudioPct = $null
     $signalActiveAudioPct = $null
@@ -3565,7 +3563,7 @@ function Build-Report {
             $passbandAudioStatus = "passband-low-audio"
         }
     }
-    $passbandEvidenceMissing = ($nr5SampleCount -gt 0 -and
+    $passbandEvidenceMissing = ($candidateSampleCount -gt 0 -and
         $signalActiveAudioCount -gt 0 -and
         $frontendTopPeakSampleCount -gt 0 -and
         $passbandAudioRmsValues.Count -eq 0)
@@ -3662,41 +3660,41 @@ function Build-Report {
     $topConstraint = Get-TopReadinessCount $constraintReadiness
     $topHardConstraint = Get-TopReadinessCount $hardConstraintReadiness
     $topStatus = Get-TopReadinessCount $statusReadiness
-    $nr5LowEvidenceSuppressionDominates = ($nr5LowEvidenceSampleCount -gt 0 -and
-        $null -ne $nr5LowEvidenceSuppressedPct -and
-        [double]$nr5LowEvidenceSuppressedPct -ge 50.0 -and
-        ($null -eq $nr5LowEvidenceLiftPct -or [double]$nr5LowEvidenceLiftPct -lt 20.0))
-    $nr5NormalizationMotionIsFloorSuppression = ($nr5LowEvidenceSuppressionDominates -and
-        $nr5WeakDropoutCandidateLossCount -eq 0 -and
-        $nr5LowEvidenceLiftCount -eq 0)
+    $candidateLowEvidenceSuppressionDominates = ($candidateLowEvidenceSampleCount -gt 0 -and
+        $null -ne $candidateLowEvidenceSuppressedPct -and
+        [double]$candidateLowEvidenceSuppressedPct -ge 50.0 -and
+        ($null -eq $candidateLowEvidenceLiftPct -or [double]$candidateLowEvidenceLiftPct -lt 20.0))
+    $candidateNormalizationMotionIsFloorSuppression = ($candidateLowEvidenceSuppressionDominates -and
+        $candidateWeakDropoutCandidateLossCount -eq 0 -and
+        $candidateLowEvidenceLiftCount -eq 0)
     $quietIntermittentTrace = ($runtimeCount -gt 0 -and
         $null -ne $signalFloorAudioPct -and [double]$signalFloorAudioPct -ge 50.0 -and
         $null -ne $signalActiveAudioPct -and [double]$signalActiveAudioPct -ge 5.0 -and [double]$signalActiveAudioPct -le 45.0 -and
         $signalIntermittentBurstCount -gt 0)
 
-    $nr5SpeechContinuityFadePct = Get-CountPercent -Count $nr5SpeechContinuityFadeCount -SampleCount $nr5SpeechContinuitySampleCount
-    $nr5SpeechContinuityDropoutPct = Get-CountPercent -Count $nr5SpeechContinuityDropoutCount -SampleCount $nr5SpeechContinuitySampleCount
-    $nr5SpeechContinuityOutputMovementDb = if ([int]$nr5SpeechContinuityOutputStats["count"] -gt 1) { [double]$nr5SpeechContinuityOutputStats["movement"] } else { $null }
-    $nr5SpeechContinuityGainMovementDb = if ([int]$nr5SpeechContinuityGainStats["count"] -gt 1) { [double]$nr5SpeechContinuityGainStats["movement"] } else { $null }
-    $nr5SpeechContinuityStatus = if ($nr5SampleCount -eq 0 -or $nr5SpeechContinuitySampleCount -eq 0) {
+    $candidateSpeechContinuityFadePct = Get-CountPercent -Count $candidateSpeechContinuityFadeCount -SampleCount $candidateSpeechContinuitySampleCount
+    $candidateSpeechContinuityDropoutPct = Get-CountPercent -Count $candidateSpeechContinuityDropoutCount -SampleCount $candidateSpeechContinuitySampleCount
+    $candidateSpeechContinuityOutputMovementDb = if ([int]$candidateSpeechContinuityOutputStats["count"] -gt 1) { [double]$candidateSpeechContinuityOutputStats["movement"] } else { $null }
+    $candidateSpeechContinuityGainMovementDb = if ([int]$candidateSpeechContinuityGainStats["count"] -gt 1) { [double]$candidateSpeechContinuityGainStats["movement"] } else { $null }
+    $candidateSpeechContinuityStatus = if ($candidateSampleCount -eq 0 -or $candidateSpeechContinuitySampleCount -eq 0) {
         "not-observed"
     }
-elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
+elseif ($candidateSpeechContinuityDropoutCount -gt 0) {
         "speech-dropout-risk"
     }
-    elseif ($nr5SpeechContinuityFadeCount -gt 0) {
+    elseif ($candidateSpeechContinuityFadeCount -gt 0) {
         "speech-fade-risk"
     }
-    elseif (($null -ne $nr5SpeechContinuityOutputMovementDb -and $nr5SpeechContinuityOutputMovementDb -gt $nr5SpeechContinuityOutputMovementThresholdDb) -or
-        ($null -ne $nr5SpeechContinuityGainMovementDb -and $nr5SpeechContinuityGainMovementDb -gt $nr5SpeechContinuityGainMovementThresholdDb)) {
+    elseif (($null -ne $candidateSpeechContinuityOutputMovementDb -and $candidateSpeechContinuityOutputMovementDb -gt $candidateSpeechContinuityOutputMovementThresholdDb) -or
+        ($null -ne $candidateSpeechContinuityGainMovementDb -and $candidateSpeechContinuityGainMovementDb -gt $candidateSpeechContinuityGainMovementThresholdDb)) {
         "speech-pumping-risk"
     }
     else {
         "stable"
     }
-    $nr5SpeechContinuityNeedsReview = -not (
-        [string]::Equals($nr5SpeechContinuityStatus, "stable", [StringComparison]::OrdinalIgnoreCase) -or
-        [string]::Equals($nr5SpeechContinuityStatus, "not-observed", [StringComparison]::OrdinalIgnoreCase))
+    $candidateSpeechContinuityNeedsReview = -not (
+        [string]::Equals($candidateSpeechContinuityStatus, "stable", [StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($candidateSpeechContinuityStatus, "not-observed", [StringComparison]::OrdinalIgnoreCase))
 
     $summaryRecommendations = New-Object System.Collections.Generic.List[string]
     if ($okCount -eq 0) {
@@ -3731,50 +3729,50 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
     if ($runtimeCount -lt $okCount) {
         $summaryRecommendations.Add("Upgrade or restart the backend so every live diagnostics sample includes runtimeEvidence.") | Out-Null
     }
-    if ($nr5SampleCount -gt 0 -and $nr5AlignedCount -lt $nr5SampleCount) {
-        $summaryRecommendations.Add("Not every NR5 diagnostics sample was requested/effective NR5; reassert NR5 before judging NR5 DSP behavior.") | Out-Null
+    if ($candidateSampleCount -gt 0 -and $candidateAlignedCount -lt $candidateSampleCount) {
+        $summaryRecommendations.Add("Not every comparison diagnostics sample matched the requested comparison state; reassert the comparison setting before judging behavior.") | Out-Null
     }
-    if ($nr5SampleCount -gt 0 -and $nr5AgcDiagnosticCount -lt $nr5SampleCount) {
-        $summaryRecommendations.Add("Recapture this NR5 trace after restarting a backend that exports GetRXASPNRAgcDiagnostics; recovery-drive and makeup-gain evidence is missing.") | Out-Null
+    if ($candidateSampleCount -gt 0 -and $candidateAgcDiagnosticCount -lt $candidateSampleCount) {
+        $summaryRecommendations.Add("Recapture this comparison trace after restarting the backend; recovery-drive and makeup-gain evidence is missing.") | Out-Null
     }
-    if ($nr5SampleCount -gt 0 -and $nr5ProbabilityDiagnosticCount -lt $nr5SampleCount) {
-        $summaryRecommendations.Add("Recapture this NR5 trace after restarting a backend that exports GetRXASPNRProbabilityDiagnostics; signal-probability and mask-texture evidence is missing.") | Out-Null
+    if ($candidateSampleCount -gt 0 -and $candidateProbabilityDiagnosticCount -lt $candidateSampleCount) {
+        $summaryRecommendations.Add("Recapture this comparison trace after restarting the backend; signal-probability and texture evidence is missing.") | Out-Null
     }
-    if ($nr5SampleCount -gt 0 -and $nr5PeakDiagnosticCount -lt $nr5SampleCount) {
-        $summaryRecommendations.Add("Recapture this NR5 trace after restarting a backend that exports GetRXASPNRPeakDiagnostics; output peak and adaptive-knee evidence is missing.") | Out-Null
+    if ($candidateSampleCount -gt 0 -and $candidatePeakDiagnosticCount -lt $candidateSampleCount) {
+        $summaryRecommendations.Add("Recapture this comparison trace after restarting the backend; output peak and adaptive-knee evidence is missing.") | Out-Null
     }
-    if ($nr5LearnerResetSampleCount -gt 0) {
-        $summaryRecommendations.Add("NR5 learned frames reset during this trace; inspect nr5LearnerStabilityWatch before using it as acceptance evidence.") | Out-Null
+    if ($candidateLearnerResetSampleCount -gt 0) {
+        $summaryRecommendations.Add("Comparison learned-frame counters reset during this trace; inspect candidateLearnerStabilityWatch before using it as acceptance evidence.") | Out-Null
     }
-    elseif ($nr5ManagedReapplySampleCount -gt 0) {
-        $summaryRecommendations.Add("Managed NR5 position or policy was re-applied during this trace; inspect nr5LearnerStabilityWatch for state replay before judging NR5 weak-signal behavior.") | Out-Null
+    elseif ($candidateManagedReapplySampleCount -gt 0) {
+        $summaryRecommendations.Add("Managed Candidate position or policy was re-applied during this trace; inspect candidateLearnerStabilityWatch for state replay before judging Candidate weak-signal behavior.") | Out-Null
     }
-    elseif ($nr5ManagedGenerationChangeCount -gt 0) {
-        $summaryRecommendations.Add("NR5 channel generation changed during this trace; recapture after the channel lifecycle is stable before accepting learner stability evidence.") | Out-Null
+    elseif ($candidateManagedGenerationChangeCount -gt 0) {
+        $summaryRecommendations.Add("Comparison channel generation changed during this trace; recapture after the channel lifecycle is stable before accepting learner stability evidence.") | Out-Null
     }
-    elseif ($nr5SampleCount -gt 0 -and $nr5ManagedCounterSampleCount -lt $nr5SampleCount) {
-        $summaryRecommendations.Add("Restart or rebuild the backend so every NR5 diagnostics sample exports managed replay counters before accepting NR5 learner-stability evidence.") | Out-Null
+    elseif ($candidateSampleCount -gt 0 -and $candidateManagedCounterSampleCount -lt $candidateSampleCount) {
+        $summaryRecommendations.Add("Restart or rebuild the backend so every comparison diagnostics sample includes managed replay counters before accepting learner-stability evidence.") | Out-Null
     }
-    if ($frontendAdjacentNoiseUsableCount -gt 0 -and $nr5SampleCount -gt 0 -and $nr5AdjacentNoiseUsableCount -eq 0) {
-        $summaryRecommendations.Add("Frontend adjacent-noise profiles were usable, but native NR5 did not report adjacent-profile trust; verify the WDSP DLL exports Set/GetRXASPNRAdjacentNoise* and that the pipeline is pushing the profile.") | Out-Null
+    if ($frontendAdjacentNoiseUsableCount -gt 0 -and $candidateSampleCount -gt 0 -and $candidateAdjacentNoiseUsableCount -eq 0) {
+        $summaryRecommendations.Add("Frontend adjacent-noise profiles were usable, but the comparison diagnostics did not report adjacent-profile trust; verify the runtime is publishing adjacent-noise evidence.") | Out-Null
     }
-    if ($nr5AdjacentNoiseUsableCount -gt 0 -and
-        [int]$nr5AdjacentNoiseSideBalanceStats["count"] -gt 0 -and
-        [double]$nr5AdjacentNoiseSideBalanceStats["average"] -lt 0.45) {
-        $summaryRecommendations.Add("Native NR5 adjacent-noise profile is mostly one-sided or imbalanced in this trace; avoid increasing adjacent suppression from this run without checking nearby QRM/splatter.") | Out-Null
+    if ($candidateAdjacentNoiseUsableCount -gt 0 -and
+        [int]$candidateAdjacentNoiseSideBalanceStats["count"] -gt 0 -and
+        [double]$candidateAdjacentNoiseSideBalanceStats["average"] -lt 0.45) {
+        $summaryRecommendations.Add("Native Candidate adjacent-noise profile is mostly one-sided or imbalanced in this trace; avoid increasing adjacent suppression from this run without checking nearby QRM/splatter.") | Out-Null
     }
-    if ($rxAudioLevelerNr5NoSignalNoiseCapCount -gt 0) {
-        $summaryRecommendations.Add("NR5 no-signal noise cap fired in this trace; inspect rxAudioLevelerWatch.nr5HybridSpeechPrior, nr5NoSignalNoisePrior, nr5NoiseProfilePrior, and topNr5NoSignalNoiseCapSamples before judging weak-signal muting.") | Out-Null
+    if ($rxAudioLevelerCandidateNoSignalNoiseCapCount -gt 0) {
+        $summaryRecommendations.Add("Comparison no-signal noise cap fired in this trace; inspect rxAudioLevelerWatch candidate prior fields and topCandidateNoSignalNoiseCapSamples before judging weak-signal muting.") | Out-Null
     }
-    switch ($nr5SpeechContinuityStatus) {
+    switch ($candidateSpeechContinuityStatus) {
         "speech-dropout-risk" {
-            $summaryRecommendations.Add("NR5 speech-continuity samples dropped below audible final audio; tune held weak-speech rescue or leveler release before tightening noise gates.") | Out-Null
+            $summaryRecommendations.Add("Comparison speech-continuity samples dropped below audible final audio; tune held weak-speech rescue or leveler release before tightening noise gates.") | Out-Null
         }
         "speech-fade-risk" {
-            $summaryRecommendations.Add("NR5 speech-continuity samples faded below the final-audio target; tune held weak-speech rescue or leveler release before tightening noise gates.") | Out-Null
+            $summaryRecommendations.Add("Comparison speech-continuity samples faded below the final-audio target; tune held weak-speech rescue or leveler release before tightening noise gates.") | Out-Null
         }
         "speech-pumping-risk" {
-            $summaryRecommendations.Add("NR5 speech-continuity output or applied gain movement is high; tune leveler release/hold before raising makeup or suppression.") | Out-Null
+            $summaryRecommendations.Add("Comparison speech-continuity output or applied gain movement is high; tune leveler release/hold before raising makeup or suppression.") | Out-Null
         }
     }
     if ($audioFreshCount -lt $runtimeCount) {
@@ -3788,7 +3786,7 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
             $summaryRecommendations.Add("AGC gain moved more than 6 dB while audio was active or voice-like; run the agc-level-step/agc-pumping fixture and listen for pumping before tuning NR.") | Out-Null
         }
         "leveler-constrained-movement" {
-            $summaryRecommendations.Add("AGC movement coincided with RX audio leveler constraints; inspect agcStabilityWatch and rxAudioLevelerWatch before changing AGC or NR5 makeup/release.") | Out-Null
+            $summaryRecommendations.Add("AGC movement coincided with RX audio leveler constraints; inspect agcStabilityWatch and rxAudioLevelerWatch before changing AGC or Candidate makeup/release.") | Out-Null
         }
         "quiet-floor-movement" {
             $summaryRecommendations.Add("AGC gain moved mostly on quiet/no-evidence floor samples; inspect agcStabilityWatch.quietNoEvidenceAgcGainDb before treating it as audible pumping.") | Out-Null
@@ -3797,7 +3795,7 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
             $summaryRecommendations.Add("AGC gain moved more than 12 dB during the trace; compare active, voice-like, and quiet AGC buckets before tuning NR.") | Out-Null
         }
     }
-    if (-not $nr5LowEvidenceSuppressionDominates -and [int]$rmsStats["count"] -gt 1 -and [double]$rmsStats["movement"] -gt 10.0) {
+    if (-not $candidateLowEvidenceSuppressionDominates -and [int]$rmsStats["count"] -gt 1 -and [double]$rmsStats["movement"] -gt 10.0) {
         $summaryRecommendations.Add("Final audio RMS moved more than 10 dB during the trace; pair this JSONL with audio render evidence before approving changes.") | Out-Null
     }
     if ([int]$rmsStats["count"] -gt 1 -and [double]$rmsStats["movement"] -gt 10.0) {
@@ -3807,7 +3805,7 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
             $summaryRecommendations.Add("Wide final-audio movement is mostly cross-bucket floor/active contrast; compare signalOccupancyWatch.activeAudioRmsDbfs and floorAudioRmsDbfs before treating it as pumping.") | Out-Null
         }
         elseif ($null -ne $floorMovement -and $floorMovement -gt 10.0) {
-            $summaryRecommendations.Add("Floor-only audio movement is high; inspect signalOccupancyWatch.floorAudioRmsDbfs before increasing NR5 gain or release speed.") | Out-Null
+            $summaryRecommendations.Add("Floor-only audio movement is high; inspect signalOccupancyWatch.floorAudioRmsDbfs before increasing Candidate gain or release speed.") | Out-Null
         }
     }
     if ($quietIntermittentTrace) {
@@ -3825,41 +3823,41 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
     if ($rxAudioLevelerOutputLimitedCount -gt 0) {
         $summaryRecommendations.Add("RX audio leveler output crest cap shaped one or more blocks; inspect rxAudioLevelerWatch.topOutputLimitedSamples before raising final loudness or release speed.") | Out-Null
     }
-    if ($nr5AudioAlignmentMismatchCount -gt 0) {
-        $summaryRecommendations.Add("NR5 output diagnostics diverged from both the pre-leveler and post-leveler audio on one or more samples; use nr5AudioAlignmentWatch before treating low-evidence lift/dropout rows as same-block DSP facts.") | Out-Null
+    if ($candidateAudioAlignmentMismatchCount -gt 0) {
+        $summaryRecommendations.Add("Candidate output diagnostics diverged from both the pre-leveler and post-leveler audio on one or more samples; use candidateAudioAlignmentWatch before treating low-evidence lift/dropout rows as same-block DSP facts.") | Out-Null
     }
-    if ($nr5AudioLevelerNormalizedCount -gt 0) {
-        $summaryRecommendations.Add("NR5 weak speech was normalized to target loudness by the RX audio leveler on one or more samples; inspect nr5AudioAlignmentWatch.topLevelerNormalizedSamples before treating those rows as mismatches or dropouts.") | Out-Null
+    if ($candidateAudioLevelerNormalizedCount -gt 0) {
+        $summaryRecommendations.Add("Candidate weak speech was normalized to target loudness by the RX audio leveler on one or more samples; inspect candidateAudioAlignmentWatch.topLevelerNormalizedSamples before treating those rows as mismatches or dropouts.") | Out-Null
     }
-    if ($nr5SpeechQualifiedWeakStrongEvidenceReady -and
-        [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "weak-strong-output-gap-watch", [StringComparison]::OrdinalIgnoreCase) -and
-        $nr5NormalizationMotionIsFloorSuppression) {
-        $summaryRecommendations.Add("Raw NR5 weak/strong averages are separated, but speech-qualified weak/strong final audio is within parity while floor suppression dominates; inspect nr5WeakSignalWatch.speechQualified* before raising NR5 floor or leveler gain.") | Out-Null
+    if ($candidateSpeechQualifiedWeakStrongEvidenceReady -and
+        [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "weak-strong-output-gap-watch", [StringComparison]::OrdinalIgnoreCase) -and
+        $candidateNormalizationMotionIsFloorSuppression) {
+        $summaryRecommendations.Add("Raw Candidate weak/strong averages are separated, but speech-qualified weak/strong final audio is within parity while floor suppression dominates; inspect candidateWeakSignalWatch.speechQualified* before raising Candidate floor or leveler gain.") | Out-Null
     }
-    elseif ($nr5PassbandQualifiedWeakStrongEvidenceReady -and
-        [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "weak-strong-output-gap-watch", [StringComparison]::OrdinalIgnoreCase) -and
-        $nr5NormalizationMotionIsFloorSuppression) {
-        $summaryRecommendations.Add("Raw NR5 weak/strong averages are separated, but passband-qualified speech is normalized while adjacent or off-passband energy stays suppressed; inspect nr5WeakSignalWatch.passbandQualified* before raising NR5 floor or leveler gain.") | Out-Null
+    elseif ($candidatePassbandQualifiedWeakStrongEvidenceReady -and
+        [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "weak-strong-output-gap-watch", [StringComparison]::OrdinalIgnoreCase) -and
+        $candidateNormalizationMotionIsFloorSuppression) {
+        $summaryRecommendations.Add("Raw Candidate weak/strong averages are separated, but passband-qualified speech is normalized while adjacent or off-passband energy stays suppressed; inspect candidateWeakSignalWatch.passbandQualified* before raising Candidate floor or leveler gain.") | Out-Null
     }
-    elseif ($nr5AudioAlignedAfterLevelerCount -gt 0 -and [int]$nr5AudioInputDeltaStats["count"] -gt 0 -and (
-        ([double]$nr5AudioInputDeltaStats["min"] -lt -12.0) -or
-        ([double]$nr5AudioInputDeltaStats["max"] -gt 12.0))) {
-        $summaryRecommendations.Add("NR5 output aligns with post-leveler speech audio even though pre-leveler audio is lower; treat that delta as intended RX leveler gain, not a diagnostics mismatch.") | Out-Null
+    elseif ($candidateAudioAlignedAfterLevelerCount -gt 0 -and [int]$candidateAudioInputDeltaStats["count"] -gt 0 -and (
+        ([double]$candidateAudioInputDeltaStats["min"] -lt -12.0) -or
+        ([double]$candidateAudioInputDeltaStats["max"] -gt 12.0))) {
+        $summaryRecommendations.Add("Candidate output aligns with post-leveler speech audio even though pre-leveler audio is lower; treat that delta as intended RX leveler gain, not a diagnostics mismatch.") | Out-Null
     }
     if ([int]$frontendAdjacentNoiseBinStats["count"] -eq 0) {
-        $summaryRecommendations.Add("No frontend adjacent-noise profile was published in this trace; keep the frontend panadapter active before using adjacent-band noise as NR5 evidence.") | Out-Null
+        $summaryRecommendations.Add("No frontend adjacent-noise profile was published in this trace; keep the frontend panadapter active before using adjacent-band noise as Candidate evidence.") | Out-Null
     }
     elseif ($frontendAdjacentNoiseUsableCount -eq 0) {
-        $summaryRecommendations.Add("Frontend adjacent-noise samples were present but not marked usable; inspect adjacent-channel signals before using the profile for NR5 suppression tuning.") | Out-Null
+        $summaryRecommendations.Add("Frontend adjacent-noise samples were present but not marked usable; inspect adjacent-channel signals before using the profile for Candidate suppression tuning.") | Out-Null
     }
     if ($frontendTopPeakSampleCount -eq 0) {
-        $summaryRecommendations.Add("Frontend top-peak evidence is missing; refresh the web frontend so NR5 traces record actual band peak locations before choosing a tuning window.") | Out-Null
+        $summaryRecommendations.Add("Frontend top-peak evidence is missing; refresh the web frontend so comparison traces record actual band peak locations before choosing a tuning window.") | Out-Null
     }
     elseif ($frontendFilterPassbandPeakSampleCount -eq 0 -and $frontendNearPassbandPeakSampleCount -gt 0) {
-        $summaryRecommendations.Add("Frontend saw peaks near the dial, but none inside the RX filter passband; tune the signal into the active filter window before using this trace as on-signal NR5 evidence.") | Out-Null
+        $summaryRecommendations.Add("Frontend saw peaks near the dial, but none inside the RX filter passband; tune the signal into the active filter window before using this trace as on-signal Candidate evidence.") | Out-Null
     }
     elseif ($frontendNearPassbandPeakSampleCount -eq 0) {
-        $summaryRecommendations.Add("Frontend saw band peaks, but none were within 3 kHz of the dial; retune toward frontendTopPeakWatch.topSamples before using this trace as on-signal NR5 evidence.") | Out-Null
+        $summaryRecommendations.Add("Frontend saw band peaks, but none were within 3 kHz of the dial; retune toward frontendTopPeakWatch.topSamples before using this trace as on-signal Candidate evidence.") | Out-Null
     }
     $rxAudioLevelerConstrainedMaxAbsGainDeltaDb = $null
     $rxAudioLevelerConstrainedDesiredGainValues = New-Object System.Collections.Generic.List[double]
@@ -3892,10 +3890,10 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
     $rxAudioLevelerHeadroomNeedsReview = ($rxAudioLevelerPeakLimitedCount -gt 0 -and
         [int]$rmsStats["count"] -gt 1 -and [double]$rmsStats["movement"] -gt 4.0)
     $rxAudioLevelerSparseConstraintPctThreshold = 5.0
-    $rxAudioLevelerFinalAudioParityReady = ($nr5MixedWeakStrongEvidenceReady -and (
-        $nr5WeakStrongFinalAudioParityReady -or
-        $nr5SpeechQualifiedWeakStrongFinalAudioParityReady -or
-        $nr5PassbandQualifiedWeakStrongFinalAudioParityReady))
+    $rxAudioLevelerFinalAudioParityReady = ($candidateMixedWeakStrongEvidenceReady -and (
+        $candidateWeakStrongFinalAudioParityReady -or
+        $candidateSpeechQualifiedWeakStrongFinalAudioParityReady -or
+        $candidatePassbandQualifiedWeakStrongFinalAudioParityReady))
     $rxAudioLevelerSparseConstraintEvidence = ($rxAudioLevelerDiagnosticCount -gt 0 -and
         $null -ne $rxAudioLevelerConstrainedPct -and [double]$rxAudioLevelerConstrainedPct -le $rxAudioLevelerSparseConstraintPctThreshold -and
         ($null -eq $rxAudioLevelerBoostSlewLimitedPct -or [double]$rxAudioLevelerBoostSlewLimitedPct -le $rxAudioLevelerSparseConstraintPctThreshold) -and
@@ -3915,139 +3913,139 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
         $rxAudioLevelerSparseConstraintEvidence -and
         $rxAudioLevelerSeverityWithinAdvisoryBounds -and
         $rxAudioLevelerOutputLimitedCount -eq 0 -and
-        $nr5WeakDropoutCandidateLossCount -eq 0 -and
-        $nr5HotMakeupCount -eq 0 -and
+        $candidateWeakDropoutCandidateLossCount -eq 0 -and
+        $candidateHotMakeupCount -eq 0 -and
         -not $agcActivePumpingRisk -and
         -not $agcWideMovement)
     $rxAudioLevelerSettlingAdvisoryOnly = ($rxAudioLevelerSettlingNeedsReview -and $rxAudioLevelerSafetyAdvisoryOnly)
     $rxAudioLevelerHeadroomAdvisoryOnly = ($rxAudioLevelerHeadroomNeedsReview -and $rxAudioLevelerSafetyAdvisoryOnly)
     if ($rxAudioLevelerSettlingAdvisoryOnly -or $rxAudioLevelerHeadroomAdvisoryOnly) {
-        $summaryRecommendations.Add("RX audio leveler constraints were sparse, output limiting was absent, and qualified NR5 final-audio parity is ready; store this as advisory evidence and avoid tuning leveler gain unless repeated traces or listening show pumping.") | Out-Null
+        $summaryRecommendations.Add("RX audio leveler constraints were sparse, output limiting was absent, and qualified Candidate final-audio parity is ready; store this as advisory evidence and avoid tuning leveler gain unless repeated traces or listening show pumping.") | Out-Null
     }
-    $nr5LowEvidenceLiftNeedsReview = ($nr5LowEvidenceLiftCount -ge 5 -or
-        ($null -ne $nr5LowEvidenceLiftPct -and [double]$nr5LowEvidenceLiftPct -ge 20.0))
-    $nr5OutputMotionNeedsReview = $false
-    if ([int]$nr5OutputStats["count"] -gt 1 -and [double]$nr5OutputStats["movement"] -gt 6.0) {
-        $nr5OutputMotionNeedsReview = ($nr5WeakDropoutCount -gt 0 `
-            -or $nr5HotMakeupCount -gt 0 `
-            -or ($null -ne $nr5NormalizationCompressionDb -and [double]$nr5NormalizationCompressionDb -lt -2.0) `
+    $candidateLowEvidenceLiftNeedsReview = ($candidateLowEvidenceLiftCount -ge 5 -or
+        ($null -ne $candidateLowEvidenceLiftPct -and [double]$candidateLowEvidenceLiftPct -ge 20.0))
+    $candidateOutputMotionNeedsReview = $false
+    if ([int]$candidateOutputStats["count"] -gt 1 -and [double]$candidateOutputStats["movement"] -gt 6.0) {
+        $candidateOutputMotionNeedsReview = ($candidateWeakDropoutCount -gt 0 `
+            -or $candidateHotMakeupCount -gt 0 `
+            -or ($null -ne $candidateNormalizationCompressionDb -and [double]$candidateNormalizationCompressionDb -lt -2.0) `
             -or ([int]$rmsStats["count"] -gt 1 -and [double]$rmsStats["movement"] -gt 6.0))
-        if ($nr5LowEvidenceSuppressionDominates) {
-            $nr5OutputMotionNeedsReview = $false
+        if ($candidateLowEvidenceSuppressionDominates) {
+            $candidateOutputMotionNeedsReview = $false
         }
     }
-    if ($nr5OutputMotionNeedsReview) {
-        if ($nr5WeakStrongFinalAudioParityReady -and
+    if ($candidateOutputMotionNeedsReview) {
+        if ($candidateWeakStrongFinalAudioParityReady -and
             [int]$rmsStats["count"] -gt 1 -and [double]$rmsStats["movement"] -le 4.0 -and
-            $nr5WeakDropoutCandidateLossCount -eq 0 -and
+            $candidateWeakDropoutCandidateLossCount -eq 0 -and
             $rxAudioLevelerConstrainedCount -eq 0) {
-            $nr5OutputMotionNeedsReview = $false
+            $candidateOutputMotionNeedsReview = $false
         }
     }
-    if ($nr5OutputMotionNeedsReview) {
-        $summaryRecommendations.Add("NR5 output RMS moved more than 6 dB during the trace; inspect nr5RecoveryDrive and nr5MakeupGainDb before tuning mask thresholds.") | Out-Null
+    if ($candidateOutputMotionNeedsReview) {
+        $summaryRecommendations.Add("Candidate output RMS moved more than 6 dB during the trace; inspect candidateRecoveryDrive and candidateMakeupGainDb before tuning mask thresholds.") | Out-Null
     }
-    if ($null -ne $nr5NormalizationCompressionDb -and [double]$nr5NormalizationCompressionDb -lt -2.0 -and
-        -not $nr5NormalizationMotionIsFloorSuppression) {
-        $summaryRecommendations.Add("NR5 output moved more than input during the trace; reduce makeup/recovery memory before increasing weak-signal gain.") | Out-Null
+    if ($null -ne $candidateNormalizationCompressionDb -and [double]$candidateNormalizationCompressionDb -lt -2.0 -and
+        -not $candidateNormalizationMotionIsFloorSuppression) {
+        $summaryRecommendations.Add("Candidate output moved more than input during the trace; reduce makeup/recovery memory before increasing weak-signal gain.") | Out-Null
     }
-    elseif ($null -ne $nr5NormalizationCompressionDb -and [double]$nr5NormalizationCompressionDb -lt -2.0 -and
-        $nr5NormalizationMotionIsFloorSuppression) {
-        $summaryRecommendations.Add("NR5 output movement is dominated by low-evidence floor suppression with no candidate weak-loss rows; do not reduce recovery/makeup based on normalization compression alone.") | Out-Null
+    elseif ($null -ne $candidateNormalizationCompressionDb -and [double]$candidateNormalizationCompressionDb -lt -2.0 -and
+        $candidateNormalizationMotionIsFloorSuppression) {
+        $summaryRecommendations.Add("Candidate output movement is dominated by low-evidence floor suppression with no candidate weak-loss rows; do not reduce recovery/makeup based on normalization compression alone.") | Out-Null
     }
-    if ($null -ne $nr5WeakStrongOutputGapDb -and [Math]::Abs([double]$nr5WeakStrongOutputGapDb) -gt 6.0 -and
-        -not $nr5WeakStrongFinalAudioParityReady -and
-        -not $nr5PassbandQualifiedWeakStrongEvidenceReady -and
-        [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "weak-strong-output-gap-watch", [StringComparison]::OrdinalIgnoreCase)) {
-        $summaryRecommendations.Add("NR5 weak and strong outputs differ by more than 6 dB on average; tune normalization before judging faint-signal fidelity.") | Out-Null
+    if ($null -ne $candidateWeakStrongOutputGapDb -and [Math]::Abs([double]$candidateWeakStrongOutputGapDb) -gt 6.0 -and
+        -not $candidateWeakStrongFinalAudioParityReady -and
+        -not $candidatePassbandQualifiedWeakStrongEvidenceReady -and
+        [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "weak-strong-output-gap-watch", [StringComparison]::OrdinalIgnoreCase)) {
+        $summaryRecommendations.Add("Candidate weak and strong outputs differ by more than 6 dB on average; tune normalization before judging faint-signal fidelity.") | Out-Null
     }
-    elseif ($null -ne $nr5WeakStrongOutputGapDb -and [Math]::Abs([double]$nr5WeakStrongOutputGapDb) -gt 6.0 -and
-        $nr5MixedWeakStrongInputEvidenceInsufficient) {
-        $summaryRecommendations.Add("NR5 weak/strong output gap is visible, but the mixed trace has too few repeated weak or strong rows for tuning; extend dwell or recapture before changing NR5 makeup/leveler logic.") | Out-Null
+    elseif ($null -ne $candidateWeakStrongOutputGapDb -and [Math]::Abs([double]$candidateWeakStrongOutputGapDb) -gt 6.0 -and
+        $candidateMixedWeakStrongInputEvidenceInsufficient) {
+        $summaryRecommendations.Add("Candidate weak/strong output gap is visible, but the mixed trace has too few repeated weak or strong rows for tuning; extend dwell or recapture before changing Candidate makeup/leveler logic.") | Out-Null
     }
-    elseif ($null -ne $nr5WeakStrongOutputGapDb -and [Math]::Abs([double]$nr5WeakStrongOutputGapDb) -gt 6.0 -and
-        ($nr5WeakStrongFinalAudioParityReady -or $nr5PassbandQualifiedWeakStrongEvidenceReady)) {
-        $summaryRecommendations.Add("Native NR5 weak/strong output differs, but post-leveler speech audio is within parity; judge volume from nr5WeakSignalWatch weak/strong final-audio fields before changing NR5 makeup.") | Out-Null
+    elseif ($null -ne $candidateWeakStrongOutputGapDb -and [Math]::Abs([double]$candidateWeakStrongOutputGapDb) -gt 6.0 -and
+        ($candidateWeakStrongFinalAudioParityReady -or $candidatePassbandQualifiedWeakStrongEvidenceReady)) {
+        $summaryRecommendations.Add("Native Candidate weak/strong output differs, but post-leveler speech audio is within parity; judge volume from candidateWeakSignalWatch weak/strong final-audio fields before changing Candidate makeup.") | Out-Null
     }
-    if ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "missing-strong-input", [StringComparison]::OrdinalIgnoreCase) -and
-        $nr5FrontendStrongPassbandSubthresholdSamples.Count -gt 0) {
-        $summaryRecommendations.Add("Frontend-strong passband peaks were present, but native NR5 input stayed below the strict $nr5StrongInputThresholdDbfs dBFS strong threshold; inspect nr5WeakSignalWatch.topFrontendStrongPassbandNr5SubthresholdInputs before treating this as no strong RF or changing DSP defaults.") | Out-Null
+    if ($candidateSampleCount -gt 0 -and [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "missing-strong-input", [StringComparison]::OrdinalIgnoreCase) -and
+        $candidateFrontendStrongPassbandSubthresholdSamples.Count -gt 0) {
+        $summaryRecommendations.Add("Frontend-strong passband peaks were present, but comparison input stayed below the strict $candidateStrongInputThresholdDbfs dBFS strong threshold; inspect candidateWeakSignalWatch.topFrontendStrongPassbandCandidateSubthresholdInputs before treating this as no strong RF or changing DSP defaults.") | Out-Null
     }
-    elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "missing-strong-input", [StringComparison]::OrdinalIgnoreCase) -and
-        $nr5NearStrongInputCount -gt 0) {
-        $summaryRecommendations.Add("NR5 trace has near-strong samples between $nr5NearStrongInputThresholdDbfs and $nr5StrongInputThresholdDbfs dBFS but no strict strong-input samples; inspect nr5WeakSignalWatch.topNearStrongInputs and retune/extend dwell around those peaks before rejecting this frequency neighborhood.") | Out-Null
+    elseif ($candidateSampleCount -gt 0 -and [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "missing-strong-input", [StringComparison]::OrdinalIgnoreCase) -and
+        $candidateNearStrongInputCount -gt 0) {
+        $summaryRecommendations.Add("Candidate trace has near-strong samples between $candidateNearStrongInputThresholdDbfs and $candidateStrongInputThresholdDbfs dBFS but no strict strong-input samples; inspect candidateWeakSignalWatch.topNearStrongInputs and retune/extend dwell around those peaks before rejecting this frequency neighborhood.") | Out-Null
     }
-    elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "missing-strong-input", [StringComparison]::OrdinalIgnoreCase)) {
-        $summaryRecommendations.Add("NR5 trace has weak-input samples but no strong-input samples; capture an active mixed weak+strong speech window before using this trace as volume-parity acceptance evidence.") | Out-Null
+    elseif ($candidateSampleCount -gt 0 -and [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "missing-strong-input", [StringComparison]::OrdinalIgnoreCase)) {
+        $summaryRecommendations.Add("Candidate trace has weak-input samples but no strong-input samples; capture an active mixed weak+strong speech window before using this trace as volume-parity acceptance evidence.") | Out-Null
     }
-    elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "missing-weak-input", [StringComparison]::OrdinalIgnoreCase)) {
-        $summaryRecommendations.Add("NR5 trace has strong-input samples but no weak-input samples; capture a weaker station or fading speech window before using this trace as weak-signal parity evidence.") | Out-Null
+    elseif ($candidateSampleCount -gt 0 -and [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "missing-weak-input", [StringComparison]::OrdinalIgnoreCase)) {
+        $summaryRecommendations.Add("Candidate trace has strong-input samples but no weak-input samples; capture a weaker station or fading speech window before using this trace as weak-signal parity evidence.") | Out-Null
     }
-    elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "missing-weak-and-strong-input", [StringComparison]::OrdinalIgnoreCase)) {
-        $summaryRecommendations.Add("NR5 trace did not include weak or strong classified input samples; retune or extend capture duration before using it as mixed-signal acceptance evidence.") | Out-Null
+    elseif ($candidateSampleCount -gt 0 -and [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "missing-weak-and-strong-input", [StringComparison]::OrdinalIgnoreCase)) {
+        $summaryRecommendations.Add("Candidate trace did not include weak or strong classified input samples; retune or extend capture duration before using it as mixed-signal acceptance evidence.") | Out-Null
     }
-    elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "missing-output-gap", [StringComparison]::OrdinalIgnoreCase)) {
-        $summaryRecommendations.Add("NR5 trace has weak and strong input samples but no output gap statistic; inspect NR5 output diagnostics before using it as volume-parity evidence.") | Out-Null
+    elseif ($candidateSampleCount -gt 0 -and [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "missing-output-gap", [StringComparison]::OrdinalIgnoreCase)) {
+        $summaryRecommendations.Add("Candidate trace has weak and strong input samples but no output gap statistic; inspect Candidate output diagnostics before using it as volume-parity evidence.") | Out-Null
     }
-    elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "low-evidence-weak-input", [StringComparison]::OrdinalIgnoreCase)) {
-        $summaryRecommendations.Add("NR5 mixed weak/strong final-audio parity only used low-evidence weak rows; capture speech-qualified weak input before accepting this as weak-signal parity evidence.") | Out-Null
+    elseif ($candidateSampleCount -gt 0 -and [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "low-evidence-weak-input", [StringComparison]::OrdinalIgnoreCase)) {
+        $summaryRecommendations.Add("Candidate mixed weak/strong final-audio parity only used low-evidence weak rows; capture speech-qualified weak input before accepting this as weak-signal parity evidence.") | Out-Null
     }
-    elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "insufficient-weak-input-evidence", [StringComparison]::OrdinalIgnoreCase)) {
-        $summaryRecommendations.Add("NR5 trace has mixed weak/strong samples, but fewer than $nr5MinimumMixedEvidenceQualifiedWeakInputSampleCount qualified weak rows; extend dwell through a weak-signal fade before using this trace for parity tuning or acceptance.") | Out-Null
+    elseif ($candidateSampleCount -gt 0 -and [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "insufficient-weak-input-evidence", [StringComparison]::OrdinalIgnoreCase)) {
+        $summaryRecommendations.Add("Candidate trace has mixed weak/strong samples, but fewer than $candidateMinimumMixedEvidenceQualifiedWeakInputSampleCount qualified weak rows; extend dwell through a weak-signal fade before using this trace for parity tuning or acceptance.") | Out-Null
     }
-    elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "insufficient-strong-input-evidence", [StringComparison]::OrdinalIgnoreCase)) {
-        $summaryRecommendations.Add("NR5 trace has weak samples, but fewer than $nr5MinimumMixedStrongInputSampleCount strong rows; extend dwell through a stronger speech burst before using this trace for mixed weak/strong parity.") | Out-Null
+    elseif ($candidateSampleCount -gt 0 -and [string]::Equals($candidateMixedWeakStrongEvidenceStatus, "insufficient-strong-input-evidence", [StringComparison]::OrdinalIgnoreCase)) {
+        $summaryRecommendations.Add("Candidate trace has weak samples, but fewer than $candidateMinimumMixedStrongInputSampleCount strong rows; extend dwell through a stronger speech burst before using this trace for mixed weak/strong parity.") | Out-Null
     }
-    if ($nr5WeakDropoutCount -gt 0 -and
-        $nr5WeakDropoutCandidateLossCount -eq 0 -and
-        $nr5WeakDropoutFinalAudibleCount -eq $nr5WeakDropoutCount) {
-        $summaryRecommendations.Add("NR5 strict weak-output dropout thresholds were hit, but every strict dropout row was already final-audio audible; treat these as recovered weak bursts unless subjective listening says otherwise.") | Out-Null
+    if ($candidateWeakDropoutCount -gt 0 -and
+        $candidateWeakDropoutCandidateLossCount -eq 0 -and
+        $candidateWeakDropoutFinalAudibleCount -eq $candidateWeakDropoutCount) {
+        $summaryRecommendations.Add("Candidate strict weak-output dropout thresholds were hit, but every strict dropout row was already final-audio audible; treat these as recovered weak bursts unless subjective listening says otherwise.") | Out-Null
     }
-    elseif ($nr5WeakDropoutCount -gt 0) {
-        $summaryRecommendations.Add("NR5 strict weak-output dropouts were observed; inspect nr5WeakSignalWatch dropout classifications before increasing global makeup gain.") | Out-Null
+    elseif ($candidateWeakDropoutCount -gt 0) {
+        $summaryRecommendations.Add("Candidate strict weak-output dropouts were observed; inspect candidateWeakSignalWatch dropout classifications before increasing global makeup gain.") | Out-Null
     }
-    if ($nr5WeakDropoutFinalAudibleCount -gt 0) {
-        $summaryRecommendations.Add("Some strict NR5 weak-dropout rows were already final-audio audible after the RX leveler; use nr5WeakSignalWatch.topFinalAudibleWeakDropouts before treating them as true weak-signal loss.") | Out-Null
+    if ($candidateWeakDropoutFinalAudibleCount -gt 0) {
+        $summaryRecommendations.Add("Some strict Candidate weak-dropout rows were already final-audio audible after the RX leveler; use candidateWeakSignalWatch.topFinalAudibleWeakDropouts before treating them as true weak-signal loss.") | Out-Null
     }
-    if ($nr5WeakDropoutCandidateLossCount -gt 0) {
-        $summaryRecommendations.Add("NR5 candidate weak-loss rows remained below the input and were not final-audio audible; tune bounded weak-frame rescue from nr5WeakSignalWatch.topCandidateWeakLosses rather than lifting the whole noise floor.") | Out-Null
+    if ($candidateWeakDropoutCandidateLossCount -gt 0) {
+        $summaryRecommendations.Add("Candidate candidate weak-loss rows remained below the input and were not final-audio audible; tune bounded weak-frame rescue from candidateWeakSignalWatch.topCandidateWeakLosses rather than lifting the whole noise floor.") | Out-Null
     }
-    if ($nr5WeakDropoutCandidateLossCount -gt 0 -and [int]$nr5SignalProbabilityStats["count"] -gt 1 -and [double]$nr5SignalProbabilityStats["max"] -lt 0.30) {
-        $summaryRecommendations.Add("NR5 candidate weak-loss rows coincided with low signal probability; tune probability/coherence opening before changing output AGC.") | Out-Null
+    if ($candidateWeakDropoutCandidateLossCount -gt 0 -and [int]$candidateSignalProbabilityStats["count"] -gt 1 -and [double]$candidateSignalProbabilityStats["max"] -lt 0.30) {
+        $summaryRecommendations.Add("Candidate candidate weak-loss rows coincided with low signal probability; tune probability/coherence opening before changing output AGC.") | Out-Null
     }
-    if ($nr5WeakDropoutCandidateLossCount -gt 0 -and [int]$nr5SignalProbabilityStats["count"] -gt 1 -and [double]$nr5SignalProbabilityStats["max"] -ge 0.30 -and
-        [int]$nr5TextureFillStats["count"] -gt 1 -and [double]$nr5TextureFillStats["max"] -lt 0.05) {
-        $summaryRecommendations.Add("NR5 saw probable weak signal but texture fill stayed low during candidate weak-loss rows; tune mask hole-fill before raising persistent makeup gain.") | Out-Null
+    if ($candidateWeakDropoutCandidateLossCount -gt 0 -and [int]$candidateSignalProbabilityStats["count"] -gt 1 -and [double]$candidateSignalProbabilityStats["max"] -ge 0.30 -and
+        [int]$candidateTextureFillStats["count"] -gt 1 -and [double]$candidateTextureFillStats["max"] -lt 0.05) {
+        $summaryRecommendations.Add("Candidate saw probable weak signal but texture fill stayed low during candidate weak-loss rows; tune mask hole-fill before raising persistent makeup gain.") | Out-Null
     }
-    if ($nr5WeakBelowInputCount -gt 0 -and $nr5WeakDropoutCandidateLossCount -gt 0) {
-        $summaryRecommendations.Add("Some weak NR5 samples left the output below the input; prefer bounded weak-frame rescue over persistent makeup gain.") | Out-Null
+    if ($candidateWeakBelowInputCount -gt 0 -and $candidateWeakDropoutCandidateLossCount -gt 0) {
+        $summaryRecommendations.Add("Some weak comparison samples left the output below the input; prefer bounded weak-frame rescue over persistent makeup gain.") | Out-Null
     }
-    elseif ($nr5WeakBelowInputCount -gt 0 -and $nr5LowEvidenceSuppressionDominates) {
+    elseif ($candidateWeakBelowInputCount -gt 0 -and $candidateLowEvidenceSuppressionDominates) {
         $summaryRecommendations.Add("Most weak rows below input are dominated by low-evidence suppression; inspect candidate weak-loss rows before treating below-input samples as voice loss.") | Out-Null
     }
-    if ($nr5HotMakeupCount -gt 0) {
-        $summaryRecommendations.Add("NR5 makeup exceeded 12 dB on one or more samples; inspect nr5WeakSignalWatch.topHotMakeup before changing recovery attack/release.") | Out-Null
+    if ($candidateHotMakeupCount -gt 0) {
+        $summaryRecommendations.Add("Candidate makeup exceeded 12 dB on one or more samples; inspect candidateWeakSignalWatch.topHotMakeup before changing recovery attack/release.") | Out-Null
     }
-    if ($nr5LowEvidenceLiftCount -gt 0) {
-        $summaryRecommendations.Add("NR5 lifted low-evidence weak samples into the audible range; inspect nr5LowEvidenceLiftWatch.topLiftedSamples before treating the recovered audio as real weak-signal content.") | Out-Null
+    if ($candidateLowEvidenceLiftCount -gt 0) {
+        $summaryRecommendations.Add("Candidate lifted low-evidence weak samples into the audible range; inspect candidateLowEvidenceLiftWatch.topLiftedSamples before treating the recovered audio as real weak-signal content.") | Out-Null
     }
-    if ($nr5LowEvidenceAlignmentMismatchCount -gt 0) {
-        $summaryRecommendations.Add("Some low-evidence NR5 rows had audio/NR5 alignment mismatch; prefer faster traces or matched offline capture before changing NR5 thresholds from those rows.") | Out-Null
+    if ($candidateLowEvidenceAlignmentMismatchCount -gt 0) {
+        $summaryRecommendations.Add("Some low-evidence Candidate rows had audio/Candidate alignment mismatch; prefer faster traces or matched offline capture before changing Candidate thresholds from those rows.") | Out-Null
     }
-    if ($nr5LowEvidenceSuppressedCount -gt 0) {
-        $summaryRecommendations.Add("NR5 suppressed low-evidence weak samples instead of normalizing them; confirm the trace is noise-only or adjacent-channel noise before using it as weak-signal loss evidence.") | Out-Null
+    if ($candidateLowEvidenceSuppressedCount -gt 0) {
+        $summaryRecommendations.Add("Candidate suppressed low-evidence weak samples instead of normalizing them; confirm the trace is noise-only or adjacent-channel noise before using it as weak-signal loss evidence.") | Out-Null
     }
-    if ([int]$nr5PeakReductionDbStats["count"] -gt 1 -and [double]$nr5PeakReductionDbStats["max"] -gt 3.0) {
-        $summaryRecommendations.Add("NR5 adaptive peak shaping exceeded 3 dB on one or more samples; compare nr5OutputPeakDbfs with final audioPeakDbfs before tuning downstream level controls.") | Out-Null
+    if ([int]$candidatePeakReductionDbStats["count"] -gt 1 -and [double]$candidatePeakReductionDbStats["max"] -gt 3.0) {
+        $summaryRecommendations.Add("Candidate adaptive peak shaping exceeded 3 dB on one or more samples; compare candidateOutputPeakDbfs with final audioPeakDbfs before tuning downstream level controls.") | Out-Null
     }
-    if ([int]$nr5RecoveryDriveStats["count"] -gt 1 -and [double]$nr5RecoveryDriveStats["max"] -lt 0.20 -and
+    if ([int]$candidateRecoveryDriveStats["count"] -gt 1 -and [double]$candidateRecoveryDriveStats["max"] -lt 0.20 -and
         [int]$rmsStats["count"] -gt 1 -and [double]$rmsStats["movement"] -gt 6.0) {
-        $summaryRecommendations.Add("Final audio moved but NR5 recovery drive stayed low; improve confidence/gating before increasing makeup gain.") | Out-Null
+        $summaryRecommendations.Add("Final audio moved but Candidate recovery drive stayed low; improve confidence/gating before increasing makeup gain.") | Out-Null
     }
-    if ([int]$nr5RecoveryDriveStats["count"] -gt 1 -and [double]$nr5RecoveryDriveStats["max"] -ge 0.20 -and
-        [int]$nr5MakeupGainDbStats["count"] -gt 1 -and [double]$nr5MakeupGainDbStats["max"] -lt 1.5 -and
+    if ([int]$candidateRecoveryDriveStats["count"] -gt 1 -and [double]$candidateRecoveryDriveStats["max"] -ge 0.20 -and
+        [int]$candidateMakeupGainDbStats["count"] -gt 1 -and [double]$candidateMakeupGainDbStats["max"] -lt 1.5 -and
         [int]$rmsStats["count"] -gt 1 -and [double]$rmsStats["movement"] -gt 6.0) {
-        $summaryRecommendations.Add("NR5 recovery drive engaged but makeup gain stayed low; tune the fast makeup path rather than the spectral mask.") | Out-Null
+        $summaryRecommendations.Add("Candidate recovery drive engaged but makeup gain stayed low; tune the fast makeup path rather than the spectral mask.") | Out-Null
     }
     if ([int]$backlogStats["count"] -gt 0 -and [double]$backlogStats["max"] -gt 0) {
         $summaryRecommendations.Add("Monitor backlog appeared during the trace; drain or stop monitor injection before judging live audio fidelity.") | Out-Null
@@ -4075,23 +4073,23 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
     elseif ($rxMetersFreshCount -lt $runtimeCount) {
         $trendStatus = "rx-meters-not-fresh"
     }
-    elseif ($nr5SampleCount -gt 0 -and $nr5AgcDiagnosticCount -lt $nr5SampleCount) {
-        $trendStatus = "nr5-agc-diagnostics-missing"
+    elseif ($candidateSampleCount -gt 0 -and $candidateAgcDiagnosticCount -lt $candidateSampleCount) {
+        $trendStatus = "candidate-agc-diagnostics-missing"
     }
-    elseif ($nr5SampleCount -gt 0 -and $nr5ProbabilityDiagnosticCount -lt $nr5SampleCount) {
-        $trendStatus = "nr5-probability-diagnostics-missing"
+    elseif ($candidateSampleCount -gt 0 -and $candidateProbabilityDiagnosticCount -lt $candidateSampleCount) {
+        $trendStatus = "candidate-probability-diagnostics-missing"
     }
-    elseif ($nr5SampleCount -gt 0 -and $nr5PeakDiagnosticCount -lt $nr5SampleCount) {
-        $trendStatus = "nr5-peak-diagnostics-missing"
+    elseif ($candidateSampleCount -gt 0 -and $candidatePeakDiagnosticCount -lt $candidateSampleCount) {
+        $trendStatus = "candidate-peak-diagnostics-missing"
     }
-    elseif ($nr5LearnerResetSampleCount -gt 0) {
-        $trendStatus = "nr5-learner-reset-watch"
+    elseif ($candidateLearnerResetSampleCount -gt 0) {
+        $trendStatus = "candidate-learner-reset-watch"
     }
-    elseif ($nr5ManagedReapplySampleCount -gt 0) {
-        $trendStatus = "nr5-managed-reapply-watch"
+    elseif ($candidateManagedReapplySampleCount -gt 0) {
+        $trendStatus = "candidate-managed-reapply-watch"
     }
-    elseif ($nr5ManagedGenerationChangeCount -gt 0) {
-        $trendStatus = "nr5-channel-generation-changed"
+    elseif ($candidateManagedGenerationChangeCount -gt 0) {
+        $trendStatus = "candidate-channel-generation-changed"
     }
     elseif ($agcActivePumpingRisk) {
         $trendStatus = "agc-pumping-watch"
@@ -4102,19 +4100,19 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
     elseif ($passbandEvidenceMissing) {
         $trendStatus = "passband-evidence-missing"
     }
-    elseif ($nr5MixedWeakStrongInputEvidenceInsufficient) {
+    elseif ($candidateMixedWeakStrongInputEvidenceInsufficient) {
         $trendStatus = "mixed-evidence-insufficient"
     }
-    elseif ($nr5OutputMotionNeedsReview) {
-        $trendStatus = "nr5-output-level-watch"
+    elseif ($candidateOutputMotionNeedsReview) {
+        $trendStatus = "candidate-output-level-watch"
     }
-    elseif ($nr5LowEvidenceLiftNeedsReview) {
-        $trendStatus = "nr5-low-evidence-lift-watch"
+    elseif ($candidateLowEvidenceLiftNeedsReview) {
+        $trendStatus = "candidate-low-evidence-lift-watch"
     }
     elseif ($quietIntermittentTrace) {
         $trendStatus = "quiet-intermittent-signal-watch"
     }
-    elseif (-not $nr5LowEvidenceSuppressionDominates -and [int]$rmsStats["count"] -gt 1 -and [double]$rmsStats["movement"] -gt 10.0) {
+    elseif (-not $candidateLowEvidenceSuppressionDominates -and [int]$rmsStats["count"] -gt 1 -and [double]$rmsStats["movement"] -gt 10.0) {
         $trendStatus = "audio-level-watch"
     }
     elseif ($rxAudioLevelerCapNeedsReview) {
@@ -4137,87 +4135,48 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
         $audioFreshCount -eq $runtimeCount -and
         $rxMetersFreshCount -eq $runtimeCount -and
         $rxStateBenchmarkReady -and
-        ($nr5SampleCount -eq 0 -or ($nr5AgcDiagnosticCount -eq $nr5SampleCount -and
-            $nr5ProbabilityDiagnosticCount -eq $nr5SampleCount -and
-            $nr5PeakDiagnosticCount -eq $nr5SampleCount)))
-    $nr5TuningReadyTrace = ($okCount -gt 0 -and
-        $failedCount -eq 0 -and
-        $nr5SampleCount -eq $okCount -and
-        $nr5AlignedCount -eq $okCount -and
-        $nr5TuningReadyCount -eq $okCount -and
-        $rxStateBenchmarkReady -and
-        $nr5AgcDiagnosticCount -eq $nr5SampleCount -and
-        $nr5ProbabilityDiagnosticCount -eq $nr5SampleCount -and
-        $nr5PeakDiagnosticCount -eq $nr5SampleCount)
-    $nr5TuningTraceStatus = if ($nr5TuningReadyTrace) {
-        "ready-for-nr5-live-tuning"
+        ($candidateSampleCount -eq 0 -or ($candidateAgcDiagnosticCount -eq $candidateSampleCount -and
+            $candidateProbabilityDiagnosticCount -eq $candidateSampleCount -and
+            $candidatePeakDiagnosticCount -eq $candidateSampleCount)))
+    $candidateTuningReadyTrace = ($okCount -gt 0 -and $candidateTuningReadyCount -eq $okCount)
+    $candidateTuningTraceStatus = if ($candidateTuningReadyTrace) {
+        "candidate-preflight-ready"
     }
-    elseif ($nr5SampleCount -eq 0) {
-        "nr5-diagnostics-missing"
+    elseif ($okCount -eq 0) {
+        "no-ok-samples"
     }
-    elseif ($nr5AlignedCount -lt $nr5SampleCount) {
-        "nr5-mode-not-aligned"
-    }
-    elseif ($nr5TuningReadyCount -lt $okCount) {
-        "nr5-tuning-preflight-required"
-    }
-    elseif ($nr5AgcDiagnosticCount -lt $nr5SampleCount) {
-        "nr5-agc-diagnostics-missing"
-    }
-    elseif ($nr5ProbabilityDiagnosticCount -lt $nr5SampleCount) {
-        "nr5-probability-diagnostics-missing"
-    }
-    elseif ($nr5PeakDiagnosticCount -lt $nr5SampleCount) {
-        "nr5-peak-diagnostics-missing"
+    elseif ($candidateTuningReadyCount -gt 0) {
+        "candidate-preflight-partial"
     }
     else {
-        "nr5-tuning-watch"
+        "candidate-tuning-preflight-required"
     }
 
     $comparisonStateId = ([string]$ComparisonId).Trim().ToLowerInvariant()
-    $comparisonStateStrict = ($comparisonStateId -eq "nr5-spnr" -or $comparisonStateId -eq "off-baseline")
+    $comparisonStateStrict = ($comparisonStateId -eq "candidate-under-test" -or $comparisonStateId -eq "off-baseline")
     $comparisonStateReady = $true
     $comparisonStateStatus = "not-required"
     $comparisonStateNextAction = "No strict NR mode state proof is required for this comparison label."
-    if ($comparisonStateId -eq "nr5-spnr") {
-        $comparisonStateReady = ($okCount -gt 0 -and
-            $nr5RequestedSampleCount -eq $okCount -and
-            $nr5EffectiveSampleCount -eq $okCount -and
-            $nr5AlignedCount -eq $okCount -and
-            $nr5SampleCount -eq $okCount -and
-            $nr5AgcDiagnosticCount -eq $nr5SampleCount -and
-            $nr5ProbabilityDiagnosticCount -eq $nr5SampleCount -and
-            $nr5PeakDiagnosticCount -eq $nr5SampleCount)
+    if ($comparisonStateId -eq "candidate-under-test") {
+        $comparisonStateReady = ($readyTrace -and $candidateTuningReadyTrace)
         if ($comparisonStateReady) {
-            $comparisonStateStatus = "nr5-state-ready"
-            $comparisonStateNextAction = "Use this trace as NR5/SPNR state-authenticated evidence."
+            $comparisonStateStatus = "candidate-preflight-ready"
+            $comparisonStateNextAction = "Use this trace as comparison-under-test evidence only after current-Zeus and Thetis-parity baselines are captured."
         }
         elseif ($okCount -eq 0) {
             $comparisonStateStatus = "no-ok-samples"
             $comparisonStateNextAction = "Recapture after the live diagnostics endpoint returns successful samples."
         }
-        elseif ($nr5EffectiveSampleCount -lt $okCount) {
-            $comparisonStateStatus = "nr5-effective-missing"
-            $comparisonStateNextAction = "Reassert NR5/SPNR and wait for effectiveNrMode=Nr5 before recapturing this comparison."
-        }
-        elseif ($nr5RequestedSampleCount -lt $okCount -or $nr5AlignedCount -lt $okCount) {
-            $comparisonStateStatus = "nr5-request-effective-mismatch"
-            $comparisonStateNextAction = "Wait for requested/effective NR mode alignment before using this trace as NR5 evidence."
-        }
-        elseif ($nr5SampleCount -lt $okCount) {
-            $comparisonStateStatus = "nr5-diagnostics-missing"
-            $comparisonStateNextAction = "Recapture after the backend publishes NR5/SPNR diagnostics for every successful sample."
-        }
         else {
-            $comparisonStateStatus = "nr5-diagnostics-incomplete"
-            $comparisonStateNextAction = "Restart or update the backend so every NR5 sample includes AGC, probability, and peak diagnostics."
+            $comparisonStateStatus = $candidateTuningTraceStatus
+            $comparisonStateNextAction = "Resolve comparison preflight constraints, then recapture before comparing the under-test path."
         }
     }
     elseif ($comparisonStateId -eq "off-baseline") {
         $comparisonStateReady = ($okCount -gt 0 -and
             $nrOffRequestedSampleCount -eq $okCount -and
             $nrOffEffectiveSampleCount -eq $okCount -and
-            $nr5SampleCount -eq 0)
+            $candidateSampleCount -eq 0)
         if ($comparisonStateReady) {
             $comparisonStateStatus = "off-state-ready"
             $comparisonStateNextAction = "Use this trace as NR-off baseline evidence."
@@ -4226,9 +4185,9 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
             $comparisonStateStatus = "no-ok-samples"
             $comparisonStateNextAction = "Recapture after the live diagnostics endpoint returns successful samples."
         }
-        elseif ($nr5SampleCount -gt 0) {
-            $comparisonStateStatus = "off-nr5-diagnostics-present"
-            $comparisonStateNextAction = "Disable NR5/SPNR before recapturing the off-baseline comparison."
+        elseif ($candidateSampleCount -gt 0) {
+            $comparisonStateStatus = "off-candidate-diagnostics-present"
+            $comparisonStateNextAction = "Discard this stale Candidate-era trace and recapture the off-baseline comparison with current WDSP v2 builds."
         }
         elseif ($nrOffEffectiveSampleCount -lt $okCount) {
             $comparisonStateStatus = "off-effective-missing"
@@ -4302,9 +4261,9 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
         readySampleCount = $readyCount
         readyForBenchmarkTrace = $readyTrace
         trendStatus = $trendStatus
-        nr5TuningReadySampleCount = $nr5TuningReadyCount
-        nr5TuningReadyTrace = $nr5TuningReadyTrace
-        nr5TuningTraceStatus = $nr5TuningTraceStatus
+        candidateTuningReadySampleCount = $candidateTuningReadyCount
+        candidateTuningReadyTrace = $candidateTuningReadyTrace
+        candidateTuningTraceStatus = $candidateTuningTraceStatus
         hardBlockerSampleCount = $hardBlockerSampleCount
         captureReadinessWatch = [ordered]@{
             status = $captureReadinessStatus
@@ -4437,22 +4396,22 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
         rxAudioLevelerOutputLimitReductionDb = $rxAudioLevelerOutputLimitReductionStats
         rxAudioLevelerOutputLimitSampleCount = $rxAudioLevelerOutputLimitSampleCountStats
         rxAudioLevelerPauseHoldBlocks = $rxAudioLevelerPauseHoldBlockStats
-        rxAudioLevelerNr5SpeechHoldBlocks = $rxAudioLevelerNr5SpeechHoldBlockStats
-        rxAudioLevelerNr5SpeechHangoverBlocks = $rxAudioLevelerNr5SpeechHangoverBlockStats
-        rxAudioLevelerNr5HybridSpeechPrior = $rxAudioLevelerNr5HybridSpeechPriorStats
-        rxAudioLevelerNr5NoSignalNoisePrior = $rxAudioLevelerNr5NoSignalNoisePriorStats
-        rxAudioLevelerNr5NoiseProfilePrior = $rxAudioLevelerNr5NoiseProfilePriorStats
+        rxAudioLevelerCandidateSpeechHoldBlocks = $rxAudioLevelerCandidateSpeechHoldBlockStats
+        rxAudioLevelerCandidateSpeechHangoverBlocks = $rxAudioLevelerCandidateSpeechHangoverBlockStats
+        rxAudioLevelerCandidateHybridSpeechPrior = $rxAudioLevelerCandidateHybridSpeechPriorStats
+        rxAudioLevelerCandidateNoSignalNoisePrior = $rxAudioLevelerCandidateNoSignalNoisePriorStats
+        rxAudioLevelerCandidateNoiseProfilePrior = $rxAudioLevelerCandidateNoiseProfilePriorStats
         rxAudioLevelerWatch = [ordered]@{
             diagnosticSampleCount = $rxAudioLevelerDiagnosticCount
             constrainedSampleCount = $rxAudioLevelerConstrainedCount
             constrainedPct = $rxAudioLevelerConstrainedPct
-            nr5NoSignalNoiseCapSampleCount = $rxAudioLevelerNr5NoSignalNoiseCapCount
-            nr5FarPeakNoiseCapSampleCount = $rxAudioLevelerNr5FarPeakNoiseCapCount
-            nr5NoProofNoiseCapSampleCount = $rxAudioLevelerNr5NoProofNoiseCapCount
-            nr5HybridSpeechPrior = $rxAudioLevelerNr5HybridSpeechPriorStats
-            nr5SpeechHangoverBlocks = $rxAudioLevelerNr5SpeechHangoverBlockStats
-            nr5NoSignalNoisePrior = $rxAudioLevelerNr5NoSignalNoisePriorStats
-            nr5NoiseProfilePrior = $rxAudioLevelerNr5NoiseProfilePriorStats
+            candidateNoSignalNoiseCapSampleCount = $rxAudioLevelerCandidateNoSignalNoiseCapCount
+            candidateFarPeakNoiseCapSampleCount = $rxAudioLevelerCandidateFarPeakNoiseCapCount
+            candidateNoProofNoiseCapSampleCount = $rxAudioLevelerCandidateNoProofNoiseCapCount
+            candidateHybridSpeechPrior = $rxAudioLevelerCandidateHybridSpeechPriorStats
+            candidateSpeechHangoverBlocks = $rxAudioLevelerCandidateSpeechHangoverBlockStats
+            candidateNoSignalNoisePrior = $rxAudioLevelerCandidateNoSignalNoisePriorStats
+            candidateNoiseProfilePrior = $rxAudioLevelerCandidateNoiseProfilePriorStats
             boostSlewLimitedSampleCount = $rxAudioLevelerBoostSlewLimitedCount
             boostSlewLimitedPct = $rxAudioLevelerBoostSlewLimitedPct
             peakLimitedSampleCount = $rxAudioLevelerPeakLimitedCount
@@ -4483,27 +4442,27 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
             topBoostSlewLimitedSamples = @($rxAudioLevelerBoostSlewLimitedTopSamples)
             topPeakLimitedSamples = @($rxAudioLevelerPeakLimitedTopSamples)
             topOutputLimitedSamples = @($rxAudioLevelerOutputLimitedTopSamples)
-            topNr5NoSignalNoiseCapSamples = @($rxAudioLevelerNr5NoSignalNoiseCapTopSamples)
+            topCandidateNoSignalNoiseCapSamples = @($rxAudioLevelerCandidateNoSignalNoiseCapTopSamples)
         }
-        nr5SpeechContinuityWatch = [ordered]@{
-            status = $nr5SpeechContinuityStatus
-            needsReview = $nr5SpeechContinuityNeedsReview
-            sampleCount = $nr5SpeechContinuitySampleCount
-            fadeSampleCount = $nr5SpeechContinuityFadeCount
-            fadePct = $nr5SpeechContinuityFadePct
-            dropoutSampleCount = $nr5SpeechContinuityDropoutCount
-            dropoutPct = $nr5SpeechContinuityDropoutPct
-            hybridSpeechPriorThreshold = $nr5SpeechContinuityHybridThreshold
-            noSignalNoisePriorMax = $nr5SpeechContinuityNoSignalMax
-            fadeThresholdDbfs = $nr5SpeechContinuityFadeThresholdDbfs
-            dropoutThresholdDbfs = $nr5SpeechContinuityDropoutThresholdDbfs
-            outputMovementThresholdDb = $nr5SpeechContinuityOutputMovementThresholdDb
-            gainMovementThresholdDb = $nr5SpeechContinuityGainMovementThresholdDb
-            finalAudioRmsDbfs = $nr5SpeechContinuityOutputStats
-            appliedGainDb = $nr5SpeechContinuityGainStats
-            outputMovementDb = $nr5SpeechContinuityOutputMovementDb
-            appliedGainMovementDb = $nr5SpeechContinuityGainMovementDb
-            topSamples = @($nr5SpeechContinuityTopSamples)
+        candidateSpeechContinuityWatch = [ordered]@{
+            status = $candidateSpeechContinuityStatus
+            needsReview = $candidateSpeechContinuityNeedsReview
+            sampleCount = $candidateSpeechContinuitySampleCount
+            fadeSampleCount = $candidateSpeechContinuityFadeCount
+            fadePct = $candidateSpeechContinuityFadePct
+            dropoutSampleCount = $candidateSpeechContinuityDropoutCount
+            dropoutPct = $candidateSpeechContinuityDropoutPct
+            hybridSpeechPriorThreshold = $candidateSpeechContinuityHybridThreshold
+            noSignalNoisePriorMax = $candidateSpeechContinuityNoSignalMax
+            fadeThresholdDbfs = $candidateSpeechContinuityFadeThresholdDbfs
+            dropoutThresholdDbfs = $candidateSpeechContinuityDropoutThresholdDbfs
+            outputMovementThresholdDb = $candidateSpeechContinuityOutputMovementThresholdDb
+            gainMovementThresholdDb = $candidateSpeechContinuityGainMovementThresholdDb
+            finalAudioRmsDbfs = $candidateSpeechContinuityOutputStats
+            appliedGainDb = $candidateSpeechContinuityGainStats
+            outputMovementDb = $candidateSpeechContinuityOutputMovementDb
+            appliedGainMovementDb = $candidateSpeechContinuityGainMovementDb
+            topSamples = @($candidateSpeechContinuityTopSamples)
         }
         monitorBacklogSamples = $backlogStats
         frontendSceneAgeMs = $frontendSceneAgeStats
@@ -4534,15 +4493,15 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
             slopeDbPerKhz = $frontendAdjacentNoiseSlopeStats
             rejectedPct = $frontendAdjacentNoiseRejectedStats
         }
-        nr5AdjacentNoiseProfile = [ordered]@{
-            usableSampleCount = $nr5AdjacentNoiseUsableCount
-            driveSampleCount = $nr5AdjacentNoiseDriveCount
-            trust = $nr5AdjacentNoiseTrustStats
-            drive = $nr5AdjacentNoiseDriveStats
-            floorDb = $nr5AdjacentNoiseFloorStats
-            rejectedPct = $nr5AdjacentNoiseRejectedStats
-            sideBalance = $nr5AdjacentNoiseSideBalanceStats
-            asymmetryDb = $nr5AdjacentNoiseAsymmetryStats
+        candidateAdjacentNoiseProfile = [ordered]@{
+            usableSampleCount = $candidateAdjacentNoiseUsableCount
+            driveSampleCount = $candidateAdjacentNoiseDriveCount
+            trust = $candidateAdjacentNoiseTrustStats
+            drive = $candidateAdjacentNoiseDriveStats
+            floorDb = $candidateAdjacentNoiseFloorStats
+            rejectedPct = $candidateAdjacentNoiseRejectedStats
+            sideBalance = $candidateAdjacentNoiseSideBalanceStats
+            asymmetryDb = $candidateAdjacentNoiseAsymmetryStats
         }
         rxMetersAgeMs = $rxMetersAgeStats
         audioAgeMs = $audioAgeStats
@@ -4551,13 +4510,13 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
         nrModeMismatchSampleCount = $nrModeMismatchSampleCount
         nrOffRequestedSampleCount = $nrOffRequestedSampleCount
         nrOffEffectiveSampleCount = $nrOffEffectiveSampleCount
-        nr5RequestedSampleCount = $nr5RequestedSampleCount
-        nr5EffectiveSampleCount = $nr5EffectiveSampleCount
-        nr5SampleCount = $nr5SampleCount
-        nr5AlignedSampleCount = $nr5AlignedCount
-        nr5AgcDiagnosticSampleCount = $nr5AgcDiagnosticCount
-        nr5ProbabilityDiagnosticSampleCount = $nr5ProbabilityDiagnosticCount
-        nr5PeakDiagnosticSampleCount = $nr5PeakDiagnosticCount
+        candidateRequestedSampleCount = $candidateRequestedSampleCount
+        candidateEffectiveSampleCount = $candidateEffectiveSampleCount
+        candidateSampleCount = $candidateSampleCount
+        candidateAlignedSampleCount = $candidateAlignedCount
+        candidateAgcDiagnosticSampleCount = $candidateAgcDiagnosticCount
+        candidateProbabilityDiagnosticSampleCount = $candidateProbabilityDiagnosticCount
+        candidatePeakDiagnosticSampleCount = $candidatePeakDiagnosticCount
         comparisonStateReadiness = [ordered]@{
             comparisonId = if ([string]::IsNullOrWhiteSpace($ComparisonId)) { $null } else { $ComparisonId }
             strict = $comparisonStateStrict
@@ -4570,196 +4529,196 @@ elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
             nrModeMismatchSampleCount = $nrModeMismatchSampleCount
             nrOffRequestedSampleCount = $nrOffRequestedSampleCount
             nrOffEffectiveSampleCount = $nrOffEffectiveSampleCount
-            nr5RequestedSampleCount = $nr5RequestedSampleCount
-            nr5EffectiveSampleCount = $nr5EffectiveSampleCount
-            nr5SampleCount = $nr5SampleCount
-            nr5AlignedSampleCount = $nr5AlignedCount
-            nr5AgcDiagnosticSampleCount = $nr5AgcDiagnosticCount
-            nr5ProbabilityDiagnosticSampleCount = $nr5ProbabilityDiagnosticCount
-            nr5PeakDiagnosticSampleCount = $nr5PeakDiagnosticCount
+            candidateRequestedSampleCount = $candidateRequestedSampleCount
+            candidateEffectiveSampleCount = $candidateEffectiveSampleCount
+            candidateSampleCount = $candidateSampleCount
+            candidateAlignedSampleCount = $candidateAlignedCount
+            candidateAgcDiagnosticSampleCount = $candidateAgcDiagnosticCount
+            candidateProbabilityDiagnosticSampleCount = $candidateProbabilityDiagnosticCount
+            candidatePeakDiagnosticSampleCount = $candidatePeakDiagnosticCount
         }
-        nr5InputDbfs = $nr5InputStats
-        nr5OutputDbfs = $nr5OutputStats
-        nr5OutputMinusInputDb = $nr5OutputMinusInputStats
-        nr5InputToOutput = $nr5InputOutputStats
-        nr5MeanGain = $nr5MeanGainStats
-        nr5FloorReductionDb = $nr5FloorReductionStats
-        nr5DynamicRangeDb = $nr5DynamicRangeStats
-        nr5SignalConfidence = $nr5SignalConfidenceStats
-        nr5AgcGate = $nr5AgcGateStats
-        nr5SignalProbability = $nr5SignalProbabilityStats
-        nr5TextureFill = $nr5TextureFillStats
-        nr5MaskSmoothing = $nr5MaskSmoothingStats
-        nr5LevelDrive = $nr5LevelDriveStats
-        nr5RecoveryDrive = $nr5RecoveryDriveStats
-        nr5WeakSignalMemory = $nr5WeakSignalMemoryStats
-        nr5MakeupGainDb = $nr5MakeupGainDbStats
-        nr5OutputPeakDbfs = $nr5OutputPeakDbfsStats
-        nr5PeakEvidence = $nr5PeakEvidenceStats
-        nr5PeakLimitDbfs = $nr5PeakLimitDbfsStats
-        nr5PeakReductionDb = $nr5PeakReductionDbStats
-        nr5LearnerStabilityWatch = [ordered]@{
-            status = $nr5LearnerStabilityStatus
-            learnerMonotonic = $nr5LearnerMonotonic
-            managedReplayEvidenceReady = $nr5ManagedReplayEvidenceReady
-            nr5SampleCount = $nr5SampleCount
-            learnedFrameSampleCount = $nr5LearnedFrameSampleCount
-            learnedFrameCoveragePct = $nr5LearnedFrameCoveragePct
-            managedCounterSampleCount = $nr5ManagedCounterSampleCount
-            managedCounterCoveragePct = $nr5ManagedCounterCoveragePct
-            learnerResetSampleCount = $nr5LearnerResetSampleCount
-            managedReapplySampleCount = $nr5ManagedReapplySampleCount
-            managedPositionReapplySampleCount = $nr5ManagedPositionReapplyCount
-            managedPolicyReapplySampleCount = $nr5ManagedPolicyReapplyCount
-            managedGenerationChangeSampleCount = $nr5ManagedGenerationChangeCount
-            learnedFrames = $nr5LearnedFrameStats
-            managedChannelGeneration = $nr5ManagedChannelGenerationStats
-            managedNr5ApplyCount = $nr5ManagedApplyCountStats
-            managedNr5PositionApplyCount = $nr5ManagedPositionApplyCountStats
-            managedNr5PolicyApplyCount = $nr5ManagedPolicyApplyCountStats
-            managedNr5NoopApplyCount = $nr5ManagedNoopApplyCountStats
-            managedNr5RunApplyCount = $nr5ManagedRunApplyCountStats
-            topLearnerResetSamples = @($nr5LearnerResetTopSamples)
-            topManagedReapplySamples = @($nr5ManagedReapplyTopSamples)
-            topManagedGenerationChangeSamples = @($nr5ManagedGenerationChangeTopSamples)
+        candidateInputDbfs = $candidateInputStats
+        candidateOutputDbfs = $candidateOutputStats
+        candidateOutputMinusInputDb = $candidateOutputMinusInputStats
+        candidateInputToOutput = $candidateInputOutputStats
+        candidateMeanGain = $candidateMeanGainStats
+        candidateFloorReductionDb = $candidateFloorReductionStats
+        candidateDynamicRangeDb = $candidateDynamicRangeStats
+        candidateSignalConfidence = $candidateSignalConfidenceStats
+        candidateAgcGate = $candidateAgcGateStats
+        candidateSignalProbability = $candidateSignalProbabilityStats
+        candidateTextureFill = $candidateTextureFillStats
+        candidateMaskSmoothing = $candidateMaskSmoothingStats
+        candidateLevelDrive = $candidateLevelDriveStats
+        candidateRecoveryDrive = $candidateRecoveryDriveStats
+        candidateWeakSignalMemory = $candidateWeakSignalMemoryStats
+        candidateMakeupGainDb = $candidateMakeupGainDbStats
+        candidateOutputPeakDbfs = $candidateOutputPeakDbfsStats
+        candidatePeakEvidence = $candidatePeakEvidenceStats
+        candidatePeakLimitDbfs = $candidatePeakLimitDbfsStats
+        candidatePeakReductionDb = $candidatePeakReductionDbStats
+        candidateLearnerStabilityWatch = [ordered]@{
+            status = $candidateLearnerStabilityStatus
+            learnerMonotonic = $candidateLearnerMonotonic
+            managedReplayEvidenceReady = $candidateManagedReplayEvidenceReady
+            candidateSampleCount = $candidateSampleCount
+            learnedFrameSampleCount = $candidateLearnedFrameSampleCount
+            learnedFrameCoveragePct = $candidateLearnedFrameCoveragePct
+            managedCounterSampleCount = $candidateManagedCounterSampleCount
+            managedCounterCoveragePct = $candidateManagedCounterCoveragePct
+            learnerResetSampleCount = $candidateLearnerResetSampleCount
+            managedReapplySampleCount = $candidateManagedReapplySampleCount
+            managedPositionReapplySampleCount = $candidateManagedPositionReapplyCount
+            managedPolicyReapplySampleCount = $candidateManagedPolicyReapplyCount
+            managedGenerationChangeSampleCount = $candidateManagedGenerationChangeCount
+            learnedFrames = $candidateLearnedFrameStats
+            managedChannelGeneration = $candidateManagedChannelGenerationStats
+            managedCandidateApplyCount = $candidateManagedApplyCountStats
+            managedCandidatePositionApplyCount = $candidateManagedPositionApplyCountStats
+            managedCandidatePolicyApplyCount = $candidateManagedPolicyApplyCountStats
+            managedCandidateNoopApplyCount = $candidateManagedNoopApplyCountStats
+            managedCandidateRunApplyCount = $candidateManagedRunApplyCountStats
+            topLearnerResetSamples = @($candidateLearnerResetTopSamples)
+            topManagedReapplySamples = @($candidateManagedReapplyTopSamples)
+            topManagedGenerationChangeSamples = @($candidateManagedGenerationChangeTopSamples)
         }
-        nr5AudioAlignmentWatch = [ordered]@{
-            comparableSampleCount = $nr5AudioAlignmentSampleCount
+        candidateAudioAlignmentWatch = [ordered]@{
+            comparableSampleCount = $candidateAudioAlignmentSampleCount
             mismatchThresholdDb = 12.0
-            mismatchSampleCount = $nr5AudioAlignmentMismatchCount
-            mismatchPct = $nr5AudioAlignmentMismatchPct
-            alignedAfterLevelerSampleCount = $nr5AudioAlignedAfterLevelerCount
-            alignedAfterLevelerPct = $nr5AudioAlignedAfterLevelerPct
-            levelerNormalizedSampleCount = $nr5AudioLevelerNormalizedCount
-            levelerNormalizedPct = $nr5AudioLevelerNormalizedPct
-            nr5OutputToLevelerInputDeltaDb = $nr5AudioInputDeltaStats
-            nr5OutputToLevelerOutputDeltaDb = $nr5AudioOutputDeltaStats
-            topMismatches = @($nr5AudioAlignmentMismatchTopSamples)
-            topLevelerNormalizedSamples = @($nr5AudioLevelerNormalizedTopSamples)
+            mismatchSampleCount = $candidateAudioAlignmentMismatchCount
+            mismatchPct = $candidateAudioAlignmentMismatchPct
+            alignedAfterLevelerSampleCount = $candidateAudioAlignedAfterLevelerCount
+            alignedAfterLevelerPct = $candidateAudioAlignedAfterLevelerPct
+            levelerNormalizedSampleCount = $candidateAudioLevelerNormalizedCount
+            levelerNormalizedPct = $candidateAudioLevelerNormalizedPct
+            candidateOutputToLevelerInputDeltaDb = $candidateAudioInputDeltaStats
+            candidateOutputToLevelerOutputDeltaDb = $candidateAudioOutputDeltaStats
+            topMismatches = @($candidateAudioAlignmentMismatchTopSamples)
+            topLevelerNormalizedSamples = @($candidateAudioLevelerNormalizedTopSamples)
         }
-        nr5WeakSignalWatch = [ordered]@{
+        candidateWeakSignalWatch = [ordered]@{
             weakInputThresholdDbfs = -30.0
-            weakInputSampleCount = $nr5WeakInputCount
-            lowEvidenceWeakInputSampleCount = $nr5LowEvidenceWeakInputCount
-            evidenceQualifiedWeakInputSampleCount = $nr5EvidenceQualifiedWeakInputCount
-            minimumMixedWeakInputSampleCount = $nr5MinimumMixedWeakInputSampleCount
-            minimumMixedStrongInputSampleCount = $nr5MinimumMixedStrongInputSampleCount
-            minimumMixedEvidenceQualifiedWeakInputSampleCount = $nr5MinimumMixedEvidenceQualifiedWeakInputSampleCount
-            minimumQualifiedWeakStrongInputSampleCount = $nr5MinimumQualifiedWeakStrongInputSampleCount
-            weakInputSampleDeficit = [Math]::Max(0, $nr5MinimumMixedWeakInputSampleCount - $nr5WeakInputCount)
-            evidenceQualifiedWeakInputSampleDeficit = [Math]::Max(0, $nr5MinimumMixedEvidenceQualifiedWeakInputSampleCount - $nr5EvidenceQualifiedWeakInputCount)
-            weakRecoveredSampleCount = $nr5WeakRecoveredCount
-            weakNearTargetSampleCount = $nr5WeakNearTargetCount
-            weakDropoutSampleCount = $nr5WeakDropoutCount
-            weakDropoutFinalAudibleThresholdDbfs = $nr5WeakDropoutFinalAudibleThresholdDbfs
-            weakDropoutFinalAudibleSampleCount = $nr5WeakDropoutFinalAudibleCount
-            weakDropoutFinalAudiblePct = $nr5WeakDropoutFinalAudiblePct
-            weakDropoutNativeLiftThresholdDb = $nr5WeakDropoutNativeLiftThresholdDb
-            weakDropoutNativeLiftedSampleCount = $nr5WeakDropoutNativeLiftedCount
-            weakDropoutNativeLiftedPct = $nr5WeakDropoutNativeLiftedPct
-            weakDropoutBelowInputThresholdDb = $nr5WeakDropoutBelowInputThresholdDb
-            weakDropoutCandidateLossSampleCount = $nr5WeakDropoutCandidateLossCount
-            weakDropoutCandidateLossPct = $nr5WeakDropoutCandidateLossPct
-            weakBelowInputSampleCount = $nr5WeakBelowInputCount
-            strongInputThresholdDbfs = $nr5StrongInputThresholdDbfs
-            strongInputSampleCount = $nr5StrongInputCount
-            strongInputSampleDeficit = [Math]::Max(0, $nr5MinimumMixedStrongInputSampleCount - $nr5StrongInputCount)
-            nearStrongInputThresholdDbfs = $nr5NearStrongInputThresholdDbfs
-            nearStrongInputSampleCount = $nr5NearStrongInputCount
+            weakInputSampleCount = $candidateWeakInputCount
+            lowEvidenceWeakInputSampleCount = $candidateLowEvidenceWeakInputCount
+            evidenceQualifiedWeakInputSampleCount = $candidateEvidenceQualifiedWeakInputCount
+            minimumMixedWeakInputSampleCount = $candidateMinimumMixedWeakInputSampleCount
+            minimumMixedStrongInputSampleCount = $candidateMinimumMixedStrongInputSampleCount
+            minimumMixedEvidenceQualifiedWeakInputSampleCount = $candidateMinimumMixedEvidenceQualifiedWeakInputSampleCount
+            minimumQualifiedWeakStrongInputSampleCount = $candidateMinimumQualifiedWeakStrongInputSampleCount
+            weakInputSampleDeficit = [Math]::Max(0, $candidateMinimumMixedWeakInputSampleCount - $candidateWeakInputCount)
+            evidenceQualifiedWeakInputSampleDeficit = [Math]::Max(0, $candidateMinimumMixedEvidenceQualifiedWeakInputSampleCount - $candidateEvidenceQualifiedWeakInputCount)
+            weakRecoveredSampleCount = $candidateWeakRecoveredCount
+            weakNearTargetSampleCount = $candidateWeakNearTargetCount
+            weakDropoutSampleCount = $candidateWeakDropoutCount
+            weakDropoutFinalAudibleThresholdDbfs = $candidateWeakDropoutFinalAudibleThresholdDbfs
+            weakDropoutFinalAudibleSampleCount = $candidateWeakDropoutFinalAudibleCount
+            weakDropoutFinalAudiblePct = $candidateWeakDropoutFinalAudiblePct
+            weakDropoutNativeLiftThresholdDb = $candidateWeakDropoutNativeLiftThresholdDb
+            weakDropoutNativeLiftedSampleCount = $candidateWeakDropoutNativeLiftedCount
+            weakDropoutNativeLiftedPct = $candidateWeakDropoutNativeLiftedPct
+            weakDropoutBelowInputThresholdDb = $candidateWeakDropoutBelowInputThresholdDb
+            weakDropoutCandidateLossSampleCount = $candidateWeakDropoutCandidateLossCount
+            weakDropoutCandidateLossPct = $candidateWeakDropoutCandidateLossPct
+            weakBelowInputSampleCount = $candidateWeakBelowInputCount
+            strongInputThresholdDbfs = $candidateStrongInputThresholdDbfs
+            strongInputSampleCount = $candidateStrongInputCount
+            strongInputSampleDeficit = [Math]::Max(0, $candidateMinimumMixedStrongInputSampleCount - $candidateStrongInputCount)
+            nearStrongInputThresholdDbfs = $candidateNearStrongInputThresholdDbfs
+            nearStrongInputSampleCount = $candidateNearStrongInputCount
             frontendStrongPassbandSnrThresholdDb = $frontendStrongPassbandSnrThresholdDb
             frontendStrongPassbandDbfsThreshold = $frontendStrongPassbandDbfsThreshold
-            frontendStrongPassbandNr5SubthresholdSampleCount = $nr5FrontendStrongPassbandSubthresholdSamples.Count
-            frontendStrongPassbandNr5SubthresholdDistanceToStrongDb = $nr5FrontendStrongPassbandSubthresholdDistanceStats
-            weakOutputDbfs = $nr5WeakOutputStats
-            strongOutputDbfs = $nr5StrongOutputStats
-            nearStrongOutputDbfs = $nr5NearStrongOutputStats
-            weakStrongOutputGapDb = $nr5WeakStrongOutputGapDb
-            weakStrongOutputGapThresholdDb = $nr5MixedWeakStrongGapThresholdDb
-            weakFinalAudioDbfs = $nr5WeakFinalAudioStats
-            strongFinalAudioDbfs = $nr5StrongFinalAudioStats
-            nearStrongFinalAudioDbfs = $nr5NearStrongFinalAudioStats
-            weakStrongFinalAudioGapDb = $nr5WeakStrongFinalAudioGapDb
-            weakStrongFinalAudioGapThresholdDb = $nr5MixedWeakStrongFinalAudioGapThresholdDb
-            speechQualifiedWeakInputSampleCount = $nr5SpeechQualifiedWeakOutputValues.Count
-            speechQualifiedStrongInputSampleCount = $nr5SpeechQualifiedStrongOutputValues.Count
-            speechQualifiedNearStrongInputSampleCount = $nr5SpeechQualifiedNearStrongOutputValues.Count
-            speechQualifiedWeakInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5SpeechQualifiedWeakOutputValues.Count)
-            speechQualifiedStrongInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5SpeechQualifiedStrongOutputValues.Count)
-            speechQualifiedWeakOutputDbfs = $nr5SpeechQualifiedWeakOutputStats
-            speechQualifiedStrongOutputDbfs = $nr5SpeechQualifiedStrongOutputStats
-            speechQualifiedNearStrongOutputDbfs = $nr5SpeechQualifiedNearStrongOutputStats
-            speechQualifiedWeakStrongOutputGapDb = $nr5SpeechQualifiedWeakStrongOutputGapDb
-            speechQualifiedWeakFinalAudioDbfs = $nr5SpeechQualifiedWeakFinalAudioStats
-            speechQualifiedStrongFinalAudioDbfs = $nr5SpeechQualifiedStrongFinalAudioStats
-            speechQualifiedNearStrongFinalAudioDbfs = $nr5SpeechQualifiedNearStrongFinalAudioStats
-            speechQualifiedWeakStrongFinalAudioGapDb = $nr5SpeechQualifiedWeakStrongFinalAudioGapDb
-            speechQualifiedMixedWeakStrongEvidenceReady = $nr5SpeechQualifiedWeakStrongEvidenceReady
-            speechQualifiedWeakStrongOutputParityReady = $nr5SpeechQualifiedWeakStrongOutputParityReady
-            speechQualifiedWeakStrongFinalAudioParityReady = $nr5SpeechQualifiedWeakStrongFinalAudioParityReady
-            speechQualifiedMixedWeakStrongEvidenceStatus = $nr5SpeechQualifiedWeakStrongEvidenceStatus
-            passbandQualifiedWeakInputSampleCount = $nr5PassbandQualifiedWeakOutputValues.Count
-            passbandQualifiedStrongInputSampleCount = $nr5PassbandQualifiedStrongOutputValues.Count
-            passbandQualifiedNearStrongInputSampleCount = $nr5PassbandQualifiedNearStrongOutputValues.Count
-            passbandQualifiedWeakInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5PassbandQualifiedWeakOutputValues.Count)
-            passbandQualifiedStrongInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5PassbandQualifiedStrongOutputValues.Count)
-            passbandQualifiedWeakOutputDbfs = $nr5PassbandQualifiedWeakOutputStats
-            passbandQualifiedStrongOutputDbfs = $nr5PassbandQualifiedStrongOutputStats
-            passbandQualifiedNearStrongOutputDbfs = $nr5PassbandQualifiedNearStrongOutputStats
-            passbandQualifiedWeakStrongOutputGapDb = $nr5PassbandQualifiedWeakStrongOutputGapDb
-            passbandQualifiedWeakFinalAudioDbfs = $nr5PassbandQualifiedWeakFinalAudioStats
-            passbandQualifiedStrongFinalAudioDbfs = $nr5PassbandQualifiedStrongFinalAudioStats
-            passbandQualifiedNearStrongFinalAudioDbfs = $nr5PassbandQualifiedNearStrongFinalAudioStats
-            passbandQualifiedWeakStrongFinalAudioGapDb = $nr5PassbandQualifiedWeakStrongFinalAudioGapDb
-            passbandQualifiedMixedWeakStrongEvidenceReady = $nr5PassbandQualifiedWeakStrongEvidenceReady
-            passbandQualifiedWeakStrongOutputParityReady = $nr5PassbandQualifiedWeakStrongOutputParityReady
-            passbandQualifiedWeakStrongFinalAudioParityReady = $nr5PassbandQualifiedWeakStrongFinalAudioParityReady
-            passbandQualifiedMixedWeakStrongEvidenceStatus = $nr5PassbandQualifiedWeakStrongEvidenceStatus
-            mixedWeakStrongEvidenceReady = $nr5MixedWeakStrongEvidenceReady
-            weakStrongOutputParityReady = $nr5WeakStrongOutputParityReady
-            weakStrongFinalAudioParityReady = $nr5WeakStrongFinalAudioParityReady
-            mixedWeakStrongEvidenceStatus = $nr5MixedWeakStrongEvidenceStatus
-            mixedWeakStrongTuningFocus = $nr5MixedWeakStrongTuningFocus
-            normalizationCompressionDb = $nr5NormalizationCompressionDb
+            frontendStrongPassbandCandidateSubthresholdSampleCount = $candidateFrontendStrongPassbandSubthresholdSamples.Count
+            frontendStrongPassbandCandidateSubthresholdDistanceToStrongDb = $candidateFrontendStrongPassbandSubthresholdDistanceStats
+            weakOutputDbfs = $candidateWeakOutputStats
+            strongOutputDbfs = $candidateStrongOutputStats
+            nearStrongOutputDbfs = $candidateNearStrongOutputStats
+            weakStrongOutputGapDb = $candidateWeakStrongOutputGapDb
+            weakStrongOutputGapThresholdDb = $candidateMixedWeakStrongGapThresholdDb
+            weakFinalAudioDbfs = $candidateWeakFinalAudioStats
+            strongFinalAudioDbfs = $candidateStrongFinalAudioStats
+            nearStrongFinalAudioDbfs = $candidateNearStrongFinalAudioStats
+            weakStrongFinalAudioGapDb = $candidateWeakStrongFinalAudioGapDb
+            weakStrongFinalAudioGapThresholdDb = $candidateMixedWeakStrongFinalAudioGapThresholdDb
+            speechQualifiedWeakInputSampleCount = $candidateSpeechQualifiedWeakOutputValues.Count
+            speechQualifiedStrongInputSampleCount = $candidateSpeechQualifiedStrongOutputValues.Count
+            speechQualifiedNearStrongInputSampleCount = $candidateSpeechQualifiedNearStrongOutputValues.Count
+            speechQualifiedWeakInputSampleDeficit = [Math]::Max(0, $candidateMinimumQualifiedWeakStrongInputSampleCount - $candidateSpeechQualifiedWeakOutputValues.Count)
+            speechQualifiedStrongInputSampleDeficit = [Math]::Max(0, $candidateMinimumQualifiedWeakStrongInputSampleCount - $candidateSpeechQualifiedStrongOutputValues.Count)
+            speechQualifiedWeakOutputDbfs = $candidateSpeechQualifiedWeakOutputStats
+            speechQualifiedStrongOutputDbfs = $candidateSpeechQualifiedStrongOutputStats
+            speechQualifiedNearStrongOutputDbfs = $candidateSpeechQualifiedNearStrongOutputStats
+            speechQualifiedWeakStrongOutputGapDb = $candidateSpeechQualifiedWeakStrongOutputGapDb
+            speechQualifiedWeakFinalAudioDbfs = $candidateSpeechQualifiedWeakFinalAudioStats
+            speechQualifiedStrongFinalAudioDbfs = $candidateSpeechQualifiedStrongFinalAudioStats
+            speechQualifiedNearStrongFinalAudioDbfs = $candidateSpeechQualifiedNearStrongFinalAudioStats
+            speechQualifiedWeakStrongFinalAudioGapDb = $candidateSpeechQualifiedWeakStrongFinalAudioGapDb
+            speechQualifiedMixedWeakStrongEvidenceReady = $candidateSpeechQualifiedWeakStrongEvidenceReady
+            speechQualifiedWeakStrongOutputParityReady = $candidateSpeechQualifiedWeakStrongOutputParityReady
+            speechQualifiedWeakStrongFinalAudioParityReady = $candidateSpeechQualifiedWeakStrongFinalAudioParityReady
+            speechQualifiedMixedWeakStrongEvidenceStatus = $candidateSpeechQualifiedWeakStrongEvidenceStatus
+            passbandQualifiedWeakInputSampleCount = $candidatePassbandQualifiedWeakOutputValues.Count
+            passbandQualifiedStrongInputSampleCount = $candidatePassbandQualifiedStrongOutputValues.Count
+            passbandQualifiedNearStrongInputSampleCount = $candidatePassbandQualifiedNearStrongOutputValues.Count
+            passbandQualifiedWeakInputSampleDeficit = [Math]::Max(0, $candidateMinimumQualifiedWeakStrongInputSampleCount - $candidatePassbandQualifiedWeakOutputValues.Count)
+            passbandQualifiedStrongInputSampleDeficit = [Math]::Max(0, $candidateMinimumQualifiedWeakStrongInputSampleCount - $candidatePassbandQualifiedStrongOutputValues.Count)
+            passbandQualifiedWeakOutputDbfs = $candidatePassbandQualifiedWeakOutputStats
+            passbandQualifiedStrongOutputDbfs = $candidatePassbandQualifiedStrongOutputStats
+            passbandQualifiedNearStrongOutputDbfs = $candidatePassbandQualifiedNearStrongOutputStats
+            passbandQualifiedWeakStrongOutputGapDb = $candidatePassbandQualifiedWeakStrongOutputGapDb
+            passbandQualifiedWeakFinalAudioDbfs = $candidatePassbandQualifiedWeakFinalAudioStats
+            passbandQualifiedStrongFinalAudioDbfs = $candidatePassbandQualifiedStrongFinalAudioStats
+            passbandQualifiedNearStrongFinalAudioDbfs = $candidatePassbandQualifiedNearStrongFinalAudioStats
+            passbandQualifiedWeakStrongFinalAudioGapDb = $candidatePassbandQualifiedWeakStrongFinalAudioGapDb
+            passbandQualifiedMixedWeakStrongEvidenceReady = $candidatePassbandQualifiedWeakStrongEvidenceReady
+            passbandQualifiedWeakStrongOutputParityReady = $candidatePassbandQualifiedWeakStrongOutputParityReady
+            passbandQualifiedWeakStrongFinalAudioParityReady = $candidatePassbandQualifiedWeakStrongFinalAudioParityReady
+            passbandQualifiedMixedWeakStrongEvidenceStatus = $candidatePassbandQualifiedWeakStrongEvidenceStatus
+            mixedWeakStrongEvidenceReady = $candidateMixedWeakStrongEvidenceReady
+            weakStrongOutputParityReady = $candidateWeakStrongOutputParityReady
+            weakStrongFinalAudioParityReady = $candidateWeakStrongFinalAudioParityReady
+            mixedWeakStrongEvidenceStatus = $candidateMixedWeakStrongEvidenceStatus
+            mixedWeakStrongTuningFocus = $candidateMixedWeakStrongTuningFocus
+            normalizationCompressionDb = $candidateNormalizationCompressionDb
             hotMakeupThresholdDb = 12.0
-            hotMakeupSampleCount = $nr5HotMakeupCount
-            normalizationMotionIsFloorSuppression = $nr5NormalizationMotionIsFloorSuppression
-            topWeakInputs = @($nr5WeakInputTopSamples)
-            topStrongInputs = @($nr5StrongInputTopSamples)
-            topSpeechQualifiedWeakInputs = @($nr5SpeechQualifiedWeakInputTopSamples)
-            topSpeechQualifiedStrongInputs = @($nr5SpeechQualifiedStrongInputTopSamples)
-            topPassbandQualifiedWeakInputs = @($nr5PassbandQualifiedWeakInputTopSamples)
-            topPassbandQualifiedStrongInputs = @($nr5PassbandQualifiedStrongInputTopSamples)
-            topWeakDropouts = @($nr5WeakDropoutTopSamples)
-            topFinalAudibleWeakDropouts = @($nr5WeakDropoutFinalAudibleTopSamples)
-            topCandidateWeakLosses = @($nr5WeakDropoutCandidateLossTopSamples)
-            topHotMakeup = @($nr5HotMakeupTopSamples)
-            topNearStrongInputs = @($nr5NearStrongInputTopSamples)
-            topFrontendStrongPassbandNr5SubthresholdInputs = @($nr5FrontendStrongPassbandSubthresholdTopSamples)
+            hotMakeupSampleCount = $candidateHotMakeupCount
+            normalizationMotionIsFloorSuppression = $candidateNormalizationMotionIsFloorSuppression
+            topWeakInputs = @($candidateWeakInputTopSamples)
+            topStrongInputs = @($candidateStrongInputTopSamples)
+            topSpeechQualifiedWeakInputs = @($candidateSpeechQualifiedWeakInputTopSamples)
+            topSpeechQualifiedStrongInputs = @($candidateSpeechQualifiedStrongInputTopSamples)
+            topPassbandQualifiedWeakInputs = @($candidatePassbandQualifiedWeakInputTopSamples)
+            topPassbandQualifiedStrongInputs = @($candidatePassbandQualifiedStrongInputTopSamples)
+            topWeakDropouts = @($candidateWeakDropoutTopSamples)
+            topFinalAudibleWeakDropouts = @($candidateWeakDropoutFinalAudibleTopSamples)
+            topCandidateWeakLosses = @($candidateWeakDropoutCandidateLossTopSamples)
+            topHotMakeup = @($candidateHotMakeupTopSamples)
+            topNearStrongInputs = @($candidateNearStrongInputTopSamples)
+            topFrontendStrongPassbandCandidateSubthresholdInputs = @($candidateFrontendStrongPassbandSubthresholdTopSamples)
         }
-        nr5LowEvidenceLiftWatch = [ordered]@{
-            weakInputThresholdDbfs = $nr5LowEvidenceInputThresholdDbfs
-            signalConfidenceThreshold = $nr5LowEvidenceConfidenceThreshold
-            signalProbabilityThreshold = $nr5LowEvidenceProbabilityThreshold
-            agcGateThreshold = $nr5LowEvidenceAgcGateThreshold
-            outputThresholdDbfs = $nr5LowEvidenceOutputThresholdDbfs
-            audioThresholdDbfs = $nr5LowEvidenceAudioThresholdDbfs
-            lowEvidenceSampleCount = $nr5LowEvidenceSampleCount
-            liftedSampleCount = $nr5LowEvidenceLiftCount
-            liftedPct = $nr5LowEvidenceLiftPct
-            alignmentMismatchSampleCount = $nr5LowEvidenceAlignmentMismatchCount
-            alignmentMismatchPct = $nr5LowEvidenceAlignmentMismatchPct
-            suppressedSampleCount = $nr5LowEvidenceSuppressedCount
-            suppressedPct = $nr5LowEvidenceSuppressedPct
-            suppressionDominates = $nr5LowEvidenceSuppressionDominates
-            topLiftedSamples = @($nr5LowEvidenceLiftTopSamples)
-            topSuppressedSamples = @($nr5LowEvidenceSuppressedTopSamples)
+        candidateLowEvidenceLiftWatch = [ordered]@{
+            weakInputThresholdDbfs = $candidateLowEvidenceInputThresholdDbfs
+            signalConfidenceThreshold = $candidateLowEvidenceConfidenceThreshold
+            signalProbabilityThreshold = $candidateLowEvidenceProbabilityThreshold
+            agcGateThreshold = $candidateLowEvidenceAgcGateThreshold
+            outputThresholdDbfs = $candidateLowEvidenceOutputThresholdDbfs
+            audioThresholdDbfs = $candidateLowEvidenceAudioThresholdDbfs
+            lowEvidenceSampleCount = $candidateLowEvidenceSampleCount
+            liftedSampleCount = $candidateLowEvidenceLiftCount
+            liftedPct = $candidateLowEvidenceLiftPct
+            alignmentMismatchSampleCount = $candidateLowEvidenceAlignmentMismatchCount
+            alignmentMismatchPct = $candidateLowEvidenceAlignmentMismatchPct
+            suppressedSampleCount = $candidateLowEvidenceSuppressedCount
+            suppressedPct = $candidateLowEvidenceSuppressedPct
+            suppressionDominates = $candidateLowEvidenceSuppressionDominates
+            topLiftedSamples = @($candidateLowEvidenceLiftTopSamples)
+            topSuppressedSamples = @($candidateLowEvidenceSuppressedTopSamples)
         }
         statusCounts = @(ConvertTo-CountArray $statusCounts)
         qualityToneCounts = @(ConvertTo-CountArray $toneCounts)
         runtimeStatusCounts = @(ConvertTo-CountArray $runtimeStatusCounts)
         audioStatusCounts = @(ConvertTo-CountArray $audioStatusCounts)
-        nr5TuningStatusCounts = @(ConvertTo-CountArray $nr5TuningStatusCounts)
-        nr5TuningConstraintCounts = @(ConvertTo-CountArray $nr5TuningConstraintCounts)
+        candidateTuningStatusCounts = @(ConvertTo-CountArray $candidateTuningStatusCounts)
+        candidateTuningConstraintCounts = @(ConvertTo-CountArray $candidateTuningConstraintCounts)
         constraintCounts = @(ConvertTo-CountArray $constraintCounts)
         hardConstraintCounts = @(ConvertTo-CountArray $hardConstraintCounts)
         recommendations = @($summaryRecommendations.ToArray())
@@ -4812,17 +4771,17 @@ if ($PlanOnly) {
             "JSON summary with runtime evidence, blockers, and AGC/audio/headroom movement",
             "captureReadinessWatch with top hard/soft preflight constraints and mapped action items",
             "Optional -Preflight and -FailOnHardGate exit codes for CI/operator capture gating",
-            "NR5-specific input/output, confidence, gate, level-drive, recovery-drive, makeup-gain, audio-alignment mismatch, weak/strong normalization, and live tuning-readiness trends when NR5 diagnostics are present"
+            "Comparison-specific input/output, confidence, gate, level-drive, recovery-drive, makeup-gain, audio-alignment mismatch, weak/strong normalization, and live tuning-readiness trends when comparison diagnostics are present"
         )
-        example = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl $base -Samples 60 -IntervalMs 1000 -TuneStepHz $effectiveTuneStepHz -Label g2-nr5-weak-cw"
+        example = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl $base -Samples 60 -IntervalMs 1000 -TuneStepHz $effectiveTuneStepHz -Label g2-candidate-weak-cw"
         preflightExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl $base -Samples 15 -IntervalMs 500 -TuneStepHz $effectiveTuneStepHz -Preflight -Label g2-preflight"
-        desktopExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl https://localhost:6443 -SkipCertificateCheck -Samples 60 -IntervalMs 500 -TuneStepHz $effectiveTuneStepHz -Label nr5-live"
-        realtimeExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl https://localhost:6443 -SkipCertificateCheck -Samples 120 -IntervalMs 250 -TuneStepHz $effectiveTuneStepHz -Realtime -RealtimeEvery 4 -Label nr5-live-tune"
+        desktopExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl https://localhost:6443 -SkipCertificateCheck -Samples 60 -IntervalMs 500 -TuneStepHz $effectiveTuneStepHz -Label candidate-live"
+        realtimeExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl https://localhost:6443 -SkipCertificateCheck -Samples 120 -IntervalMs 250 -TuneStepHz $effectiveTuneStepHz -Realtime -RealtimeEvery 4 -Label candidate-live-tune"
         offlineExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -InputPath captures\dsp-live-diagnostics\trace.jsonl -JsonOnly"
         notes = @(
             "Read-only: the tool only calls GET /api/dsp/live-diagnostics.",
             "Use traces as runtime context beside offline fixture metrics, audio renders, spectrum captures, and operator notes.",
-            "Use nr5AudioAlignmentWatch to reject mixed-frame rows before treating low-evidence lift/dropout rows as DSP behavior.",
+            "Use candidateAudioAlignmentWatch to reject mixed-frame rows before treating low-evidence lift/dropout rows as DSP behavior.",
             "Frontend tune candidates are snapped to -TuneStepHz; raw/exact FFT-bin-derived targets remain in rawSuggested* and exactSuggested* fields.",
             "-Preflight exits nonzero when samples fail, hard blockers appear, or readyForBenchmarkTrace is false.",
             "-FailOnHardGate exits nonzero only for failed samples or hard blockers.",
@@ -4908,15 +4867,15 @@ else {
     }
     Write-Host "Status: $($report["trendStatus"])"
     Write-Host "Capture readiness: $($report["captureReadinessWatch"]["status"]) (hardGatePass=$($report["captureReadinessWatch"]["hardGatePass"]), strictPreflightPass=$($report["captureReadinessWatch"]["strictPreflightPass"]))"
-    Write-Host "NR5 tuning: $($report["nr5TuningTraceStatus"]) ($($report["nr5TuningReadySampleCount"])/$($report["okSampleCount"]) ready)"
-    $learnerWatch = $report["nr5LearnerStabilityWatch"]
+    Write-Host "Candidate tuning: $($report["candidateTuningTraceStatus"]) ($($report["candidateTuningReadySampleCount"])/$($report["okSampleCount"]) ready)"
+    $learnerWatch = $report["candidateLearnerStabilityWatch"]
     if ($null -ne $learnerWatch) {
-        Write-Host "NR5 learner: $($learnerWatch["status"]), learned frames $($learnerWatch["learnedFrames"]["min"])..$($learnerWatch["learnedFrames"]["max"]), position applies movement $($learnerWatch["managedNr5PositionApplyCount"]["movement"]), policy applies movement $($learnerWatch["managedNr5PolicyApplyCount"]["movement"])"
+        Write-Host "Candidate learner: $($learnerWatch["status"]), learned frames $($learnerWatch["learnedFrames"]["min"])..$($learnerWatch["learnedFrames"]["max"]), position applies movement $($learnerWatch["managedCandidatePositionApplyCount"]["movement"]), policy applies movement $($learnerWatch["managedCandidatePolicyApplyCount"]["movement"])"
     }
     Write-Host "Samples: $($report["okSampleCount"]) ok, $($report["failedSampleCount"]) failed, $($report["hardBlockerSampleCount"]) with hard blockers"
     Write-Host "AGC movement dB: $($report["agcGainDb"]["movement"]) ($($report["agcStabilityWatch"]["status"])), audio RMS movement dB: $($report["audioRmsDbfs"]["movement"]), min ADC headroom dB: $($report["adcHeadroomDb"]["min"])"
-    Write-Host "NR5 normalization: input movement dB $($report["nr5InputDbfs"]["movement"]), output movement dB $($report["nr5OutputDbfs"]["movement"]), weak/strong output gap dB $($report["nr5WeakSignalWatch"]["weakStrongOutputGapDb"]), weak/strong final-audio gap dB $($report["nr5WeakSignalWatch"]["weakStrongFinalAudioGapDb"]), mixed weak/strong status $($report["nr5WeakSignalWatch"]["mixedWeakStrongEvidenceStatus"])"
-    Write-Host "NR5 qualified parity: speech final gap dB $($report["nr5WeakSignalWatch"]["speechQualifiedWeakStrongFinalAudioGapDb"]) ($($report["nr5WeakSignalWatch"]["speechQualifiedMixedWeakStrongEvidenceStatus"])), passband final gap dB $($report["nr5WeakSignalWatch"]["passbandQualifiedWeakStrongFinalAudioGapDb"]) ($($report["nr5WeakSignalWatch"]["passbandQualifiedMixedWeakStrongEvidenceStatus"]))"
+    Write-Host "Candidate normalization: input movement dB $($report["candidateInputDbfs"]["movement"]), output movement dB $($report["candidateOutputDbfs"]["movement"]), weak/strong output gap dB $($report["candidateWeakSignalWatch"]["weakStrongOutputGapDb"]), weak/strong final-audio gap dB $($report["candidateWeakSignalWatch"]["weakStrongFinalAudioGapDb"]), mixed weak/strong status $($report["candidateWeakSignalWatch"]["mixedWeakStrongEvidenceStatus"])"
+    Write-Host "Candidate qualified parity: speech final gap dB $($report["candidateWeakSignalWatch"]["speechQualifiedWeakStrongFinalAudioGapDb"]) ($($report["candidateWeakSignalWatch"]["speechQualifiedMixedWeakStrongEvidenceStatus"])), passband final gap dB $($report["candidateWeakSignalWatch"]["passbandQualifiedWeakStrongFinalAudioGapDb"]) ($($report["candidateWeakSignalWatch"]["passbandQualifiedMixedWeakStrongEvidenceStatus"]))"
     $tuneCandidates = @($report["frontendTuneCandidates"])
     if ($tuneCandidates.Count -gt 0) {
         $candidateText = @($tuneCandidates | Select-Object -First 5 | ForEach-Object {
@@ -4926,14 +4885,14 @@ else {
         }) -join "; "
         Write-Host "Frontend tune candidates: $candidateText"
     }
-    $weakWatch = $report["nr5WeakSignalWatch"]
+    $weakWatch = $report["candidateWeakSignalWatch"]
     if ($null -ne $weakWatch) {
-        Write-Host "NR5 weak outcome: weak=$($weakWatch["weakInputSampleCount"]), recovered=$($weakWatch["weakRecoveredSampleCount"]), dropouts=$($weakWatch["weakDropoutSampleCount"]), finalAudible=$($weakWatch["weakDropoutFinalAudibleSampleCount"]), candidateLoss=$($weakWatch["weakDropoutCandidateLossSampleCount"]), hotMakeup=$($weakWatch["hotMakeupSampleCount"])"
+        Write-Host "Candidate weak outcome: weak=$($weakWatch["weakInputSampleCount"]), recovered=$($weakWatch["weakRecoveredSampleCount"]), dropouts=$($weakWatch["weakDropoutSampleCount"]), finalAudible=$($weakWatch["weakDropoutFinalAudibleSampleCount"]), candidateLoss=$($weakWatch["weakDropoutCandidateLossSampleCount"]), hotMakeup=$($weakWatch["hotMakeupSampleCount"])"
         $mixedFocus = $weakWatch["mixedWeakStrongTuningFocus"]
         if ($null -ne $mixedFocus) {
             $outputGapExcessText = if ($null -eq $mixedFocus["outputGapExcessDb"]) { "n/a" } else { "$($mixedFocus["outputGapExcessDb"]) dB" }
             $finalAudioGapExcessText = if ($null -eq $mixedFocus["finalAudioGapExcessDb"]) { "n/a" } else { "$($mixedFocus["finalAudioGapExcessDb"]) dB" }
-            Write-Host "NR5 mixed focus: action=$($mixedFocus["preferredAction"]), weak=$($mixedFocus["weakInputSampleCount"]), strong=$($mixedFocus["strongInputSampleCount"]), outputGapExcess=$outputGapExcessText ($($mixedFocus["outputGapDirection"])), finalAudioGapExcess=$finalAudioGapExcessText ($($mixedFocus["finalAudioGapDirection"])), speechFinalGap=$($mixedFocus["speechQualifiedFinalAudioGapDb"]) ($($mixedFocus["speechQualifiedStatus"])), passbandFinalGap=$($mixedFocus["passbandQualifiedFinalAudioGapDb"]) ($($mixedFocus["passbandQualifiedStatus"]))"
+            Write-Host "Candidate mixed focus: action=$($mixedFocus["preferredAction"]), weak=$($mixedFocus["weakInputSampleCount"]), strong=$($mixedFocus["strongInputSampleCount"]), outputGapExcess=$outputGapExcessText ($($mixedFocus["outputGapDirection"])), finalAudioGapExcess=$finalAudioGapExcessText ($($mixedFocus["finalAudioGapDirection"])), speechFinalGap=$($mixedFocus["speechQualifiedFinalAudioGapDb"]) ($($mixedFocus["speechQualifiedStatus"])), passbandFinalGap=$($mixedFocus["passbandQualifiedFinalAudioGapDb"]) ($($mixedFocus["passbandQualifiedStatus"]))"
         }
     }
     $levelerWatch = $report["rxAudioLevelerWatch"]

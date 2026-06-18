@@ -33,10 +33,6 @@ public static class DspLiveDiagnosticsService
         };
 
         int score = 100;
-        bool nr5RequestedOrEffective = ModeEquals(condition.ExpectedNrMode, "Nr5")
-            || ModeEquals(condition.RequestedNrMode, "Nr5")
-            || ModeEquals(condition.EffectiveNrMode, "Nr5");
-
         if (condition.WdspNativeLoadable)
             evidence.Add("wdsp-native-loadable");
         else
@@ -71,16 +67,6 @@ public static class DspLiveDiagnosticsService
             score -= 20;
             constraints.Add("nr4-sbnr-exports-missing");
             actions.Add("Rebuild or install WDSP with NR4/SBNR exports before evaluating NR4 as best-in-class.");
-        }
-
-        if (condition.WdspNr5SpnrAvailable)
-            evidence.Add("legacy-nr5-spnr-available");
-
-        if (nr5RequestedOrEffective)
-        {
-            score -= 30;
-            constraints.Add("nr5-retired-for-wdsp-v2");
-            actions.Add("Turn NR5 off before collecting WDSP v2 evidence; compare NR-off/current-Zeus against the opt-in non-NR5 candidate path.");
         }
 
         if (!condition.Available)
@@ -189,38 +175,6 @@ public static class DspLiveDiagnosticsService
         if (condition.ImpulsivePct is > 10.0)
             constraints.Add("impulsive-scene");
 
-        var nr5 = condition.Nr5SpnrDiagnostics;
-        if (ModeEquals(condition.EffectiveNrMode, "Nr5") || nr5 is not null)
-        {
-            tools.Add("legacy-nr5-spnr-diagnostics");
-            if (nr5 is null)
-            {
-                constraints.Add("nr5-diagnostics-missing");
-            }
-            else
-            {
-                evidence.Add($"nr5-learned-frames-{nr5.LearnedFrames}");
-                evidence.Add($"nr5-signal-confidence-{nr5.SignalConfidence:0.000}");
-                evidence.Add($"nr5-weak-signal-memory-{nr5.WeakSignalMemory:0.000}");
-                if (nr5.AdjacentNoiseUsable)
-                {
-                    evidence.Add($"nr5-adjacent-noise-trust-{nr5.AdjacentNoiseTrust:0.000}");
-                    evidence.Add($"nr5-adjacent-noise-side-balance-{nr5.AdjacentNoiseSideBalance:0.000}");
-                    evidence.Add($"nr5-adjacent-noise-asymmetry-{nr5.AdjacentNoiseAsymmetryDb:0.0}db");
-                }
-                if (nr5.AdjacentNoiseDrive > 0.0)
-                    evidence.Add($"nr5-adjacent-noise-drive-{nr5.AdjacentNoiseDrive:0.000}");
-                if (nr5.LearnedFrames < 20)
-                    constraints.Add("nr5-learning");
-                if (nr5.SignalConfidence < 0.10 && condition.CoherentSubthresholdSignal == true)
-                    constraints.Add("nr5-low-confidence-on-coherent-scene");
-                if (nr5.AgcGate < 0.10 && condition.CoherentSubthresholdSignal == true)
-                    constraints.Add("nr5-agc-gate-closed-on-coherent-scene");
-                if (nr5.FloorReductionDb > 20.0 && nr5.SignalConfidence < 0.20)
-                    constraints.Add("nr5-floor-pressure-high");
-            }
-        }
-
         foreach (var candidate in externalCandidates)
             tools.Add($"external-post-demod-bakeoff:{candidate.Id}");
 
@@ -287,13 +241,12 @@ public static class DspLiveDiagnosticsService
         string status = Status(condition, constraints, score);
         string tone = QualityTone(status, condition, score);
         var nextBenchmarkScenarios = DspBenchmarkPlanCatalog.NextScenarioIds(condition);
-        var nr5Tuning = Nr5TuningReadiness(condition);
         var externalBakeoff = ExternalEngineBakeoffReadiness(condition, runtimeEvidence, externalCandidates);
         tools.Add("external-engine-live-bakeoff-watch");
         if (externalBakeoff.Ready)
         {
             evidence.Add("ready-for-external-engine-bakeoff");
-            actions.Add("Capture a manually tuned G2 NR-off/current-Zeus baseline and an opt-in RX Audio Suite candidate trace before promoting any non-NR5 DSP path.");
+            actions.Add("Capture a manually tuned G2 NR-off/current-Zeus baseline and an opt-in RX Audio Suite candidate trace before promoting any replacement DSP path.");
         }
 
         bool ready = score >= 85
@@ -320,9 +273,6 @@ public static class DspLiveDiagnosticsService
             QualityTone: tone,
             ReadinessScore: score,
             ReadyForLiveBenchmark: ready,
-            ReadyForNr5Tuning: nr5Tuning.Ready,
-            Nr5TuningStatus: nr5Tuning.Status,
-            Nr5TuningConstraints: nr5Tuning.Constraints,
             ReadyForExternalEngineBakeoff: externalBakeoff.Ready,
             ExternalEngineBakeoffStatus: externalBakeoff.Status,
             ExternalEngineBakeoffConstraints: externalBakeoff.Constraints,
@@ -331,9 +281,7 @@ public static class DspLiveDiagnosticsService
             WdspNativeLoadable: condition.WdspNativeLoadable,
             WdspEmnrPost2Available: condition.WdspEmnrPost2Available,
             WdspNr4SbnrAvailable: condition.WdspNr4SbnrAvailable,
-            WdspNr5SpnrAvailable: condition.WdspNr5SpnrAvailable,
             Nr4Readiness: condition.Nr4Readiness,
-            Nr5Readiness: condition.Nr5Readiness,
             FrontendSceneAvailable: condition.Available,
             FrontendSceneStatus: condition.Status,
             FrontendSceneFresh: condition.Fresh,
@@ -371,19 +319,6 @@ public static class DspLiveDiagnosticsService
             RadioMode: radioState?.Mode.ToString(),
             RadioCtunEnabled: radioState?.CtunEnabled,
             RadioSampleRate: radioState?.SampleRate,
-            Nr5SpnrDiagnostics: nr5,
-            Nr5SignalConfidence: nr5?.SignalConfidence,
-            Nr5AgcGate: nr5?.AgcGate,
-            Nr5SignalProbability: nr5?.SignalProbability,
-            Nr5TextureFill: nr5?.TextureFill,
-            Nr5MaskSmoothing: nr5?.MaskSmoothing,
-            Nr5WeakSignalMemory: nr5?.WeakSignalMemory,
-            Nr5MeanGain: nr5?.MeanGain,
-            Nr5FloorReductionDb: nr5?.FloorReductionDb,
-            Nr5OutputPeakDbfs: nr5?.OutputPeakDbfs,
-            Nr5PeakEvidence: nr5?.PeakEvidence,
-            Nr5PeakLimitDbfs: nr5?.PeakLimitDbfs,
-            Nr5PeakReductionDb: nr5?.PeakReductionDb,
             RuntimeEvidence: runtimeEvidence,
             Evidence: Unique(evidence),
             Constraints: Unique(constraints),
@@ -404,8 +339,7 @@ public static class DspLiveDiagnosticsService
         if (constraints.Contains("frontend-clock-skew")) return "frontend-clock-skew";
         if (condition.Stale || constraints.Contains("frontend-dsp-scene-stale")) return "frontend-scene-stale";
         if (!condition.Available) return "frontend-scene-missing";
-        if (constraints.Any(c => c is "nr4-sbnr-exports-missing" or "nr5-spnr-exports-missing")) return "nr-capability-limited";
-        if (constraints.Contains("nr5-retired-for-wdsp-v2")) return "nr5-retired-for-wdsp-v2";
+        if (constraints.Any(c => c is "nr4-sbnr-exports-missing")) return "nr-capability-limited";
         if (constraints.Contains("smart-nr-apply-pending")) return "smart-nr-apply-pending";
         if (constraints.Contains("smart-nr-runtime-misaligned")) return "smart-nr-runtime-misaligned";
         if (constraints.Contains("rx-chain-protect")) return "rx-chain-protect";
@@ -413,7 +347,6 @@ public static class DspLiveDiagnosticsService
         if (constraints.Contains("final-audio-not-fresh")) return "final-audio-not-fresh";
         if (constraints.Contains("adc-headroom-low")) return "adc-headroom-low";
         if (constraints.Contains("final-audio-muted-by-squelch")) return "final-audio-muted-by-squelch";
-        if (constraints.Any(c => c.StartsWith("nr5-", StringComparison.Ordinal))) return "nr5-needs-benchmark";
         if (score >= 85) return "ready-for-live-benchmark";
         if (score >= 65) return "verify-before-tuning";
         return "diagnostics-not-ready";
@@ -423,7 +356,7 @@ public static class DspLiveDiagnosticsService
     {
         if (status is "wdsp-native-unloadable" or "dsp-engine-unavailable" or "nr-capability-limited"
             or "rx-chain-protect" or "final-audio-clipping-risk" or "final-audio-not-fresh"
-            or "adc-headroom-low" or "nr5-retired-for-wdsp-v2" or "diagnostics-not-ready")
+            or "adc-headroom-low" or "diagnostics-not-ready")
             return "protect";
         if (!condition.Available || status is "frontend-scene-missing")
             return "standby";
@@ -442,7 +375,6 @@ public static class DspLiveDiagnosticsService
             "frontend-scene-stale" => "Frontend scene evidence is stale; refresh the client before using Smart NR recommendations.",
             "frontend-scene-missing" => "No frontend DSP scene is available; open Signal Intelligence/Smart NR so backend diagnostics can correlate scene evidence with WDSP state.",
             "nr-capability-limited" => "The requested Smart NR path needs native WDSP exports that are not available; rebuild/update WDSP before evaluating that mode.",
-            "nr5-retired-for-wdsp-v2" => "NR5 is retired for WDSP v2; turn it off and capture NR-off/current-Zeus plus opt-in non-NR5 candidate evidence instead.",
             "smart-nr-apply-pending" => condition.RuntimeAlignmentRecommendation,
             "smart-nr-runtime-misaligned" => condition.RuntimeAlignmentRecommendation,
             "rx-chain-protect" => condition.RxChainRecommendation ?? "RX-chain health is in protect mode; resolve ADC/AGC/attenuator posture before increasing DSP aggressiveness.",
@@ -450,7 +382,6 @@ public static class DspLiveDiagnosticsService
             "final-audio-not-fresh" => "Final RX audio is missing or stale; restore the DSP/audio publish path before evaluating live DSP quality.",
             "adc-headroom-low" => "ADC headroom is low; stabilize front-end gain and attenuation before evaluating NR/AGC improvements.",
             "final-audio-muted-by-squelch" => "Final audio is muted by squelch; open or lower squelch before using silence as weak-signal evidence.",
-            "nr5-needs-benchmark" => "NR5/SPNR is active or requested but diagnostics show a tuning constraint; use the synthetic benchmark fixtures before changing constants.",
             "ready-for-live-benchmark" => "Live diagnostics are aligned enough for a G2 benchmark capture; keep the new DSP path opt-in until benchmark and on-air evidence prove it.",
             _ => actions[0],
         };
@@ -463,9 +394,6 @@ public static class DspLiveDiagnosticsService
             or "frontend-dsp-scene-stale"
             or "frontend-clock-skew"
             or "nr4-sbnr-exports-missing"
-            or "nr5-spnr-exports-missing"
-            or "nr5-retired-for-wdsp-v2"
-            or "nr5-active-retired-for-wdsp-v2"
             or "smart-nr-runtime-misaligned"
             or "rx-chain-protect"
             or "final-audio-not-fresh"
@@ -482,9 +410,6 @@ public static class DspLiveDiagnosticsService
             constraints.Add("wdsp-native-unloadable");
         if (!condition.WdspActive)
             constraints.Add("wdsp-inactive");
-
-        if (ModeEquals(condition.EffectiveNrMode, "Nr5") || ModeEquals(condition.RequestedNrMode, "Nr5"))
-            constraints.Add("nr5-active-retired-for-wdsp-v2");
 
         if (!condition.Available)
             constraints.Add("frontend-dsp-scene-missing");
@@ -559,16 +484,6 @@ public static class DspLiveDiagnosticsService
             : new(false, "external-engine-bakeoff-preflight-required", unique);
     }
 
-    private static Nr5LiveTuningReadiness Nr5TuningReadiness(SmartNrConditionDto condition)
-    {
-        bool nr5Relevant = ModeEquals(condition.RequestedNrMode, "Nr5")
-            || ModeEquals(condition.EffectiveNrMode, "Nr5")
-            || condition.Nr5SpnrDiagnostics is not null;
-        if (!nr5Relevant)
-            return new(false, "nr5-not-active", ["nr5-not-active"]);
-        return new(false, "nr5-retired-for-wdsp-v2", ["nr5-retired-for-wdsp-v2"]);
-    }
-
     private static bool ModeEquals(string? left, string right) =>
         string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
 
@@ -577,11 +492,6 @@ public static class DspLiveDiagnosticsService
             .Where(static value => !string.IsNullOrWhiteSpace(value))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-
-    private sealed record Nr5LiveTuningReadiness(
-        bool Ready,
-        string Status,
-        string[] Constraints);
 
     private sealed record ExternalEngineBakeoffReadinessResult(
         bool Ready,

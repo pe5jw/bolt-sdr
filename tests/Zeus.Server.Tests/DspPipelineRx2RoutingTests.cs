@@ -16,6 +16,7 @@ public class DspPipelineRx2RoutingTests
         FilterHighHz: 2600,
         SampleRate: 384_000,
         VfoBHz: 14_250_000,
+        ModeB: mode,
         RadioLoHz: 14_200_000);
 
     [Fact]
@@ -82,6 +83,39 @@ public class DspPipelineRx2RoutingTests
 
         Assert.Equal([0], engine.FeedChannels);
         Assert.Equal(iq, engine.FeedSamples[0]);
+    }
+
+    [Fact]
+    public void SelectRxAudio_Rx2ModeWithNoRx2Samples_FallsBackToRx1()
+    {
+        float[] rx1 = [0.10f, -0.20f, 0.30f, 9.0f];
+
+        int count = DspPipelineService.SelectRxAudio(
+            Rx2AudioMode.Rx2,
+            rx1,
+            rx1Count: 3,
+            rx2: [],
+            rx2Count: 0);
+
+        Assert.Equal(3, count);
+        Assert.Equal([0.10f, -0.20f, 0.30f], rx1[..count]);
+    }
+
+    [Fact]
+    public void SelectRxAudio_Rx2ModeWithRx2Samples_UsesRx2()
+    {
+        float[] rx1 = [0.10f, -0.20f, 0.30f];
+        float[] rx2 = [0.40f, -0.50f];
+
+        int count = DspPipelineService.SelectRxAudio(
+            Rx2AudioMode.Rx2,
+            rx1,
+            rx1Count: rx1.Length,
+            rx2,
+            rx2Count: rx2.Length);
+
+        Assert.Equal(2, count);
+        Assert.Equal([0.40f, -0.50f], rx1[..count]);
     }
 
     private sealed class RecordingEngine : IDspEngine

@@ -67,6 +67,33 @@ public class AudioSuitePreviewEndpointTests : IClassFixture<AudioSuitePreviewEnd
     }
 
     [Fact]
+    public async Task MeterOnlyReportsBackOnlyWhileEnabled()
+    {
+        using var client = _factory.CreateClient();
+
+        // Auto Tune arms the monitor for metering only — the chain runs but the
+        // operator hears nothing. The endpoint echoes the applied flag.
+        var on = await client.PutAsJsonAsync(
+            "/api/tx-audio-suite/preview", new { enabled = true, meterOnly = true });
+        Assert.Equal(HttpStatusCode.OK, on.StatusCode);
+        using (var onJson = await on.Content.ReadFromJsonAsync<JsonDocument>())
+        {
+            Assert.NotNull(onJson);
+            Assert.True(onJson!.RootElement.GetProperty("enabled").GetBoolean());
+            Assert.True(onJson.RootElement.GetProperty("meterOnly").GetBoolean());
+        }
+
+        // meterOnly is meaningless without the monitor; disabling reports false.
+        var off = await client.PutAsJsonAsync(
+            "/api/tx-audio-suite/preview", new { enabled = false, meterOnly = true });
+        Assert.Equal(HttpStatusCode.OK, off.StatusCode);
+        using var offJson = await off.Content.ReadFromJsonAsync<JsonDocument>();
+        Assert.NotNull(offJson);
+        Assert.False(offJson!.RootElement.GetProperty("enabled").GetBoolean());
+        Assert.False(offJson.RootElement.GetProperty("meterOnly").GetBoolean());
+    }
+
+    [Fact]
     public async Task TxSuiteAliasesExposeTxRouteSurfaces()
     {
         using var client = _factory.CreateClient();

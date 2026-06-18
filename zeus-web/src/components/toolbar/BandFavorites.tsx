@@ -44,13 +44,17 @@ export function BandFavorites() {
   const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
   const rxFocus = useConnectionStore((s) => s.rxFocus);
   const mode = useConnectionStore((s) => s.mode);
+  const modeB = useConnectionStore((s) => s.modeB);
   const applyState = useConnectionStore((s) => s.applyState);
   const activeReceiver: TxVfo = rxFocus === 'B' && rx2Enabled ? 'B' : 'A';
   const activeVfoHz = activeReceiver === 'B' ? vfoBHz : vfoHz;
+  const activeMode = activeReceiver === 'B' ? modeB : mode;
 
   const [currentBand, setCurrentBand] = useState<string>(() => bandOf(activeVfoHz));
   const memoryRef = useRef<Map<string, BandMemoryEntry>>(new Map());
   const saveTimerRef = useRef<number | null>(null);
+  const pendingSaveRef = useRef<BandMemoryEntry | null>(null);
+  const lastBandRef = useRef<string>(currentBand);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -66,23 +70,43 @@ export function BandFavorites() {
     return () => ac.abort();
   }, []);
 
+  const clearSaveTimer = useCallback(() => {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+  }, []);
+
+  const flushPendingSave = useCallback(() => {
+    const pending = pendingSaveRef.current;
+    if (!pending) return;
+
+    pendingSaveRef.current = null;
+    clearSaveTimer();
+    memoryRef.current.set(pending.band, pending);
+    saveBandMemory(pending.band, pending.hz, pending.mode).catch(() => { /* next tune retries */ });
+  }, [clearSaveTimer]);
+
+  useEffect(() => {
+    return () => {
+      clearSaveTimer();
+      pendingSaveRef.current = null;
+    };
+  }, [clearSaveTimer]);
+
   useEffect(() => {
     const band = bandOf(activeVfoHz);
     setCurrentBand(band);
+    if (lastBandRef.current !== band) {
+      flushPendingSave();
+      lastBandRef.current = band;
+    }
     if (band === '—') return;
-    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = window.setTimeout(() => {
-      saveTimerRef.current = null;
-      memoryRef.current.set(band, { band, hz: activeVfoHz, mode });
-      saveBandMemory(band, activeVfoHz, mode).catch(() => { /* next tune retries */ });
-    }, SAVE_DEBOUNCE_MS);
-    return () => {
-      if (saveTimerRef.current !== null) {
-        window.clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-      }
-    };
-  }, [activeVfoHz, mode]);
+
+    pendingSaveRef.current = { band, hz: activeVfoHz, mode: activeMode };
+    clearSaveTimer();
+    saveTimerRef.current = window.setTimeout(flushPendingSave, SAVE_DEBOUNCE_MS);
+  }, [activeVfoHz, activeMode, clearSaveTimer, flushPendingSave]);
 
   const onSelect = useCallback(
     (key: string) => {
@@ -99,8 +123,10 @@ export function BandFavorites() {
       const postVfo = activeReceiver === 'B' ? setVfoB : setVfo;
 
       void (async () => {
-        if (targetMode && targetMode !== mode) {
-          useConnectionStore.setState({ mode: targetMode });
+        if (targetMode && targetMode !== activeMode) {
+          useConnectionStore.setState(
+            activeReceiver === 'B' ? { modeB: targetMode } : { mode: targetMode },
+          );
           try {
             applyState(await setMode(targetMode, undefined, activeReceiver));
           } catch {
@@ -114,7 +140,7 @@ export function BandFavorites() {
         }
       })();
     },
-    [activeReceiver, applyState, mode],
+    [activeReceiver, activeMode, applyState],
   );
 
   return (

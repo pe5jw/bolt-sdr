@@ -593,7 +593,7 @@ export function Waterfall({
     };
   }, [receiver]);
 
-  usePanTuneGesture(canvasRef, receiver, { touchMode, tuneReceiver });
+  usePanTuneGesture(canvasRef, receiver, { touchMode, tuneReceiver, dragMode: 'ruler-pan' });
 
   return (
     <div

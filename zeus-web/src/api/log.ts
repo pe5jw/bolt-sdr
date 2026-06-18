@@ -89,6 +89,41 @@ export type LogEntriesResponse = {
   totalCount: number;
 };
 
+export type WorkedCallsignRecentQso = {
+  qsoDateTimeUtc: string;
+  band: string | null;
+  mode: string | null;
+  frequencyMhz: number;
+  rstSent: string | null;
+  rstRcvd: string | null;
+  name: string | null;
+  grid: string | null;
+  country: string | null;
+  state: string | null;
+  comment: string | null;
+  qrzLogId: string | null;
+};
+
+export type WorkedCallsignSummary = {
+  callsign: string;
+  workedBefore: boolean;
+  totalCount: number;
+  lastWorkedUtc: string | null;
+  lastBand: string | null;
+  lastMode: string | null;
+  lastFrequencyMhz: number | null;
+  lastRstSent: string | null;
+  lastRstRcvd: string | null;
+  lastName: string | null;
+  lastGrid: string | null;
+  lastCountry: string | null;
+  lastState: string | null;
+  lastComment: string | null;
+  bands: string[];
+  modes: string[];
+  recentQsos: WorkedCallsignRecentQso[];
+};
+
 export type QrzPublishRequest = {
   logEntryIds: string[];
 };
@@ -115,6 +150,16 @@ export async function getLogEntries(
   signal?: AbortSignal
 ): Promise<LogEntriesResponse> {
   const url = `/api/log/entries?skip=${skip}&take=${take}`;
+  const response = await fetch(url, { signal });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return await response.json();
+}
+
+export async function getWorkedCallsignSummary(
+  callsign: string,
+  signal?: AbortSignal
+): Promise<WorkedCallsignSummary> {
+  const url = `/api/log/worked?callsign=${encodeURIComponent(callsign)}&recent=5`;
   const response = await fetch(url, { signal });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return await response.json();

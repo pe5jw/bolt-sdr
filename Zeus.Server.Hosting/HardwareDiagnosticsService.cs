@@ -2378,7 +2378,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                     Title: "Mic, line, and XLR input fidelity paths",
                     Category: "tx-audio",
                     ManualCapability: "The G2 exposes front-panel mic/headphone/CW plus rear-panel XLR and line input paths; p2app supports selecting audio input modes such as XLR and jack.",
-                    CurrentExposure: "Zeus exposes host mic ingest, TX stage meters, TX audio tools, and plugin/VST chains; it does not yet surface G2 hardware audio input selection.",
+                    CurrentExposure: "Zeus exposes host mic ingest, TX stage meters, Audio Tools, and plugin/VST chains; it does not yet surface G2 hardware audio input selection.",
                     ImplementationStatus: "manual-confirmed-gap",
                     SafetyClass: "tx-safe-after-mapping",
                     UserConfigurable: false,
@@ -2390,7 +2390,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                     ],
                     CurrentControls:
                     [
-                        "Settings > TX Audio Tools",
+                        "Settings > Audio Tools",
                         "Settings > Hardware > Mapping Capture",
                     ],
                     Blockers:
@@ -2846,9 +2846,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "dsp.wdspWisdomPhase",
                 "dsp.wdspEmnrPost2Available",
                 "dsp.wdspNr4SbnrAvailable",
-                "dsp.wdspNr5SpnrAvailable",
                 "dsp.nr4Readiness",
-                "dsp.nr5Readiness",
                 "/api/dsp/live-diagnostics.status",
                 "/api/dsp/live-diagnostics.readinessScore",
                 "/api/dsp/live-diagnostics.constraints",
@@ -2912,7 +2910,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "/api/dsp/modernization-snapshot",
             },
             safetyClass = "rx-safe",
-            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the direct NR-condition API and backend diagnostics feed preserve the active profile, recommendation, RX-chain hold reason, requested/effective NR mode, ANF/SNB/NB/manual-notch runtime state, WDSP NR2/NR4/NR5 native capability, backend AGC/ATT/ADC/squelch operating point, and final RX/TX-monitor audio-frame freshness/RMS/peak evidence for remote clients and recordings. The live-diagnostics API fuses that evidence into a modernization readiness score, constraints list, recommended next tools, opt-in external-engine candidate gates, and benchmark-plan scenario IDs; the benchmark-capture manifest turns that state into a concrete G2 evidence checklist; the modernization snapshot bundles all of those read-only surfaces into one capture artifact.",
+            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the direct NR-condition API and backend diagnostics feed preserve the active profile, recommendation, RX-chain hold reason, requested/effective NR mode, ANF/SNB/NB/manual-notch runtime state, WDSP NR2/NR4 native capability, backend AGC/ATT/ADC/squelch operating point, and final RX/TX-monitor audio-frame freshness/RMS/peak evidence for remote clients and recordings. The live-diagnostics API fuses that evidence into a modernization readiness score, constraints list, recommended next tools, external-engine opt-in gates, and benchmark-plan scenario IDs; the benchmark-capture manifest turns that state into a concrete G2 evidence checklist; the modernization snapshot bundles all of those read-only surfaces into one capture artifact.",
         },
         new
         {

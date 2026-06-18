@@ -43,8 +43,19 @@
 // License for details.
 
 import { create } from 'zustand';
-import type { LogEntry, CreateLogEntryRequest, QrzPublishResponse } from '../api/log';
-import { getLogEntries, createLogEntry, exportToAdif, publishToQrz } from '../api/log';
+import type {
+  LogEntry,
+  CreateLogEntryRequest,
+  QrzPublishResponse,
+  WorkedCallsignSummary,
+} from '../api/log';
+import {
+  getLogEntries,
+  getWorkedCallsignSummary,
+  createLogEntry,
+  exportToAdif,
+  publishToQrz,
+} from '../api/log';
 
 type LoggerState = {
   entries: LogEntry[];
@@ -55,9 +66,14 @@ type LoggerState = {
   publishError: string | null;
   lastPublishResult: QrzPublishResponse | null;
   selectedIds: Set<string>;
+  workedSummary: WorkedCallsignSummary | null;
+  workedSummaryLoading: boolean;
+  workedSummaryError: string | null;
 
   // Actions
   loadEntries: () => Promise<void>;
+  loadWorkedSummary: (callsign: string, signal?: AbortSignal) => Promise<WorkedCallsignSummary | null>;
+  clearWorkedSummary: () => void;
   addLogEntry: (request: CreateLogEntryRequest) => Promise<LogEntry | null>;
   exportAdif: () => Promise<void>;
   publishSelectedToQrz: (logEntryIds: string[]) => Promise<void>;
@@ -76,6 +92,9 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
   publishError: null,
   lastPublishResult: null,
   selectedIds: new Set<string>(),
+  workedSummary: null,
+  workedSummaryLoading: false,
+  workedSummaryError: null,
 
   loadEntries: async () => {
     set({ loading: true, error: null });
@@ -87,12 +106,44 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
     }
   },
 
+  loadWorkedSummary: async (callsign: string, signal?: AbortSignal) => {
+    const key = callsign.trim().toUpperCase();
+    if (!key) {
+      set({ workedSummary: null, workedSummaryLoading: false, workedSummaryError: null });
+      return null;
+    }
+
+    set({ workedSummaryLoading: true, workedSummaryError: null });
+    try {
+      const summary = await getWorkedCallsignSummary(key, signal);
+      if (signal?.aborted) return null;
+      set({ workedSummary: summary, workedSummaryLoading: false });
+      return summary;
+    } catch (err) {
+      if (signal?.aborted) return null;
+      set({
+        workedSummary: null,
+        workedSummaryError: err instanceof Error ? err.message : 'Failed to load worked-before summary',
+        workedSummaryLoading: false,
+      });
+      return null;
+    }
+  },
+
+  clearWorkedSummary: () => {
+    set({ workedSummary: null, workedSummaryLoading: false, workedSummaryError: null });
+  },
+
   addLogEntry: async (request: CreateLogEntryRequest) => {
     set({ error: null });
     try {
       const entry = await createLogEntry(request);
       // Reload entries to get the updated list
       await get().loadEntries();
+      const activeSummaryCall = get().workedSummary?.callsign;
+      if (activeSummaryCall && activeSummaryCall === entry.callsign.trim().toUpperCase()) {
+        await get().loadWorkedSummary(activeSummaryCall);
+      }
       return entry;
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Failed to create log entry' });

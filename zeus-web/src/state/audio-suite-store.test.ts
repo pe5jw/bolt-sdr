@@ -7,6 +7,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '../components/meters/__tests__/harness';
+import { useAudioSuiteStore } from './audio-suite-store';
+import { useTxStore } from './tx-store';
 
 function response(body: unknown, ok = true): Response {
   return {
@@ -16,33 +18,48 @@ function response(body: unknown, ok = true): Response {
   } as Response;
 }
 
+function resetStoreState(): void {
+  useTxStore.setState(useTxStore.getInitialState(), true);
+  useAudioSuiteStore.setState(useAudioSuiteStore.getInitialState(), true);
+}
+
+async function rehydrateAudioSuiteFromStorage(): Promise<void> {
+  const persisted = localStorage.getItem('zeus-audio-suite');
+  resetStoreState();
+  if (persisted === null) {
+    localStorage.removeItem('zeus-audio-suite');
+  } else {
+    localStorage.setItem('zeus-audio-suite', persisted);
+  }
+  await useAudioSuiteStore.persist.rehydrate();
+}
+
 describe('audio-suite-store profile selection', () => {
   beforeEach(() => {
-    vi.resetModules();
+    vi.useRealTimers();
+    resetStoreState();
     localStorage.clear();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+    vi.useRealTimers();
+    resetStoreState();
+    localStorage.clear();
   });
 
   it('persists the selected profile until the operator changes it', async () => {
-    const { useAudioSuiteStore } = await import('./audio-suite-store');
-
     useAudioSuiteStore.getState().setSelectedProfile('Ragchew');
 
     const stored = JSON.parse(localStorage.getItem('zeus-audio-suite') ?? '{}');
     expect(stored.state.selectedProfile).toBe('Ragchew');
 
-    vi.resetModules();
-    const reloaded = await import('./audio-suite-store');
-    expect(reloaded.useAudioSuiteStore.getState().selectedProfile).toBe('Ragchew');
+    await rehydrateAudioSuiteFromStorage();
+    expect(useAudioSuiteStore.getState().selectedProfile).toBe('Ragchew');
   });
 
   it('opens TX and RX suites as independent windows', async () => {
-    const { useAudioSuiteStore } = await import('./audio-suite-store');
-
     expect(useAudioSuiteStore.getState().suiteRoute).toBe('tx');
 
     useAudioSuiteStore.getState().openTx();
@@ -78,13 +95,12 @@ describe('audio-suite-store profile selection', () => {
     expect(stored.state.txX).toBe(111);
     expect(stored.state.rxX).toBe(211);
 
-    vi.resetModules();
-    const reloaded = await import('./audio-suite-store');
-    expect(reloaded.useAudioSuiteStore.getState().suiteRoute).toBe('rx');
-    expect(reloaded.useAudioSuiteStore.getState().txOpen).toBe(false);
-    expect(reloaded.useAudioSuiteStore.getState().rxOpen).toBe(true);
-    expect(reloaded.useAudioSuiteStore.getState().txX).toBe(111);
-    expect(reloaded.useAudioSuiteStore.getState().rxX).toBe(211);
+    await rehydrateAudioSuiteFromStorage();
+    expect(useAudioSuiteStore.getState().suiteRoute).toBe('rx');
+    expect(useAudioSuiteStore.getState().txOpen).toBe(false);
+    expect(useAudioSuiteStore.getState().rxOpen).toBe(true);
+    expect(useAudioSuiteStore.getState().txX).toBe(111);
+    expect(useAudioSuiteStore.getState().rxX).toBe(211);
   });
 
   it('migrates a legacy open RX suite into the RX window', async () => {
@@ -103,7 +119,7 @@ describe('audio-suite-store profile selection', () => {
       }),
     );
 
-    const { useAudioSuiteStore } = await import('./audio-suite-store');
+    await rehydrateAudioSuiteFromStorage();
 
     expect(useAudioSuiteStore.getState().rxOpen).toBe(true);
     expect(useAudioSuiteStore.getState().txOpen).toBe(false);
@@ -126,7 +142,7 @@ describe('audio-suite-store profile selection', () => {
       .mockResolvedValue(response({ profiles: [{ name: 'Current profile' }] }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const { useAudioSuiteStore } = await import('./audio-suite-store');
+    await rehydrateAudioSuiteFromStorage();
     expect(useAudioSuiteStore.getState().selectedProfile).toBe('Deleted profile');
 
     await useAudioSuiteStore.getState().loadProfiles();
@@ -306,7 +322,7 @@ describe('audio-suite-store profile selection', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/tx-audio-suite/preview', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: true }),
+      body: JSON.stringify({ enabled: true, meterOnly: false }),
     });
   });
 

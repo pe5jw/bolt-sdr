@@ -179,6 +179,7 @@ public sealed class G2TopologyDiagnosticsEndpointTests
                 "192.168.1.23:1024",
                 384_000,
                 boardKind: HpsdrBoardKind.OrionMkII);
+            radio.SetRx2(new Rx2SetRequest(Enabled: false));
         }
 
         using var client = factory.CreateClient();

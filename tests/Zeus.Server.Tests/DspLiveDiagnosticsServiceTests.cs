@@ -19,8 +19,6 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Equal("frontend-scene-missing", diag.Status);
         Assert.Equal("standby", diag.QualityTone);
         Assert.False(diag.ReadyForLiveBenchmark);
-        Assert.False(diag.ReadyForNr5Tuning);
-        Assert.Equal("nr5-not-active", diag.Nr5TuningStatus);
         Assert.False(diag.ReadyForExternalEngineBakeoff);
         Assert.Equal("external-engine-bakeoff-preflight-required", diag.ExternalEngineBakeoffStatus);
         Assert.Contains("frontend-dsp-scene-missing", diag.ExternalEngineBakeoffConstraints);
@@ -37,65 +35,6 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("frontend-scene-freshness", diag.NextBenchmarkScenarios);
         Assert.Contains(diag.ExternalEngineCandidates, c => c.Id == "rnnoise");
         Assert.All(diag.ExternalEngineCandidates, c => Assert.Equal("off", c.DefaultState));
-    }
-
-    [Fact]
-    public void Build_AlignedFreshNr5SceneIsBlockedAsRetiredForWdspV2()
-    {
-        var service = new FrontendDspSceneDiagnosticsService();
-        PublishScene(service, profile: "NR5", held: false, rxScore: 94, rxTone: "neutral", coherent: true);
-        var condition = service.SmartNrCondition(
-            Runtime("Nr5", "Nr5", nr5Available: true, nr5: Nr5(learnedFrames: 80, confidence: 0.72, agcGate: 0.66)),
-            RxChain(score: 94));
-
-        var diag = DspLiveDiagnosticsService.Build(condition, RuntimeEvidence());
-
-        Assert.Equal("nr5-retired-for-wdsp-v2", diag.Status);
-        Assert.Equal("protect", diag.QualityTone);
-        Assert.False(diag.ReadyForLiveBenchmark);
-        Assert.False(diag.ReadyForNr5Tuning);
-        Assert.False(diag.ReadyForExternalEngineBakeoff);
-        Assert.Contains("nr5-retired-for-wdsp-v2", diag.Constraints);
-        Assert.Contains("nr5-active-retired-for-wdsp-v2", diag.ExternalEngineBakeoffConstraints);
-        Assert.Equal("nr5-retired-for-wdsp-v2", diag.Nr5TuningStatus);
-        Assert.Contains("nr5-retired-for-wdsp-v2", diag.Nr5TuningConstraints);
-        Assert.True(diag.RuntimeAligned);
-        Assert.Equal("Nr5", diag.EffectiveNrMode);
-        Assert.Equal(0.72, diag.Nr5SignalConfidence);
-        Assert.Equal(0.66, diag.Nr5SignalProbability);
-        Assert.Equal(0.12, diag.Nr5TextureFill);
-        Assert.Equal(0.18, diag.Nr5MaskSmoothing);
-        Assert.Equal(0.41, diag.Nr5WeakSignalMemory);
-        Assert.True(diag.FrontendAdjacentNoiseUsable);
-        Assert.Equal(72, diag.FrontendAdjacentNoiseBins);
-        Assert.Equal(-111.4, diag.FrontendAdjacentNoiseFloorDb);
-        Assert.Equal(5.3, diag.FrontendAdjacentNoiseRejectedPct);
-        var peak = Assert.Single(diag.FrontendTopPeaks);
-        Assert.Equal(14_268_750, peak.FrequencyHz);
-        Assert.Equal(1_750, peak.OffsetHz);
-        Assert.Equal(21.4, peak.SnrDb);
-        Assert.Equal(-82.5, peak.Dbfs);
-        Assert.Equal(0.812, peak.Confidence);
-        Assert.True(peak.Coherent);
-        Assert.Contains("adjacent-noise-profile-usable", diag.Evidence);
-        Assert.Contains("nr5-adjacent-noise-trust-0.680", diag.Evidence);
-        Assert.Contains("nr5-adjacent-noise-side-balance-0.895", diag.Evidence);
-        Assert.Contains("nr5-adjacent-noise-asymmetry-1.4db", diag.Evidence);
-        Assert.Contains("nr5-adjacent-noise-drive-0.210", diag.Evidence);
-        Assert.Contains("adjacent-noise-profile", diag.CandidateTools);
-        Assert.Contains("legacy-nr5-spnr-diagnostics", diag.CandidateTools);
-        Assert.Contains("weak-cw-carrier", diag.NextBenchmarkScenarios);
-        Assert.Contains("agc-level-step", diag.NextBenchmarkScenarios);
-        Assert.Contains(diag.BenchmarkAcceptanceGates, gate => gate.Contains("No weak-signal loss", StringComparison.Ordinal));
-        Assert.Contains("external-post-demod-bakeoff:deepfilternet", diag.CandidateTools);
-        var deepFilter = Assert.Single(diag.ExternalEngineCandidates, c => c.Id == "deepfilternet");
-        Assert.Contains("ssb-like-speech", deepFilter.RequiredBenchmarks);
-        Assert.Contains("Model artifact", string.Join(" ", deepFilter.Blockers));
-        Assert.DoesNotContain("ready-for-g2-live-benchmark", diag.Evidence);
-        Assert.DoesNotContain("ready-for-nr5-live-tuning", diag.Evidence);
-        Assert.DoesNotContain("nr5-live-tuning-watch", diag.CandidateTools);
-        Assert.Contains("g2-rx-peak-hunt", diag.CandidateTools);
-        Assert.Equal("opt-in-only-until-benchmark-and-g2-on-air-acceptance", diag.RolloutGate);
     }
 
     [Fact]
@@ -143,34 +82,12 @@ public sealed class DspLiveDiagnosticsServiceTests
     }
 
     [Fact]
-    public void Build_RuntimeOnlyAlignedNr5SceneDoesNotEmitProfileUnmappedConstraint()
-    {
-        var service = new FrontendDspSceneDiagnosticsService();
-        PublishScene(service, profile: null, held: false, rxScore: 94, rxTone: "neutral", coherent: true);
-        var condition = service.SmartNrCondition(
-            Runtime("Nr5", "Nr5", nr5Available: true, nr5: Nr5(learnedFrames: 80, confidence: 0.72, agcGate: 0.66)),
-            RxChain(score: 94));
-
-        var diag = DspLiveDiagnosticsService.Build(condition, RuntimeEvidence());
-
-        Assert.Equal("nr5-retired-for-wdsp-v2", diag.Status);
-        Assert.False(diag.ReadyForLiveBenchmark);
-        Assert.False(diag.ReadyForNr5Tuning);
-        Assert.True(diag.RuntimeAligned);
-        Assert.Equal("runtime-only-aligned", diag.RuntimeAlignmentStatus);
-        Assert.Equal("Nr5", diag.ExpectedNrMode);
-        Assert.Contains("smart-nr-runtime-aligned", diag.Evidence);
-        Assert.Contains("nr5-retired-for-wdsp-v2", diag.Constraints);
-        Assert.DoesNotContain("smart-nr-profile-unmapped", diag.Constraints);
-    }
-
-    [Fact]
     public void Build_CarriesRadioStateForStableLiveTraceEvidence()
     {
         var service = new FrontendDspSceneDiagnosticsService();
-        PublishScene(service, profile: "NR5", held: false, rxScore: 94, rxTone: "neutral", coherent: true);
+        PublishScene(service, profile: "NR4", held: false, rxScore: 94, rxTone: "neutral", coherent: true);
         var condition = service.SmartNrCondition(
-            Runtime("Nr5", "Nr5", nr5Available: true, nr5: Nr5(learnedFrames: 80, confidence: 0.72, agcGate: 0.66)),
+            Runtime("Sbnr", "Sbnr"),
             RxChain(score: 94));
         var state = new StateDto(
             Status: ConnectionStatus.Connected,
@@ -193,32 +110,12 @@ public sealed class DspLiveDiagnosticsServiceTests
     }
 
     [Fact]
-    public void Build_MissingFrontendSceneKeepsNr5Retired()
-    {
-        var service = new FrontendDspSceneDiagnosticsService();
-        var condition = service.SmartNrCondition(
-            Runtime("Nr5", "Nr5", nr5Available: true, nr5: Nr5(learnedFrames: 80, confidence: 0.72, agcGate: 0.66)),
-            RxChain(score: 94));
-
-        var diag = DspLiveDiagnosticsService.Build(condition, RuntimeEvidence());
-
-        Assert.Equal("frontend-scene-missing", diag.Status);
-        Assert.False(diag.ReadyForLiveBenchmark);
-        Assert.False(diag.ReadyForNr5Tuning);
-        Assert.Equal("nr5-retired-for-wdsp-v2", diag.Nr5TuningStatus);
-        Assert.Contains("nr5-retired-for-wdsp-v2", diag.Nr5TuningConstraints);
-        Assert.Contains("frontend-dsp-scene-missing", diag.Constraints);
-        Assert.Contains("nr5-retired-for-wdsp-v2", diag.Constraints);
-        Assert.DoesNotContain("ready-for-nr5-live-tuning", diag.Evidence);
-    }
-
-    [Fact]
     public void Build_RuntimeEvidenceBlocksBenchmarkWhenFinalAudioClips()
     {
         var service = new FrontendDspSceneDiagnosticsService();
-        PublishScene(service, profile: "NR5", held: false, rxScore: 94, rxTone: "neutral", coherent: true);
+        PublishScene(service, profile: "NR4", held: false, rxScore: 94, rxTone: "neutral", coherent: true);
         var condition = service.SmartNrCondition(
-            Runtime("Nr5", "Nr5", nr5Available: true, nr5: Nr5(learnedFrames: 80, confidence: 0.72, agcGate: 0.66)),
+            Runtime("Sbnr", "Sbnr"),
             RxChain(score: 94));
 
         var diag = DspLiveDiagnosticsService.Build(condition, RuntimeEvidence(
@@ -226,15 +123,9 @@ public sealed class DspLiveDiagnosticsServiceTests
             audioStatus: "clipping-risk",
             audioPeakDbfs: -0.1,
             adcHeadroomDb: 12.0));
-
-        Assert.Equal("nr5-retired-for-wdsp-v2", diag.Status);
         Assert.Equal("protect", diag.QualityTone);
         Assert.False(diag.ReadyForLiveBenchmark);
-        Assert.False(diag.ReadyForNr5Tuning);
-        Assert.Equal("nr5-retired-for-wdsp-v2", diag.Nr5TuningStatus);
-        Assert.Contains("nr5-retired-for-wdsp-v2", diag.Nr5TuningConstraints);
         Assert.Contains("final-audio-clipping-risk", diag.Constraints);
-        Assert.Contains("nr5-retired-for-wdsp-v2", diag.Constraints);
         Assert.Contains("Reduce RX leveler boost", string.Join(" ", diag.RecommendedActions));
         Assert.NotNull(diag.RuntimeEvidence);
         Assert.Equal(-0.1, diag.RuntimeEvidence.AudioPeakDbfs);
@@ -262,27 +153,6 @@ public sealed class DspLiveDiagnosticsServiceTests
     }
 
     [Fact]
-    public void Build_Nr5RecommendationWithoutExportsReportsRetiredPath()
-    {
-        var service = new FrontendDspSceneDiagnosticsService();
-        PublishScene(service, profile: "NR5", held: false, rxScore: 90, rxTone: "neutral", coherent: true);
-        var condition = service.SmartNrCondition(
-            Runtime("Nr5", "Off", nr5Available: false),
-            RxChain(score: 90));
-
-        var diag = DspLiveDiagnosticsService.Build(condition);
-
-        Assert.Equal("nr5-retired-for-wdsp-v2", diag.Status);
-        Assert.Equal("protect", diag.QualityTone);
-        Assert.False(diag.ReadyForLiveBenchmark);
-        Assert.False(diag.ReadyForNr5Tuning);
-        Assert.Contains("nr5-retired-for-wdsp-v2", diag.Constraints);
-        Assert.DoesNotContain("nr5-spnr-exports-missing", diag.Constraints);
-        Assert.Contains("Turn NR5 off", string.Join(" ", diag.RecommendedActions));
-        Assert.Contains("NR5 is retired", diag.DiagnosticRecommendation);
-    }
-
-    [Fact]
     public void BenchmarkPlanCatalog_CoversRxTxPureSignalAndLifecycleGates()
     {
         var plan = DspBenchmarkPlanCatalog.Build();
@@ -291,8 +161,8 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Equal("G2", plan.FirstHardwareTarget);
         Assert.Contains("off-baseline", plan.RequiredComparisons);
         Assert.Contains("thetis-parity", plan.RequiredComparisons);
-        Assert.Contains("candidate-external-engine-opt-in", plan.RequiredComparisons);
-        Assert.DoesNotContain("nr5-spnr", plan.RequiredComparisons);
+        Assert.Contains("candidate-under-test", plan.RequiredComparisons);
+        Assert.DoesNotContain("candidate-external-engine-opt-in", plan.RequiredComparisons);
         Assert.Contains(plan.GlobalAcceptanceGates, gate => gate.Contains("No weak-signal loss", StringComparison.Ordinal));
         Assert.Contains(plan.GlobalAcceptanceGates, gate => gate.Contains("PureSignal", StringComparison.Ordinal));
 
@@ -366,7 +236,7 @@ public sealed class DspLiveDiagnosticsServiceTests
     }
 
     [Fact]
-    public void BenchmarkPlanCatalog_RequiresExternalCandidateComparisonForRxAcceptanceScenariosOnly()
+    public void BenchmarkPlanCatalog_RequiresUnderTestComparisonForRxAcceptanceScenariosOnly()
     {
         var plan = DspBenchmarkPlanCatalog.Build();
 
@@ -385,8 +255,8 @@ public sealed class DspLiveDiagnosticsServiceTests
         foreach (var scenarioId in rxScenarioIds)
         {
             var scenario = Assert.Single(plan.Scenarios, s => s.Id == scenarioId);
-            Assert.Contains("candidate-external-engine-opt-in", scenario.RequiredComparisons);
-            Assert.DoesNotContain("nr5-spnr", scenario.RequiredComparisons);
+            Assert.Contains("candidate-under-test", scenario.RequiredComparisons);
+            Assert.DoesNotContain("candidate-external-engine-opt-in", scenario.RequiredComparisons);
         }
 
         string[] nonRxNrScenarioIds =
@@ -401,8 +271,8 @@ public sealed class DspLiveDiagnosticsServiceTests
         foreach (var scenarioId in nonRxNrScenarioIds)
         {
             var scenario = Assert.Single(plan.Scenarios, s => s.Id == scenarioId);
+            Assert.DoesNotContain("candidate-under-test", scenario.RequiredComparisons);
             Assert.DoesNotContain("candidate-external-engine-opt-in", scenario.RequiredComparisons);
-            Assert.DoesNotContain("nr5-spnr", scenario.RequiredComparisons);
         }
     }
 
@@ -463,13 +333,6 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Equal("higher", catalogById["readysamplepct"].Direction);
         Assert.Equal("1.0", catalogById["readysamplepct"].AcceptanceThreshold);
         Assert.Equal("readiness", catalogById["readysamplepct"].SafetyClass);
-        Assert.Equal("lower", catalogById["nr5outputmovementdb"].Direction);
-        Assert.Equal("1.0", catalogById["nr5outputmovementdb"].AcceptanceThreshold);
-        Assert.Equal("pumping", catalogById["nr5outputmovementdb"].SafetyClass);
-        Assert.Equal("lower", catalogById["nr5artifactriskscore"].Direction);
-        Assert.Equal("0.0", catalogById["nr5artifactriskscore"].AcceptanceThreshold);
-        Assert.Equal("artifact-control", catalogById["nr5artifactriskscore"].SafetyClass);
-        Assert.Contains("live-diagnostics-trace-comparison", catalogById["nr5artifactriskscore"].AcceptanceScopes);
         Assert.Contains("weak-cw-carrier", catalogById["wantedsnr"].RelatedScenarios);
         Assert.Contains("weak-cw-carrier", catalogById["signalsinad"].RelatedScenarios);
         Assert.Contains("tx-two-tone", catalogById["processingelapsedms"].AcceptanceScopes);
@@ -501,12 +364,12 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Id == "wdsp-runtime-artifact-audit" && artifact.Required);
         Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Id == "offline-fixture-metrics" && artifact.Required);
         Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Id == "native-stage-timing-report" && artifact.Required);
-        Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Id == "external-engine-bakeoff-report" && artifact.Required);
+        Assert.DoesNotContain(manifest.RequiredArtifacts, artifact => artifact.Id == "external-engine-bakeoff-report");
         Assert.Contains(manifest.StopConditions, item => item.Contains("weak-signal loss", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void CaptureManifest_ReadyExternalReplacementListsG2EvidenceArtifacts()
+    public void CaptureManifest_ReadyDefaultPlanListsG2EvidenceArtifacts()
     {
         var service = new FrontendDspSceneDiagnosticsService();
         PublishScene(service, profile: "Light", held: false, rxScore: 94, rxTone: "neutral", coherent: true);
@@ -524,8 +387,8 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("agc-level-step", manifest.ScenarioIds);
         Assert.Contains("wdsp-channel-lifecycle", manifest.ScenarioIds);
         Assert.Contains("thetis-parity", manifest.RequiredComparisons);
-        Assert.Contains("candidate-external-engine-opt-in", manifest.RequiredComparisons);
-        Assert.DoesNotContain("nr5-spnr", manifest.RequiredComparisons);
+        Assert.Contains("candidate-under-test", manifest.RequiredComparisons);
+        Assert.DoesNotContain("candidate-external-engine-opt-in", manifest.RequiredComparisons);
         Assert.Contains(manifest.GlobalAcceptanceGates, gate => gate.Contains("No weak-signal loss", StringComparison.Ordinal));
         Assert.Contains(manifest.PreflightChecks, item => item.Contains("G2", StringComparison.Ordinal));
         Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Source == "/api/radio/diagnostics/dsp-scene");
@@ -550,10 +413,7 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Equal("puresignal-safe-bypass-report-json", pureSignalReportArtifact.Kind);
         Assert.Contains("summarize-dsp-puresignal-bench.ps1", pureSignalReportArtifact.Source);
         Assert.Equal(["tx-puresignal-safe-bypass"], pureSignalReportArtifact.ScenarioIds);
-        var externalBakeoffArtifact = Assert.Single(manifest.RequiredArtifacts, artifact => artifact.Id == "external-engine-bakeoff-report");
-        Assert.True(externalBakeoffArtifact.Required);
-        Assert.Equal("external-candidate-report-json", externalBakeoffArtifact.Kind);
-        Assert.Contains("summarize-dsp-external-engine-candidates.ps1", externalBakeoffArtifact.Source);
+        Assert.DoesNotContain(manifest.RequiredArtifacts, artifact => artifact.Id == "external-engine-bakeoff-report");
         var nativeAuditArtifact = Assert.Single(manifest.RequiredArtifacts, artifact => artifact.Id == "wdsp-native-symbol-audit");
         Assert.True(nativeAuditArtifact.Required);
         Assert.Equal("native-audit-json", nativeAuditArtifact.Kind);
@@ -594,7 +454,7 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("live-diagnostics-json", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-native-symbol-audit", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-runtime-artifact-audit", snapshot.IncludedArtifacts);
-        Assert.Contains("external-engine-bakeoff-report", snapshot.IncludedArtifacts);
+        Assert.DoesNotContain("external-engine-bakeoff-report", snapshot.IncludedArtifacts);
         Assert.DoesNotContain("live-diagnostics-history", snapshot.IncludedArtifacts);
         Assert.Contains("frontend-dsp-scene", snapshot.MissingEvidence);
         Assert.Same(condition, snapshot.SmartNrCondition);
@@ -605,7 +465,7 @@ public sealed class DspLiveDiagnosticsServiceTests
     }
 
     [Fact]
-    public void ModernizationSnapshot_ReadyExternalReplacementIncludesBakeoffBundle()
+    public void ModernizationSnapshot_ReadyDefaultCaptureKeepsBakeoffOutOfBundle()
     {
         var service = new FrontendDspSceneDiagnosticsService();
         PublishScene(service, profile: "Light", held: false, rxScore: 94, rxTone: "neutral", coherent: true);
@@ -631,7 +491,7 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("offline-fixture-metrics", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-native-symbol-audit", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-runtime-artifact-audit", snapshot.IncludedArtifacts);
-        Assert.Contains("external-engine-bakeoff-report", snapshot.IncludedArtifacts);
+        Assert.DoesNotContain("external-engine-bakeoff-report", snapshot.IncludedArtifacts);
         Assert.DoesNotContain("live-diagnostics-history", snapshot.IncludedArtifacts);
         Assert.Contains(snapshot.NextActions, action => action.Contains("Save this modernization snapshot", StringComparison.Ordinal));
         Assert.Contains(snapshot.ExternalEngineCandidates, candidate => candidate.Id == "rnnoise");
@@ -641,9 +501,9 @@ public sealed class DspLiveDiagnosticsServiceTests
     public void CaptureManifest_RequiresExternalBakeoffOnlyWhenExternalComparisonIsScoped()
     {
         var service = new FrontendDspSceneDiagnosticsService();
-        PublishScene(service, profile: "NR5", held: false, rxScore: 94, rxTone: "neutral", coherent: true);
+        PublishScene(service, profile: "NR4", held: false, rxScore: 94, rxTone: "neutral", coherent: true);
         var condition = service.SmartNrCondition(
-            Runtime("Nr5", "Nr5", nr5Available: true, nr5: Nr5(learnedFrames: 80, confidence: 0.72, agcGate: 0.66)),
+            Runtime("Sbnr", "Sbnr"),
             RxChain(score: 94));
         var live = DspLiveDiagnosticsService.Build(condition);
         var plan = DspBenchmarkPlanCatalog.Build() with
@@ -653,7 +513,7 @@ public sealed class DspLiveDiagnosticsServiceTests
                 "off-baseline",
                 "thetis-parity",
                 "current-zeus",
-                "nr5-spnr",
+                "candidate-external-engine-opt-in",
                 "candidate-external-engine-opt-in",
             ],
         };
@@ -818,20 +678,15 @@ public sealed class DspLiveDiagnosticsServiceTests
         string effective,
         bool wdspActive = true,
         bool nativeLoadable = true,
-        bool nr4Available = true,
-        bool nr5Available = true,
-        Nr5SpnrDiagnosticsDto? nr5 = null) =>
+        bool nr4Available = true) =>
         new(
             WdspActive: wdspActive,
             WdspNativeLoadable: nativeLoadable,
             WdspEmnrPost2Available: true,
             WdspNr4SbnrAvailable: nr4Available,
-            WdspNr5SpnrAvailable: nr5Available,
             Nr4Readiness: nr4Available ? "available" : "missing-sbnr-exports",
-            Nr5Readiness: nr5Available ? "available" : "missing-spnr-exports",
             RequestedNrMode: requested,
-            EffectiveNrMode: effective,
-            Nr5SpnrDiagnostics: nr5);
+            EffectiveNrMode: effective);
 
     private static SmartNrRxChainRuntimeDto RxChain(int score, bool adcOverload = false) =>
         new(
@@ -840,7 +695,7 @@ public sealed class DspLiveDiagnosticsServiceTests
             FilterLowHz: 300,
             FilterHighHz: 2600,
             FilterWidthHz: 2300,
-            FilterPresetName: "NR5-WEAK",
+            FilterPresetName: "WEAK-RX",
             AutoAgcEnabled: true,
             AgcMode: "Med",
             AgcTopDb: 80,
@@ -863,62 +718,6 @@ public sealed class DspLiveDiagnosticsServiceTests
             SquelchAdaptive: true,
             SquelchLevel: 0,
             PreampOn: false);
-
-    private static Nr5SpnrDiagnosticsDto Nr5(int learnedFrames, double confidence, double agcGate) =>
-        new(
-            SchemaVersion: 9,
-            ChannelId: 0,
-            Run: true,
-            Position: 1,
-            LearnedFrames: learnedFrames,
-            Aggressiveness: 0.62,
-            AgcRun: true,
-            TargetRms: 0.075,
-            MaxGain: 12.0,
-            AgcGain: 1.7,
-            AgcGainDb: 4.6,
-            PresencePeak: 0.8,
-            SaliencePeak: 0.7,
-            CoherencePeak: 0.65,
-            RidgePeak: 0.61,
-            MeanGain: 0.58,
-            MinGain: 0.18,
-            SuppressionDb: 9.1,
-            NoiseFloorDb: -58.0,
-            FloorReductionDb: 7.3,
-            DynamicRangeDb: 18.4,
-            SignalProbability: 0.66,
-            TextureFill: 0.12,
-            MaskSmoothing: 0.18,
-            SignalConfidence: confidence,
-            AgcGate: agcGate,
-            LevelDrive: 0.82,
-            RecoveryDrive: 0.64,
-            WeakSignalMemory: 0.41,
-            MakeupGain: 1.35,
-            MakeupGainDb: 2.6,
-            InputRms: 0.031,
-            InputDbfs: -30.2,
-            OutputRms: 0.068,
-            OutputDbfs: -23.4,
-            OutputPeak: 0.12,
-            OutputPeakDbfs: -18.4,
-            PeakEvidence: 0.72,
-            PeakLimit: 0.69,
-            PeakLimitDbfs: -3.2,
-            PeakReductionDb: 1.4,
-            AdjacentNoiseUsable: true,
-            AdjacentNoiseBins: 72,
-            AdjacentNoiseFloorDb: -111.4,
-            AdjacentNoiseTrust: 0.68,
-            AdjacentNoiseDrive: 0.21,
-            AdjacentNoiseRejectedPct: 5.3,
-            AdjacentNoiseLeftBins: 34,
-            AdjacentNoiseRightBins: 38,
-            AdjacentNoiseLeftFloorDb: -112.0,
-            AdjacentNoiseRightFloorDb: -110.6,
-            AdjacentNoiseSideBalance: 0.895,
-            AdjacentNoiseAsymmetryDb: 1.4);
 
     private static DspLiveRuntimeEvidenceDto RuntimeEvidence(
         string status = "fresh",
@@ -963,7 +762,6 @@ public sealed class DspLiveDiagnosticsServiceTests
             RxAudioLevelerOutputLimitReductionDb: 0.0,
             RxAudioLevelerOutputLimitSampleCount: 0,
             RxAudioLevelerPauseHoldBlocks: 0,
-            RxAudioLevelerNr5SpeechHoldBlocks: 0,
             RxAudioLevelerBoostSlewLimited: false,
             RxAudioLevelerPeakLimited: false,
             RxAudioLevelerOutputLimited: false,

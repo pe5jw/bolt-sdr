@@ -86,8 +86,11 @@ public sealed class RadioService : IDisposable
     private volatile bool _stateDirty;
     private readonly System.Threading.Timer? _stateFlushTimer;
     // Last-known preset name per mode, preserved across mode switches.
+    // RX2 keeps its own cache so VFO B top-bar edits do not affect what VFO A
+    // restores on its next mode change.
     // Accessed only from inside Mutate (under _sync) or at init.
     private readonly Dictionary<RxMode, string?> _lastPresetPerMode = new();
+    private readonly Dictionary<RxMode, string?> _lastPresetPerModeB = new();
     // Last-commanded slider value in UI percent (0..100). Needed here because
     // the drive byte depends on three inputs — percent, per-band PA gain, and
     // global max-watts — any of which can change independently. When a band
@@ -267,7 +270,7 @@ public sealed class RadioService : IDisposable
         }
 
         // Load persisted DSP settings from the store, or use defaults if not found
-        var persistedNr = _dspSettingsStore.Get() ?? new NrConfig();
+        var persistedNr = NormalizeNrConfig(_dspSettingsStore.Get() ?? new NrConfig());
         // CFC — issue #123. Persisted globally; null on a fresh install or
         // legacy DB row falls back to the default-OFF baseline so the operator
         // sees no behaviour change unless they enable.
@@ -288,7 +291,10 @@ public sealed class RadioService : IDisposable
         if (filterPresetStore != null)
         {
             foreach (RxMode m in Enum.GetValues<RxMode>())
+            {
                 _lastPresetPerMode[m] = filterPresetStore.GetLastSelectedPreset(m);
+                _lastPresetPerModeB[m] = _lastPresetPerMode[m];
+            }
         }
 
         // Load persisted PS settings — operator's calibration tuning and
@@ -415,6 +421,10 @@ public sealed class RadioService : IDisposable
             VfoBHz: (rsSnap?.VfoBHz ?? 0L) != 0L
                 ? rsSnap!.VfoBHz
                 : (rsSnap?.VfoHz ?? 14_200_000),
+            ModeB: rsSnap?.ModeB ?? rsSnap?.Mode ?? RxMode.USB,
+            FilterLowHzB: rsSnap?.FilterLowHzB ?? rsSnap?.FilterLowHz ?? 100,
+            FilterHighHzB: rsSnap?.FilterHighHzB ?? rsSnap?.FilterHighHz ?? 2850,
+            FilterPresetNameB: rsSnap?.FilterPresetNameB ?? rsSnap?.FilterPresetName ?? "VAR1",
             Rx2AudioMode: rsSnap?.Rx2AudioMode ?? Zeus.Contracts.Rx2AudioMode.Both,
             Rx2AfGainDb: Math.Clamp(rsSnap?.Rx2AfGainDb ?? 0.0, -50.0, 20.0),
             TxVfo: rsSnap?.TxVfo ?? TxVfo.A,
@@ -1160,6 +1170,10 @@ public sealed class RadioService : IDisposable
     // pitch=600, half=125 → 475..725). SignedFilterForMode keeps them as
     // (+475,+725) for CWU and mirrors to (-725,-475) for CWL.
     private FamilyFilter _cwFilter = new(475, 725);
+    private FamilyFilter _ssbFilterB = new(150, 2850);
+    private FamilyFilter _amFilterB = new(0, 4000);
+    private FamilyFilter _fmFilterB = new(0, 5500);
+    private FamilyFilter _cwFilterB = new(475, 725);
 
     // TX-side per-family filter memory. Thetis stores a single TX filter Lo/Hi
     // (setup.cs:5029-5066); pihpsdr uses hardcoded per-mode shapes
@@ -1183,32 +1197,42 @@ public sealed class RadioService : IDisposable
         RxMode departingMode = default;
         string? departingPreset = null;
         long newVfoAHz = 0;
+        bool targetBAtSet = false;
         Mutate(s =>
         {
-            departingMode = s.Mode;
-            departingPreset = s.FilterPresetName;
+            bool targetB = receiver == TxVfo.B && s.Rx2Enabled;
+            targetBAtSet = targetB;
+            var currentMode = targetB ? s.ModeB : s.Mode;
+            var currentPreset = targetB ? s.FilterPresetNameB : s.FilterPresetName;
+            var currentFilterLow = targetB ? s.FilterLowHzB : s.FilterLowHz;
+            var currentFilterHigh = targetB ? s.FilterHighHzB : s.FilterHighHz;
+
+            departingMode = currentMode;
+            departingPreset = currentPreset;
 
             // Save departing mode's preset name to the in-memory cache.
-            _lastPresetPerMode[s.Mode] = s.FilterPresetName;
+            var presetCache = targetB ? _lastPresetPerModeB : _lastPresetPerMode;
+            presetCache[currentMode] = currentPreset;
 
-            // 1) Save current abs-filter into the mode we are LEAVING (RX + TX).
-            int curLoAbs = Math.Min(Math.Abs(s.FilterLowHz), Math.Abs(s.FilterHighHz));
-            int curHiAbs = Math.Max(Math.Abs(s.FilterLowHz), Math.Abs(s.FilterHighHz));
-            StoreFamilyFilter(s.Mode, curLoAbs, curHiAbs);
-            int curTxLoAbs = Math.Min(Math.Abs(s.TxFilterLowHz), Math.Abs(s.TxFilterHighHz));
-            int curTxHiAbs = Math.Max(Math.Abs(s.TxFilterLowHz), Math.Abs(s.TxFilterHighHz));
-            StoreTxFamilyFilter(s.Mode, curTxLoAbs, curTxHiAbs);
+            // 1) Save current abs-filter into the mode we are LEAVING.
+            int curLoAbs = Math.Min(Math.Abs(currentFilterLow), Math.Abs(currentFilterHigh));
+            int curHiAbs = Math.Max(Math.Abs(currentFilterLow), Math.Abs(currentFilterHigh));
+            StoreFamilyFilter(currentMode, curLoAbs, curHiAbs, targetB ? TxVfo.B : TxVfo.A);
+            if (!targetB)
+            {
+                int curTxLoAbs = Math.Min(Math.Abs(s.TxFilterLowHz), Math.Abs(s.TxFilterHighHz));
+                int curTxHiAbs = Math.Max(Math.Abs(s.TxFilterLowHz), Math.Abs(s.TxFilterHighHz));
+                StoreTxFamilyFilter(currentMode, curTxLoAbs, curTxHiAbs);
+            }
 
             // 2) Look up the target family's remembered filter (RX + TX).
-            var fam = FamilyFilterFor(mode);
-            var txFam = TxFamilyFilterFor(mode);
+            var fam = FamilyFilterFor(mode, targetB ? TxVfo.B : TxVfo.A);
 
             // 3) Re-sign per target mode's sideband convention.
             var (lo, hi) = SignedFilterForMode(mode, fam.LoAbs, fam.HiAbs);
-            var (txLo, txHi) = SignedFilterForMode(mode, txFam.LoAbs, txFam.HiAbs);
 
             // 4) Restore the last-known preset name for the incoming mode.
-            _lastPresetPerMode.TryGetValue(mode, out var restoredPreset);
+            presetCache.TryGetValue(mode, out var restoredPreset);
 
             // 5) Thetis-style dial bump on SSB↔CW transitions so the
             //    effective LO doesn't jump under the operator's feet — the
@@ -1217,11 +1241,25 @@ public sealed class RadioService : IDisposable
             //    (Thetis console.cs:34037-34052, 34203-34298 mirrored here).
             //    Non-CW↔non-CW transitions return 0, so SSB/AM/FM/DIG
             //    behaviour is unchanged.
-            long bump = CwOffset.DialBumpForModeTransition(s.Mode, mode);
-            bool targetB = receiver == TxVfo.B && s.Rx2Enabled;
+            long bump = CwOffset.DialBumpForModeTransition(currentMode, mode);
             long nextVfoA = targetB ? s.VfoHz : Math.Clamp(s.VfoHz + bump, 0L, 60_000_000L);
             long nextVfoB = targetB ? Math.Clamp(s.VfoBHz + bump, 0L, 60_000_000L) : s.VfoBHz;
             newVfoAHz = nextVfoA;
+
+            if (targetB)
+            {
+                return s with
+                {
+                    ModeB = mode,
+                    VfoBHz = nextVfoB,
+                    FilterLowHzB = lo,
+                    FilterHighHzB = hi,
+                    FilterPresetNameB = restoredPreset,
+                };
+            }
+
+            var txFam = TxFamilyFilterFor(mode);
+            var (txLo, txHi) = SignedFilterForMode(mode, txFam.LoAbs, txFam.HiAbs);
 
             return s with
             {
@@ -1235,40 +1273,55 @@ public sealed class RadioService : IDisposable
         });
 
         // Persist the departing mode's last preset outside the lock.
-        if (departingPreset != null)
+        if (departingPreset != null && !targetBAtSet)
             _filterPresetStore?.UpsertLastSelectedPreset(departingMode, departingPreset);
 
         // Push the new effective LO. Even with no dial bump, switching
         // into/out of CW changes EffectiveLoHz by ±cw_pitch and the radio
         // needs the new tuning before the next IQ block arrives. P2 is
         // pushed via DspPipelineService.OnRadioStateChanged.
-        ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(mode, newVfoAHz));
+        if (!targetBAtSet)
+            ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(mode, newVfoAHz));
 
         return Snapshot();
     }
 
     public StateDto SetFilter(int lowHz, int highHz, string? presetName = null)
+        => SetFilter(lowHz, highHz, presetName, TxVfo.A);
+
+    public StateDto SetFilter(int lowHz, int highHz, string? presetName, TxVfo receiver)
     {
+        if (!Enum.IsDefined(receiver))
+            throw new ArgumentOutOfRangeException(nameof(receiver), receiver, "Unknown VFO receiver");
         if (highHz < lowHz) (lowHz, highHz) = (highHz, lowHz);
         RxMode modeAtSet = RxMode.USB;
         string? resolvedName = presetName;
+        bool targetBAtSet = false;
         Mutate(s =>
         {
-            modeAtSet = s.Mode;
+            bool targetB = receiver == TxVfo.B && s.Rx2Enabled;
+            targetBAtSet = targetB;
+            modeAtSet = targetB ? s.ModeB : s.Mode;
             // Normalize the slot name: if (low,high) exactly matches a non-VAR
             // preset for this mode, use that slot's name regardless of what the
             // caller passed. Prevents dual selection where a stored VAR happens
             // to equal a standard preset width and edges.
-            var match = FilterPresets.DefaultsForMode(s.Mode)
+            var match = FilterPresets.DefaultsForMode(modeAtSet)
                 .FirstOrDefault(e => !e.IsVar && e.LowHz == lowHz && e.HighHz == highHz);
             if (match is not null) resolvedName = match.SlotName;
-            if (resolvedName != null) _lastPresetPerMode[s.Mode] = resolvedName;
+            if (resolvedName != null)
+            {
+                var presetCache = targetB ? _lastPresetPerModeB : _lastPresetPerMode;
+                presetCache[modeAtSet] = resolvedName;
+            }
             int loAbs = Math.Min(Math.Abs(lowHz), Math.Abs(highHz));
             int hiAbs = Math.Max(Math.Abs(lowHz), Math.Abs(highHz));
-            StoreFamilyFilter(s.Mode, loAbs, hiAbs);
+            StoreFamilyFilter(modeAtSet, loAbs, hiAbs, targetB ? TxVfo.B : TxVfo.A);
+            if (targetB)
+                return s with { FilterLowHzB = lowHz, FilterHighHzB = highHz, FilterPresetNameB = resolvedName };
             return s with { FilterLowHz = lowHz, FilterHighHz = highHz, FilterPresetName = resolvedName };
         });
-        if (resolvedName != null)
+        if (resolvedName != null && !targetBAtSet)
             _filterPresetStore?.UpsertLastSelectedPreset(modeAtSet, resolvedName);
         FlushState();
         return Snapshot();
@@ -1329,18 +1382,22 @@ public sealed class RadioService : IDisposable
     }
 
     private void StoreFamilyFilter(RxMode mode, int loAbs, int hiAbs)
+        => StoreFamilyFilter(mode, loAbs, hiAbs, TxVfo.A);
+
+    private void StoreFamilyFilter(RxMode mode, int loAbs, int hiAbs, TxVfo receiver)
     {
         var slot = new FamilyFilter(loAbs, hiAbs);
+        bool targetB = receiver == TxVfo.B;
         switch (mode)
         {
             case RxMode.USB: case RxMode.LSB: case RxMode.DIGU: case RxMode.DIGL:
-                _ssbFilter = slot; break;
+                if (targetB) _ssbFilterB = slot; else _ssbFilter = slot; break;
             case RxMode.AM: case RxMode.SAM: case RxMode.DSB:
-                _amFilter = slot; break;
+                if (targetB) _amFilterB = slot; else _amFilter = slot; break;
             case RxMode.FM:
-                _fmFilter = slot; break;
+                if (targetB) _fmFilterB = slot; else _fmFilter = slot; break;
             case RxMode.CWL: case RxMode.CWU:
-                _cwFilter = slot; break;
+                if (targetB) _cwFilterB = slot; else _cwFilter = slot; break;
         }
     }
 
@@ -1377,6 +1434,21 @@ public sealed class RadioService : IDisposable
         RxMode.CWL or RxMode.CWU => _cwFilter,
         _ => _ssbFilter,
     };
+
+    private FamilyFilter FamilyFilterFor(RxMode mode, TxVfo receiver)
+    {
+        if (receiver != TxVfo.B)
+            return FamilyFilterFor(mode);
+
+        return mode switch
+        {
+            RxMode.USB or RxMode.LSB or RxMode.DIGU or RxMode.DIGL => _ssbFilterB,
+            RxMode.AM or RxMode.SAM or RxMode.DSB => _amFilterB,
+            RxMode.FM => _fmFilterB,
+            RxMode.CWL or RxMode.CWU => _cwFilterB,
+            _ => _ssbFilterB,
+        };
+    }
 
     private static (int low, int high) SignedFilterForMode(RxMode mode, int loAbs, int hiAbs)
     {
@@ -2153,13 +2225,20 @@ public sealed class RadioService : IDisposable
     public StateDto SetNr(NrConfig cfg)
     {
         ArgumentNullException.ThrowIfNull(cfg);
-        Mutate(s => s with { Nr = cfg });
+        var normalized = NormalizeNrConfig(cfg);
+        Mutate(s => s with { Nr = normalized });
 
         // Persist the new DSP settings to the store
-        _dspSettingsStore.Upsert(cfg);
+        _dspSettingsStore.Upsert(normalized);
 
         return Snapshot();
     }
+
+    private static NrConfig NormalizeNrConfig(NrConfig cfg) =>
+        IsSupportedNrMode(cfg.NrMode) ? cfg : cfg with { NrMode = NrMode.Off };
+
+    private static bool IsSupportedNrMode(NrMode mode) =>
+        mode is NrMode.Off or NrMode.Anr or NrMode.Emnr or NrMode.Sbnr;
 
     // AGC mode + custom/fixed params. Replace-style like SetNr; the engine apply
     // happens in DspPipelineService via the _appliedAgc latch. The separate AGC
@@ -2661,6 +2740,10 @@ public sealed class RadioService : IDisposable
                 RadioLoHz = snap.RadioLoHz,
                 Rx2Enabled = snap.Rx2Enabled,
                 VfoBHz = snap.VfoBHz,
+                ModeB = snap.ModeB,
+                FilterLowHzB = snap.FilterLowHzB,
+                FilterHighHzB = snap.FilterHighHzB,
+                FilterPresetNameB = snap.FilterPresetNameB,
                 Rx2AudioMode = snap.Rx2AudioMode,
                 Rx2AfGainDb = snap.Rx2AfGainDb,
                 TxVfo = snap.TxVfo,

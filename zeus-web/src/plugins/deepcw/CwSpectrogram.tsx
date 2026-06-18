@@ -47,7 +47,7 @@ export function CwSpectrogram({ active }: { active: boolean }) {
     for (let i = 0; i < WINDOW_SAMPLES; i += 1) {
       hann[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / WINDOW_SAMPLES);
     }
-    let coeffs = new Float32Array(BINS);
+    const coeffs = new Float32Array(BINS);
     const computeCoeffs = (rate: number) => {
       for (let b = 0; b < BINS; b += 1) {
         coeffs[b] = 2 * Math.cos((2 * Math.PI * binFreq(b)) / rate);

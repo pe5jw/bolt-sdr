@@ -79,10 +79,10 @@ public sealed class DspManualTuneObserverValidationToolTests
             Assert.Equal(1_626.0, validationRoot.GetProperty("manualTuneObserverFrontendSuggestedFilterCenterOffsetHz").GetDouble(), precision: 3);
             Assert.Equal(32_098.0, validationRoot.GetProperty("manualTuneObserverFrontendSuggestedFilterDistanceHz").GetDouble(), precision: 3);
             Assert.Equal("above-filter", validationRoot.GetProperty("manualTuneObserverFrontendSuggestedTuneReason").GetString());
-            Assert.True(validationRoot.GetProperty("manualTuneObserverRequireNr5CaptureReady").GetBoolean());
+            Assert.True(validationRoot.GetProperty("manualTuneObserverRequireCandidateCaptureReady").GetBoolean());
             Assert.Equal(1, validationRoot.GetProperty("manualTuneObserverBaseCaptureQualifiedPollCount").GetInt32());
-            Assert.Equal(1, validationRoot.GetProperty("manualTuneObserverNr5CaptureReadyPollCount").GetInt32());
-            Assert.Equal(0, validationRoot.GetProperty("manualTuneObserverNr5CaptureBlockedPollCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("manualTuneObserverCandidateCaptureReadyPollCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("manualTuneObserverCandidateCaptureBlockedPollCount").GetInt32());
             Assert.Equal("promote-manual-observer-mixed-weak-strong-capture", validationRoot.GetProperty("manualTuneObserverPrimaryManualTuneActionId").GetString());
             Assert.Equal("mixed-ready", validationRoot.GetProperty("manualTuneObserverPrimaryManualTuneActionStatus").GetString());
 
@@ -129,9 +129,9 @@ public sealed class DspManualTuneObserverValidationToolTests
             Assert.Equal(14.365, summaryRoot.GetProperty("manualTuneObserverFrontendSuggestedVfoMhz").GetDouble(), precision: 6);
             Assert.Equal(14_365_124L, summaryRoot.GetProperty("manualTuneObserverFrontendExactSuggestedVfoHz").GetInt64());
             Assert.Equal("above-filter", summaryRoot.GetProperty("manualTuneObserverFrontendSuggestedTuneReason").GetString());
-            Assert.True(summaryRoot.GetProperty("manualTuneObserverRequireNr5CaptureReady").GetBoolean());
+            Assert.True(summaryRoot.GetProperty("manualTuneObserverRequireCandidateCaptureReady").GetBoolean());
             Assert.Equal(1, summaryRoot.GetProperty("manualTuneObserverBaseCaptureQualifiedPollCount").GetInt32());
-            Assert.Equal(1, summaryRoot.GetProperty("manualTuneObserverNr5CaptureReadyPollCount").GetInt32());
+            Assert.Equal(1, summaryRoot.GetProperty("manualTuneObserverCandidateCaptureReadyPollCount").GetInt32());
             Assert.Equal("promote-manual-observer-mixed-weak-strong-capture", summaryRoot.GetProperty("manualTuneObserverPrimaryManualTuneActionId").GetString());
 
             var summaryBestHint = summaryRoot.GetProperty("manualTuneObserverFrontendBestTuningHint");
@@ -148,14 +148,14 @@ public sealed class DspManualTuneObserverValidationToolTests
             Assert.Contains("vfoMhz=14.365", gateDetail, StringComparison.Ordinal);
             Assert.Contains("exactVfoMhz=14.365124", gateDetail, StringComparison.Ordinal);
             Assert.Contains("reason=above-filter", gateDetail, StringComparison.Ordinal);
-            Assert.Contains("requireNr5CaptureReady=True", gateDetail, StringComparison.Ordinal);
-            Assert.Contains("nr5CaptureReady/blocked/advisory=1/0/0", gateDetail, StringComparison.Ordinal);
+            Assert.Contains("requireCandidateCaptureReady=True", gateDetail, StringComparison.Ordinal);
+            Assert.Contains("candidateCaptureReady/blocked/advisory=1/0/0", gateDetail, StringComparison.Ordinal);
             Assert.Contains("primaryAction=promote-manual-observer-mixed-weak-strong-capture/mixed-ready", gateDetail, StringComparison.Ordinal);
 
             var markdown = await File.ReadAllTextAsync(summaryMarkdown);
             Assert.Contains("Observed VFOs/best/status/score: 1 / 14331500 Hz / capture-qualified", markdown, StringComparison.Ordinal);
             Assert.Contains("Frontend tuning hint polls/shift/VFO/step/exact/reason/distance: 3 / 33500 Hz / 14.365 MHz / 1000 Hz / 14.365124 MHz / above-filter / 32098 Hz", markdown, StringComparison.Ordinal);
-            Assert.Contains("NR5 capture gate required/base-qualified/ready/blocked/advisory polls: True / 1 / 1 / 0 / 0", markdown, StringComparison.Ordinal);
+            Assert.Contains("Candidate capture gate required/base-qualified/ready/blocked/advisory polls: True / 1 / 1 / 0 / 0", markdown, StringComparison.Ordinal);
             Assert.Contains("Primary manual action: promote-manual-observer-mixed-weak-strong-capture / mixed-ready", markdown, StringComparison.Ordinal);
         }
         finally
@@ -907,7 +907,7 @@ public sealed class DspManualTuneObserverValidationToolTests
                     source = "tools/watch-dsp-manual-tune-observer.ps1",
                     path = "artifacts/manual-tune-observer-report.json",
                     required = false,
-                    comparisonIds = new[] { "nr5-spnr" }
+                    comparisonIds = new[] { "candidate-under-test" }
                 }
             }
         };
@@ -1012,7 +1012,7 @@ public sealed class DspManualTuneObserverValidationToolTests
             outputRoot = "artifacts/manual-tune-observer",
             label = "synthetic-hint",
             scenarioId = "rx-ssb-voice-like-manual",
-            comparisonId = "nr5-spnr",
+            comparisonId = "candidate-under-test",
             pollCount = 3,
             pollIntervalSec = 1,
             stablePolls = 1,
@@ -1062,11 +1062,11 @@ public sealed class DspManualTuneObserverValidationToolTests
             frontendOffsetMismatchPollCount = 0,
             frontendTuningHintPollCount = includeTuningHints ? 3 : 0,
             frontendBestTuningHint = includeTuningHints ? hint : null,
-            requireNr5CaptureReady = true,
+            requireCandidateCaptureReady = true,
             baseCaptureQualifiedPollCount = includeCapture ? 1 : 0,
-            nr5CaptureReadyPollCount = includeCapture ? 1 : 0,
-            nr5CaptureBlockedPollCount = 0,
-            nr5CaptureAdvisoryPollCount = 0,
+            candidateCaptureReadyPollCount = includeCapture ? 1 : 0,
+            candidateCaptureBlockedPollCount = 0,
+            candidateCaptureAdvisoryPollCount = 0,
             captureQualifiedPollCount = includeCapture ? 1 : 0,
             readyCaptureCount = includeCapture ? 1 : 0,
             mixedWeakStrongReady = includeCapture,
@@ -1090,9 +1090,9 @@ public sealed class DspManualTuneObserverValidationToolTests
                     ? "Mixed weak+strong evidence was captured; promote this watcher window into live history before tuning DSP behavior."
                     : "Manually tune toward 14.365000 MHz so the strongest frontend peak lands inside the active RX filter.",
                 manualAction = includeCapture
-                    ? "Keep DSP defaults unchanged; promote the captured watcher report into live history and compare current-Zeus/Thetis windows before any opt-in NR5/SPNR tuning."
+                    ? "Keep DSP defaults unchanged; promote the captured watcher report into live history and compare current-Zeus/Thetis windows before any under-test comparison tuning."
                     : "Tune G2 near 14.365000 MHz, then rerun the observer with capture enabled and frontend passband required.",
-                commandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\watch-dsp-manual-tune-observer.ps1 -BaseUrl http://127.0.0.1:6060 -RequireFrontendNearPassband -RequireNr5CaptureReady -MaxCapturesPerVfo 2 -CaptureSamples 32",
+                commandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\watch-dsp-manual-tune-observer.ps1 -BaseUrl http://127.0.0.1:6060 -RequireFrontendNearPassband -RequireCandidateCaptureReady -MaxCapturesPerVfo 2 -CaptureSamples 32",
                 expectedEvidence = "liveDiagnosticsHistoryMixedWeakStrongEvidenceReady=true plus current-Zeus/Thetis comparison evidence"
             },
             primaryManualTuneActionId = includeCapture
@@ -1103,9 +1103,9 @@ public sealed class DspManualTuneObserverValidationToolTests
                 ? "Mixed weak+strong evidence was captured; promote this watcher window into live history before tuning DSP behavior."
                 : "Manually tune toward 14.365000 MHz so the strongest frontend peak lands inside the active RX filter.",
             primaryManualTuneActionManualAction = includeCapture
-                ? "Keep DSP defaults unchanged; promote the captured watcher report into live history and compare current-Zeus/Thetis windows before any opt-in NR5/SPNR tuning."
+                ? "Keep DSP defaults unchanged; promote the captured watcher report into live history and compare current-Zeus/Thetis windows before any under-test comparison tuning."
                 : "Tune G2 near 14.365000 MHz, then rerun the observer with capture enabled and frontend passband required.",
-            primaryManualTuneActionCommandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\watch-dsp-manual-tune-observer.ps1 -BaseUrl http://127.0.0.1:6060 -RequireFrontendNearPassband -RequireNr5CaptureReady -MaxCapturesPerVfo 2 -CaptureSamples 32",
+            primaryManualTuneActionCommandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\watch-dsp-manual-tune-observer.ps1 -BaseUrl http://127.0.0.1:6060 -RequireFrontendNearPassband -RequireCandidateCaptureReady -MaxCapturesPerVfo 2 -CaptureSamples 32",
             primaryManualTuneActionExpectedEvidence = "liveDiagnosticsHistoryMixedWeakStrongEvidenceReady=true plus current-Zeus/Thetis comparison evidence",
             captures = includeCapture ? new object[]
             {
@@ -1350,7 +1350,7 @@ public sealed class DspManualTuneObserverValidationToolTests
         captureQualifiedPollCount = includeCapture ? 1 : 0,
         maxCoherentSnrDb = 18.0,
         maxAudioRmsDbfs = -34.0,
-        maxNr5OutputDbfs = -31.0,
+        maxCandidateOutputDbfs = -31.0,
         bestTuningHint = includeTuningHints ? hint : null,
         frontendSuggestedDialShiftHz = includeTuningHints ? 33_500.0 : 0.0,
         frontendSuggestedVfoHz = includeTuningHints ? 14_365_000L : 0L,
@@ -1428,7 +1428,7 @@ public sealed class DspManualTuneObserverValidationToolTests
             readyForBenchmarkTrace = !watcherReportNotReady,
             sampleCount = 24,
             jsonlPath,
-            nr5WeakSignalWatch = new
+            candidateWeakSignalWatch = new
             {
                 weakInputSampleCount = 8,
                 strongInputSampleCount = nearStrongCandidate || weakOnlyCapture ? 0 : 9,

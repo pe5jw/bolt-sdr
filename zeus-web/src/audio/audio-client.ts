@@ -297,30 +297,38 @@ class AudioClient {
       return;
     }
 
-    // If we've fallen behind (or this is the first frame after start/reset),
-    // re-anchor the schedule one target interval in the future.
-    if (this.nextPlayTime < now + this.targetSecs * 0.5) {
-      if (this.nextPlayTime !== 0) {
-        this.underruns++;
-        // A real underrun — grow the buffer target so we stop chasing the
-        // schedule. Decays back down during clean playback (emitStats).
-        this.targetSecs = Math.min(BUFFER_TARGET_MAX_SECS, this.targetSecs + BUFFER_UNDERRUN_BUMP_SECS);
-        // #299 Step 2 probe — attribute the underrun. 90 ms threshold matches
-        // BUFFER_TARGET_SECS * 0.9 with a small margin; at 50 Hz audio frame
-        // rate (one ~20 ms frame per push) the expected dt is 20 ms, so >90 ms
-        // strongly indicates main-thread / WS delivery starvation.
-        if (dtSinceLastPushMs > 90) {
-          this.latePushCount++;
-          console.warn(
-            `audio.underrun.latePush dtMs=${dtSinceLastPushMs.toFixed(1)} totalLate=${this.latePushCount}`,
-          );
-        } else {
-          this.latenessVsScheduleCount++;
-          const schedAheadMs = (this.nextPlayTime - now) * 1000;
-          console.warn(
-            `audio.underrun.latenessVsSchedule dtMs=${dtSinceLastPushMs.toFixed(1)} schedAheadMs=${schedAheadMs.toFixed(1)} totalSched=${this.latenessVsScheduleCount}`,
-          );
-        }
+    // Re-anchor the schedule ONLY on a true underrun — i.e. when nextPlayTime
+    // has fallen at/behind the clock, so the previously-queued audio has
+    // actually finished and there is a real gap. The old condition re-anchored
+    // whenever the buffer merely dipped below HALF the target (~70 ms); under
+    // sub-target delivery jitter (e.g. a 2nd receiver's panadapter adding
+    // main-thread render load — issue zeus-gdc7) that fired constantly while
+    // 30–55 ms of audio was still queued and playing, and the forward jump it
+    // performed INSERTED that much silence each time → the crackle. Riding the
+    // buffer low is fine: contiguous scheduling (nextPlayTime += frame
+    // duration) keeps audio seamless until it genuinely runs dry.
+    if (this.nextPlayTime === 0) {
+      // First frame after start/reset — seed the jitter cushion.
+      this.nextPlayTime = now + this.targetSecs;
+    } else if (this.nextPlayTime < now) {
+      this.underruns++;
+      // A real underrun — grow the buffer target so we carry more cushion.
+      // Decays back toward the floor during clean playback (emitStats).
+      this.targetSecs = Math.min(BUFFER_TARGET_MAX_SECS, this.targetSecs + BUFFER_UNDERRUN_BUMP_SECS);
+      // #299 Step 2 probe — attribute the underrun. A >90 ms gap since the
+      // previous push points at main-thread / WS delivery starvation; a
+      // smaller gap means the render thread / OS scheduling drifted.
+      if (dtSinceLastPushMs > 90) {
+        this.latePushCount++;
+        console.warn(
+          `audio.underrun.latePush dtMs=${dtSinceLastPushMs.toFixed(1)} totalLate=${this.latePushCount}`,
+        );
+      } else {
+        this.latenessVsScheduleCount++;
+        const behindMs = (now - this.nextPlayTime) * 1000;
+        console.warn(
+          `audio.underrun.latenessVsSchedule dtMs=${dtSinceLastPushMs.toFixed(1)} behindMs=${behindMs.toFixed(1)} totalSched=${this.latenessVsScheduleCount}`,
+        );
       }
       this.nextPlayTime = now + this.targetSecs;
     }

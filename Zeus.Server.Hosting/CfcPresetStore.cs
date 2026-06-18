@@ -8,7 +8,7 @@ using JsonSerializer = System.Text.Json.JsonSerializer;
 namespace Zeus.Server;
 
 /// <summary>
-/// Persists named TX Audio Tools CFC presets. The live CFC state still lives in
+/// Persists named Audio Tools CFC presets. The live CFC state still lives in
 /// <see cref="DspSettingsStore"/>; this store is only the operator's recallable
 /// preset library.
 /// </summary>

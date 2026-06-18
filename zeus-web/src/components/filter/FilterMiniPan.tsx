@@ -38,7 +38,12 @@
 // main panadapter's GL context.
 
 import { useEffect, useRef, useState } from 'react';
-import { registerFrameConsumer, useDisplayStore } from '../../state/display-store';
+import {
+  registerFrameConsumer,
+  selectDisplaySlice,
+  useDisplayStore,
+  type SpectrumReceiver,
+} from '../../state/display-store';
 import { useConnectionStore } from '../../state/connection-store';
 import { useThemeStore } from '../../state/theme-store';
 import { useDisplaySettingsStore } from '../../state/display-settings-store';
@@ -52,7 +57,7 @@ import {
 } from '../../dsp/signal-estimator';
 import { setFilter } from '../../api/client';
 import { formatCutOffset, formatFilterWidth, nudgeStepHz } from './filterPresets';
-import type { RxMode } from '../../api/client';
+import type { Rx2AudioMode, RxMode, TxVfo } from '../../api/client';
 
 const DEFAULT_SPAN_HZ = 12_000;       // initial visible window around VFO
 const MIN_SPAN_HZ = 3_000;            // Ctrl+wheel zoom-in floor
@@ -85,6 +90,8 @@ const EQ_METER_BANDS = 32;             // max bottom parametric-EQ blocks inside
 const EQ_METER_AVG_MS = 5000;          // each EQ band shows a 5-second level average
 const MINI_TRACE_RANGE_DB = 20;        // visual SNR span above the noise knee
 const MINI_NOISE_GATE_DB = 3.5;        // soft knee above local floor; keeps noise faint, not invisible
+const EQ_LEVEL_REF_MIN_DB = 6;         // min SNR before a block participates in EQ balance
+const EQ_ACTUAL_RANGE_DB = 40;         // actual dB scale for the EQ block fill
 const PEAKHOLD_DECAY_PX = 0.45;       // peak-hold envelope fall rate (px/frame ≈ 13 px/s)
 const FIT_HIT_PX = 26;                // click-to-fit grab radius around a carrier
 const FIT_MARGIN_HZ = 120;            // breathing room added each side when fitting
@@ -251,6 +258,12 @@ export function miniPanSignalLevel(
   return Math.min(1, raw) ** 0.70;
 }
 
+export function formatEqActualDb(db: number): string {
+  if (!Number.isFinite(db)) return '--dB';
+  const rounded = Math.max(0, Math.round(db));
+  return `${rounded}dB`;
+}
+
 function passbandCenterOffsetHz(lowHz: number, highHz: number): number {
   return (lowHz + highHz) / 2;
 }
@@ -277,6 +290,90 @@ function parseRgb(s: string): [number, number, number] {
   const m = t.match(/\d+(?:\.\d+)?/g);
   if (m && m.length >= 3) return [Number(m[0]), Number(m[1]), Number(m[2])];
   return [74, 158, 255]; // --accent fallback
+}
+
+type MiniPanConnectionSnapshot = {
+  rx2Enabled: boolean;
+  rxFocus: SpectrumReceiver;
+  vfoHz: number;
+  vfoBHz: number;
+  mode: RxMode;
+  modeB: RxMode;
+  filterLowHz: number;
+  filterHighHz: number;
+  filterLowHzB: number;
+  filterHighHzB: number;
+  filterPresetName: string | null;
+  filterPresetNameB: string | null;
+};
+
+type ActiveMiniPanFilter = {
+  receiver: SpectrumReceiver;
+  vfoHz: number;
+  mode: RxMode;
+  filterLowHz: number;
+  filterHighHz: number;
+  filterPresetName: string | null;
+};
+
+function filterMiniPanReceivers(
+  rx2Enabled: boolean,
+  rx2AudioMode: Rx2AudioMode,
+  rxFocus: TxVfo,
+): SpectrumReceiver[] {
+  if (!rx2Enabled) return ['A'];
+  if (rx2AudioMode === 'both') return ['A', 'B'];
+  return [rxFocus];
+}
+
+function miniPanVfoHzForReceiver(c: {
+  rx2Enabled: boolean;
+  rxFocus: SpectrumReceiver;
+  vfoHz: number;
+  vfoBHz: number;
+}, receiver: SpectrumReceiver): number {
+  return receiver === 'B' ? Number(c.vfoBHz) : Number(c.vfoHz);
+}
+
+function miniPanFilterForReceiver(
+  c: MiniPanConnectionSnapshot,
+  receiver: SpectrumReceiver,
+): ActiveMiniPanFilter {
+  if (receiver === 'B') {
+    return {
+      receiver,
+      vfoHz: Number(c.vfoBHz),
+      mode: c.modeB,
+      filterLowHz: c.filterLowHzB,
+      filterHighHz: c.filterHighHzB,
+      filterPresetName: c.filterPresetNameB,
+    };
+  }
+  return {
+    receiver,
+    vfoHz: Number(c.vfoHz),
+    mode: c.mode,
+    filterLowHz: c.filterLowHz,
+    filterHighHz: c.filterHighHz,
+    filterPresetName: c.filterPresetName,
+  };
+}
+
+function setSelectedFilterState(
+  receiver: SpectrumReceiver,
+  lowHz: number,
+  highHz: number,
+  presetName: string,
+): void {
+  useConnectionStore.setState(receiver === 'B'
+    ? { filterLowHzB: lowHz, filterHighHzB: highHz, filterPresetNameB: presetName }
+    : { filterLowHz: lowHz, filterHighHz: highHz, filterPresetName: presetName });
+}
+
+function sharedNoiseFloorForReceiver(receiver: SpectrumReceiver): Float32Array | null {
+  // The shared estimator is currently fed from RX1 display frames. Do not mix
+  // that floor with RX2 bins; RX2 falls back to the mini-pan's local floor.
+  return receiver === 'A' ? getNoiseFloor() : null;
 }
 
 // Snap a dragged edge onto the nearest detected carrier when it falls inside
@@ -439,7 +536,15 @@ function formatEqPeakOffset(hz: number): string {
   return `${sign}${abs}`;
 }
 
-export function FilterMiniPan() {
+function FilterMiniPanSurface({
+  receiver = 'A',
+  split = false,
+  showReceiverLabel = false,
+}: {
+  receiver?: SpectrumReceiver;
+  split?: boolean;
+  showReceiverLabel?: boolean;
+}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // Visible span lives in a ref (read by the imperative draw loop) plus a state
   // mirror so the width pill / React tree re-render on zoom.
@@ -451,14 +556,15 @@ export function FilterMiniPan() {
 
   // Live filter edges + mode for the editable width pill. These re-render the
   // component (cheap) but the per-frame canvas path stays imperative.
-  const filterLowHz = useConnectionStore((s) => s.filterLowHz);
-  const filterHighHz = useConnectionStore((s) => s.filterHighHz);
-  const mode = useConnectionStore((s) => s.mode);
+  const filterLowHz = useConnectionStore((s) => miniPanFilterForReceiver(s, receiver).filterLowHz);
+  const filterHighHz = useConnectionStore((s) => miniPanFilterForReceiver(s, receiver).filterHighHz);
+  const mode = useConnectionStore((s) => miniPanFilterForReceiver(s, receiver).mode);
 
   const [editingWidth, setEditingWidth] = useState(false);
   const [widthDraft, setWidthDraft] = useState('');
 
   const dragRef = useRef<{
+    receiver: SpectrumReceiver;
     mode: DragMode;
     rect: DOMRect;
     spanHz: number;
@@ -488,7 +594,9 @@ export function FilterMiniPan() {
     // Keep the floor estimator live while this panel is open so the signal-aware
     // features (heat trace, bandwidth brackets, fit-to-signal) work without the
     // operator first toggling global Pop/Snap.
-    const releaseEstimator = registerEstimatorConsumer();
+    const releaseEstimator = receiver === 'A'
+      ? registerEstimatorConsumer()
+      : () => {};
 
     let rafHandle = 0;
     let lastSeq: number | null = null;
@@ -501,6 +609,7 @@ export function FilterMiniPan() {
     let peakHoldKey = ''; // geometry key; reset the envelope when it changes
     let eqMeterAvg: Float32Array | null = null; // bottom EQ-style 5-second averaged levels
     let eqMeterPeakOffAvg: Float32Array | null = null; // 5-second averaged peak offset per EQ band
+    let eqMeterLevelDbAvg: Float32Array | null = null; // 5-second averaged signal level per EQ band
     let eqMeterKey = ''; // geometry key; reset EQ meter when the window changes
     let eqMeterLastAt = 0;
     let autoLoDb = NaN; // EMA of the visible-window floor (dynamic vertical scale)
@@ -511,19 +620,39 @@ export function FilterMiniPan() {
     let avgKey = ''; // geometry key; reset the average when it changes
     let bracketTracks: BracketTrack[] = []; // smoothed signal-bandwidth annotations
     let bracketKey = ''; // geometry key; reset annotations when the display window changes
+    let activeReceiver: SpectrumReceiver = 'A';
 
     const draw = () => {
       rafHandle = 0;
       const now = performance.now();
       const d = useDisplayStore.getState();
       const c = useConnectionStore.getState();
-      if (lastSeq !== null && d.lastSeq === lastSeq) return;
-      lastSeq = d.lastSeq;
+      const active = miniPanFilterForReceiver(c, receiver);
+      const display = selectDisplaySlice(d, receiver);
+      if (receiver !== activeReceiver) {
+        activeReceiver = receiver;
+        lastSeq = null;
+        heldPanDb = null;
+        heldCenterHz = 0;
+        heldHzPerPixel = 0;
+        traceY = null;
+        traceSm = null;
+        peakHoldY = null;
+        peakHoldKey = '';
+        eqMeterKey = '';
+        eqMeterLastAt = 0;
+        autoRangeKey = '';
+        avgKey = '';
+        bracketKey = '';
+        bracketTracks = [];
+      }
+      if (lastSeq !== null && display.lastSeq === lastSeq) return;
+      lastSeq = display.lastSeq;
 
-      const minSpanHz = minSpanForFilter(c.filterLowHz, c.filterHighHz);
+      const minSpanHz = minSpanForFilter(active.filterLowHz, active.filterHighHz);
       if (spanHzRef.current < minSpanHz) spanHzRef.current = minSpanHz;
       const spanHz = spanHzRef.current;
-      const winLoOffHz = filterWindowLoOffsetHz(c.filterLowHz, c.filterHighHz, spanHz);
+      const winLoOffHz = filterWindowLoOffsetHz(active.filterLowHz, active.filterHighHz, spanHz);
       const winHiOffHz = winLoOffHz + spanHz;
       const dpr = window.devicePixelRatio || 1;
       const cssW = canvas.clientWidth;
@@ -554,8 +683,12 @@ export function FilterMiniPan() {
       const ink0 = (a: number) => `rgba(${fg0r}, ${fg0g}, ${fg0b}, ${a})`;
       const ink1 = (a: number) => `rgba(${fg1r}, ${fg1g}, ${fg1b}, ${a})`;
       const ink3 = (a: number) => `rgba(${fg3r}, ${fg3g}, ${fg3b}, ${a})`;
-      // Accent drives the active-filter passband (focus/state token, CLAUDE.md).
-      const [ar, ag, ab] = parseRgb(cs.getPropertyValue('--accent') || '#4a9eff');
+      // A follows --accent, B follows --signal so the mini-pan matches the
+      // focused receiver colour used by the main spectrum surfaces.
+      const receiverAccent = receiver === 'B'
+        ? (cs.getPropertyValue('--signal').trim() || '#25d366')
+        : (cs.getPropertyValue('--accent').trim() || '#4a9eff');
+      const [ar, ag, ab] = parseRgb(receiverAccent);
       const accent = (a: number) => `rgba(${ar}, ${ag}, ${ab}, ${a})`;
       const eqBlue = (a: number) => `rgba(34, 204, 255, ${Math.max(0, Math.min(1, a))})`;
 
@@ -563,7 +696,7 @@ export function FilterMiniPan() {
       // is maintained whenever the panel is open (not only when global Pop/Snap
       // are on) — the heat trace, brackets and fit-to-signal all read it.
       const enh = useSignalEnhanceStore.getState();
-      const floor = getNoiseFloor();
+      const floor = sharedNoiseFloorForReceiver(receiver);
       const signalColor = useDisplaySettingsStore.getState().rxTraceColor;
       const [sr, sg, sb] = parseRgb(signalColor || '#FFA028');
       const signal = (a: number) => `rgba(${sr}, ${sg}, ${sb}, ${a})`;
@@ -615,15 +748,15 @@ export function FilterMiniPan() {
       }
       ctx.restore();
 
-      const vfo = Number(c.vfoHz);
-      if (d.panDb && d.hzPerPixel > 0) {
-        heldPanDb = d.panDb;
-        heldCenterHz = Number(d.centerHz);
-        heldHzPerPixel = d.hzPerPixel;
+      const vfo = active.vfoHz;
+      if (display.panDb && display.hzPerPixel > 0) {
+        heldPanDb = display.panDb;
+        heldCenterHz = Number(display.centerHz);
+        heldHzPerPixel = display.hzPerPixel;
       }
-      const panDb = d.panDb && d.hzPerPixel > 0 ? d.panDb : heldPanDb;
-      const frameCenterHz = d.panDb && d.hzPerPixel > 0 ? Number(d.centerHz) : heldCenterHz;
-      const frameHzPerPixel = d.panDb && d.hzPerPixel > 0 ? d.hzPerPixel : heldHzPerPixel;
+      const panDb = display.panDb && display.hzPerPixel > 0 ? display.panDb : heldPanDb;
+      const frameCenterHz = display.panDb && display.hzPerPixel > 0 ? Number(display.centerHz) : heldCenterHz;
+      const frameHzPerPixel = display.panDb && display.hzPerPixel > 0 ? display.hzPerPixel : heldHzPerPixel;
       const binsPerHz = frameHzPerPixel > 0 ? 1 / frameHzPerPixel : 0;
       const popOn = enh.popEnabled && floor !== null && panDb !== null && floor.length === panDb.length;
 
@@ -633,7 +766,7 @@ export function FilterMiniPan() {
       // the signal's true transmitted bandwidth. The live trace stays
       // instantaneous; only the bandwidth read is averaged.
       if (panDb) {
-        const akey = `${frameCenterHz}:${frameHzPerPixel}:${panDb.length}`;
+        const akey = `${receiver}:${frameCenterHz}:${frameHzPerPixel}:${panDb.length}`;
         if (avgLin === null || avgLin.length !== panDb.length) {
           avgLin = new Float32Array(panDb.length);
           avgDb = new Float32Array(panDb.length);
@@ -663,7 +796,7 @@ export function FilterMiniPan() {
         binEnd = Math.min(panDb.length, Math.ceil((loHz + spanHz - fullStartHz) * binsPerHz));
       }
       const bins = Math.max(0, binEnd - binStart);
-      const nextAutoRangeKey = `${Math.round(loHz)}:${Math.round(spanHz)}:${panDb?.length ?? 0}:${frameHzPerPixel}`;
+      const nextAutoRangeKey = `${receiver}:${Math.round(loHz)}:${Math.round(spanHz)}:${panDb?.length ?? 0}:${frameHzPerPixel}`;
       if (nextAutoRangeKey !== autoRangeKey) {
         autoRangeKey = nextAutoRangeKey;
         autoLoDb = NaN;
@@ -712,32 +845,37 @@ export function FilterMiniPan() {
 
       const drawEqMeter = () => {
         if (!panDb || bins <= 0 || binsPerHz <= 0) return;
-        const rawMeterLeft = offsetToX(c.filterLowHz);
-        const rawMeterRight = offsetToX(c.filterHighHz);
+        const rawMeterLeft = offsetToX(active.filterLowHz);
+        const rawMeterRight = offsetToX(active.filterHighHz);
         const meterLeft = Math.max(0, Math.min(w, rawMeterLeft));
         const meterRight = Math.max(0, Math.min(w, rawMeterRight));
         const meterW = meterRight - meterLeft;
-        if (meterW < Math.max(18, Math.round(18 * dpr)) || c.filterHighHz <= c.filterLowHz) return;
+        if (meterW < Math.max(18, Math.round(18 * dpr)) || active.filterHighHz <= active.filterLowHz) return;
         const targetBlockPx = Math.max(36, Math.round(42 * dpr));
         const meterBands = Math.max(1, Math.min(EQ_METER_BANDS, Math.floor(meterW / targetBlockPx)));
         if (
           eqMeterAvg === null ||
           eqMeterAvg.length !== EQ_METER_BANDS ||
           eqMeterPeakOffAvg === null ||
-          eqMeterPeakOffAvg.length !== EQ_METER_BANDS
+          eqMeterPeakOffAvg.length !== EQ_METER_BANDS ||
+          eqMeterLevelDbAvg === null ||
+          eqMeterLevelDbAvg.length !== EQ_METER_BANDS
         ) {
           eqMeterAvg = new Float32Array(EQ_METER_BANDS);
           eqMeterPeakOffAvg = new Float32Array(EQ_METER_BANDS);
+          eqMeterLevelDbAvg = new Float32Array(EQ_METER_BANDS);
           eqMeterKey = '';
           eqMeterLastAt = 0;
         }
-        const meterKey = `${frameCenterHz}:${frameHzPerPixel}:${panDb.length}:${vfo}:${spanHz}:${w}:${c.filterLowHz}:${c.filterHighHz}:${meterBands}`;
+        const meterKey = `${receiver}:${frameCenterHz}:${frameHzPerPixel}:${panDb.length}:${vfo}:${spanHz}:${w}:${active.filterLowHz}:${active.filterHighHz}:${meterBands}`;
         const avg = eqMeterAvg;
         const peakOffAvg = eqMeterPeakOffAvg;
+        const levelDbAvg = eqMeterLevelDbAvg;
         if (meterKey !== eqMeterKey) {
           eqMeterKey = meterKey;
           avg.fill(0);
           peakOffAvg.fill(0);
+          levelDbAvg.fill(0);
           eqMeterLastAt = 0;
         }
         const meterDtMs = eqMeterLastAt > 0 ? Math.max(0, Math.min(1000, now - eqMeterLastAt)) : 0;
@@ -745,7 +883,7 @@ export function FilterMiniPan() {
         eqMeterLastAt = now;
 
         const haveFloor = floor !== null && floor.length === panDb.length;
-        const meterH = Math.max(14, Math.round(19 * dpr));
+        const meterH = Math.max(30, Math.round(36 * dpr));
         const meterBottom = plotBottom - Math.round(2 * dpr);
         const meterTop = Math.max(plotTop + Math.round(8 * dpr), meterBottom - meterH);
         const usableH = Math.max(1, meterBottom - meterTop);
@@ -755,14 +893,22 @@ export function FilterMiniPan() {
         const hoveredBand = eqHoverRef.current !== null && eqHoverRef.current < meterBands
           ? eqHoverRef.current
           : null;
+        const bands: Array<{
+          x0: number;
+          x1: number;
+          level: number;
+          levelDb: number;
+          peakOffHz: number;
+          isActive: boolean;
+        }> = [];
         for (let band = 0; band < meterBands; band++) {
-          const hovered = hoveredBand === band;
           const x0 = Math.floor(meterLeft + (band / meterBands) * meterW);
           const x1 = Math.max(x0 + 1, Math.floor(meterLeft + ((band + 1) / meterBands) * meterW));
-          const bandLoHz = vfo + c.filterLowHz + (band / meterBands) * (c.filterHighHz - c.filterLowHz);
-          const bandHiHz = vfo + c.filterLowHz + ((band + 1) / meterBands) * (c.filterHighHz - c.filterLowHz);
+          const bandLoHz = vfo + active.filterLowHz + (band / meterBands) * (active.filterHighHz - active.filterLowHz);
+          const bandHiHz = vfo + active.filterLowHz + ((band + 1) / meterBands) * (active.filterHighHz - active.filterLowHz);
           const range = frameBinRange(bandLoHz, bandHiHz);
           let live = 0;
+          let levelDb = 0;
           let peakOffHz = (bandLoHz + bandHiHz) / 2 - vfo;
           if (range && haveFloor) {
             const [b0, b1] = range;
@@ -775,6 +921,7 @@ export function FilterMiniPan() {
                 peakBin = i;
               }
             }
+            levelDb = Math.max(0, peakSnr);
             live = miniPanSignalLevel(loDb + peakSnr, loDb, noiseGateDb, MINI_TRACE_RANGE_DB);
             peakOffHz = fullStartHz + peakBin * frameHzPerPixel - vfo;
           } else if (range) {
@@ -788,56 +935,74 @@ export function FilterMiniPan() {
                 peakBin = i;
               }
             }
+            levelDb = peakDb === -Infinity ? 0 : Math.max(0, peakDb - loDb);
             live = peakDb === -Infinity ? 0 : signalLevel(peakDb);
             peakOffHz = fullStartHz + peakBin * frameHzPerPixel - vfo;
           }
           live = Math.max(0, Math.min(1, live));
           avg[band] = avg[band]! + avgAlpha * (live - avg[band]!);
           peakOffAvg[band] = peakOffAvg[band]! + avgAlpha * (peakOffHz - peakOffAvg[band]!);
-          const level = avg[band]!;
-          const blockLift = hovered ? Math.round(10 * dpr) : 0;
-          const blockTop = hovered ? Math.max(plotTop + Math.round(4 * dpr), meterTop - blockLift) : meterTop;
+          levelDbAvg[band] = levelDbAvg[band]! + avgAlpha * (levelDb - levelDbAvg[band]!);
+          const isActive = levelDbAvg[band]! >= Math.max(EQ_LEVEL_REF_MIN_DB, noiseGateDb + 1);
+          bands.push({
+            x0,
+            x1,
+            level: avg[band]!,
+            levelDb: levelDbAvg[band]!,
+            peakOffHz: peakOffAvg[band]!,
+            isActive,
+          });
+        }
+
+        for (let band = 0; band < bands.length; band++) {
+          const hovered = hoveredBand === band;
+          const { x0, x1, level, levelDb, peakOffHz, isActive } = bands[band]!;
+          const blockLift = hovered ? Math.round(15 * dpr) : 0;
+          const blockTop = hovered ? Math.max(plotTop + Math.round(2 * dpr), meterTop - blockLift) : meterTop;
           const blockH = Math.max(1, meterBottom - blockTop);
-          const barH = Math.max(1, Math.round(Math.min(1, level * (hovered ? 1.34 : 1)) * blockH));
           const gap = Math.max(1, Math.round(1 * dpr));
           const bx = x0 + gap;
           const bw = Math.max(1, x1 - x0 - gap * 2);
           const paint = eqBlue;
           if (hovered) {
             ctx.save();
-            ctx.shadowColor = paint(0.76);
-            ctx.shadowBlur = Math.round(13 * dpr);
+            ctx.shadowColor = paint(0.84);
+            ctx.shadowBlur = Math.round(17 * dpr);
             ctx.fillStyle = 'rgba(5, 10, 16, 0.92)';
             ctx.strokeStyle = paint(0.95);
             ctx.lineWidth = Math.max(1, 1 * dpr);
             ctx.beginPath();
             ctx.roundRect(
-              bx - Math.round(2 * dpr),
+              bx - Math.round(3 * dpr),
               blockTop,
-              bw + Math.round(4 * dpr),
-              meterBottom - blockTop + Math.round(1 * dpr),
+              bw + Math.round(6 * dpr),
+              meterBottom - blockTop + Math.round(2 * dpr),
               Math.round(2 * dpr),
             );
             ctx.fill();
             ctx.stroke();
             ctx.restore();
           }
-          ctx.fillStyle = paint((hovered ? 0.52 : 0.26) + 0.58 * level);
+          const dbNorm = Math.max(0, Math.min(1, levelDb / EQ_ACTUAL_RANGE_DB));
+          const barH = Math.max(1, Math.round(dbNorm * blockH * 0.42));
+          ctx.fillStyle = paint((isActive ? 0.18 : 0.06) + 0.34 * dbNorm);
           ctx.fillRect(bx, meterBottom - barH, bw, barH);
-          if (level > 0.14) {
-            ctx.fillStyle = paint((hovered ? 0.82 : 0.50) + 0.32 * level);
-            ctx.fillRect(bx, meterBottom - barH, bw, Math.max(1, Math.round((hovered ? 2 : 1) * dpr)));
+          if (level > 0.06) {
+            ctx.fillStyle = eqBlue(0.16 + 0.22 * Math.min(1, level));
+            ctx.fillRect(bx, meterBottom - Math.max(1, Math.round(1 * dpr)), bw, Math.max(1, Math.round(1 * dpr)));
           }
-          const label = formatEqPeakOffset(peakOffAvg[band]!);
-          const labelFontPx = Math.max(6, Math.round((hovered ? 9.5 : 7) * dpr));
-          ctx.font = `${hovered ? 760 : 650} ${labelFontPx}px "SFMono-Regular", ui-monospace, monospace`;
+          const freqLabel = formatEqPeakOffset(peakOffHz);
+          const actualDbLabel = formatEqActualDb(levelDb);
+          const labelFontPx = Math.max(6, Math.round((hovered ? 9.2 : 6.3) * dpr));
+          ctx.font = `${hovered ? 820 : 650} ${labelFontPx}px "SFMono-Regular", ui-monospace, monospace`;
           ctx.textBaseline = 'middle';
           ctx.textAlign = 'center';
-          const textY = blockTop + blockH * (hovered ? 0.42 : 0.46);
           ctx.fillStyle = hovered ? 'rgba(3, 5, 9, 0.76)' : 'rgba(3, 5, 9, 0.58)';
-          ctx.fillRect(bx, blockTop + Math.round(1 * dpr), bw, Math.max(8, Math.round((hovered ? 12.5 : 9) * dpr)));
-          ctx.fillStyle = hovered ? ink0(0.96) : ink0(0.74 + 0.18 * level);
-          ctx.fillText(label, x0 + (x1 - x0) / 2, textY);
+          ctx.fillRect(bx, blockTop + Math.round(1 * dpr), bw, Math.max(15, Math.round((hovered ? 27 : 18) * dpr)));
+          ctx.fillStyle = isActive ? (hovered ? ink0(0.98) : ink0(0.78 + 0.12 * level)) : ink0(0.42);
+          ctx.fillText(freqLabel, x0 + (x1 - x0) / 2, blockTop + blockH * 0.32);
+          ctx.fillStyle = isActive ? ink0(hovered ? 1 : 0.92) : ink0(0.36);
+          ctx.fillText(actualDbLabel, x0 + (x1 - x0) / 2, blockTop + blockH * 0.68);
         }
       };
 
@@ -955,7 +1120,7 @@ export function FilterMiniPan() {
         // the frequency window changes (held peaks would otherwise smear).
         if (peakHoldY === null || peakHoldY.length !== w) peakHoldY = new Float32Array(w);
         const ph = peakHoldY;
-        const phKey = `${c.vfoHz}:${spanHz}:${winLoOffHz}:${w}`;
+        const phKey = `${receiver}:${vfo}:${spanHz}:${winLoOffHz}:${w}`;
         const decay = PEAKHOLD_DECAY_PX * dpr;
         if (phKey !== peakHoldKey) {
           peakHoldKey = phKey;
@@ -1017,8 +1182,8 @@ export function FilterMiniPan() {
       // Passband — accent-tinted filled rectangle between two glowing cut
       // walls, with a bright flat top and grab handles. (Departs from the older
       // neutral-silver "not a cyan box" treatment — red-light, see CLAUDE.md.)
-      const passLeftPx = offsetToX(c.filterLowHz);
-      const passRightPx = offsetToX(c.filterHighHz);
+      const passLeftPx = offsetToX(active.filterLowHz);
+      const passRightPx = offsetToX(active.filterHighHz);
       const onScreen = passRightPx > 0 && passLeftPx < w;
 
       // Signal-edge markers — for each detected carrier in the window, measure
@@ -1032,7 +1197,7 @@ export function FilterMiniPan() {
         const dCenter = frameCenterHz;
         const baseY = plotBottom;
         const half = panDb.length / 2;
-        const nextBracketKey = `${frameCenterHz}:${frameHzPerPixel}:${panDb.length}:${spanHz}:${winLoOffHz}`;
+        const nextBracketKey = `${receiver}:${frameCenterHz}:${frameHzPerPixel}:${panDb.length}:${spanHz}:${winLoOffHz}`;
         if (nextBracketKey !== bracketKey) {
           bracketKey = nextBracketKey;
           bracketTracks = [];
@@ -1080,7 +1245,7 @@ export function FilterMiniPan() {
           drawnBands.push({ loPx: xL, hiPx: xR });
           const markerCrestHz = track.heldCrestHz;
           const markerCenterX = ((markerCrestHz - loHz) / spanHz) * w;
-          const inBand = markerCrestHz - vfo >= c.filterLowHz && markerCrestHz - vfo <= c.filterHighHz;
+          const inBand = markerCrestHz - vfo >= active.filterLowHz && markerCrestHz - vfo <= active.filterHighHz;
           const col = inBand ? accent : signal;
           const prominence = Math.max(0, Math.min(1, (track.heldSnrDb - BRACKET_MIN_SNR_DB) / 30));
 
@@ -1395,8 +1560,8 @@ export function FilterMiniPan() {
           ctx.fillText(value, chipCx, valY);
         };
 
-        drawCallout(passLeftPx, 'lo', formatCutOffset(c.filterLowHz));
-        drawCallout(passRightPx, 'hi', formatCutOffset(c.filterHighHz));
+        drawCallout(passLeftPx, 'lo', formatCutOffset(active.filterLowHz));
+        drawCallout(passRightPx, 'hi', formatCutOffset(active.filterHighHz));
 
         // Reset text state for subsequent draws (x-axis labels assume start).
         ctx.textAlign = 'start';
@@ -1435,14 +1600,25 @@ export function FilterMiniPan() {
     };
     redrawRef.current = requestRedraw;
 
-    const unsubDisplay = useDisplayStore.subscribe(() => {
-      if (rafHandle === 0) rafHandle = requestAnimationFrame(draw);
+    const unsubDisplay = useDisplayStore.subscribe((s, p) => {
+      if (selectDisplaySlice(s, receiver).lastSeq !== selectDisplaySlice(p, receiver).lastSeq) {
+        if (rafHandle === 0) rafHandle = requestAnimationFrame(draw);
+      }
     });
     const unsubConn = useConnectionStore.subscribe((s, p) => {
       if (
         s.filterLowHz !== p.filterLowHz ||
         s.filterHighHz !== p.filterHighHz ||
-        s.vfoHz !== p.vfoHz
+        s.filterLowHzB !== p.filterLowHzB ||
+        s.filterHighHzB !== p.filterHighHzB ||
+        s.filterPresetName !== p.filterPresetName ||
+        s.filterPresetNameB !== p.filterPresetNameB ||
+        s.mode !== p.mode ||
+        s.modeB !== p.modeB ||
+        s.vfoHz !== p.vfoHz ||
+        s.vfoBHz !== p.vfoBHz ||
+        s.rx2Enabled !== p.rx2Enabled ||
+        s.rxFocus !== p.rxFocus
       ) {
         requestRedraw();
       }
@@ -1480,10 +1656,11 @@ export function FilterMiniPan() {
       e.preventDefault();
       const dir = e.deltaY > 0 ? 1 : -1;
       const c = useConnectionStore.getState();
+      const active = miniPanFilterForReceiver(c, receiver);
 
       if (e.ctrlKey || e.metaKey) {
         const factor = dir > 0 ? 1.18 : 1 / 1.18;
-        const minSpanHz = minSpanForFilter(c.filterLowHz, c.filterHighHz);
+        const minSpanHz = minSpanForFilter(active.filterLowHz, active.filterHighHz);
         const next = Math.round(Math.max(minSpanHz, Math.min(MAX_SPAN_HZ, spanHzRef.current * factor)));
         if (next !== spanHzRef.current) {
           spanHzRef.current = next;
@@ -1493,25 +1670,25 @@ export function FilterMiniPan() {
         return;
       }
 
-      const step = nudgeStepHz(c.mode) * (e.shiftKey ? 10 : 1) * dir;
+      const step = nudgeStepHz(active.mode) * (e.shiftKey ? 10 : 1) * dir;
       const edge = hoverEdgeRef.current;
-      let lo = c.filterLowHz;
-      let hi = c.filterHighHz;
+      let lo = active.filterLowHz;
+      let hi = active.filterHighHz;
       if (edge === 'lo') {
-        lo = Math.min(c.filterHighHz - 50, c.filterLowHz + step);
+        lo = Math.min(active.filterHighHz - 50, active.filterLowHz + step);
       } else if (edge === 'hi') {
-        hi = Math.max(c.filterLowHz + 50, c.filterHighHz + step);
+        hi = Math.max(active.filterLowHz + 50, active.filterHighHz + step);
       } else {
         // Inside / no edge → symmetric width change about the passband centre.
-        const center = (c.filterLowHz + c.filterHighHz) / 2;
-        const halfW = Math.max(25, Math.abs(c.filterHighHz - c.filterLowHz) / 2 + step);
+        const center = (active.filterLowHz + active.filterHighHz) / 2;
+        const halfW = Math.max(25, Math.abs(active.filterHighHz - active.filterLowHz) / 2 + step);
         lo = Math.round(center - halfW);
         hi = Math.round(center + halfW);
       }
       if (hi <= lo + 50) return;
-      const slot = presetIsFixed(c.filterPresetName) || !c.filterPresetName ? 'VAR1' : c.filterPresetName;
-      useConnectionStore.setState({ filterLowHz: lo, filterHighHz: hi, filterPresetName: slot });
-      setFilter(lo, hi, slot).then(c.applyState).catch(() => {});
+      const slot = presetIsFixed(active.filterPresetName) || !active.filterPresetName ? 'VAR1' : active.filterPresetName;
+      setSelectedFilterState(active.receiver, lo, hi, slot);
+      setFilter(lo, hi, slot, undefined, active.receiver).then(c.applyState).catch(() => {});
     };
     canvas.addEventListener('wheel', onWheel, { passive: false });
 
@@ -1532,14 +1709,14 @@ export function FilterMiniPan() {
       releaseFrameConsumer();
       releaseEstimator();
     };
-  }, []);
+  }, [receiver]);
 
   const flushPending = () => {
     const d = dragRef.current;
     if (!d) return;
     d.flushTimer = null;
     d.lastWriteAt = performance.now();
-    setFilter(d.pendingLo, d.pendingHi, d.activeSlot).catch(() => {});
+    setFilter(d.pendingLo, d.pendingHi, d.activeSlot, undefined, d.receiver).catch(() => {});
   };
 
   const schedule = () => {
@@ -1559,11 +1736,13 @@ export function FilterMiniPan() {
   // the same edge walk snap uses) plus a little margin. Returns true if it
   // fitted, so the caller skips starting a drag.
   const tryFitToSignal = (relX: number, rectW: number, spanHz: number): boolean => {
-    const d = useDisplayStore.getState();
-    if (!d.panDb || d.hzPerPixel <= 0 || getNoiseFloor() === null) return false;
     const c = useConnectionStore.getState();
-    const vfo = Number(c.vfoHz);
-    const winLoHz = vfo + filterWindowLoOffsetHz(c.filterLowHz, c.filterHighHz, spanHz);
+    const active = miniPanFilterForReceiver(c, receiver);
+    const floor = sharedNoiseFloorForReceiver(active.receiver);
+    const d = selectDisplaySlice(useDisplayStore.getState(), active.receiver);
+    if (!d.panDb || d.hzPerPixel <= 0 || floor === null) return false;
+    const vfo = active.vfoHz;
+    const winLoHz = vfo + filterWindowLoOffsetHz(active.filterLowHz, active.filterHighHz, spanHz);
     const dCenter = Number(d.centerHz);
     const peaks = detectPeaks(d.panDb, dCenter, d.hzPerPixel).filter((p) => p.snrDb >= BRACKET_MIN_SNR_DB);
     let best: DetectedPeak | null = null;
@@ -1579,12 +1758,12 @@ export function FilterMiniPan() {
     // Keep the fit on the active mode's sideband — a signal on the wrong side of
     // the carrier is unreachable here without retuning, so bail rather than flip
     // the passband to the opposite sideband.
-    const fitted = fitPassbandForMode(c.mode, ext.loHz - vfo, ext.hiHz - vfo, FIT_MARGIN_HZ);
+    const fitted = fitPassbandForMode(active.mode, ext.loHz - vfo, ext.hiHz - vfo, FIT_MARGIN_HZ);
     if (!fitted) return false;
     const { low, high } = fitted;
-    const slot = presetIsFixed(c.filterPresetName) || !c.filterPresetName ? 'VAR1' : c.filterPresetName;
-    useConnectionStore.setState({ filterLowHz: low, filterHighHz: high, filterPresetName: slot });
-    setFilter(low, high, slot).then(c.applyState).catch(() => {});
+    const slot = presetIsFixed(active.filterPresetName) || !active.filterPresetName ? 'VAR1' : active.filterPresetName;
+    setSelectedFilterState(active.receiver, low, high, slot);
+    setFilter(low, high, slot, undefined, active.receiver).then(c.applyState).catch(() => {});
     return true;
   };
 
@@ -1596,13 +1775,14 @@ export function FilterMiniPan() {
     if (rect.width <= 0) return;
 
     const c = useConnectionStore.getState();
-    const minSpanHz = minSpanForFilter(c.filterLowHz, c.filterHighHz);
+    const active = miniPanFilterForReceiver(c, receiver);
+    const minSpanHz = minSpanForFilter(active.filterLowHz, active.filterHighHz);
     if (spanHzRef.current < minSpanHz) spanHzRef.current = minSpanHz;
     const spanHz = spanHzRef.current;
-    const windowLoOffsetHz = filterWindowLoOffsetHz(c.filterLowHz, c.filterHighHz, spanHz);
+    const windowLoOffsetHz = filterWindowLoOffsetHz(active.filterLowHz, active.filterHighHz, spanHz);
     const offsetToCssX = (offHz: number) => ((offHz - windowLoOffsetHz) / spanHz) * rect.width;
-    const passLeftPx = offsetToCssX(c.filterLowHz);
-    const passRightPx = offsetToCssX(c.filterHighHz);
+    const passLeftPx = offsetToCssX(active.filterLowHz);
+    const passRightPx = offsetToCssX(active.filterHighHz);
     const relX = e.clientX - rect.left;
 
     let mode: DragMode;
@@ -1619,38 +1799,39 @@ export function FilterMiniPan() {
     e.preventDefault();
     try { canvas.setPointerCapture(e.pointerId); } catch { /* ok */ }
 
-    const activeSlot = presetIsFixed(c.filterPresetName) || !c.filterPresetName ? 'VAR1' : c.filterPresetName;
+    const activeSlot = presetIsFixed(active.filterPresetName) || !active.filterPresetName ? 'VAR1' : active.filterPresetName;
 
     // Snapshot detected carriers once so the magnetic edge-snap has stable
     // targets through the drag. The panel keeps the floor live, so detection is
     // available here without the operator toggling global Snap.
     let peaks: DetectedPeak[] = [];
     {
-      const d = useDisplayStore.getState();
-      if (d.panDb && d.hzPerPixel > 0 && getNoiseFloor() !== null) {
+      const d = selectDisplaySlice(useDisplayStore.getState(), active.receiver);
+      if (d.panDb && d.hzPerPixel > 0 && sharedNoiseFloorForReceiver(active.receiver) !== null) {
         peaks = detectPeaks(d.panDb, Number(d.centerHz), d.hzPerPixel);
       }
     }
 
     dragRef.current = {
+      receiver: active.receiver,
       mode,
       rect,
       spanHz,
       activeSlot,
-      startLoHz: c.filterLowHz,
-      startHiHz: c.filterHighHz,
+      startLoHz: active.filterLowHz,
+      startHiHz: active.filterHighHz,
       windowLoOffsetHz,
       startX: e.clientX,
-      pendingLo: c.filterLowHz,
-      pendingHi: c.filterHighHz,
+      pendingLo: active.filterLowHz,
+      pendingHi: active.filterHighHz,
       lastWriteAt: 0,
       flushTimer: null,
       pointerId: e.pointerId,
       peaks,
     };
 
-    if (activeSlot !== c.filterPresetName) {
-      useConnectionStore.setState({ filterPresetName: activeSlot });
+    if (activeSlot !== active.filterPresetName) {
+      setSelectedFilterState(active.receiver, active.filterLowHz, active.filterHighHz, activeSlot);
     }
   };
 
@@ -1659,7 +1840,7 @@ export function FilterMiniPan() {
     if (!d || e.pointerId !== d.pointerId) return;
     e.stopPropagation();
 
-    const vfo = Number(useConnectionStore.getState().vfoHz);
+    const vfo = miniPanVfoHzForReceiver(useConnectionStore.getState(), d.receiver);
     const hzPerPx = d.spanHz / d.rect.width;
     // Magnetic snap is active for edge drags unless Alt is held (free placement)
     // and unless there are no detected carriers.
@@ -1684,7 +1865,7 @@ export function FilterMiniPan() {
 
     d.pendingLo = loHz;
     d.pendingHi = hiHz;
-    useConnectionStore.setState({ filterLowHz: loHz, filterHighHz: hiHz });
+    setSelectedFilterState(d.receiver, loHz, hiHz, d.activeSlot);
     schedule();
   };
 
@@ -1703,9 +1884,10 @@ export function FilterMiniPan() {
     const lo = d.pendingLo;
     const hi = d.pendingHi;
     const slot = d.activeSlot;
+    const receiver = d.receiver;
     dragRef.current = null;
     const applyState = useConnectionStore.getState().applyState;
-    setFilter(lo, hi, slot).then(applyState).catch(() => {});
+    setFilter(lo, hi, slot, undefined, receiver).then(applyState).catch(() => {});
   };
 
   const onPointerMoveHover = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1715,13 +1897,14 @@ export function FilterMiniPan() {
     const rect = canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
     const c = useConnectionStore.getState();
-    const minSpanHz = minSpanForFilter(c.filterLowHz, c.filterHighHz);
+    const active = miniPanFilterForReceiver(c, receiver);
+    const minSpanHz = minSpanForFilter(active.filterLowHz, active.filterHighHz);
     if (spanHzRef.current < minSpanHz) spanHzRef.current = minSpanHz;
     const spanHz = spanHzRef.current;
-    const windowLoOffsetHz = filterWindowLoOffsetHz(c.filterLowHz, c.filterHighHz, spanHz);
+    const windowLoOffsetHz = filterWindowLoOffsetHz(active.filterLowHz, active.filterHighHz, spanHz);
     const offsetToCssX = (offHz: number) => ((offHz - windowLoOffsetHz) / spanHz) * rect.width;
-    const passLeftPx = offsetToCssX(c.filterLowHz);
-    const passRightPx = offsetToCssX(c.filterHighHz);
+    const passLeftPx = offsetToCssX(active.filterLowHz);
+    const passRightPx = offsetToCssX(active.filterHighHz);
     const relX = e.clientX - rect.left;
     const relY = e.clientY - rect.top;
     const prevEdge = hoverEdgeRef.current;
@@ -1735,11 +1918,11 @@ export function FilterMiniPan() {
     const meterTop = Math.max(plotTop + 8, meterBottom - 19);
     let nextEq: number | null = null;
     if (
-      c.filterHighHz > c.filterLowHz &&
+      active.filterHighHz > active.filterLowHz &&
       meterW >= 18 &&
       relX >= meterLeft &&
       relX <= meterRight &&
-      relY >= meterTop - 12 &&
+      relY >= meterTop - 18 &&
       relY <= meterBottom + 2
     ) {
       const meterBands = Math.max(1, Math.min(EQ_METER_BANDS, Math.floor(meterW / 42)));
@@ -1794,20 +1977,21 @@ export function FilterMiniPan() {
     const next = Number.parseInt(widthDraft, 10);
     if (!Number.isFinite(next) || next < 50) return;
     const c = useConnectionStore.getState();
+    const active = miniPanFilterForReceiver(c, receiver);
     let lo: number;
     let hi: number;
-    if (isSymmetricMode(c.mode)) {
+    if (isSymmetricMode(active.mode)) {
       lo = -Math.round(next / 2);
       hi = Math.round(next / 2);
     } else {
       // Preserve the passband centre (audio centre) and set the new width.
-      const center = (c.filterLowHz + c.filterHighHz) / 2;
+      const center = (active.filterLowHz + active.filterHighHz) / 2;
       lo = Math.round(center - next / 2);
       hi = Math.round(center + next / 2);
     }
-    const slot = presetIsFixed(c.filterPresetName) || !c.filterPresetName ? 'VAR1' : c.filterPresetName;
-    useConnectionStore.setState({ filterLowHz: lo, filterHighHz: hi, filterPresetName: slot });
-    setFilter(lo, hi, slot).then(c.applyState).catch(() => {});
+    const slot = presetIsFixed(active.filterPresetName) || !active.filterPresetName ? 'VAR1' : active.filterPresetName;
+    setSelectedFilterState(active.receiver, lo, hi, slot);
+    setFilter(lo, hi, slot, undefined, active.receiver).then(c.applyState).catch(() => {});
   };
 
   const onWidthKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -1816,7 +2000,12 @@ export function FilterMiniPan() {
   };
 
   return (
-    <div className="filter-minipan-wrap">
+    <div className={`filter-minipan-wrap ${split ? 'filter-minipan-wrap--split' : ''}`}>
+      {showReceiverLabel && (
+        <div className={`filter-minipan-vfo-tag mono ${receiver === 'B' ? 'is-rx2' : 'is-rx1'}`}>
+          {receiver === 'B' ? 'RX2 · VFO B' : 'RX1 · VFO A'}
+        </div>
+      )}
       <canvas
         ref={canvasRef}
         className="filter-minipan-canvas"
@@ -1854,6 +2043,27 @@ export function FilterMiniPan() {
           {formatFilterWidth(filterLowHz, filterHighHz)}
         </button>
       )}
+    </div>
+  );
+}
+
+export function FilterMiniPan() {
+  const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
+  const rx2AudioMode = useConnectionStore((s) => s.rx2AudioMode);
+  const rxFocus = useConnectionStore((s) => s.rxFocus);
+  const receivers = filterMiniPanReceivers(rx2Enabled, rx2AudioMode, rxFocus);
+  const split = receivers.length > 1;
+
+  return (
+    <div className={`filter-minipan-stack ${split ? 'filter-minipan-stack--split' : ''}`}>
+      {receivers.map((receiver) => (
+        <FilterMiniPanSurface
+          key={receiver}
+          receiver={receiver}
+          split={split}
+          showReceiverLabel={rx2Enabled}
+        />
+      ))}
     </div>
   );
 }

@@ -43,7 +43,7 @@
 // License for details.
 
 import { useCallback, useState } from 'react';
-import { setRxAfGain } from '../api/client';
+import { setRx2, setRxAfGain, type TxVfo } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useLiveSlider } from '../hooks/useLiveSlider';
 
@@ -58,11 +58,16 @@ const MAX = 20;
 
 export function AfGainSlider() {
   const serverAf = useConnectionStore((s) => s.rxAfGainDb);
+  const serverAfB = useConnectionStore((s) => s.rx2AfGainDb);
+  const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
+  const rxFocus = useConnectionStore((s) => s.rxFocus);
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const applyState = useConnectionStore((s) => s.applyState);
+  const activeReceiver: TxVfo = rxFocus === 'B' && rx2Enabled ? 'B' : 'A';
+  const activeAf = activeReceiver === 'B' ? serverAfB : serverAf;
 
   const [dragValue, setDragValue] = useState<number | null>(null);
-  const value = dragValue ?? serverAf;
+  const value = dragValue ?? activeAf;
 
   // Stream during drag (rAF coalesced — ~16 ms at 60 Hz), flush on release.
   // The previous 100 ms debounce was perceptible as a lag in the audible AF
@@ -71,14 +76,16 @@ export function AfGainSlider() {
   const liveSlider = useLiveSlider<number>({
     send: useCallback(
       (v: number, signal: AbortSignal) =>
-        setRxAfGain(v, signal)
+        (activeReceiver === 'B'
+          ? setRx2({ afGainDb: v }, signal)
+          : setRxAfGain(v, signal))
           .then((next) => {
             if (!signal.aborted) applyState(next);
           })
           .catch(() => {
             /* next poll will reconcile; don't noisily log on abort */
           }),
-      [applyState],
+      [activeReceiver, applyState],
     ),
   });
 

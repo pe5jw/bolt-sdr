@@ -400,7 +400,7 @@ foreach ($artifact in (Get-JsonArray $captureManifest "requiredArtifacts")) {
             -Path "artifacts/live-diagnostics-trace-index.candidate.json" `
             -Required $effectiveRequired `
             -ScenarioIds $scenarioIds `
-            -ComparisonIds @("nr5-spnr")
+            -ComparisonIds @("candidate-under-test")
 
         Add-ArtifactRecord `
             -Artifacts $artifacts `
@@ -413,7 +413,7 @@ foreach ($artifact in (Get-JsonArray $captureManifest "requiredArtifacts")) {
             -Path "artifacts/live-diagnostics-matrix-report.candidate.json" `
             -Required $effectiveRequired `
             -ScenarioIds $scenarioIds `
-            -ComparisonIds @("nr5-spnr")
+            -ComparisonIds @("candidate-under-test")
         continue
     }
 
@@ -438,12 +438,12 @@ if ($RequireLiveAcceptanceArtifacts -and -not $seenArtifactIds.ContainsKey("live
         -Id "live-diagnostics-trace-comparison" `
         -Kind "diagnostics-comparison-json" `
         -Source "tools/compare-dsp-live-diagnostics-matrix.ps1" `
-        -Purpose "Compare current-Zeus baseline and NR5/SPNR candidate live matrix windows across the G2 scenario set before accepting live DSP evidence." `
+        -Purpose "Compare current-Zeus baseline and candidate DSP candidate live matrix windows across the G2 scenario set before accepting live DSP evidence." `
         -Cadence "once-per-candidate-live-matrix" `
         -Path "artifacts/live-diagnostics-trace-comparison.json" `
         -Required $true `
         -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds") `
-        -ComparisonIds @("current-zeus", "nr5-spnr")
+        -ComparisonIds @("current-zeus", "candidate-under-test")
 }
 
 if ($RequireLiveAcceptanceArtifacts -and -not $seenArtifactIds.ContainsKey("live-diagnostics-trace-comparison-thetis-parity")) {
@@ -453,12 +453,12 @@ if ($RequireLiveAcceptanceArtifacts -and -not $seenArtifactIds.ContainsKey("live
         -Id "live-diagnostics-trace-comparison-thetis-parity" `
         -Kind "diagnostics-comparison-json" `
         -Source "tools/compare-dsp-live-diagnostics-matrix.ps1" `
-        -Purpose "Compare Thetis-parity baseline and NR5/SPNR candidate live matrix windows across the G2 scenario set so candidate evidence cannot drift from the WDSP behavior authority." `
+        -Purpose "Compare Thetis-parity baseline and candidate DSP candidate live matrix windows across the G2 scenario set so candidate evidence cannot drift from the WDSP behavior authority." `
         -Cadence "once-per-candidate-live-matrix" `
         -Path "artifacts/live-diagnostics-trace-comparison.thetis-parity.json" `
         -Required $true `
         -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds") `
-        -ComparisonIds @("thetis-parity", "nr5-spnr")
+        -ComparisonIds @("thetis-parity", "candidate-under-test")
 }
 
 if ($RequireLiveAcceptanceArtifacts -and -not $seenArtifactIds.ContainsKey("live-diagnostics-trace-index")) {
@@ -548,12 +548,12 @@ if ($RequireLiveAcceptanceArtifacts -and -not $seenArtifactIds.ContainsKey("live
         -Id "live-diagnostics-trace-index" `
         -Kind "trace" `
         -Source "tools/run-dsp-live-diagnostics-matrix.ps1" `
-        -Purpose "Required NR5/SPNR live diagnostics matrix index for G2 acceptance coverage." `
+        -Purpose "Required candidate DSP live diagnostics matrix index for G2 acceptance coverage." `
         -Cadence "once-per-g2-live-acceptance-matrix" `
         -Path "artifacts/live-diagnostics-trace-index.candidate.json" `
         -Required $true `
         -ScenarioIds $scenarioIds `
-        -ComparisonIds @("nr5-spnr")
+        -ComparisonIds @("candidate-under-test")
 
     Add-ArtifactRecord `
         -Artifacts $artifacts `
@@ -561,12 +561,12 @@ if ($RequireLiveAcceptanceArtifacts -and -not $seenArtifactIds.ContainsKey("live
         -Id "live-diagnostics-matrix-report-candidate" `
         -Kind "diagnostics-matrix-json" `
         -Source "tools/run-dsp-live-diagnostics-matrix.ps1" `
-        -Purpose "Required NR5/SPNR matrix report with trace-index hash evidence for G2 acceptance coverage." `
+        -Purpose "Required candidate DSP matrix report with trace-index hash evidence for G2 acceptance coverage." `
         -Cadence "once-per-g2-live-acceptance-matrix" `
         -Path "artifacts/live-diagnostics-matrix-report.candidate.json" `
         -Required $true `
         -ScenarioIds $scenarioIds `
-        -ComparisonIds @("nr5-spnr")
+        -ComparisonIds @("candidate-under-test")
 }
 
 if (-not $seenArtifactIds.ContainsKey("fixture-metric-comparison-report")) {
@@ -641,12 +641,12 @@ if (($IncludeOptionalArtifacts -or $RequireLiveAcceptanceArtifacts) -and -not $s
         -Id "manual-tune-observer-report" `
         -Kind "manual-tune-observer-report-json" `
         -Source "tools/watch-dsp-manual-tune-observer.ps1" `
-        -Purpose "Summarize read-only operator/manual tuning captures, no-retune/no-write safety, stable active VFO evidence, weak/strong NR5 sample coverage, and AGC pumping risk before selecting a live-history recapture window." `
+        -Purpose "Summarize read-only operator/manual tuning captures, no-retune/no-write safety, stable active VFO evidence, weak/strong Candidate sample coverage, and AGC pumping risk before selecting a live-history recapture window." `
         -Cadence "optional-while-operator-manually-tunes-g2-active-frequencies" `
         -Path "artifacts/manual-tune-observer-report.json" `
         -Required $false `
         -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds") `
-        -ComparisonIds @("nr5-spnr")
+        -ComparisonIds @("candidate-under-test")
 }
 
 if (($IncludeOptionalArtifacts -or $RequireLiveAcceptanceArtifacts) -and -not $seenArtifactIds.ContainsKey("g2-rx-peak-hunt-report")) {
@@ -656,12 +656,12 @@ if (($IncludeOptionalArtifacts -or $RequireLiveAcceptanceArtifacts) -and -not $s
         -Id "g2-rx-peak-hunt-report" `
         -Kind "g2-rx-peak-hunt-report-json" `
         -Source "tools/run-dsp-g2-rx-peak-hunt.ps1" `
-        -Purpose "Summarize RX-only G2 frontend peak-hunt windows, VFO restore safety, weak/strong NR5 sample coverage, AGC pumping risk, and candidate mixed weak+strong promotion evidence before live-history recapture." `
+        -Purpose "Summarize RX-only G2 frontend peak-hunt windows, VFO restore safety, weak/strong Candidate sample coverage, AGC pumping risk, and candidate mixed weak+strong promotion evidence before live-history recapture." `
         -Cadence "optional-before-g2-live-history-mixed-weak-strong-recapture" `
         -Path "artifacts/g2-rx-peak-hunt-report.json" `
         -Required $false `
         -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds") `
-        -ComparisonIds @("nr5-spnr")
+        -ComparisonIds @("candidate-under-test")
 }
 
 if (($IncludeOptionalArtifacts -or $RequireLiveAcceptanceArtifacts) -and -not $seenArtifactIds.ContainsKey("live-diagnostics-history")) {
@@ -671,7 +671,7 @@ if (($IncludeOptionalArtifacts -or $RequireLiveAcceptanceArtifacts) -and -not $s
         -Id "live-diagnostics-history" `
         -Kind "diagnostics-history-json" `
         -Source "tools/summarize-dsp-live-diagnostics-history.ps1" `
-        -Purpose "Summarize captured NR5/NR2 live diagnostics attempts, rank best weak-signal and lowest-pumping traces, preserve safety-class rollups, and bind each history trace to watcher-summary/JSONL SHA-256 provenance before choosing the next candidate comparison." `
+        -Purpose "Summarize captured Candidate/NR2 live diagnostics attempts, rank best weak-signal and lowest-pumping traces, preserve safety-class rollups, and bind each history trace to watcher-summary/JSONL SHA-256 provenance before choosing the next candidate comparison." `
         -Cadence "once-after-several-live-diagnostics-attempts" `
         -Path "artifacts/live-diagnostics-history.json" `
         -Required ([bool]$RequireLiveAcceptanceArtifacts) `
@@ -690,7 +690,7 @@ if (($IncludeOptionalArtifacts -or $RequireLiveAcceptanceArtifacts) -and -not $s
         -Path "artifacts/live-acceptance-cycle-summary.json" `
         -Required $false `
         -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds") `
-        -ComparisonIds @("off-baseline", "thetis-parity", "current-zeus", "nr5-spnr")
+        -ComparisonIds @("off-baseline", "thetis-parity", "current-zeus", "candidate-under-test")
 }
 
 if ($IncludeOptionalArtifacts -and -not $seenArtifactIds.ContainsKey("cross-radio-validation-report")) {
@@ -705,7 +705,7 @@ if ($IncludeOptionalArtifacts -and -not $seenArtifactIds.ContainsKey("cross-radi
         -Path "artifacts/cross-radio-validation-report.json" `
         -Required $false `
         -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds") `
-        -ComparisonIds @("current-zeus", "thetis-parity", "nr5-spnr")
+        -ComparisonIds @("current-zeus", "thetis-parity", "candidate-under-test")
 }
 
 if ($IncludeOptionalArtifacts -and -not $seenArtifactIds.ContainsKey("wdsp-source-drift-report")) {
@@ -750,17 +750,17 @@ $output = [ordered]@{
         "This scaffold is derived from benchmark-capture-manifest.json.",
         "Endpoint JSON is validated through bundle-index.json unless -IncludeEndpointJson is used.",
         "Use watch-dsp-live-diagnostics.ps1 for optional diagnostics-jsonl traces across live scenario windows.",
-        "Use run-dsp-live-diagnostics-matrix.ps1 for optional multi-scenario trace indexes; pass separate -IndexPath and -ReportPath values for off-baseline, Thetis-parity, current-Zeus baseline, and NR5/SPNR candidate runs. With -IncludeOptionalArtifacts, this scaffold emits separate off-baseline, Thetis-parity, baseline, and candidate live-diagnostics-trace-index and live-diagnostics-matrix-report entries.",
+        "Use run-dsp-live-diagnostics-matrix.ps1 for optional multi-scenario trace indexes; pass separate -IndexPath and -ReportPath values for off-baseline, Thetis-parity, current-Zeus baseline, and candidate DSP candidate runs. With -IncludeOptionalArtifacts, this scaffold emits separate off-baseline, Thetis-parity, baseline, and candidate live-diagnostics-trace-index and live-diagnostics-matrix-report entries.",
         "Use -RequireLiveAcceptanceArtifacts for G2 live acceptance review manifests after capture; it marks current-Zeus and Thetis-parity live-diagnostics-trace-comparison reports, the four live matrix trace-index/report pairs, and live-diagnostics-history required without pulling external-engine bakeoff into scope.",
         "The live-acceptance-cycle-summary artifact is optional because run-dsp-live-acceptance-cycle.ps1 writes it after strict validation; when present, strict validation verifies its wrapper identity and child report references.",
         "Use summarize-dsp-cross-radio-validation.ps1 with -BundleDir after a non-G2 validation pass to generate the optional cross-radio-validation-report artifact; it is evidence only and cannot approve default DSP behavior changes.",
         "Use summarize-dsp-puresignal-bench.ps1 after G2 TX bench captures to turn disabled and enabled PureSignal feedback traces into the required puresignal-safe-bypass-report artifact before TX profile graduation.",
         "Use compare-dsp-live-diagnostics-traces.ps1 with -BundleDir to compare baseline and candidate live traces before accepting a candidate window while keeping report paths portable.",
-        "Use compare-dsp-live-diagnostics-matrix.ps1 with -BundleDir to compare baseline and candidate trace indexes across all captured live scenarios while keeping report paths portable; pass -BaselineComparisonId current-zeus and -CandidateComparisonId nr5-spnr for the required Zeus live acceptance comparison, then repeat with -BaselineComparisonId thetis-parity for the required WDSP authority comparison.",
+        "Use compare-dsp-live-diagnostics-matrix.ps1 with -BundleDir to compare baseline and candidate trace indexes across all captured live scenarios while keeping report paths portable; pass -BaselineComparisonId current-zeus and -CandidateComparisonId candidate-under-test for the required Zeus live acceptance comparison, then repeat with -BaselineComparisonId thetis-parity for the required WDSP authority comparison.",
         "live-diagnostics-trace-comparison reports carry capture-readiness comparison evidence into strict validation and validation triage, including hard-gate pass/fail, strict-preflight pass/fail, top soft constraints, and top hard gates.",
         "Use watch-dsp-manual-tune-observer.ps1 with -BundleDir, -MaxCapturesPerVfo 2, -RequireFrontendNearPassband, and -AllowStaleSceneCapture while the operator is manually tuning active G2 frequencies; the optional report is read-only/no-retune evidence that can retry an intermittent same-VFO window until mixed weak+strong evidence appears without spending acceptance captures on off-passband frontend peaks.",
         "Use run-dsp-g2-rx-peak-hunt.ps1 before mixed weak+strong live-history recapture when G2 windows are weak-only or off-signal; the optional report keeps RX-only safety, VFO restore, weak/strong sample coverage, and best-window recommendation evidence portable.",
-        "Use summarize-dsp-live-diagnostics-history.ps1 with -BundleDir after several NR5/NR2 live attempts so best weak-signal, lowest-pumping, latest tuning directions, and per-trace watcher-summary/JSONL hashes are preserved as portable review evidence.",
+        "Use summarize-dsp-live-diagnostics-history.ps1 with -BundleDir after several Candidate/NR2 live attempts so best weak-signal, lowest-pumping, latest tuning directions, and per-trace watcher-summary/JSONL hashes are preserved as portable review evidence.",
         "Use summarize-dsp-external-engine-candidates.ps1 with -BundleDir before any external DSP/ML bakeoff so RNNoise/DeepFilterNet/SpeexDSP/WebRTC blockers, risk, and required evidence stay explicit.",
         "Use compare-wdsp-source-drift.ps1 with -ReferenceDir pointing at the local Thetis WDSP source before native WDSP imports, deletions, or refactors; line-ending-only changes are ignored and likely-defect source drift must be explicitly classified.",
         "Use summarize-dsp-native-stage-timing.ps1 after WDSP-backed offline fixture evidence so stage timing, managed allocation deltas, runtime hash provenance, and the native C instrumentation gap are explicit in strict validation.",
@@ -768,7 +768,7 @@ $output = [ordered]@{
         "For acceptance review, regenerate with -AcceptanceManifest -RequireLiveAcceptanceArtifacts after the comparison report is captured so live trace regressions and incomplete history coverage fail strict validation.",
         "For single-comparison artifact indexes, add comparisonIds to the artifact entry so validation checks only the captured comparison scope.",
         "Run audit-wdsp-native-symbols.ps1 with -RequireBinaryExports for the required wdsp-native-symbol-audit.json before accepting native or P/Invoke changes.",
-        "Run audit-wdsp-runtime-artifacts.ps1 for the required wdsp-runtime-artifact-audit.json before claiming packaged NR4/NR5 support for any RID.",
+        "Run audit-wdsp-runtime-artifacts.ps1 for the required wdsp-runtime-artifact-audit.json before claiming packaged NR4/Candidate support for any RID.",
         "For plural audio, spectrum, and trace evidence, store an index JSON at the generated path with a files array of bundle-relative evidence file paths plus scenario/candidate metadata.",
         "Use run-dsp-wdsp-fixture-matrix.ps1 with -BundleDir to generate WDSP-backed offline fixture metrics, portable audio/spectrum evidence indexes, runtime audit, and dsp-fixture-metric-comparison.json in one repeatable step; add -ValidateBundle -RequireArtifactFiles before treating acceptanceEvidenceReady as possible.",
         "run-dsp-offline-fixture-evidence.ps1 is only a deterministic schema fallback; strict validation requires WDSP-backed fixture comparison evidence.",

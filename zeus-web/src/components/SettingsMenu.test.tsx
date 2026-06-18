@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// SettingsView — verify the TX Audio Tools tab is always present. CFC is
+// SettingsView — verify the Audio Tools tab is always present. CFC is
 // WDSP-driven and must remain visible.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -71,11 +71,11 @@ function stubSettingsFetch(overrides: Record<string, unknown> = {}) {
         case '/api/pa-settings':
         case '/api/pa-settings/defaults':
           return jsonResponse(paSettingsFixture());
-        case '/api/audio-suite/master-bypass':
+        case '/api/tx-audio-suite/master-bypass':
           return jsonResponse({ bypassed: false });
-        case '/api/audio-suite/processing-mode':
+        case '/api/tx-audio-suite/processing-mode':
           return jsonResponse({ mode: 'native', engineAvailable: false, engineActive: false });
-        case '/api/audio-suite/profiles':
+        case '/api/tx-audio-suite/profiles':
           return jsonResponse({ profiles: [] });
         case '/api/tx/fidelity-policy':
           return jsonResponse({ profileId: 'studio-ssb', targetSpectralDensity: 55 });
@@ -128,7 +128,7 @@ function seedRadioCaps(overrides: Partial<BoardCapabilities>) {
   }));
 }
 
-describe('SettingsView — TX Audio Tools', () => {
+describe('SettingsView — Audio Tools', () => {
   let container: HTMLDivElement;
   let root: Root;
 
@@ -147,7 +147,7 @@ describe('SettingsView — TX Audio Tools', () => {
     vi.unstubAllGlobals();
   });
 
-  it('always renders the TX AUDIO TOOLS tab', async () => {
+  it('always renders the AUDIO TOOLS tab', async () => {
     seed();
     await act(async () => {
       root.render(<SettingsView onClose={() => {}} />);
@@ -156,15 +156,17 @@ describe('SettingsView — TX Audio Tools', () => {
     const tabs = Array.from(
       container.querySelectorAll('[role="tablist"] button'),
     ).map((b) => b.textContent?.trim() ?? '');
-    expect(tabs).toContain('TX AUDIO TOOLS');
+    expect(tabs).toContain('AUDIO TOOLS');
   });
 
-  it('shows CFC inside the TX Audio Tools tab', async () => {
+  it('shows CFC inside the Audio Tools tab', async () => {
     seed();
     await act(async () => {
       root.render(<SettingsView onClose={() => {}} initialTab="tx-audio" />);
       await flushEffects();
     });
+    expect(container.textContent).toContain('TX Audio');
+    expect(container.textContent).toContain('RX Audio');
     expect(container.textContent).toContain('TX Fidelity Policy');
     expect(container.textContent).toContain('Station Profile');
     expect(container.textContent).toContain('Continuous Frequency Compressor');

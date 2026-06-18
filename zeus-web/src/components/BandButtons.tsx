@@ -86,6 +86,8 @@ export function BandButtons() {
   // band click can apply the saved (hz, mode) without an extra round-trip.
   const memoryRef = useRef<Map<string, BandMemoryEntry>>(new Map());
   const saveTimerRef = useRef<number | null>(null);
+  const pendingSaveRef = useRef<BandMemoryEntry | null>(null);
+  const lastBandRef = useRef<string>(currentBand);
 
   // Initial load of server-persisted band memory
   useEffect(() => {
@@ -102,30 +104,48 @@ export function BandButtons() {
     return () => ac.abort();
   }, []);
 
-  // Track current band + debounced save of (hz, mode) for that band
+  const clearSaveTimer = useCallback(() => {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+  }, []);
+
+  const flushPendingSave = useCallback(() => {
+    const pending = pendingSaveRef.current;
+    if (!pending) return;
+
+    pendingSaveRef.current = null;
+    clearSaveTimer();
+    memoryRef.current.set(pending.band, pending);
+    saveBandMemory(pending.band, pending.hz, pending.mode).catch(() => {
+      /* best-effort — next tune will retry */
+    });
+  }, [clearSaveTimer]);
+
+  useEffect(() => {
+    return () => {
+      clearSaveTimer();
+      pendingSaveRef.current = null;
+    };
+  }, [clearSaveTimer]);
+
+  // Track current band + debounced save of (hz, mode) for that band.
+  // Crossing bands flushes the previous band's pending row so a quick
+  // mode-change-then-band-click does not drop the old band's mode memory.
   useEffect(() => {
     const band = bandOf(vfoHz);
     setCurrentBand(band);
+    if (lastBandRef.current !== band) {
+      flushPendingSave();
+      lastBandRef.current = band;
+    }
     if (band === '—') return;
 
-    if (saveTimerRef.current !== null) {
-      window.clearTimeout(saveTimerRef.current);
-    }
-    saveTimerRef.current = window.setTimeout(() => {
-      saveTimerRef.current = null;
-      memoryRef.current.set(band, { band, hz: vfoHz, mode });
-      saveBandMemory(band, vfoHz, mode).catch(() => {
-        /* best-effort — next tune will retry */
-      });
-    }, SAVE_DEBOUNCE_MS);
-
-    return () => {
-      if (saveTimerRef.current !== null) {
-        window.clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-      }
-    };
-  }, [vfoHz, mode]);
+    pendingSaveRef.current = { band, hz: vfoHz, mode };
+    clearSaveTimer();
+    saveTimerRef.current = window.setTimeout(flushPendingSave, SAVE_DEBOUNCE_MS);
+  }, [clearSaveTimer, flushPendingSave, vfoHz, mode]);
 
   const selectBand = useCallback(
     (band: BandEntry) => {

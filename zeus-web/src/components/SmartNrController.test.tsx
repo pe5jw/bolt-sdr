@@ -81,9 +81,13 @@ function mockState(nr: NrConfigDto): RadioStateDto {
     rx2AfGainDb: 0,
     txVfo: 'A',
     mode: conn.mode,
+    modeB: conn.modeB,
     filterLowHz: conn.filterLowHz,
     filterHighHz: conn.filterHighHz,
+    filterLowHzB: conn.filterLowHzB,
+    filterHighHzB: conn.filterHighHzB,
     filterPresetName: conn.filterPresetName,
+    filterPresetNameB: conn.filterPresetNameB,
     filterAdvancedPaneOpen: conn.filterAdvancedPaneOpen,
     txFilterLowHz: conn.txFilterLowHz,
     txFilterHighHz: conn.txFilterHighHz,
@@ -149,9 +153,7 @@ describe('SmartNrController', () => {
       dsp: {
         wdspActive: true,
         wdspEmnrPost2Available: true,
-        wdspNr4SbnrAvailable: true,
-        wdspNr5SpnrAvailable: true,
-      },
+        wdspNr4SbnrAvailable: true,      },
     });
     useSmartNrStore.getState().resetSettings();
     useSmartNrStore.getState().setSettings({ dwellSamples: 3 });
@@ -369,9 +371,7 @@ describe('SmartNrController', () => {
       dsp: {
         wdspActive: true,
         wdspEmnrPost2Available: true,
-        wdspNr4SbnrAvailable: false,
-        wdspNr5SpnrAvailable: true,
-      },
+        wdspNr4SbnrAvailable: false,      },
     });
 
     feed(weakCwSignal());

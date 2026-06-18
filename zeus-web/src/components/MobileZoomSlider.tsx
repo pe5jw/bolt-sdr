@@ -42,10 +42,11 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useLiveSlider } from '../hooks/useLiveSlider';
+import { applyCtunZoomCenterAfterState, centerCtunForZoomIn } from '../util/ctun-zoom-center';
 
 /**
  * Vertical zoom slider pinned to the right edge of the panadapter on mobile.
@@ -62,6 +63,7 @@ export function MobileZoomSlider() {
   const setLocalZoom = useConnectionStore((s) => s.setZoomLevel);
   const applyState = useConnectionStore((s) => s.applyState);
   const connected = useConnectionStore((s) => s.status === 'Connected');
+  const centeredLoHzRef = useRef<number | null>(null);
 
   // rAF-coalesced live stream — see ZoomControl for rationale.
   const liveSlider = useLiveSlider<ZoomLevel>({
@@ -69,7 +71,10 @@ export function MobileZoomSlider() {
       (v: ZoomLevel, signal: AbortSignal) =>
         setZoom(v, signal)
           .then((next) => {
-            if (!signal.aborted) applyState(next);
+            if (!signal.aborted) {
+              applyState(next);
+              applyCtunZoomCenterAfterState(centeredLoHzRef.current);
+            }
           })
           .catch(() => {
             /* next state poll will reconcile */
@@ -80,6 +85,10 @@ export function MobileZoomSlider() {
 
   const onSlide = useCallback(
     (v: ZoomLevel) => {
+      const cur = useConnectionStore.getState().zoomLevel;
+      const centeredLoHz = centerCtunForZoomIn(cur, v);
+      if (centeredLoHz != null) centeredLoHzRef.current = centeredLoHz;
+      else if (v <= cur) centeredLoHzRef.current = null;
       setLocalZoom(v);
       liveSlider.push(v);
     },

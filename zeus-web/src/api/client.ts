@@ -69,7 +69,7 @@ export type RxMode =
 export type Rx2AudioMode = 'both' | 'rx1' | 'rx2';
 export type TxVfo = 'A' | 'B';
 
-export type NrMode = 'Off' | 'Anr' | 'Emnr' | 'Sbnr' | 'Nr5';
+export type NrMode = 'Off' | 'Anr' | 'Emnr' | 'Sbnr';
 export type NbMode = 'Off' | 'Nb1' | 'Nb2';
 
 // RXA AGC mode. PascalCase strings match the server's JsonStringEnumConverter
@@ -280,10 +280,14 @@ export type RadioStateDto = {
   rx2AfGainDb: number;
   txVfo: TxVfo;
   mode: RxMode;
+  modeB: RxMode;
   filterLowHz: number;
   filterHighHz: number;
+  filterLowHzB: number;
+  filterHighHzB: number;
   // Null after a drag edit without a named-slot context (PRD §4.1).
   filterPresetName: string | null;
+  filterPresetNameB: string | null;
   // Advanced-filter ribbon visibility; persisted server-side.
   filterAdvancedPaneOpen: boolean;
   // TX bandpass (signed, per-sideband). Per-mode family memory on the server.
@@ -523,62 +527,6 @@ export type HardwareDisplayDiagnosticsDto = {
   diagnosticRecommendation: string | null;
 };
 
-export type Nr5SpnrDiagnosticsDto = {
-  schemaVersion: number;
-  channelId: number;
-  run: boolean;
-  position: number;
-  learnedFrames: number;
-  aggressiveness: number;
-  agcRun: boolean;
-  targetRms: number;
-  maxGain: number;
-  agcGain: number;
-  agcGainDb: number;
-  presencePeak: number;
-  saliencePeak: number;
-  coherencePeak: number;
-  ridgePeak: number;
-  meanGain: number;
-  minGain: number;
-  suppressionDb: number;
-  noiseFloorDb: number;
-  floorReductionDb: number;
-  dynamicRangeDb: number;
-  signalProbability: number;
-  textureFill: number;
-  maskSmoothing: number;
-  signalConfidence: number;
-  agcGate: number;
-  levelDrive: number;
-  recoveryDrive: number;
-  weakSignalMemory: number;
-  makeupGain: number;
-  makeupGainDb: number;
-  inputRms: number;
-  inputDbfs: number;
-  outputRms: number;
-  outputDbfs: number;
-  outputPeak: number;
-  outputPeakDbfs: number;
-  peakEvidence: number;
-  peakLimit: number;
-  peakLimitDbfs: number;
-  peakReductionDb: number;
-  adjacentNoiseUsable: boolean;
-  adjacentNoiseBins: number;
-  adjacentNoiseFloorDb: number;
-  adjacentNoiseTrust: number;
-  adjacentNoiseDrive: number;
-  adjacentNoiseRejectedPct: number;
-  adjacentNoiseLeftBins: number;
-  adjacentNoiseRightBins: number;
-  adjacentNoiseLeftFloorDb: number;
-  adjacentNoiseRightFloorDb: number;
-  adjacentNoiseSideBalance: number;
-  adjacentNoiseAsymmetryDb: number;
-};
-
 export type HardwareRxDspDiagnosticsDto = {
   schemaVersion: number;
   status: string;
@@ -608,10 +556,7 @@ export type HardwareRxDspDiagnosticsDto = {
   wdspNativeLoadable: boolean;
   wdspEmnrPost2Available: boolean;
   wdspNr4SbnrAvailable: boolean;
-  wdspNr5SpnrAvailable: boolean;
   nr4Readiness: string;
-  nr5Readiness: string;
-  nr5SpnrDiagnostics: Nr5SpnrDiagnosticsDto | null;
   appliedNrMatchesRequested: boolean;
   appliedAgcMatchesRequested: boolean;
   appliedSquelchMatchesRequested: boolean;
@@ -866,12 +811,9 @@ export type HardwareDspDiagnosticsDto = {
   wdspNativeLoadable: boolean;
   wdspEmnrPost2Available: boolean;
   wdspNr4SbnrAvailable: boolean;
-  wdspNr5SpnrAvailable: boolean;
   nr4Readiness: string;
-  nr5Readiness: string;
   requestedNrMode: string;
   effectiveNrMode: string;
-  nr5SpnrDiagnostics: Nr5SpnrDiagnosticsDto | null;
   channelId: number;
   sampleRateHz: number;
   displayWidth: number;
@@ -1116,12 +1058,9 @@ export type SmartNrConditionDto = {
   wdspNativeLoadable: boolean;
   wdspEmnrPost2Available: boolean;
   wdspNr4SbnrAvailable: boolean;
-  wdspNr5SpnrAvailable: boolean;
   nr4Readiness: string;
-  nr5Readiness: string;
   requestedNrMode: string;
   effectiveNrMode: string;
-  nr5SpnrDiagnostics: Nr5SpnrDiagnosticsDto | null;
   expectedNrMode: string | null;
   runtimeAligned: boolean | null;
   runtimeAlignmentStatus: string;
@@ -1158,9 +1097,6 @@ export type DspLiveDiagnosticsDto = {
   qualityTone: string;
   readinessScore: number;
   readyForLiveBenchmark: boolean;
-  readyForNr5Tuning: boolean;
-  nr5TuningStatus: string;
-  nr5TuningConstraints: string[];
   readyForExternalEngineBakeoff: boolean;
   externalEngineBakeoffStatus: string;
   externalEngineBakeoffConstraints: string[];
@@ -1169,9 +1105,7 @@ export type DspLiveDiagnosticsDto = {
   wdspNativeLoadable: boolean;
   wdspEmnrPost2Available: boolean;
   wdspNr4SbnrAvailable: boolean;
-  wdspNr5SpnrAvailable: boolean;
   nr4Readiness: string;
-  nr5Readiness: string;
   frontendSceneAvailable: boolean;
   frontendSceneStatus: string;
   frontendSceneFresh: boolean;
@@ -1203,19 +1137,6 @@ export type DspLiveDiagnosticsDto = {
   rxChainFilterHighHz: number | null;
   rxChainFilterWidthHz: number | null;
   rxChainFilterPresetName: string | null;
-  nr5SpnrDiagnostics: Nr5SpnrDiagnosticsDto | null;
-  nr5SignalConfidence: number | null;
-  nr5AgcGate: number | null;
-  nr5SignalProbability: number | null;
-  nr5TextureFill: number | null;
-  nr5MaskSmoothing: number | null;
-  nr5WeakSignalMemory: number | null;
-  nr5MeanGain: number | null;
-  nr5FloorReductionDb: number | null;
-  nr5OutputPeakDbfs: number | null;
-  nr5PeakEvidence: number | null;
-  nr5PeakLimitDbfs: number | null;
-  nr5PeakReductionDb: number | null;
   evidence: string[];
   constraints: string[];
   recommendedActions: string[];
@@ -2012,7 +1933,7 @@ const MODE_ORDER: readonly RxMode[] = [
 ];
 
 const RX2_AUDIO_MODE_ORDER: readonly Rx2AudioMode[] = ['both', 'rx1', 'rx2'];
-const NR_MODE_ORDER: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr', 'Nr5'];
+const NR_MODE_ORDER: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
 const NB_MODE_ORDER: readonly NbMode[] = ['Off', 'Nb1', 'Nb2'];
 
 export function normalizeStatus(v: unknown): ConnectionStatus {
@@ -2312,9 +2233,28 @@ export function normalizeState(raw: unknown): RadioStateDto {
     rx2AfGainDb: typeof r.rx2AfGainDb === 'number' ? r.rx2AfGainDb : 0,
     txVfo: normalizeTxVfo(r.txVfo),
     mode: normalizeMode(r.mode),
+    modeB: normalizeMode(r.modeB ?? r.mode),
     filterLowHz: typeof r.filterLowHz === 'number' ? r.filterLowHz : 0,
     filterHighHz: typeof r.filterHighHz === 'number' ? r.filterHighHz : 0,
+    filterLowHzB:
+      typeof r.filterLowHzB === 'number'
+        ? r.filterLowHzB
+        : typeof r.filterLowHz === 'number'
+        ? r.filterLowHz
+        : 0,
+    filterHighHzB:
+      typeof r.filterHighHzB === 'number'
+        ? r.filterHighHzB
+        : typeof r.filterHighHz === 'number'
+        ? r.filterHighHz
+        : 0,
     filterPresetName: typeof r.filterPresetName === 'string' ? r.filterPresetName : null,
+    filterPresetNameB:
+      typeof r.filterPresetNameB === 'string'
+        ? r.filterPresetNameB
+        : typeof r.filterPresetName === 'string'
+        ? r.filterPresetName
+        : null,
     filterAdvancedPaneOpen: typeof r.filterAdvancedPaneOpen === 'boolean' ? r.filterAdvancedPaneOpen : false,
     txFilterLowHz: typeof r.txFilterLowHz === 'number' ? r.txFilterLowHz : 150,
     txFilterHighHz: typeof r.txFilterHighHz === 'number' ? r.txFilterHighHz : 2850,
@@ -2607,68 +2547,6 @@ function normalizeFrontendDspSceneTopPeaks(raw: unknown): FrontendDspSceneTopPea
   });
 }
 
-function normalizeNr5SpnrDiagnostics(raw: unknown): Nr5SpnrDiagnosticsDto | null {
-  if (raw === null || raw === undefined) return null;
-  const r = asDiagRecord(raw);
-  const schemaVersion = diagNumber(r.schemaVersion);
-  if (schemaVersion === null) return null;
-  return {
-    schemaVersion,
-    channelId: diagNumber(r.channelId) ?? 0,
-    run: Boolean(r.run),
-    position: diagNumber(r.position) ?? 0,
-    learnedFrames: diagNumber(r.learnedFrames) ?? 0,
-    aggressiveness: diagNumber(r.aggressiveness) ?? 0,
-    agcRun: Boolean(r.agcRun),
-    targetRms: diagNumber(r.targetRms) ?? 0,
-    maxGain: diagNumber(r.maxGain) ?? 0,
-    agcGain: diagNumber(r.agcGain) ?? 0,
-    agcGainDb: diagNumber(r.agcGainDb) ?? 0,
-    presencePeak: diagNumber(r.presencePeak) ?? 0,
-    saliencePeak: diagNumber(r.saliencePeak) ?? 0,
-    coherencePeak: diagNumber(r.coherencePeak) ?? 0,
-    ridgePeak: diagNumber(r.ridgePeak) ?? 0,
-    meanGain: diagNumber(r.meanGain) ?? 1,
-    minGain: diagNumber(r.minGain) ?? 1,
-    suppressionDb: diagNumber(r.suppressionDb) ?? 0,
-    noiseFloorDb: diagNumber(r.noiseFloorDb) ?? 0,
-    floorReductionDb: diagNumber(r.floorReductionDb) ?? 0,
-    dynamicRangeDb: diagNumber(r.dynamicRangeDb) ?? 0,
-    signalProbability: diagNumber(r.signalProbability) ?? 0,
-    textureFill: diagNumber(r.textureFill) ?? 0,
-    maskSmoothing: diagNumber(r.maskSmoothing) ?? 0,
-    signalConfidence: diagNumber(r.signalConfidence) ?? 0,
-    agcGate: diagNumber(r.agcGate) ?? 0,
-    levelDrive: diagNumber(r.levelDrive) ?? 0,
-    recoveryDrive: diagNumber(r.recoveryDrive) ?? 0,
-    weakSignalMemory: diagNumber(r.weakSignalMemory) ?? 0,
-    makeupGain: diagNumber(r.makeupGain) ?? 1,
-    makeupGainDb: diagNumber(r.makeupGainDb) ?? 0,
-    inputRms: diagNumber(r.inputRms) ?? 0,
-    inputDbfs: diagNumber(r.inputDbfs) ?? -240,
-    outputRms: diagNumber(r.outputRms) ?? 0,
-    outputDbfs: diagNumber(r.outputDbfs) ?? -240,
-    outputPeak: diagNumber(r.outputPeak) ?? 0,
-    outputPeakDbfs: diagNumber(r.outputPeakDbfs) ?? -240,
-    peakEvidence: diagNumber(r.peakEvidence) ?? 0,
-    peakLimit: diagNumber(r.peakLimit) ?? 0,
-    peakLimitDbfs: diagNumber(r.peakLimitDbfs) ?? -240,
-    peakReductionDb: diagNumber(r.peakReductionDb) ?? 0,
-    adjacentNoiseUsable: Boolean(r.adjacentNoiseUsable),
-    adjacentNoiseBins: diagNumber(r.adjacentNoiseBins) ?? 0,
-    adjacentNoiseFloorDb: diagNumber(r.adjacentNoiseFloorDb) ?? 0,
-    adjacentNoiseTrust: diagNumber(r.adjacentNoiseTrust) ?? 0,
-    adjacentNoiseDrive: diagNumber(r.adjacentNoiseDrive) ?? 0,
-    adjacentNoiseRejectedPct: diagNumber(r.adjacentNoiseRejectedPct) ?? 0,
-    adjacentNoiseLeftBins: diagNumber(r.adjacentNoiseLeftBins) ?? 0,
-    adjacentNoiseRightBins: diagNumber(r.adjacentNoiseRightBins) ?? 0,
-    adjacentNoiseLeftFloorDb: diagNumber(r.adjacentNoiseLeftFloorDb) ?? 0,
-    adjacentNoiseRightFloorDb: diagNumber(r.adjacentNoiseRightFloorDb) ?? 0,
-    adjacentNoiseSideBalance: diagNumber(r.adjacentNoiseSideBalance) ?? 0,
-    adjacentNoiseAsymmetryDb: diagNumber(r.adjacentNoiseAsymmetryDb) ?? 0,
-  };
-}
-
 function normalizeFeatureSurfaces(raw: unknown): HardwareFeatureSurfaceDto[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((entry) => {
@@ -2897,12 +2775,9 @@ function normalizeDspDiagnostics(raw: unknown): HardwareDspDiagnosticsDto {
     wdspNativeLoadable: Boolean(r.wdspNativeLoadable),
     wdspEmnrPost2Available: Boolean(r.wdspEmnrPost2Available),
     wdspNr4SbnrAvailable: Boolean(r.wdspNr4SbnrAvailable),
-    wdspNr5SpnrAvailable: Boolean(r.wdspNr5SpnrAvailable),
     nr4Readiness: diagString(r.nr4Readiness) ?? 'unknown',
-    nr5Readiness: diagString(r.nr5Readiness) ?? 'unknown',
     requestedNrMode: diagString(r.requestedNrMode) ?? 'Off',
     effectiveNrMode: diagString(r.effectiveNrMode) ?? 'Off',
-    nr5SpnrDiagnostics: normalizeNr5SpnrDiagnostics(r.nr5SpnrDiagnostics),
     channelId: diagNumber(r.channelId) ?? 0,
     sampleRateHz: diagNumber(r.sampleRateHz) ?? 0,
     displayWidth: diagNumber(r.displayWidth) ?? 0,
@@ -2982,10 +2857,7 @@ function normalizeHardwareRxDspDiagnostics(raw: unknown): HardwareRxDspDiagnosti
       wdspNativeLoadable: false,
       wdspEmnrPost2Available: false,
       wdspNr4SbnrAvailable: false,
-      wdspNr5SpnrAvailable: false,
       nr4Readiness: 'unknown',
-      nr5Readiness: 'unknown',
-      nr5SpnrDiagnostics: null,
       appliedNrMatchesRequested: true,
       appliedAgcMatchesRequested: true,
       appliedSquelchMatchesRequested: true,
@@ -3024,10 +2896,7 @@ function normalizeHardwareRxDspDiagnostics(raw: unknown): HardwareRxDspDiagnosti
     wdspNativeLoadable: Boolean(r.wdspNativeLoadable),
     wdspEmnrPost2Available: Boolean(r.wdspEmnrPost2Available),
     wdspNr4SbnrAvailable: Boolean(r.wdspNr4SbnrAvailable),
-    wdspNr5SpnrAvailable: Boolean(r.wdspNr5SpnrAvailable),
     nr4Readiness: diagString(r.nr4Readiness) ?? 'unknown',
-    nr5Readiness: diagString(r.nr5Readiness) ?? 'unknown',
-    nr5SpnrDiagnostics: normalizeNr5SpnrDiagnostics(r.nr5SpnrDiagnostics),
     appliedNrMatchesRequested: r.appliedNrMatchesRequested === undefined ? true : Boolean(r.appliedNrMatchesRequested),
     appliedAgcMatchesRequested: r.appliedAgcMatchesRequested === undefined ? true : Boolean(r.appliedAgcMatchesRequested),
     appliedSquelchMatchesRequested: r.appliedSquelchMatchesRequested === undefined ? true : Boolean(r.appliedSquelchMatchesRequested),
@@ -3467,12 +3336,9 @@ function normalizeSmartNrCondition(raw: unknown): SmartNrConditionDto {
     wdspNativeLoadable: Boolean(r.wdspNativeLoadable),
     wdspEmnrPost2Available: Boolean(r.wdspEmnrPost2Available),
     wdspNr4SbnrAvailable: Boolean(r.wdspNr4SbnrAvailable),
-    wdspNr5SpnrAvailable: Boolean(r.wdspNr5SpnrAvailable),
     nr4Readiness: diagString(r.nr4Readiness) ?? 'unknown',
-    nr5Readiness: diagString(r.nr5Readiness) ?? 'unknown',
     requestedNrMode: diagString(r.requestedNrMode) ?? 'Off',
     effectiveNrMode: diagString(r.effectiveNrMode) ?? 'Off',
-    nr5SpnrDiagnostics: normalizeNr5SpnrDiagnostics(r.nr5SpnrDiagnostics),
     expectedNrMode: diagString(r.expectedNrMode),
     runtimeAligned: diagBool(r.runtimeAligned),
     runtimeAlignmentStatus: diagString(r.runtimeAlignmentStatus) ?? 'unknown',
@@ -3520,9 +3386,6 @@ function normalizeDspLiveDiagnostics(raw: unknown): DspLiveDiagnosticsDto {
     qualityTone: diagString(r.qualityTone) ?? 'standby',
     readinessScore: diagNumber(r.readinessScore) ?? 0,
     readyForLiveBenchmark: Boolean(r.readyForLiveBenchmark),
-    readyForNr5Tuning: Boolean(r.readyForNr5Tuning),
-    nr5TuningStatus: diagString(r.nr5TuningStatus) ?? 'nr5-not-active',
-    nr5TuningConstraints: diagStringArray(r.nr5TuningConstraints),
     readyForExternalEngineBakeoff: Boolean(r.readyForExternalEngineBakeoff),
     externalEngineBakeoffStatus: diagString(r.externalEngineBakeoffStatus) ?? 'external-engine-bakeoff-preflight-required',
     externalEngineBakeoffConstraints: diagStringArray(r.externalEngineBakeoffConstraints),
@@ -3531,9 +3394,7 @@ function normalizeDspLiveDiagnostics(raw: unknown): DspLiveDiagnosticsDto {
     wdspNativeLoadable: Boolean(r.wdspNativeLoadable),
     wdspEmnrPost2Available: Boolean(r.wdspEmnrPost2Available),
     wdspNr4SbnrAvailable: Boolean(r.wdspNr4SbnrAvailable),
-    wdspNr5SpnrAvailable: Boolean(r.wdspNr5SpnrAvailable),
     nr4Readiness: diagString(r.nr4Readiness) ?? 'unknown',
-    nr5Readiness: diagString(r.nr5Readiness) ?? 'unknown',
     frontendSceneAvailable: Boolean(r.frontendSceneAvailable),
     frontendSceneStatus: diagString(r.frontendSceneStatus) ?? 'unknown',
     frontendSceneFresh: Boolean(r.frontendSceneFresh),
@@ -3565,19 +3426,6 @@ function normalizeDspLiveDiagnostics(raw: unknown): DspLiveDiagnosticsDto {
     rxChainFilterHighHz: diagNumber(r.rxChainFilterHighHz),
     rxChainFilterWidthHz: diagNumber(r.rxChainFilterWidthHz),
     rxChainFilterPresetName: diagString(r.rxChainFilterPresetName),
-    nr5SpnrDiagnostics: normalizeNr5SpnrDiagnostics(r.nr5SpnrDiagnostics),
-    nr5SignalConfidence: diagNumber(r.nr5SignalConfidence),
-    nr5AgcGate: diagNumber(r.nr5AgcGate),
-    nr5SignalProbability: diagNumber(r.nr5SignalProbability),
-    nr5TextureFill: diagNumber(r.nr5TextureFill),
-    nr5MaskSmoothing: diagNumber(r.nr5MaskSmoothing),
-    nr5WeakSignalMemory: diagNumber(r.nr5WeakSignalMemory),
-    nr5MeanGain: diagNumber(r.nr5MeanGain),
-    nr5FloorReductionDb: diagNumber(r.nr5FloorReductionDb),
-    nr5OutputPeakDbfs: diagNumber(r.nr5OutputPeakDbfs),
-    nr5PeakEvidence: diagNumber(r.nr5PeakEvidence),
-    nr5PeakLimitDbfs: diagNumber(r.nr5PeakLimitDbfs),
-    nr5PeakReductionDb: diagNumber(r.nr5PeakReductionDb),
     evidence: diagStringArray(r.evidence),
     constraints: diagStringArray(r.constraints),
     recommendedActions: diagStringArray(r.recommendedActions),
@@ -5569,13 +5417,19 @@ export function setFilter(
   highHz: number,
   presetName?: string,
   signal?: AbortSignal,
+  receiver: TxVfo = 'A',
 ): Promise<RadioStateDto> {
   return jsonFetch(
     '/api/filter',
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ lowHz, highHz, presetName: presetName ?? null }),
+      body: JSON.stringify({
+        lowHz,
+        highHz,
+        presetName: presetName ?? null,
+        receiver: receiver === 'B' ? 1 : 0,
+      }),
       signal,
     },
     normalizeState,

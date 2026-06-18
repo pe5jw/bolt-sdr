@@ -88,7 +88,7 @@ Slots are named like `<surface>.<region>`:
 | Slot | What renders there |
 |---|---|
 | `workspace.amplifier` | A pane in the main workspace; multiple plugins can stack. |
-| `workspace.tools` | TX-side tools panel (paired with the Mic / TX Audio Tools). |
+| `workspace.tools` | TX-side tools panel (paired with the Mic / Audio Tools). |
 | `settings.plugins.body` | Inside the **Settings → Plugins** page (below the registry browser). |
 | `topbar.right` | Pill at the right side of the top bar. Use sparingly — top bar real estate is precious. |
 

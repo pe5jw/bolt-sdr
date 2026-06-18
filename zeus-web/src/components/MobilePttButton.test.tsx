@@ -12,7 +12,6 @@ const ensureMicUplinkRunningMock = vi.hoisted(() => vi.fn());
 const ensureTxStationProfileActivatedMock = vi.hoisted(() => vi.fn());
 const setMicUplinkTxForcedMock = vi.hoisted(() => vi.fn());
 const waitForMicPcmTransportReadyMock = vi.hoisted(() => vi.fn());
-const runTxBandPreflightMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/client')>();
@@ -35,10 +34,6 @@ vi.mock('../realtime/ws-client', () => ({
   waitForMicPcmTransportReady: waitForMicPcmTransportReadyMock,
 }));
 
-vi.mock('../tx/tx-band-preflight', () => ({
-  runTxBandPreflight: runTxBandPreflightMock,
-}));
-
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
 import { MobilePttButton } from './MobilePttButton';
@@ -59,7 +54,6 @@ describe('MobilePttButton', () => {
     vi.clearAllMocks();
     setMoxMock.mockResolvedValue({});
     ensureTxStationProfileActivatedMock.mockResolvedValue(undefined);
-    runTxBandPreflightMock.mockResolvedValue(true);
     ensureMicUplinkRunningMock.mockResolvedValue(true);
     waitForMicPcmTransportReadyMock.mockResolvedValue(true);
     useConnectionStore.setState({ status: 'Connected' });

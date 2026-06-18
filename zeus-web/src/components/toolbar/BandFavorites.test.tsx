@@ -1,10 +1,10 @@
 /** @vitest-environment jsdom */
 
 import { createElement } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { act, render } from '../meters/__tests__/harness';
-import { setMode, setVfo, setVfoB, type RadioStateDto } from '../../api/client';
+import { saveBandMemory, setMode, setVfo, setVfoB, type RadioStateDto } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
 import { useToolbarFavoritesStore } from '../../state/toolbar-favorites-store';
 import { BandFavorites } from './BandFavorites';
@@ -33,6 +33,10 @@ function resetStores() {
     rx2Enabled: true,
     rxFocus: 'B',
     mode: 'USB',
+    modeB: 'LSB',
+    filterLowHzB: -2850,
+    filterHighHzB: -150,
+    filterPresetNameB: 'VAR1',
   });
   useToolbarFavoritesStore.setState({
     band: ['40m', '20m', '15m'],
@@ -43,6 +47,10 @@ describe('BandFavorites', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetStores();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('applies topbar band selection to focused VFO B', async () => {
@@ -61,6 +69,32 @@ describe('BandFavorites', () => {
     expect(setMode).not.toHaveBeenCalled();
     expect(useConnectionStore.getState().vfoBHz).toBe(7_074_000);
     expect(useConnectionStore.getState().vfoHz).toBe(14_200_000);
+
+    unmount();
+  });
+
+  it('flushes focused receiver mode memory before changing bands', async () => {
+    vi.useFakeTimers();
+    const { container, unmount } = render(createElement(BandFavorites));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    vi.clearAllMocks();
+
+    act(() => {
+      useConnectionStore.setState({ modeB: 'CWU' });
+    });
+    const twentyMeters = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === '20m');
+
+    await act(async () => {
+      twentyMeters?.click();
+      await Promise.resolve();
+    });
+
+    expect(twentyMeters).toBeTruthy();
+    expect(saveBandMemory).toHaveBeenCalledWith('40m', 7_200_000, 'CWU');
+    expect(saveBandMemory).not.toHaveBeenCalledWith('40m', 7_200_000, 'LSB');
 
     unmount();
   });

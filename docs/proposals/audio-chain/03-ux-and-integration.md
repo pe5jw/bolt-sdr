@@ -74,12 +74,12 @@ Zeus has meter widget types suitable for audio-chain monitoring:
 
 ### 2.1 Where the panel lives
 
-**Decision: Tab in the Settings menu, under "TX Audio Tools"** (alongside CFC and VST host).
+**Decision: Tab in the Settings menu, under "Audio Tools"** (alongside CFC and VST host).
 
 In the browser:
 ```
 Settings menu (gear icon)
-  └─ TX Audio Tools (tab)
+  └─ Audio Tools (tab)
       ├─ CFC Settings Panel
       ├─ Audio Voice Chain Panel  ← NEW (v1: EQ, Comp, Exciter, Bass, Reverb)
       └─ VST Host Submenu (if available)
@@ -382,7 +382,7 @@ Real-world Zeus TX today runs ~14–34% single-core on a 12-core M-series Mac (f
 
 ### 4.1 Discovery and initial setup
 
-**First time an operator opens Settings > TX Audio Tools:**
+**First time an operator opens Settings > Audio Tools:**
 - CFC panel is visible (always available, can be off).
 - Audio chain panel appears below it.
 - Chain is **disabled by default** (master toggle OFF).
@@ -490,7 +490,7 @@ Meter styling: reuse `HBarMeter` from the immersive-meters package. Same fill gr
 
 ## Summary
 
-The v1 audio voice chain (5 blocks: Parametric EQ, Compressor, Exciter, Bass Enhancer, Reverb) slots into Zeus's existing TX Audio Tools tab as a collapsible section with a master enable toggle and a flow visualization showing all five blocks' on/off status. Each block is a card with primary controls, optional meters (HBarMeter for compressor GR, activity LEDs for exciter/bass), and an Advanced disclosure for secondary settings. Presets ("Podcast voice", "SSB contest", "FT8 macro") allow one-click setup with sensible defaults.
+The v1 audio voice chain (5 blocks: Parametric EQ, Compressor, Exciter, Bass Enhancer, Reverb) slots into Zeus's existing Audio Tools tab as a collapsible section with a master enable toggle and a flow visualization showing all five blocks' on/off status. Each block is a card with primary controls, optional meters (HBarMeter for compressor GR, activity LEDs for exciter/bass), and an Advanced disclosure for secondary settings. Presets ("Podcast voice", "SSB contest", "FT8 macro") allow one-click setup with sensible defaults.
 
 The integration point in `WdspDspEngine.ProcessTxBlock` is between the VST host seam and the WDSP `fexchange2` call. The chain processes a single 48 kHz mono float buffer in-place, respecting the same buffer ownership and thread-safety constraints as the existing VST host. Per-block CPU budget totals ~16–22% per 21 ms tick (worst case, all on), leaving headroom in the current 14–34% TX baseline.
 

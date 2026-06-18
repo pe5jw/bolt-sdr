@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { frameBinRangeForHz, miniPanSignalLevel, sampleSpectrumAtHz } from './FilterMiniPan';
+import { formatEqActualDb, frameBinRangeForHz, miniPanSignalLevel, sampleSpectrumAtHz } from './FilterMiniPan';
 
 describe('FilterMiniPan frequency sampling', () => {
   it('keeps partial frame overlap at its true frequency position', () => {
@@ -32,5 +32,12 @@ describe('FilterMiniPan frequency sampling', () => {
     expect(miniPanSignalLevel(-106, floorDb, 3.5, 20)).toBeLessThan(0.08);
     expect(miniPanSignalLevel(-100, floorDb, 3.5, 20)).toBeGreaterThan(0.45);
     expect(miniPanSignalLevel(-88, floorDb, 3.5, 20)).toBeGreaterThan(0.9);
+  });
+
+  it('formats measured EQ block dB actuals', () => {
+    expect(formatEqActualDb(0)).toBe('0dB');
+    expect(formatEqActualDb(9.4)).toBe('9dB');
+    expect(formatEqActualDb(9.5)).toBe('10dB');
+    expect(formatEqActualDb(Number.NaN)).toBe('--dB');
   });
 });

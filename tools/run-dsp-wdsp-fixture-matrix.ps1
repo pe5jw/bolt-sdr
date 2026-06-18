@@ -196,10 +196,10 @@ function Invoke-ToolScript {
     )
 
     if ($Quiet) {
-        & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments | Out-Null
+        & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $ScriptPath @Arguments | Out-Null
     }
     else {
-        & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments
+        & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $ScriptPath @Arguments
     }
     if ($LASTEXITCODE -ne 0 -and -not $AllowNonZeroExit) {
         throw "Tool failed with exit code ${LASTEXITCODE}: $ScriptPath"
@@ -349,7 +349,7 @@ Invoke-ToolScript -ScriptPath $stageTimingScript -Arguments @($stageTimingArgs.T
 $runtimeArgs = New-Object System.Collections.Generic.List[string]
 Add-CliArg $runtimeArgs "-ReportPath" $RuntimeAuditPath
 if (-not $AllowRuntimeAuditPreflight) {
-    Add-CliArg $runtimeArgs "-FailOnMissingWinX64Nr5"
+    Add-CliArg $runtimeArgs "-FailOnMissingWinX64CurrentNr"
 }
 if ($JsonOnly) { Add-CliArg $runtimeArgs "-JsonOnly" }
 Invoke-ToolScript -ScriptPath $runtimeAuditScript -Arguments @($runtimeArgs.ToArray()) -Quiet:$JsonOnly

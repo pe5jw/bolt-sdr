@@ -49,7 +49,7 @@ set(WDSP_SOURCES
     icfir.c iir.c impulse_cache.c iobuffs.c iqc.c linux_port.c lmath.c main.c
     matchedCW.c meter.c meterlog10.c nbp.c nob.c nobII.c osctrl.c patchpanel.c
     resample.c rmatch.c RXA.c sender.c shift.c siphon.c slew.c snb.c ssql.c
-    spnr.c syncbuffs.c TXA.c utilities.c varsamp.c version.c wcpAGC.c wisdom.c zetaHat.c
+    syncbuffs.c TXA.c utilities.c varsamp.c version.c wcpAGC.c wisdom.c zetaHat.c
 )
 
 # NR3 — RNNoise gate.

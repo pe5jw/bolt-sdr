@@ -43,6 +43,7 @@
 // License for details.
 
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -112,6 +113,7 @@ public sealed class WdspDspEngine : IDspEngine
     private const int AnalyzerWindow = 2;
     private const double AnalyzerKaiserPi = 14.0;
     private const double AnalyzerKeepTime = 0.1;
+    private const int MaxWdspNativeChannels = 32; // native/wdsp/comm.h MAX_CHANNELS
 
     private static readonly string[] EmnrPost2RequiredExports =
     [
@@ -134,56 +136,6 @@ public sealed class WdspDspEngine : IDspEngine
         nameof(NativeMethods.SetRXASBNRnoiseScalingType),
     ];
 
-    private static readonly string[] SpnrRequiredExports =
-    [
-        nameof(NativeMethods.SetRXASPNRRun),
-        nameof(NativeMethods.SetRXASPNRPosition),
-        nameof(NativeMethods.SetRXASPNRAggressiveness),
-        nameof(NativeMethods.SetRXASPNRAgcRun),
-        nameof(NativeMethods.SetRXASPNRAgcTarget),
-    ];
-
-    internal static bool NativeLibraryLoadable => WdspNativeLoader.TryProbe();
-
-    internal static bool EmnrPost2Available => AllNativeExportsAvailable(EmnrPost2RequiredExports);
-
-    internal static bool Nr4SbnrAvailable => AllNativeExportsAvailable(SbnrRequiredExports);
-
-    internal static bool Nr5SpnrAvailable => AllNativeExportsAvailable(SpnrRequiredExports);
-
-    internal static bool Nr5SpnrDiagnosticsAvailable =>
-        WdspNativeLoader.TryProbe() &&
-        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRDiagnostics));
-
-    internal static bool Nr5SpnrAdvancedDiagnosticsAvailable =>
-        WdspNativeLoader.TryProbe() &&
-        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRAdvancedDiagnostics));
-
-    internal static bool Nr5SpnrDeepDiagnosticsAvailable =>
-        WdspNativeLoader.TryProbe() &&
-        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRDeepDiagnostics));
-
-    internal static bool Nr5SpnrProbabilityDiagnosticsAvailable =>
-        WdspNativeLoader.TryProbe() &&
-        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRProbabilityDiagnostics));
-
-    internal static bool Nr5SpnrPeakDiagnosticsAvailable =>
-        WdspNativeLoader.TryProbe() &&
-        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRPeakDiagnostics));
-
-    internal static bool Nr5SpnrAgcDiagnosticsAvailable =>
-        WdspNativeLoader.TryProbe() &&
-        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRAgcDiagnostics));
-
-    internal static bool Nr5SpnrMemoryDiagnosticsAvailable =>
-        WdspNativeLoader.TryProbe() &&
-        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRMemoryDiagnostics));
-
-    internal static bool Nr5SpnrAdjacentNoiseAvailable =>
-        WdspNativeLoader.TryProbe() &&
-        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.SetRXASPNRAdjacentNoiseProfile)) &&
-        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRAdjacentNoiseDiagnostics));
-
     private static bool AllNativeExportsAvailable(string[] symbolNames)
     {
         if (!WdspNativeLoader.TryProbe()) return false;
@@ -194,6 +146,12 @@ public sealed class WdspDspEngine : IDspEngine
         }
         return true;
     }
+
+    public static bool NativeLibraryLoadable => WdspNativeLoader.TryProbe();
+
+    public static bool EmnrPost2Available => AllNativeExportsAvailable(EmnrPost2RequiredExports);
+
+    public static bool Nr4SbnrAvailable => AllNativeExportsAvailable(SbnrRequiredExports);
 
     private static double FiniteOrZero(double value) =>
         double.IsFinite(value) ? value : 0.0;
@@ -261,27 +219,33 @@ public sealed class WdspDspEngine : IDspEngine
         // Single-writer on the pipeline thread + word-sized read on the worker = safe
         // without a lock (worst case: one extra frame at the old setting on toggle).
         public volatile NbMode CurrentNbMode = NbMode.Off;
-        // Re-applies passband-aware NR5 tuning when the operator changes the
-        // filter while NR5 is already running.
         public volatile NrMode CurrentNrMode = NrMode.Off;
-        public bool Nr5PositionApplied;
-        public int Nr5AppliedPosition = int.MinValue;
-        public double Nr5AppliedAggressiveness = double.NaN;
-        public double Nr5AppliedAgcTargetRms = double.NaN;
-        public int Nr5ApplyCount;
-        public int Nr5PositionApplyCount;
-        public int Nr5PolicyApplyCount;
-        public int Nr5NoopApplyCount;
-        public int Nr5RunApplyCount;
-        public string Nr5LastApplyReason = "never";
         // Zoom level (1..32). Changing it re-calls SetAnalyzer with shifted
         // fscLin/fscHin; the worker's Spectrum0 and the pixel drain's GetPixels
         // take this lock so they never interleave with an in-flight reconfig.
         public int ZoomLevel = 1;
         public readonly object AnalyzerLock = new();
+
+        // --- TEMP diagnostics for RX2 crackle/lag (issue zeus-gdc7) ---
+        // All counters are reset each 1 Hz emit in ReadAudio. Cheap Interlocked
+        // increments on the hot paths; no allocation. Remove once the dual-RX
+        // realtime stall is root-caused.
+        public long DiagFramesIn;          // frames handed to InQueue this window
+        public long DiagEnqueueFull;       // enqueues where the bounded InQueue was already full (Add would block the RX net thread)
+        public long DiagWorkerFrames;      // frames the worker processed this window
+        public long DiagWorkerTotalTicks;  // Σ per-frame fexchange0+Spectrum0 Stopwatch ticks
+        public long DiagWorkerMaxTicks;    // max single-frame processing ticks
+        public long DiagAudioOverrun;      // PushAudio writes that overwrote an unread sample (ring full → discontinuity)
+        public long DiagLastLogTicks;      // Stopwatch timestamp of last 1 Hz emit
     }
 
+    // Bounded depth of each channel's InQueue — mirrors the boundedCapacity
+    // passed at construction so the diagnostic "would-block" check matches.
+    private const int InQueueCapacity = 32;
+
     private readonly ConcurrentDictionary<int, ChannelState> _channels = new();
+    private readonly object _nativeSlotLock = new();
+    private readonly HashSet<int> _reservedNativeSlots = new();
     private readonly ILogger _log;
     private int _disposed;
     private int _channelGeneration;
@@ -479,19 +443,32 @@ public sealed class WdspDspEngine : IDspEngine
         // themselves, or accept slow first-open planning.
     }
 
+    private int ReserveNativeSlot()
+    {
+        lock (_nativeSlotLock)
+        {
+            for (int id = 0; id < MaxWdspNativeChannels; id++)
+            {
+                if (_reservedNativeSlots.Add(id)) return id;
+            }
+        }
+
+        throw new InvalidOperationException("No free WDSP native channel/analyzer slots are available.");
+    }
+
+    private void ReleaseNativeSlot(int id)
+    {
+        lock (_nativeSlotLock)
+            _reservedNativeSlots.Remove(id);
+    }
+
     public int OpenChannel(int sampleRateHz, int pixelWidth)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
         if (pixelWidth <= 0) throw new ArgumentOutOfRangeException(nameof(pixelWidth));
         if (sampleRateHz <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRateHz));
 
-        // Skip ids occupied by TXA (which is NOT registered in _channels but
-        // still owns a slot in WDSP's global channel table). Wave 7 — when
-        // the TX monitor opens AFTER TXA, this loop would otherwise hand
-        // back the TXA's id and the two channels would alias inside WDSP,
-        // double-freeing on disconnect.
-        int id = 0;
-        while (_channels.ContainsKey(id) || id == _txaChannelId) id++;
+        int id = ReserveNativeSlot();
 
         int outSamples = (int)((long)InSize * OutputRate / sampleRateHz);
         int outDoubles = Math.Max(2, outSamples * 2);
@@ -569,7 +546,7 @@ public sealed class WdspDspEngine : IDspEngine
             SampleRateHz = sampleRateHz,
             PixelWidth = pixelWidth,
             OutDoubles = outDoubles,
-            InQueue = new BlockingCollection<double[]>(boundedCapacity: 32),
+            InQueue = new BlockingCollection<double[]>(boundedCapacity: InQueueCapacity),
             Worker = null!,
         };
 
@@ -635,6 +612,13 @@ public sealed class WdspDspEngine : IDspEngine
                     state.PartialFill = 0;
                     if (!state.InQueue.IsAddingCompleted)
                     {
+                        // TEMP diag (zeus-gdc7): a full bounded InQueue means the
+                        // next Add BLOCKS this thread — and FeedIq runs on the
+                        // realtime P2/P1 RX sink thread, so a stalled worker
+                        // stalls UDP intake (crackle + UI lag at modest CPU).
+                        state.DiagFramesIn++;
+                        if (state.InQueue.Count >= InQueueCapacity)
+                            state.DiagEnqueueFull++;
                         try { state.InQueue.Add(frame); }
                         catch (InvalidOperationException) { state.FreeFrames.Enqueue(frame); }
                     }
@@ -675,10 +659,6 @@ public sealed class WdspDspEngine : IDspEngine
         state.FilterLowAbsHz = lo;
         state.FilterHighAbsHz = hi;
         ApplyBandpassForMode(state);
-        if (state.CurrentNrMode == NrMode.Nr5)
-        {
-            ApplyNr5Spnr(state, "filter-policy");
-        }
     }
 
     public void SetVfoHz(int channelId, long vfoHz)
@@ -818,7 +798,6 @@ public sealed class WdspDspEngine : IDspEngine
             case NrMode.Anr:
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
-                TrySetSpnrRun(channelId, 0);
                 NativeMethods.SetRXAANRVals(channelId, NrDefaults.AnrTaps, NrDefaults.AnrDelay, NrDefaults.AnrGain, NrDefaults.AnrLeakage);
                 NativeMethods.SetRXAANRPosition(channelId, NrDefaults.Position);
                 NativeMethods.SetRXAANRRun(channelId, 1);
@@ -826,7 +805,6 @@ public sealed class WdspDspEngine : IDspEngine
             case NrMode.Emnr:
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
-                TrySetSpnrRun(channelId, 0);
                 // Core EMNR algorithm selectors (gain method, NPE method, AE
                 // filter) plus the optional Trained-method T1/T2 tuning. All
                 // operator-tunable; null fields fall back to NrDefaults so the
@@ -849,37 +827,16 @@ public sealed class WdspDspEngine : IDspEngine
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 TrySetEmnrPost2Run(channelId, 0);
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
-                TrySetSpnrRun(channelId, 0);
                 ApplyNr4Sbnr(channelId, cfg);
-                break;
-            case NrMode.Nr5:
-                // NR5 — Zeus experimental signal-preserving NR. It learns a
-                // per-bin noise model online and includes a bounded output
-                // normalizer, so it remains mutually exclusive with NR1/2/4.
-                NativeMethods.SetRXAANRRun(channelId, 0);
-                TrySetEmnrPost2Run(channelId, 0);
-                NativeMethods.SetRXAEMNRRun(channelId, 0);
-                TrySetSbnrRun(channelId, 0);
-                ApplyNr5Spnr(state, "nr5-mode-apply");
                 break;
             default:
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 TrySetEmnrPost2Run(channelId, 0);
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
-                TrySetSpnrRun(channelId, 0);
                 break;
         }
         state.CurrentNrMode = cfg.NrMode;
-        if (cfg.NrMode != NrMode.Nr5)
-        {
-            state.Nr5PositionApplied = false;
-            state.Nr5AppliedPosition = int.MinValue;
-            state.Nr5AppliedAggressiveness = double.NaN;
-            state.Nr5AppliedAgcTargetRms = double.NaN;
-            state.Nr5LastApplyReason = $"nr5-mode-exit-{cfg.NrMode}";
-        }
-
         if (cfg.AnfEnabled)
         {
             NativeMethods.SetRXAANFVals(channelId, NrDefaults.AnfTaps, NrDefaults.AnfDelay, NrDefaults.AnfGain, NrDefaults.AnfLeakage);
@@ -1094,459 +1051,10 @@ public sealed class WdspDspEngine : IDspEngine
         }
     }
 
-    // NR5 (SPNR) parameter push + Run=1. Defaults are conservative while the
-    // mode is experimental: moderate suppression, post-NR audio normalization
-    // on, and a target below full scale so WDSP AGC still has headroom.
-    private void ApplyNr5Spnr(ChannelState state, string reason)
-    {
-        int channelId = state.Id;
-        try
-        {
-            state.Nr5ApplyCount++;
-            state.Nr5LastApplyReason = reason;
-            bool positionApplied = false;
-            bool policyApplied = false;
-            var policy = ComputeNr5PassbandPolicy(state.FilterLowAbsHz, state.FilterHighAbsHz);
-            if (!state.Nr5PositionApplied || state.Nr5AppliedPosition != NrDefaults.Nr5Position)
-            {
-                NativeMethods.SetRXASPNRPosition(channelId, NrDefaults.Nr5Position);
-                state.Nr5PositionApplied = true;
-                state.Nr5AppliedPosition = NrDefaults.Nr5Position;
-                state.Nr5PositionApplyCount++;
-                positionApplied = true;
-            }
-            if (!NearlyEqual(state.Nr5AppliedAggressiveness, policy.Aggressiveness))
-            {
-                NativeMethods.SetRXASPNRAggressiveness(channelId, policy.Aggressiveness);
-                state.Nr5AppliedAggressiveness = policy.Aggressiveness;
-                policyApplied = true;
-            }
-            if (!NearlyEqual(state.Nr5AppliedAgcTargetRms, policy.AgcTargetRms))
-            {
-                NativeMethods.SetRXASPNRAgcTarget(channelId, policy.AgcTargetRms);
-                state.Nr5AppliedAgcTargetRms = policy.AgcTargetRms;
-                policyApplied = true;
-            }
-            if (policyApplied) state.Nr5PolicyApplyCount++;
-            if (!positionApplied && !policyApplied) state.Nr5NoopApplyCount++;
-            NativeMethods.SetRXASPNRAgcRun(channelId, 1);
-            NativeMethods.SetRXASPNRRun(channelId, 1);
-            state.Nr5RunApplyCount++;
-        }
-        catch (EntryPointNotFoundException ex)
-        {
-            _log.LogWarning(
-                "wdsp.spnr.unavailable channel={Id} reason=\"libwdsp build does not export NR5/SPNR symbols\" detail={Msg}",
-                channelId, ex.Message);
-        }
-    }
-
-    private static bool NearlyEqual(double left, double right) =>
-        double.IsFinite(left) &&
-        double.IsFinite(right) &&
-        Math.Abs(left - right) <= 1.0e-12;
-
-    internal readonly record struct Nr5PassbandPolicy(double Aggressiveness, double AgcTargetRms);
-
-    internal static Nr5PassbandPolicy ComputeNr5PassbandPolicy(int lowAbsHz, int highAbsHz)
-    {
-        int lo = Math.Abs(lowAbsHz);
-        int hi = Math.Abs(highAbsHz);
-        if (hi < lo) (lo, hi) = (hi, lo);
-
-        double widthHz = Math.Max(300.0, hi - lo);
-        double narrowDrive = Clamp01((2600.0 - widthHz) / 1200.0);
-        double wideDrive = Clamp01((widthHz - 3000.0) / 2200.0);
-
-        double aggressiveness =
-            NrDefaults.Nr5Aggressiveness
-            - 0.08 * narrowDrive
-            + 0.07 * wideDrive;
-        double agcTarget =
-            NrDefaults.Nr5AgcTargetRms
-            - 0.005 * narrowDrive
-            + 0.005 * wideDrive;
-
-        return new Nr5PassbandPolicy(
-            Math.Clamp(aggressiveness, 0.52, 0.70),
-            Math.Clamp(agcTarget, 0.068, 0.083));
-    }
-
-    private static double Clamp01(double value) => Math.Clamp(value, 0.0, 1.0);
-
-    // Pre-Phase-1-binary safe Run=0 — the only SBNR call we make outside the
-    // Sbnr arm. EntryPointNotFoundException here just means "the library
-    // doesn't have SBNR; nothing to turn off."
     private void TrySetSbnrRun(int channelId, int run)
     {
         try { NativeMethods.SetRXASBNRRun(channelId, run); }
         catch (EntryPointNotFoundException) { /* libwdsp pre-Phase-1; SBNR is a no-op */ }
-    }
-
-    private void TrySetSpnrRun(int channelId, int run)
-    {
-        try { NativeMethods.SetRXASPNRRun(channelId, run); }
-        catch (EntryPointNotFoundException) { /* libwdsp lacks NR5; nothing to turn off */ }
-    }
-
-    public void SetNr5AdjacentNoiseProfile(
-        int channelId,
-        bool usable,
-        int bins,
-        double floorDb,
-        double p10Db,
-        double p50Db,
-        double p90Db,
-        double slopeDbPerKhz,
-        double rejectedPct,
-        int leftBins = 0,
-        int rightBins = 0,
-        double leftFloorDb = 0.0,
-        double rightFloorDb = 0.0)
-    {
-        if (channelId < 0 || !IsRxChannelOpen(channelId) || !Nr5SpnrAdjacentNoiseAvailable)
-            return;
-
-        try
-        {
-            NativeMethods.SetRXASPNRAdjacentNoiseProfile(
-                channelId,
-                usable ? 1 : 0,
-                Math.Max(0, bins),
-                Math.Max(0, leftBins),
-                Math.Max(0, rightBins),
-                FiniteOrZero(floorDb),
-                FiniteOrZero(p10Db),
-                FiniteOrZero(p50Db),
-                FiniteOrZero(p90Db),
-                FiniteOrFallback(leftFloorDb, floorDb),
-                FiniteOrFallback(rightFloorDb, floorDb),
-                FiniteOrZero(slopeDbPerKhz),
-                Math.Clamp(FiniteOrZero(rejectedPct), 0.0, 100.0));
-        }
-        catch (EntryPointNotFoundException)
-        {
-            // Optional NR5 enhancement; older native builds keep the self-learned path.
-        }
-    }
-
-    public Nr5SpnrDiagnosticsDto? TryGetNr5SpnrDiagnostics(int channelId)
-    {
-        if (channelId < 0 ||
-            !_channels.TryGetValue(channelId, out var state) ||
-            state.Stopped ||
-            !Nr5SpnrDiagnosticsAvailable)
-            return null;
-
-        try
-        {
-            int ok = NativeMethods.GetRXASPNRDiagnostics(
-                channelId,
-                out int run,
-                out int position,
-                out int learnedFrames,
-                out int agcRun,
-                out double aggressiveness,
-                out double targetRms,
-                out double maxGain,
-                out double agcGain,
-                out double presencePeak,
-                out double saliencePeak,
-                out double meanGain,
-                out double minGain,
-                out double noiseFloorDb,
-                out double inputRms,
-                out double outputRms);
-
-            if (ok == 0) return null;
-
-            double coherencePeak = 0.0;
-            double ridgePeak = 0.0;
-            double floorReductionDb = 0.0;
-            double dynamicRangeDb = 0.0;
-            double signalProbability = 0.0;
-            double textureFill = 0.0;
-            double maskSmoothing = 0.0;
-            double signalConfidence = 0.0;
-            double agcGate = 0.0;
-            double levelDrive = 0.0;
-            double recoveryDrive = 0.0;
-            double weakSignalMemory = 0.0;
-            double makeupGain = 1.0;
-            double outputPeak = 0.0;
-            double peakEvidence = 0.0;
-            double peakLimit = 0.0;
-            double peakReductionDb = 0.0;
-            bool adjacentNoiseUsable = false;
-            int adjacentNoiseBins = 0;
-            int adjacentNoiseLeftBins = 0;
-            int adjacentNoiseRightBins = 0;
-            double adjacentNoiseFloorDb = 0.0;
-            double adjacentNoiseLeftFloorDb = 0.0;
-            double adjacentNoiseRightFloorDb = 0.0;
-            double adjacentNoiseTrust = 0.0;
-            double adjacentNoiseDrive = 0.0;
-            double adjacentNoiseRejectedPct = 0.0;
-            double adjacentNoiseSideBalance = 0.0;
-            double adjacentNoiseAsymmetryDb = 0.0;
-            if (Nr5SpnrAdvancedDiagnosticsAvailable)
-            {
-                try
-                {
-                    int advancedOk = NativeMethods.GetRXASPNRAdvancedDiagnostics(
-                        channelId,
-                        out coherencePeak,
-                        out ridgePeak,
-                        out floorReductionDb,
-                        out dynamicRangeDb);
-                    if (advancedOk == 0)
-                    {
-                        coherencePeak = 0.0;
-                        ridgePeak = 0.0;
-                        floorReductionDb = 0.0;
-                        dynamicRangeDb = 0.0;
-                    }
-                }
-                catch (EntryPointNotFoundException)
-                {
-                    coherencePeak = 0.0;
-                    ridgePeak = 0.0;
-                    floorReductionDb = 0.0;
-                    dynamicRangeDb = 0.0;
-                }
-            }
-            if (Nr5SpnrDeepDiagnosticsAvailable)
-            {
-                try
-                {
-                    int deepOk = NativeMethods.GetRXASPNRDeepDiagnostics(
-                        channelId,
-                        out signalConfidence,
-                        out agcGate);
-                    if (deepOk == 0)
-                    {
-                        signalConfidence = 0.0;
-                        agcGate = 0.0;
-                    }
-                }
-                catch (EntryPointNotFoundException)
-                {
-                    signalConfidence = 0.0;
-                    agcGate = 0.0;
-                }
-            }
-            if (Nr5SpnrProbabilityDiagnosticsAvailable)
-            {
-                try
-                {
-                    int probabilityOk = NativeMethods.GetRXASPNRProbabilityDiagnostics(
-                        channelId,
-                        out signalProbability,
-                        out textureFill,
-                        out maskSmoothing);
-                    if (probabilityOk == 0)
-                    {
-                        signalProbability = 0.0;
-                        textureFill = 0.0;
-                        maskSmoothing = 0.0;
-                    }
-                }
-                catch (EntryPointNotFoundException)
-                {
-                    signalProbability = 0.0;
-                    textureFill = 0.0;
-                    maskSmoothing = 0.0;
-                }
-            }
-            if (Nr5SpnrPeakDiagnosticsAvailable)
-            {
-                try
-                {
-                    int peakOk = NativeMethods.GetRXASPNRPeakDiagnostics(
-                        channelId,
-                        out outputPeak,
-                        out peakEvidence,
-                        out peakLimit,
-                        out peakReductionDb);
-                    if (peakOk == 0)
-                    {
-                        outputPeak = 0.0;
-                        peakEvidence = 0.0;
-                        peakLimit = 0.0;
-                        peakReductionDb = 0.0;
-                    }
-                }
-                catch (EntryPointNotFoundException)
-                {
-                    outputPeak = 0.0;
-                    peakEvidence = 0.0;
-                    peakLimit = 0.0;
-                    peakReductionDb = 0.0;
-                }
-            }
-            if (Nr5SpnrAgcDiagnosticsAvailable)
-            {
-                try
-                {
-                    int agcOk = NativeMethods.GetRXASPNRAgcDiagnostics(
-                        channelId,
-                        out levelDrive,
-                        out recoveryDrive,
-                        out makeupGain);
-                    if (agcOk == 0)
-                    {
-                        levelDrive = 0.0;
-                        recoveryDrive = 0.0;
-                        makeupGain = 1.0;
-                    }
-                }
-                catch (EntryPointNotFoundException)
-                {
-                    levelDrive = 0.0;
-                    recoveryDrive = 0.0;
-                    makeupGain = 1.0;
-                }
-            }
-            if (Nr5SpnrMemoryDiagnosticsAvailable)
-            {
-                try
-                {
-                    int memoryOk = NativeMethods.GetRXASPNRMemoryDiagnostics(
-                        channelId,
-                        out weakSignalMemory);
-                    if (memoryOk == 0)
-                    {
-                        weakSignalMemory = 0.0;
-                    }
-                }
-                catch (EntryPointNotFoundException)
-                {
-                    weakSignalMemory = 0.0;
-                }
-            }
-            if (Nr5SpnrAdjacentNoiseAvailable)
-            {
-                try
-                {
-                    int adjacentOk = NativeMethods.GetRXASPNRAdjacentNoiseDiagnostics(
-                        channelId,
-                        out int adjacentUsable,
-                        out adjacentNoiseBins,
-                        out adjacentNoiseLeftBins,
-                        out adjacentNoiseRightBins,
-                        out adjacentNoiseFloorDb,
-                        out adjacentNoiseLeftFloorDb,
-                        out adjacentNoiseRightFloorDb,
-                        out adjacentNoiseTrust,
-                        out adjacentNoiseDrive,
-                        out adjacentNoiseRejectedPct,
-                        out adjacentNoiseSideBalance,
-                        out adjacentNoiseAsymmetryDb);
-                    if (adjacentOk == 0)
-                    {
-                        adjacentNoiseUsable = false;
-                        adjacentNoiseBins = 0;
-                        adjacentNoiseLeftBins = 0;
-                        adjacentNoiseRightBins = 0;
-                        adjacentNoiseFloorDb = 0.0;
-                        adjacentNoiseLeftFloorDb = 0.0;
-                        adjacentNoiseRightFloorDb = 0.0;
-                        adjacentNoiseTrust = 0.0;
-                        adjacentNoiseDrive = 0.0;
-                        adjacentNoiseRejectedPct = 0.0;
-                        adjacentNoiseSideBalance = 0.0;
-                        adjacentNoiseAsymmetryDb = 0.0;
-                    }
-                    else
-                    {
-                        adjacentNoiseUsable = adjacentUsable != 0;
-                    }
-                }
-                catch (EntryPointNotFoundException)
-                {
-                    adjacentNoiseUsable = false;
-                    adjacentNoiseBins = 0;
-                    adjacentNoiseLeftBins = 0;
-                    adjacentNoiseRightBins = 0;
-                    adjacentNoiseFloorDb = 0.0;
-                    adjacentNoiseLeftFloorDb = 0.0;
-                    adjacentNoiseRightFloorDb = 0.0;
-                    adjacentNoiseTrust = 0.0;
-                    adjacentNoiseDrive = 0.0;
-                    adjacentNoiseRejectedPct = 0.0;
-                    adjacentNoiseSideBalance = 0.0;
-                    adjacentNoiseAsymmetryDb = 0.0;
-                }
-            }
-
-            return new Nr5SpnrDiagnosticsDto(
-                SchemaVersion: 9,
-                ChannelId: channelId,
-                Run: run != 0,
-                Position: position,
-                LearnedFrames: Math.Max(0, learnedFrames),
-                Aggressiveness: RoundDiag(aggressiveness, 3),
-                AgcRun: agcRun != 0,
-                TargetRms: RoundDiag(targetRms, 6),
-                MaxGain: RoundDiag(maxGain, 3),
-                AgcGain: RoundDiag(agcGain, 3),
-                AgcGainDb: RoundDiag(LinearToDb(agcGain), 1),
-                PresencePeak: RoundDiag(presencePeak, 3),
-                SaliencePeak: RoundDiag(saliencePeak, 3),
-                CoherencePeak: RoundDiag(coherencePeak, 3),
-                RidgePeak: RoundDiag(ridgePeak, 3),
-                MeanGain: RoundDiag(meanGain, 3),
-                MinGain: RoundDiag(minGain, 3),
-                SuppressionDb: RoundDiag(LinearToDb(meanGain), 1),
-                NoiseFloorDb: RoundDiag(noiseFloorDb, 1),
-                FloorReductionDb: RoundDiag(floorReductionDb, 1),
-                DynamicRangeDb: RoundDiag(dynamicRangeDb, 1),
-                SignalProbability: RoundDiag(signalProbability, 3),
-                TextureFill: RoundDiag(textureFill, 3),
-                MaskSmoothing: RoundDiag(maskSmoothing, 3),
-                SignalConfidence: RoundDiag(signalConfidence, 3),
-                AgcGate: RoundDiag(agcGate, 3),
-                LevelDrive: RoundDiag(levelDrive, 3),
-                RecoveryDrive: RoundDiag(recoveryDrive, 3),
-                WeakSignalMemory: RoundDiag(weakSignalMemory, 3),
-                MakeupGain: RoundDiag(makeupGain, 3),
-                MakeupGainDb: RoundDiag(LinearToDb(makeupGain), 1),
-                InputRms: RoundDiag(inputRms, 6),
-                InputDbfs: RoundDiag(LinearToDb(inputRms), 1),
-                OutputRms: RoundDiag(outputRms, 6),
-                OutputDbfs: RoundDiag(LinearToDb(outputRms), 1),
-                OutputPeak: RoundDiag(outputPeak, 6),
-                OutputPeakDbfs: RoundDiag(LinearToDb(outputPeak), 1),
-                PeakEvidence: RoundDiag(peakEvidence, 3),
-                PeakLimit: RoundDiag(peakLimit, 6),
-                PeakLimitDbfs: RoundDiag(LinearToDb(peakLimit), 1),
-                PeakReductionDb: RoundDiag(Math.Max(0.0, peakReductionDb), 1),
-                AdjacentNoiseUsable: adjacentNoiseUsable,
-                AdjacentNoiseBins: Math.Max(0, adjacentNoiseBins),
-                AdjacentNoiseFloorDb: RoundDiag(adjacentNoiseFloorDb, 1),
-                AdjacentNoiseTrust: RoundDiag(adjacentNoiseTrust, 3),
-                AdjacentNoiseDrive: RoundDiag(adjacentNoiseDrive, 3),
-                AdjacentNoiseRejectedPct: RoundDiag(Math.Clamp(adjacentNoiseRejectedPct, 0.0, 100.0), 1),
-                AdjacentNoiseLeftBins: Math.Max(0, adjacentNoiseLeftBins),
-                AdjacentNoiseRightBins: Math.Max(0, adjacentNoiseRightBins),
-                AdjacentNoiseLeftFloorDb: RoundDiag(adjacentNoiseLeftFloorDb, 1),
-                AdjacentNoiseRightFloorDb: RoundDiag(adjacentNoiseRightFloorDb, 1),
-                AdjacentNoiseSideBalance: RoundDiag(Math.Clamp(adjacentNoiseSideBalance, 0.0, 1.0), 3),
-                AdjacentNoiseAsymmetryDb: RoundDiag(Math.Max(0.0, adjacentNoiseAsymmetryDb), 1))
-            {
-                ManagedChannelGeneration = state.Generation,
-                ManagedNr5ApplyCount = state.Nr5ApplyCount,
-                ManagedNr5PositionApplyCount = state.Nr5PositionApplyCount,
-                ManagedNr5PolicyApplyCount = state.Nr5PolicyApplyCount,
-                ManagedNr5NoopApplyCount = state.Nr5NoopApplyCount,
-                ManagedNr5RunApplyCount = state.Nr5RunApplyCount,
-                ManagedNr5LastApplyReason = state.Nr5LastApplyReason,
-            };
-        }
-        catch (EntryPointNotFoundException)
-        {
-            return null;
-        }
     }
 
     // Same shape as TrySetSbnrRun for the post2 Run=0 calls we issue when
@@ -1614,14 +1122,6 @@ public sealed class WdspDspEngine : IDspEngine
         public const int Nr4NoiseScalingType = 0;
         public const int Nr4Position = 1;
 
-        // NR5 (SPNR) defaults. The native stage learns its own noise floor and
-        // signal-presence model online. Aggressiveness is 0..1; target RMS is
-        // linear post-NR audio. Position=1 keeps it after WDSP AGC, matching
-        // Zeus's NR2/NR4 default path while NR5's own bounded normalizer evens
-        // out very weak copy without chasing pure noise.
-        public const int Nr5Position = 1;
-        public const double Nr5Aggressiveness = 0.62;
-        public const double Nr5AgcTargetRms = 0.075;
 
         // NB1/NB2 runtime-steady-state params — what Thetis actually runs with
         // once radio.cs's NB property setters have fired (tau=advtime=hangtime
@@ -1645,6 +1145,8 @@ public sealed class WdspDspEngine : IDspEngine
             return 0;
         }
 
+        EmitRxDiag(state);
+
         lock (state.AudioGate)
         {
             int n = Math.Min(output.Length, state.AudioCount);
@@ -1662,6 +1164,43 @@ public sealed class WdspDspEngine : IDspEngine
         }
     }
 
+    // TEMP diagnostics (zeus-gdc7): emit a 1 Hz per-channel snapshot of the
+    // realtime RX path health — input frames, would-block enqueues, worker
+    // per-frame timing, audio-ring depth + overruns. Lets a live G2 session
+    // tell apart "worker can't keep up" (queueFull>0 / high workerMaxMs) from
+    // "consumer/tick stall" (queueFull==0 but audioOverrun>0 / ringDepth low).
+    // Called once per channel per ReadAudio (≈30 Hz); gated to log at ~1 Hz.
+    private void EmitRxDiag(ChannelState state)
+    {
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        long last = state.DiagLastLogTicks;
+        if (last != 0 && now - last < System.Diagnostics.Stopwatch.Frequency) return;
+        state.DiagLastLogTicks = now;
+        if (last == 0) return; // first call only seeds the timer
+
+        long framesIn = Interlocked.Exchange(ref state.DiagFramesIn, 0);
+        long enqueueFull = Interlocked.Exchange(ref state.DiagEnqueueFull, 0);
+        long workerFrames = Interlocked.Exchange(ref state.DiagWorkerFrames, 0);
+        long workerTotalTicks = Interlocked.Exchange(ref state.DiagWorkerTotalTicks, 0);
+        long workerMaxTicks = Interlocked.Exchange(ref state.DiagWorkerMaxTicks, 0);
+        long audioOverrun = Interlocked.Exchange(ref state.DiagAudioOverrun, 0);
+
+        double ticksToMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        double workerAvgMs = workerFrames > 0 ? workerTotalTicks * ticksToMs / workerFrames : 0;
+        double workerMaxMs = workerMaxTicks * ticksToMs;
+        int queueDepth = state.InQueue.Count;
+        int audioRingDepth;
+        lock (state.AudioGate) audioRingDepth = state.AudioCount;
+
+        _log.LogInformation(
+            "wdsp.rxdiag ch={Id} framesIn={FramesIn} queueDepth={QueueDepth} queueFull={QueueFull} " +
+            "workerFrames={WorkerFrames} workerAvgMs={WorkerAvgMs:F2} workerMaxMs={WorkerMaxMs:F2} " +
+            "audioRingDepth={AudioRingDepth} audioOverrun={AudioOverrun}",
+            state.Id, framesIn, queueDepth, enqueueFull,
+            workerFrames, workerAvgMs, workerMaxMs,
+            audioRingDepth, audioOverrun);
+    }
+
     private static void PushAudio(ChannelState state, ReadOnlySpan<double> interleavedStereo, int monoSampleCount)
     {
         lock (state.AudioGate)
@@ -1673,6 +1212,8 @@ public sealed class WdspDspEngine : IDspEngine
                 state.AudioHead = (state.AudioHead + 1) % AudioRingCapacity;
                 if (state.AudioCount < AudioRingCapacity)
                     state.AudioCount++;
+                else
+                    state.DiagAudioOverrun++; // TEMP diag (zeus-gdc7): oldest unread sample overwritten → discontinuity
                 // Otherwise the oldest sample has been overwritten — head advance already did it.
             }
         }
@@ -1863,11 +1404,7 @@ public sealed class WdspDspEngine : IDspEngine
                 _txaCfirRun = false;
             }
 
-            // TXA id must not collide with any RXA id — pick the first free slot
-            // past the current RXA allocation. WDSP doesn't care about id
-            // ordering, it just uses the int as an index into its channel table.
-            int id = 0;
-            while (_channels.ContainsKey(id) || id == _txaChannelId) id++;
+            int id = ReserveNativeSlot();
 
             // type: 1 (TX), state: 0 (stays quiescent until SetMox). Rates
             // chosen above so P1 keeps its 48/48/48 shape (rated power
@@ -2850,17 +2387,12 @@ public sealed class WdspDspEngine : IDspEngine
         {
             if (_psFbDispAlive) return;
 
-            // Pick a disp slot that doesn't collide with any RX channel id or
-            // the TXA channel id. WDSP's analyzer table is indexed
-            // independently of channel ids (see comment at OpenTxChannel
-            // analyzer creation), but our own bookkeeping needs the int to be
-            // unique so SetZoom / Spectrum0 / GetPixels reach the right slot.
-            int psFbId = 0;
-            while (_channels.ContainsKey(psFbId) || psFbId == txaId) psFbId++;
+            int psFbId = ReserveNativeSlot();
 
             NativeMethods.XCreateAnalyzer(psFbId, out int rc, MaxFftSize, 1, 1, null);
             if (rc != 0)
             {
+                ReleaseNativeSlot(psFbId);
                 _log.LogWarning("wdsp.psFb.open XCreateAnalyzer rc={Rc} — PS-Monitor will fall back to TX trace", rc);
                 return;
             }
@@ -2868,6 +2400,7 @@ public sealed class WdspDspEngine : IDspEngine
             if (!configured)
             {
                 NativeMethods.DestroyAnalyzer(psFbId);
+                ReleaseNativeSlot(psFbId);
                 _log.LogWarning(
                     "wdsp.psFb.open skipped — rx={RxRate} psFb={PsFbRate} not an integer multiple; PS-Monitor will fall back to TX trace",
                     rxRate, PsFeedbackSampleRateHz);
@@ -2896,8 +2429,15 @@ public sealed class WdspDspEngine : IDspEngine
             if (!_psFbDispAlive) return;
             if (_psFbDispId is int id)
             {
-                NativeMethods.DestroyAnalyzer(id);
-                _log.LogInformation("wdsp.psFb.close id={Id}", id);
+                try
+                {
+                    NativeMethods.DestroyAnalyzer(id);
+                    _log.LogInformation("wdsp.psFb.close id={Id}", id);
+                }
+                finally
+                {
+                    ReleaseNativeSlot(id);
+                }
             }
             _psFbDispId = null;
             _psFbDispAlive = false;
@@ -3455,16 +2995,23 @@ public sealed class WdspDspEngine : IDspEngine
         {
             if (_txaChannelId is int txa)
             {
-                lock (_txDispLock)
+                try
                 {
-                    if (_txDispAlive)
+                    lock (_txDispLock)
                     {
-                        NativeMethods.DestroyAnalyzer(txa);
-                        _txDispAlive = false;
+                        if (_txDispAlive)
+                        {
+                            NativeMethods.DestroyAnalyzer(txa);
+                            _txDispAlive = false;
+                        }
                     }
+                    NativeMethods.CloseChannel(txa);
                 }
-                NativeMethods.CloseChannel(txa);
-                _txaChannelId = null;
+                finally
+                {
+                    ReleaseNativeSlot(txa);
+                    _txaChannelId = null;
+                }
             }
         }
     }
@@ -3574,21 +3121,28 @@ public sealed class WdspDspEngine : IDspEngine
 
     private void StopChannel(ChannelState state)
     {
-        state.Stopped = true;
-        state.InQueue.CompleteAdding();
-        state.Cts.Cancel();
-        if (!state.Worker.Join(TimeSpan.FromSeconds(2)))
+        try
         {
-            // Worker did not exit in time; fall through to teardown anyway.
+            state.Stopped = true;
+            state.InQueue.CompleteAdding();
+            state.Cts.Cancel();
+            if (!state.Worker.Join(TimeSpan.FromSeconds(2)))
+            {
+                // Worker did not exit in time; fall through to teardown anyway.
+            }
+            state.InQueue.Dispose();
+            state.Cts.Dispose();
+            NativeMethods.DestroyAnalyzer(state.Id);
+            // Tear down EXT blankers before CloseChannel — they reference our id
+            // slot in panb[]/pnob[] and outlive CloseChannel unless destroyed here.
+            NativeMethods.DestroyAnbEXT(state.Id);
+            NativeMethods.DestroyNobEXT(state.Id);
+            NativeMethods.CloseChannel(state.Id);
         }
-        state.InQueue.Dispose();
-        state.Cts.Dispose();
-        NativeMethods.DestroyAnalyzer(state.Id);
-        // Tear down EXT blankers before CloseChannel — they reference our id
-        // slot in panb[]/pnob[] and outlive CloseChannel unless destroyed here.
-        NativeMethods.DestroyAnbEXT(state.Id);
-        NativeMethods.DestroyNobEXT(state.Id);
-        NativeMethods.CloseChannel(state.Id);
+        finally
+        {
+            ReleaseNativeSlot(state.Id);
+        }
     }
 
     private static void RunWorker(ChannelState state)
@@ -3600,6 +3154,11 @@ public sealed class WdspDspEngine : IDspEngine
         {
             foreach (var frame in state.InQueue.GetConsumingEnumerable(state.Cts.Token))
             {
+                // TEMP diag (zeus-gdc7): time the per-frame WDSP work so we can
+                // tell whether the worker is the bottleneck (slow fexchange0 /
+                // Spectrum0 → queue fills → RX net thread blocks) or whether the
+                // queue stays shallow and the stall is on the consumer/tick side.
+                long frameStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 // Pre-RXA blanker. In-place is safe: xanb/xnob read a->in[i]
                 // before writing a->out[i] within each iteration, so same-buffer
                 // aliasing doesn't clobber unread samples. Skipped entirely when
@@ -3641,6 +3200,11 @@ public sealed class WdspDspEngine : IDspEngine
                 }
                 PushAudio(state, audio, monoSamples);
                 state.FreeFrames.Enqueue(frame);
+
+                long frameTicks = System.Diagnostics.Stopwatch.GetTimestamp() - frameStart;
+                state.DiagWorkerFrames++;
+                state.DiagWorkerTotalTicks += frameTicks;
+                if (frameTicks > state.DiagWorkerMaxTicks) state.DiagWorkerMaxTicks = frameTicks;
             }
         }
         catch (OperationCanceledException) { }

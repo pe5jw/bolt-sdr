@@ -67,8 +67,17 @@ public sealed class DspSettingsStore : IDisposable
                 profileId, e.EmnrPost2Factor, e.EmnrPost2Nlevel);
         }
 
+        var nrMode = NormalizeNrMode(e.NrMode);
+        if (nrMode != e.NrMode)
+        {
+            e.NrMode = nrMode;
+            e.UpdatedUtc = DateTime.UtcNow;
+            _entries.Update(e);
+            _log.LogInformation("Migrated unsupported NR mode to Off for profile {ProfileId}", profileId);
+        }
+
         return new NrConfig(
-            NrMode: e.NrMode,
+            NrMode: nrMode,
             AnfEnabled: e.AnfEnabled,
             SnbEnabled: e.SnbEnabled,
             NbpNotchesEnabled: e.NbpNotchesEnabled,
@@ -345,6 +354,7 @@ public sealed class DspSettingsStore : IDisposable
 
     public void Upsert(NrConfig config, string profileId = "default")
     {
+        config = config with { NrMode = NormalizeNrMode(config.NrMode) };
         var existing = _entries.FindOne(x => x.ProfileId == profileId);
         if (existing is null)
         {
@@ -461,6 +471,11 @@ public sealed class DspSettingsStore : IDisposable
         e.CfcBand9Freq = c.Bands[8].FreqHz;  e.CfcBand9Comp = c.Bands[8].CompLevelDb;  e.CfcBand9Post = c.Bands[8].PostGainDb;
         e.CfcBand10Freq = c.Bands[9].FreqHz; e.CfcBand10Comp = c.Bands[9].CompLevelDb; e.CfcBand10Post = c.Bands[9].PostGainDb;
     }
+
+    private static NrMode NormalizeNrMode(NrMode mode) =>
+        mode is NrMode.Off or NrMode.Anr or NrMode.Emnr or NrMode.Sbnr
+            ? mode
+            : NrMode.Off;
 
     public void Dispose() => _db.Dispose();
 

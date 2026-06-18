@@ -61,10 +61,11 @@ public class NativeAudioSinkRegistrationTests
         var app = ZeusHost.Build(Array.Empty<string>(), opts);
 
         var sinks = app.Services.GetServices<IRxAudioSink>().ToArray();
-        Assert.Single(sinks);
         // Desktop mode swaps in the native sink so RX audio goes straight to
         // the OS default output device (Phase 2b).
-        Assert.Equal("NativeAudioSink", sinks[0].GetType().Name);
+        Assert.Contains(sinks, sink => sink.GetType().Name == "NativeAudioSink");
+        Assert.Contains(sinks, sink => sink.GetType().Name == "GatedWebSocketAudioSink");
+        Assert.DoesNotContain(sinks, sink => sink.GetType().Name == "WebSocketAudioSink");
 
         // Same NativeAudioSink instance must also be wired as a hosted
         // service so its StartAsync opens the playback device.

@@ -1,26 +1,117 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+import { useEffect, useState } from 'react';
+
+import { fetchTxDiagnostics, type TxDiagnosticsDto } from '../api/client';
 import { analyzeTxFidelity } from '../audio/tx-fidelity';
+import { useAudioSuiteStore } from '../state/audio-suite-store';
 import { useTxStore } from '../state/tx-store';
 
-function fmtDb(v: number | null): string {
-  return v === null ? '--' : `${v.toFixed(1)} dBFS`;
+const CHAIN_METER_POLL_MS = 250;
+const TX_DIAG_POLL_MS = 500;
+const CHAIN_DBFS_FLOOR = -119.5;
+
+type ChainMetersDto = {
+  inputDb?: unknown;
+  outputDb?: unknown;
+  inputDbfs?: unknown;
+  outputDbfs?: unknown;
+};
+
+type ChainMeterSnapshot = {
+  inputDbfs: number | null;
+  outputDbfs: number | null;
+};
+
+const EMPTY_CHAIN_METERS: ChainMeterSnapshot = {
+  inputDbfs: null,
+  outputDbfs: null,
+};
+
+type TxHealthSnapshot = {
+  vstDegradedBlocks: number | null;
+  vstDegradedDelta: number | null;
+  ingestDroppedFrames: number | null;
+  ingestDroppedFrameDelta: number | null;
+  p2QueuedPackets: number | null;
+  p2TransportFailures: number | null;
+  p2TransportFailureDelta: number | null;
+  p2QueueWriteFailures: number | null;
+  p2QueueFailureDelta: number | null;
+  micUplinkStatus: string | null;
+};
+
+const EMPTY_TX_HEALTH: TxHealthSnapshot = {
+  vstDegradedBlocks: null,
+  vstDegradedDelta: null,
+  ingestDroppedFrames: null,
+  ingestDroppedFrameDelta: null,
+  p2QueuedPackets: null,
+  p2TransportFailures: null,
+  p2TransportFailureDelta: null,
+  p2QueueWriteFailures: null,
+  p2QueueFailureDelta: null,
+  micUplinkStatus: null,
+};
+
+function normalizeChainDb(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) && v > CHAIN_DBFS_FLOOR ? v : null;
 }
 
-function fmtGr(v: number): string {
-  return `${v.toFixed(1)} dB`;
+function normalizeChainMeters(body: ChainMetersDto): ChainMeterSnapshot {
+  return {
+    inputDbfs: normalizeChainDb(body.inputDbfs ?? body.inputDb),
+    outputDbfs: normalizeChainDb(body.outputDbfs ?? body.outputDb),
+  };
 }
 
-function fmtCrest(v: number | null): string {
-  return v === null ? '--' : `${v.toFixed(1)} dB`;
+function sameChainMeters(a: ChainMeterSnapshot, b: ChainMeterSnapshot): boolean {
+  return Object.is(a.inputDbfs, b.inputDbfs) && Object.is(a.outputDbfs, b.outputDbfs);
 }
 
-function fmtValue(v: number | null, suffix = ''): string {
-  return v === null ? '--' : `${v.toFixed(0)}${suffix}`;
+function countOrNull(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
 }
 
-function fmtDensity(live: number | null, target: number): string {
-  return live === null ? `--/${target}` : `${live.toFixed(0)}/${target}`;
+function delta(prev: number | null, next: number | null): number | null {
+  if (next === null) return null;
+  if (prev === null) return 0;
+  return Math.max(0, next - prev);
+}
+
+function normalizeTxHealth(diag: TxDiagnosticsDto, prev: TxHealthSnapshot): TxHealthSnapshot {
+  const degraded = countOrNull(diag.vstEngine?.degradedBlocks);
+  const dropped = countOrNull(diag.ingest.droppedFrames);
+  const queued = countOrNull(diag.protocol2?.queuedPackets);
+  const transportFailures = countOrNull(diag.protocol2?.sendFailures);
+  const queueFailures = countOrNull(diag.protocol2?.queueWriteFailures);
+  return {
+    vstDegradedBlocks: degraded,
+    vstDegradedDelta: delta(prev.vstDegradedBlocks, degraded),
+    ingestDroppedFrames: dropped,
+    ingestDroppedFrameDelta: delta(prev.ingestDroppedFrames, dropped),
+    p2QueuedPackets: queued,
+    p2TransportFailures: transportFailures,
+    p2TransportFailureDelta: delta(prev.p2TransportFailures, transportFailures),
+    p2QueueWriteFailures: queueFailures,
+    p2QueueFailureDelta: delta(prev.p2QueueWriteFailures, queueFailures),
+    micUplinkStatus: diag.micUplink.status,
+  };
+}
+
+function sameTxHealth(a: TxHealthSnapshot, b: TxHealthSnapshot): boolean {
+  return (
+    Object.is(a.vstDegradedBlocks, b.vstDegradedBlocks) &&
+    Object.is(a.vstDegradedDelta, b.vstDegradedDelta) &&
+    Object.is(a.ingestDroppedFrames, b.ingestDroppedFrames) &&
+    Object.is(a.ingestDroppedFrameDelta, b.ingestDroppedFrameDelta) &&
+    Object.is(a.p2QueuedPackets, b.p2QueuedPackets) &&
+    Object.is(a.p2TransportFailures, b.p2TransportFailures) &&
+    Object.is(a.p2TransportFailureDelta, b.p2TransportFailureDelta) &&
+    Object.is(a.p2QueueWriteFailures, b.p2QueueWriteFailures) &&
+    Object.is(a.p2QueueFailureDelta, b.p2QueueFailureDelta) &&
+    Object.is(a.micUplinkStatus, b.micUplinkStatus)
+  );
 }
 
 function stateColor(state: string): string {
@@ -35,6 +126,20 @@ function actionColor(tone: string, fallback: string): string {
   if (tone === 'reduce') return 'var(--power)';
   if (tone === 'raise') return 'var(--accent)';
   return fallback;
+}
+
+function metricColor(status: string): string {
+  if (status === 'met') return 'var(--signal)';
+  if (status === 'bad') return 'var(--tx)';
+  if (status === 'warn') return 'var(--power)';
+  return 'var(--fg-3)';
+}
+
+function metricBg(status: string): string {
+  if (status === 'met') return 'rgba(67, 181, 129, 0.12)';
+  if (status === 'bad') return 'rgba(230, 58, 43, 0.12)';
+  if (status === 'warn') return 'rgba(245, 166, 35, 0.12)';
+  return 'var(--bg-1)';
 }
 
 type TxFidelityAdvisorProps = {
@@ -62,6 +167,81 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
   const psFeedbackLevel = useTxStore((s) => s.psFeedbackLevel);
   const psCalState = useTxStore((s) => s.psCalState);
   const psCalibrationStalled = useTxStore((s) => s.psCalibrationStalled);
+  const audioSuiteMode = useAudioSuiteStore((s) => s.processingMode);
+  const audioSuiteMasterBypassed = useAudioSuiteStore((s) => s.masterBypassed);
+  const vstEngineActive = useAudioSuiteStore((s) => s.vstEngineActive);
+  const loadMasterBypassFromServer = useAudioSuiteStore((s) => s.loadMasterBypassFromServer);
+  const loadProcessingModeFromServer = useAudioSuiteStore((s) => s.loadProcessingModeFromServer);
+  const [chainMeters, setChainMeters] = useState<ChainMeterSnapshot>(EMPTY_CHAIN_METERS);
+  const [txHealth, setTxHealth] = useState<TxHealthSnapshot>(EMPTY_TX_HEALTH);
+  const shouldPollChainMeters = !tunOn && (moxOn || txMonitorEnabled);
+  const shouldPollTxHealth = !tunOn && (moxOn || txMonitorEnabled || audioSuiteMode === 'vst' || vstEngineActive);
+
+  useEffect(() => {
+    void loadMasterBypassFromServer();
+    void loadProcessingModeFromServer();
+  }, [loadMasterBypassFromServer, loadProcessingModeFromServer]);
+
+  useEffect(() => {
+    if (!shouldPollChainMeters || typeof fetch !== 'function') {
+      setChainMeters((prev) => (sameChainMeters(prev, EMPTY_CHAIN_METERS) ? prev : EMPTY_CHAIN_METERS));
+      return;
+    }
+
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      try {
+        const res = await fetch('/api/tx-audio-suite/chain/meters');
+        if (alive && res.ok) {
+          const body = (await res.json()) as ChainMetersDto;
+          const next = normalizeChainMeters(body);
+          setChainMeters((prev) => (sameChainMeters(prev, next) ? prev : next));
+        }
+      } catch {
+        /* transient meter read failure; keep the last chain reading */
+      }
+      if (alive) timer = setTimeout(tick, CHAIN_METER_POLL_MS);
+    };
+
+    void tick();
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [shouldPollChainMeters]);
+
+  useEffect(() => {
+    if (!shouldPollTxHealth) {
+      setTxHealth((prev) => (prev === EMPTY_TX_HEALTH ? prev : EMPTY_TX_HEALTH));
+      return;
+    }
+
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      const controller = new AbortController();
+      try {
+        const diag = await fetchTxDiagnostics(controller.signal);
+        if (alive) {
+          setTxHealth((prev) => {
+            const next = normalizeTxHealth(diag, prev);
+            return sameTxHealth(prev, next) ? prev : next;
+          });
+        }
+      } catch {
+        /* transient diagnostic read failure; keep the previous health state */
+      }
+      if (alive) timer = setTimeout(tick, TX_DIAG_POLL_MS);
+    };
+
+    void tick();
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [shouldPollTxHealth]);
+
   const snapshot = {
     moxOn,
     tunOn,
@@ -83,6 +263,17 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
     psCalState,
     psCalibrationStalled,
     targetSpectralDensity,
+    audioSuiteInputDbfs: chainMeters.inputDbfs ?? undefined,
+    audioSuiteOutputDbfs: chainMeters.outputDbfs ?? undefined,
+    audioSuiteMode,
+    audioSuiteBypassed: audioSuiteMasterBypassed,
+    vstEngineActive,
+    vstDegradedDelta: txHealth.vstDegradedDelta,
+    ingestDroppedFrameDelta: txHealth.ingestDroppedFrameDelta,
+    p2QueuedPackets: txHealth.p2QueuedPackets,
+    p2TransportFailureDelta: txHealth.p2TransportFailureDelta,
+    p2QueueFailureDelta: txHealth.p2QueueFailureDelta,
+    micUplinkStatus: txHealth.micUplinkStatus,
   };
   const analysis = analyzeTxFidelity(snapshot);
   const color = stateColor(analysis.state);
@@ -220,29 +411,44 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
         className="mono"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(96px, 1fr))',
-          gap: '4px 10px',
-          justifyItems: 'start',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(104px, 1fr))',
+          gap: 5,
           color: 'var(--fg-2)',
           fontSize: 10,
           lineHeight: 1.25,
           minWidth: 0,
         }}
       >
-        <span style={{ whiteSpace: 'nowrap' }}>MIC {fmtDb(analysis.micDbfs)}</span>
-        <span style={{ whiteSpace: 'nowrap' }}>OUT {fmtDb(analysis.outDbfs)}</span>
-        <span style={{ whiteSpace: 'nowrap' }}>
-          DENS {fmtDensity(analysis.liveSpectralDensity, analysis.targetSpectralDensity)}
-        </span>
-        <span style={{ whiteSpace: 'nowrap' }}>
-          CREST {fmtCrest(analysis.outCrestDb ?? analysis.compCrestDb ?? analysis.micCrestDb)}
-        </span>
-        <span style={{ whiteSpace: 'nowrap' }}>COMP {fmtCrest(analysis.compCrestDb)}</span>
-        <span style={{ whiteSpace: 'nowrap' }}>ALC {fmtGr(analysis.alcGr)}</span>
-        <span style={{ whiteSpace: 'nowrap' }}>LVL {fmtGr(analysis.lvlrGr)}</span>
-        <span style={{ whiteSpace: 'nowrap' }}>CFC {fmtGr(analysis.cfcGr)}</span>
-        <span style={{ whiteSpace: 'nowrap' }}>SWR {analysis.swr.toFixed(2)}</span>
-        <span style={{ whiteSpace: 'nowrap' }}>PSFB {fmtValue(analysis.psFeedbackLevel)}</span>
+        {analysis.tuningMetrics.map((m) => {
+          const mColor = metricColor(m.status);
+          return (
+            <span
+              key={m.id}
+              data-testid={`tx-fidelity-metric-${m.id}`}
+              data-status={m.status}
+              aria-label={`${m.label} ${m.value}. Target ${m.target}. ${m.detail}`}
+              title={`${m.label} target ${m.target}: ${m.detail}`}
+              style={{
+                minWidth: 0,
+                boxSizing: 'border-box',
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: 5,
+                alignItems: 'center',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                padding: '3px 5px',
+                border: `1px solid ${mColor}`,
+                borderRadius: 'var(--r-sm)',
+                background: metricBg(m.status),
+                color: mColor,
+              }}
+            >
+              <span style={{ fontWeight: 900, overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.label}</span>
+              <span style={{ color: mColor, overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.value}</span>
+            </span>
+          );
+        })}
       </div>
     </section>
   );

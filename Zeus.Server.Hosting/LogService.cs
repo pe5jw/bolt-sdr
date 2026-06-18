@@ -120,6 +120,27 @@ public sealed class LogService : IDisposable
         }, ct);
     }
 
+    public async Task<WorkedCallsignSummary> GetWorkedCallsignSummaryAsync(
+        string callsign,
+        int recentTake = 5,
+        CancellationToken ct = default)
+    {
+        var normalized = NormalizeCallsign(callsign);
+        return await Task.Run(() =>
+        {
+            if (string.IsNullOrEmpty(normalized))
+            {
+                return BuildWorkedSummary(normalized, [], recentTake);
+            }
+
+            var docs = _logs.Query()
+                .Where(x => x.Callsign == normalized)
+                .ToList();
+
+            return BuildWorkedSummary(normalized, docs, recentTake);
+        }, ct);
+    }
+
     public async Task<LogEntry?> GetLogEntryAsync(string id, CancellationToken ct = default)
     {
         return await Task.Run(() =>
@@ -207,6 +228,56 @@ public sealed class LogService : IDisposable
         QrzLogId: doc.QrzLogId,
         QrzUploadedUtc: doc.QrzUploadedUtc);
 
+    internal static WorkedCallsignSummary BuildWorkedSummary(
+        string callsign,
+        IEnumerable<LogEntryDocument> docs,
+        int recentTake = 5)
+    {
+        var normalized = NormalizeCallsign(callsign);
+        var ordered = docs
+            .Where(d => NormalizeCallsign(d.Callsign) == normalized)
+            .OrderByDescending(d => ToUtc(d.QsoDateTimeUtc))
+            .ToList();
+
+        var last = ordered.FirstOrDefault();
+        var boundedRecentTake = Math.Clamp(recentTake, 1, 10);
+        var recent = ordered
+            .Take(boundedRecentTake)
+            .Select(d => new WorkedCallsignRecentQso(
+                QsoDateTimeUtc: ToUtc(d.QsoDateTimeUtc),
+                Band: EmptyToNull(d.Band),
+                Mode: EmptyToNull(d.Mode),
+                FrequencyMhz: d.FrequencyMhz,
+                RstSent: EmptyToNull(d.RstSent),
+                RstRcvd: EmptyToNull(d.RstRcvd),
+                Name: EmptyToNull(d.Name),
+                Grid: EmptyToNull(d.Grid),
+                Country: EmptyToNull(d.Country),
+                State: EmptyToNull(d.State),
+                Comment: EmptyToNull(d.Comment),
+                QrzLogId: EmptyToNull(d.QrzLogId)))
+            .ToList();
+
+        return new WorkedCallsignSummary(
+            Callsign: normalized,
+            WorkedBefore: ordered.Count > 0,
+            TotalCount: ordered.Count,
+            LastWorkedUtc: last is null ? null : ToUtc(last.QsoDateTimeUtc),
+            LastBand: last is null ? null : EmptyToNull(last.Band),
+            LastMode: last is null ? null : EmptyToNull(last.Mode),
+            LastFrequencyMhz: last?.FrequencyMhz,
+            LastRstSent: last is null ? null : EmptyToNull(last.RstSent),
+            LastRstRcvd: last is null ? null : EmptyToNull(last.RstRcvd),
+            LastName: last is null ? null : EmptyToNull(last.Name),
+            LastGrid: last is null ? null : EmptyToNull(last.Grid),
+            LastCountry: last is null ? null : EmptyToNull(last.Country),
+            LastState: last is null ? null : EmptyToNull(last.State),
+            LastComment: last is null ? null : EmptyToNull(last.Comment),
+            Bands: DistinctNonEmpty(ordered.Select(d => d.Band)),
+            Modes: DistinctNonEmpty(ordered.Select(d => d.Mode)),
+            RecentQsos: recent);
+    }
+
     /// <summary>Internal so AdifUtcTimezoneTests can pin the
     /// <see cref="DateTime.Kind"/> behaviour without standing up a LiteDB
     /// round-trip. The method itself remains a private detail of the ADIF
@@ -255,6 +326,27 @@ public sealed class LogService : IDisposable
     {
         if (string.IsNullOrEmpty(value)) return;
         sb.Append($"<{fieldName}:{value.Length}>{value} ");
+    }
+
+    private static DateTime ToUtc(DateTime dt) => dt.Kind == DateTimeKind.Utc ? dt : dt.ToUniversalTime();
+
+    private static string NormalizeCallsign(string? callsign) =>
+        (callsign ?? string.Empty).Trim().ToUpperInvariant();
+
+    private static string? EmptyToNull(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+    }
+
+    private static IReadOnlyList<string> DistinctNonEmpty(IEnumerable<string?> values)
+    {
+        return values
+            .Select(EmptyToNull)
+            .Where(v => v is not null)
+            .Select(v => v!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static string GetDatabasePath()
@@ -308,3 +400,36 @@ internal sealed class LogEntryDocument
     public string? QrzLogId { get; set; }
     public DateTime? QrzUploadedUtc { get; set; }
 }
+
+public sealed record WorkedCallsignSummary(
+    string Callsign,
+    bool WorkedBefore,
+    int TotalCount,
+    DateTime? LastWorkedUtc,
+    string? LastBand,
+    string? LastMode,
+    double? LastFrequencyMhz,
+    string? LastRstSent,
+    string? LastRstRcvd,
+    string? LastName,
+    string? LastGrid,
+    string? LastCountry,
+    string? LastState,
+    string? LastComment,
+    IReadOnlyList<string> Bands,
+    IReadOnlyList<string> Modes,
+    IReadOnlyList<WorkedCallsignRecentQso> RecentQsos);
+
+public sealed record WorkedCallsignRecentQso(
+    DateTime QsoDateTimeUtc,
+    string? Band,
+    string? Mode,
+    double FrequencyMhz,
+    string? RstSent,
+    string? RstRcvd,
+    string? Name,
+    string? Grid,
+    string? Country,
+    string? State,
+    string? Comment,
+    string? QrzLogId);

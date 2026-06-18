@@ -74,6 +74,12 @@ public class RadioStateStoreTests : IDisposable
                 },
                 DrivePct = 47,
                 TunePct = 23,
+                Rx2Enabled = true,
+                VfoBHz = 7_100_000,
+                ModeB = RxMode.CWU,
+                FilterLowHzB = 475,
+                FilterHighHzB = 725,
+                FilterPresetNameB = "F6",
                 UpdatedUtc = DateTime.UtcNow,
             });
         }
@@ -114,6 +120,12 @@ public class RadioStateStoreTests : IDisposable
         Assert.Equal("auto", got.Notches[1].Source);
         Assert.Equal(47, got.DrivePct);
         Assert.Equal(23, got.TunePct);
+        Assert.True(got.Rx2Enabled);
+        Assert.Equal(7_100_000, got.VfoBHz);
+        Assert.Equal(RxMode.CWU, got.ModeB);
+        Assert.Equal(475, got.FilterLowHzB);
+        Assert.Equal(725, got.FilterHighHzB);
+        Assert.Equal("F6", got.FilterPresetNameB);
     }
 
     // Older rows written before DrivePct/TunePct existed must hydrate with the

@@ -55,8 +55,66 @@ public sealed class RadioServiceModeTargetTests : IDisposable
 
         var after = radio.SetMode(RxMode.CWU, TxVfo.B);
 
-        Assert.Equal(RxMode.CWU, after.Mode);
+        Assert.Equal(RxMode.USB, after.Mode);
+        Assert.Equal(RxMode.CWU, after.ModeB);
         Assert.Equal(14_200_000, after.VfoHz);
         Assert.Equal(7_100_600, after.VfoBHz);
+    }
+
+    [Fact]
+    public void SetFilter_TargetB_LeavesPrimaryFilterUntouched()
+    {
+        using var radio = BuildRadio();
+        radio.SetMode(RxMode.USB);
+        radio.SetFilter(150, 2850, "VAR1");
+        radio.SetRx2(new Rx2SetRequest(Enabled: true, VfoBHz: 7_100_000));
+
+        var after = radio.SetFilter(300, 2400, "F6", TxVfo.B);
+
+        Assert.Equal(150, after.FilterLowHz);
+        Assert.Equal(2850, after.FilterHighHz);
+        Assert.Equal("VAR1", after.FilterPresetName);
+        Assert.Equal(300, after.FilterLowHzB);
+        Assert.Equal(2400, after.FilterHighHzB);
+        Assert.Equal("F6", after.FilterPresetNameB);
+    }
+
+    [Fact]
+    public void SetFilter_TargetB_DoesNotReplacePrimaryModeMemory()
+    {
+        using var radio = BuildRadio();
+        radio.SetMode(RxMode.USB);
+        radio.SetFilter(150, 2850, "VAR1");
+        radio.SetRx2(new Rx2SetRequest(Enabled: true, VfoBHz: 7_100_000));
+        radio.SetMode(RxMode.AM);
+
+        radio.SetFilter(300, 2400, "F6", TxVfo.B);
+        var after = radio.SetMode(RxMode.USB);
+
+        Assert.Equal(RxMode.USB, after.Mode);
+        Assert.Equal(150, after.FilterLowHz);
+        Assert.Equal(2850, after.FilterHighHz);
+        Assert.Equal(300, after.FilterLowHzB);
+        Assert.Equal(2400, after.FilterHighHzB);
+    }
+
+    [Fact]
+    public void SetMode_TargetB_RestoresTargetBFilterMemory()
+    {
+        using var radio = BuildRadio();
+        radio.SetMode(RxMode.USB);
+        radio.SetFilter(150, 2850, "VAR1");
+        radio.SetRx2(new Rx2SetRequest(Enabled: true, VfoBHz: 7_100_000));
+        radio.SetFilter(300, 2400, "F6", TxVfo.B);
+
+        radio.SetMode(RxMode.AM, TxVfo.B);
+        var after = radio.SetMode(RxMode.USB, TxVfo.B);
+
+        Assert.Equal(RxMode.USB, after.Mode);
+        Assert.Equal(RxMode.USB, after.ModeB);
+        Assert.Equal(150, after.FilterLowHz);
+        Assert.Equal(2850, after.FilterHighHz);
+        Assert.Equal(300, after.FilterLowHzB);
+        Assert.Equal(2400, after.FilterHighHzB);
     }
 }

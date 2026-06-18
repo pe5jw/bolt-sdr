@@ -42,10 +42,11 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useLiveSlider } from '../hooks/useLiveSlider';
+import { applyCtunZoomCenterAfterState, centerCtunForZoomIn } from '../util/ctun-zoom-center';
 
 // Compact zoom slider styled as a panel-head chip. Lives in the hero
 // tile header (above the panadapter) so the operator always sees the
@@ -63,6 +64,7 @@ export function ZoomControl() {
   const setLocalZoom = useConnectionStore((s) => s.setZoomLevel);
   const applyState = useConnectionStore((s) => s.applyState);
   const connected = useConnectionStore((s) => s.status === 'Connected');
+  const centeredLoHzRef = useRef<number | null>(null);
 
   // rAF-coalesced live stream — keeps the panadapter zoom tracking the thumb
   // during a fast drag while capping POSTs to one per paint (zoom triggers a
@@ -73,7 +75,10 @@ export function ZoomControl() {
       (v: ZoomLevel, signal: AbortSignal) =>
         setZoom(v, signal)
           .then((next) => {
-            if (!signal.aborted) applyState(next);
+            if (!signal.aborted) {
+              applyState(next);
+              applyCtunZoomCenterAfterState(centeredLoHzRef.current);
+            }
           })
           .catch(() => {
             /* next state poll will reconcile */
@@ -84,6 +89,10 @@ export function ZoomControl() {
 
   const onSlide = useCallback(
     (v: ZoomLevel) => {
+      const cur = useConnectionStore.getState().zoomLevel;
+      const centeredLoHz = centerCtunForZoomIn(cur, v);
+      if (centeredLoHz != null) centeredLoHzRef.current = centeredLoHz;
+      else if (v <= cur) centeredLoHzRef.current = null;
       setLocalZoom(v);
       liveSlider.push(v);
     },

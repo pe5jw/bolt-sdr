@@ -13,7 +13,7 @@
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
 
-import { useEffect, useMemo, type CSSProperties } from 'react';
+import { useEffect, useMemo, type CSSProperties, type ReactNode } from 'react';
 import { CfcSettingsPanel } from './CfcSettingsPanel';
 import { DownloadAudioSuiteButton } from './DownloadAudioSuiteButton';
 import { TxFidelityPanel } from '../layout/panels/TxFidelityPanel';
@@ -21,41 +21,252 @@ import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import type { RegisteredPluginPanel } from '../plugins/runtime/pluginRuntime';
 import { useAudioSuiteStore } from '../state/audio-suite-store';
 
-// ---------------------------------------------------------------
-// Audio-chain plugin slot — installed plugins whose manifest declares
-// `ui.panels[].slot === "tx-audio-tools.chain"` are owned by the
-// Audio Suite floating window (Phase 2 of issue #332). The chain
-// flow strip here is a read-only one-glance view; the "Audio Suite"
-// button opens the floating window where plugins can be reordered
-// (drag-and-drop tiles), previewed through the operator's headphones,
-// and tuned via their per-plugin panels stacked vertically.
-//
-// CFC stays below — it's WDSP-driven, ships in Zeus core (not as a
-// plugin), so it's not part of the reorderable chain.
-// ---------------------------------------------------------------
 const CHAIN_SLOT = 'tx-audio-tools.chain';
+const RX_CHAIN_SLOT = 'rx-audio-tools.chain';
 
-// ---------------------------------------------------------------
-// Master signal-flow strip — one-glance read of which chain blocks
-// are installed and active, drawn in Zeus tokens (brass-plate rail
-// matching v3 Lifted Dark). Uninstalled blocks render dim; CFC is
-// always on (WDSP-driven, can't be uninstalled).
-// ---------------------------------------------------------------
-function ChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
-  const v1Slots: Array<{ id: string; title: string; installed: boolean }> = useMemo(() => {
+type AudioRoute = 'tx' | 'rx';
+type ChainFlowSlot = { id: string; title: string; installed: boolean };
+
+function routeColor(route: AudioRoute) {
+  return route === 'tx' ? 'var(--tx)' : 'var(--accent)';
+}
+
+function RouteRail({
+  route,
+  title,
+  status,
+  actions,
+  children,
+}: {
+  route: AudioRoute;
+  title: string;
+  status: ReactNode;
+  actions: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      aria-label={title}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        minWidth: 0,
+        background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
+        border: '1px solid var(--line)',
+        borderTop: '2px solid ' + routeColor(route),
+        borderRadius: 6,
+        color: 'var(--fg-2)',
+        fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          minWidth: 0,
+          padding: '8px 10px',
+          borderBottom: '1px solid var(--line)',
+          flexWrap: 'wrap',
+        }}
+      >
+        <span
+          style={{
+            padding: '2px 7px',
+            borderRadius: 3,
+            border: '1px solid ' + routeColor(route),
+            background: 'var(--bg-2)',
+            color: routeColor(route),
+            fontSize: 10,
+            fontWeight: 800,
+            letterSpacing: 0,
+            lineHeight: 1.2,
+          }}
+        >
+          {route.toUpperCase()}
+        </span>
+        <span
+          style={{
+            color: 'var(--fg-1)',
+            fontSize: 12,
+            fontWeight: 700,
+            letterSpacing: 0,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {title}
+        </span>
+        {status}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            gap: 8,
+            marginLeft: 'auto',
+            flexWrap: 'wrap',
+          }}
+        >
+          {actions}
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px 12px',
+          padding: '8px 10px',
+          flexWrap: 'wrap',
+        }}
+      >
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function RouteStatusPill({
+  route,
+  label,
+  title,
+  muted = false,
+}: {
+  route: AudioRoute;
+  label: string;
+  title: string;
+  muted?: boolean;
+}) {
+  return (
+    <span
+      title={title}
+      style={{
+        padding: '2px 7px',
+        borderRadius: 3,
+        border: '1px solid ' + (muted ? 'var(--line)' : routeColor(route)),
+        background: 'var(--bg-1)',
+        color: muted ? 'var(--fg-3)' : 'var(--fg-1)',
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: 0,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function ChainStageChips({
+  slots,
+  bypassed,
+  emptyText,
+  bypassTitle,
+}: {
+  slots: ChainFlowSlot[];
+  bypassed: boolean;
+  emptyText: string;
+  bypassTitle: string;
+}) {
+  if (slots.length === 0) {
+    return (
+      <span
+        style={{
+          color: 'var(--fg-3)',
+          fontSize: 11,
+          fontWeight: 500,
+          letterSpacing: 0,
+        }}
+      >
+        {emptyText}
+      </span>
+    );
+  }
+
+  return (
+    <>
+      {slots.map((slot, i) => {
+        const dimForBypass = slot.id !== 'cfc' && bypassed;
+        return (
+          <span
+            key={slot.id}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
+          >
+            {i > 0 && (
+              <span
+                aria-hidden
+                style={{
+                  color: 'var(--fg-3)',
+                  fontFamily: 'var(--font-mono, JetBrains Mono, ui-monospace, monospace)',
+                }}
+              >
+                ›
+              </span>
+            )}
+            <span
+              style={{
+                maxWidth: 190,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                padding: '2px 8px',
+                borderRadius: 3,
+                background: slot.installed ? 'var(--bg-2)' : 'var(--bg-1)',
+                border: '1px solid ' + (slot.installed ? 'var(--accent)' : 'var(--line)'),
+                color: slot.installed ? 'var(--fg-0)' : 'var(--fg-3)',
+                opacity: dimForBypass ? 0.45 : (slot.installed ? 1 : 0.5),
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: 0,
+                transition: 'opacity 120ms ease-out',
+              }}
+              title={
+                dimForBypass
+                  ? bypassTitle
+                  : slot.installed
+                    ? 'Installed and active'
+                    : 'Not installed — click Download Audio Suite or Settings → Plugins → Install from URL'
+              }
+            >
+              {slot.title}
+            </span>
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+function TxChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
+  const v1Slots: ChainFlowSlot[] = useMemo(() => {
     const installedIds = new Set(chainPanels.map((p) => p.pluginId));
     return [
-      { id: 'eq',      title: 'EQ',      installed: installedIds.has('com.openhpsdr.zeus.samples.eq') },
-      { id: 'comp',    title: 'COMP',    installed: installedIds.has('com.openhpsdr.zeus.samples.compressor') },
-      { id: 'exciter', title: 'EXCITER', installed: installedIds.has('com.openhpsdr.zeus.samples.exciter') },
-      { id: 'bass',    title: 'BASS',    installed: installedIds.has('com.openhpsdr.zeus.samples.bass') },
-      { id: 'reverb',  title: 'REVERB',  installed: installedIds.has('com.openhpsdr.zeus.samples.reverb') },
-      { id: 'cfc',     title: 'CFC',     installed: true }, // WDSP-driven, always present
+      { id: 'eq', title: 'EQ', installed: installedIds.has('com.openhpsdr.zeus.samples.eq') },
+      {
+        id: 'comp',
+        title: 'COMP',
+        installed: installedIds.has('com.openhpsdr.zeus.samples.compressor'),
+      },
+      {
+        id: 'exciter',
+        title: 'EXCITER',
+        installed: installedIds.has('com.openhpsdr.zeus.samples.exciter'),
+      },
+      { id: 'bass', title: 'BASS', installed: installedIds.has('com.openhpsdr.zeus.samples.bass') },
+      {
+        id: 'reverb',
+        title: 'REVERB',
+        installed: installedIds.has('com.openhpsdr.zeus.samples.reverb'),
+      },
+      { id: 'cfc', title: 'CFC', installed: true },
     ];
   }, [chainPanels]);
 
   const masterBypassed = useAudioSuiteStore((s) => s.masterBypassed);
   const processingMode = useAudioSuiteStore((s) => s.processingMode);
+  const engineAvailable = useAudioSuiteStore((s) => s.vstEngineAvailable);
+  const engineActive = useAudioSuiteStore((s) => s.vstEngineActive);
   const chainOrder = useAudioSuiteStore((s) => s.chainOrder);
   const loadMasterBypassFromServer = useAudioSuiteStore(
     (s) => s.loadMasterBypassFromServer,
@@ -64,9 +275,6 @@ function ChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
     (s) => s.loadProcessingModeFromServer,
   );
 
-  // On the VST route the native v1 blocks don't run — the out-of-process
-  // engine hosts the operator's VST3 plugins instead. Show that chain (in
-  // signal order) so the strip reflects what's actually processing.
   const vstMode = processingMode === 'vst';
   const vstSlots = useMemo(() => {
     if (!vstMode) return [];
@@ -82,102 +290,174 @@ function ChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
   }, [vstMode, chainPanels, chainOrder]);
 
   const slots = vstMode ? vstSlots : v1Slots;
+  const statusLabel = !vstMode
+    ? 'NATIVE'
+    : engineActive
+      ? 'VST ON'
+      : engineAvailable
+        ? 'VST IDLE'
+        : 'VST OFF';
+  const statusTitle = !vstMode
+    ? 'Transmit audio is using the native in-process Audio Suite route.'
+    : engineActive
+      ? 'Transmit VST route is active.'
+      : engineAvailable
+        ? 'Transmit VST route is selected but the engine is not routing yet.'
+        : 'Transmit VST route is selected but no VST engine is installed.';
 
-  // Pull the master-bypass state from the server once on mount so a
-  // fresh browser session reflects the persisted operator preference.
-  // Subsequent broadcasts (0x1F) keep us in sync without polling.
-  // Processing mode (Native/VST) is likewise server-authoritative.
   useEffect(() => {
     loadMasterBypassFromServer();
     loadProcessingModeFromServer();
   }, [loadMasterBypassFromServer, loadProcessingModeFromServer]);
 
   return (
-    <div
-      role="presentation"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px 12px',
-        padding: '8px 12px',
-        background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
-        border: '1px solid var(--line)',
-        borderRadius: 6,
-        boxShadow: 'inset 0 2px 0 var(--power), inset 0 3px 8px rgba(255, 201, 58, 0.08)',
-        fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
-        fontSize: 11,
-        letterSpacing: 1.2,
-        textTransform: 'uppercase',
-        color: 'var(--fg-2)',
-        flexWrap: 'wrap',
-      }}
+    <RouteRail
+      route="tx"
+      title="TX Audio"
+      status={
+        <RouteStatusPill
+          route="tx"
+          label={statusLabel}
+          title={statusTitle}
+          muted={!vstMode}
+        />
+      }
+      actions={
+        <>
+          <SuiteButton route="tx" />
+          {!vstMode && <DownloadAudioSuiteButton />}
+        </>
+      }
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <ProcessingModeButton />
         <MasterBypassButton />
       </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 auto', flexWrap: 'wrap', minWidth: 0 }}>
-        <span style={{ marginRight: 4, color: 'var(--fg-1)', fontWeight: 600, flex: '0 0 auto' }}>
-          {vstMode ? 'VST chain' : 'TX chain'}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          flex: '1 1 260px',
+          flexWrap: 'wrap',
+          minWidth: 0,
+        }}
+      >
+        <span
+          style={{
+            color: 'var(--fg-1)',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: 0,
+            flex: '0 0 auto',
+          }}
+        >
+          {vstMode ? 'TX VST chain' : 'TX chain'}
         </span>
-        {vstMode && slots.length === 0 && (
-          <span style={{ color: 'var(--fg-3)', fontSize: 10, fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>
-            No VST3 plugins in the chain — open the Audio Suite to scan and add some.
-          </span>
-        )}
-        {slots.map((slot, i) => {
-          // CFC is downstream in WDSP and unaffected by master bypass —
-          // never dim it. Plugin slots dim to 45% when bypassed to mirror
-          // the per-plugin bypass visual convention (operator sees the
-          // chain is inert).
-          const dimForBypass = slot.id !== 'cfc' && masterBypassed;
-          return (
-            <span key={slot.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              {i > 0 && (
-                <span aria-hidden style={{ color: 'var(--fg-3)', fontFamily: 'var(--font-mono, JetBrains Mono, ui-monospace, monospace)' }}>›</span>
-              )}
-              <span
-                style={{
-                  padding: '2px 8px',
-                  borderRadius: 3,
-                  background: slot.installed ? 'var(--bg-2)' : 'var(--bg-1)',
-                  border: '1px solid ' + (slot.installed ? 'var(--accent)' : 'var(--line)'),
-                  color: slot.installed ? 'var(--fg-0)' : 'var(--fg-3)',
-                  opacity: dimForBypass ? 0.45 : (slot.installed ? 1 : 0.5),
-                  fontSize: 10,
-                  fontWeight: 500,
-                  transition: 'opacity 120ms ease-out',
-                }}
-                title={
-                  dimForBypass
-                    ? 'Master bypass engaged — this stage is inert. Click BYPASS to engage the chain.'
-                    : slot.installed
-                    ? 'Installed and active'
-                    : 'Not installed — click Download Audio Suite or Settings → Plugins → Install from URL'
-                }
-              >
-                {slot.title}
-              </span>
-            </span>
-          );
-        })}
+        <ChainStageChips
+          slots={slots}
+          bypassed={masterBypassed}
+          emptyText="No active TX VST plugins"
+          bypassTitle="TX master bypass engaged — this stage is inert. Click BYPASS to engage the TX chain."
+        />
       </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '0 0 auto', flexWrap: 'nowrap' }}>
-        <AudioSuiteOpenButton />
-        {!vstMode && <DownloadAudioSuiteButton />}
-      </div>
-    </div>
+    </RouteRail>
   );
 }
 
-// Master-bypass toggle for the whole plugin chain. One click instead of
-// six per-plugin bypass clicks. Sits at the head of the brass rail so
-// it's the first thing the operator's eye lands on. Visual convention
-// matches the per-plugin bypass (feedback_audio_plugin_bypass_convention):
-//   engaged   (bypassed) → --tx background, white text, "BYPASS" label
-//   released (chain hot) → --bg-2 background, --fg-2 text, "BYPASS" label
+function RxChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
+  const rxMasterBypassed = useAudioSuiteStore((s) => s.rxMasterBypassed);
+  const rxChainOrder = useAudioSuiteStore((s) => s.rxChainOrder);
+  const rxVstEngineAvailable = useAudioSuiteStore((s) => s.rxVstEngineAvailable);
+  const rxVstEngineActive = useAudioSuiteStore((s) => s.rxVstEngineActive);
+  const rxVstActivePlugins = useAudioSuiteStore((s) => s.rxVstActivePlugins);
+  const rxVstDegradedBlocks = useAudioSuiteStore((s) => s.rxVstDegradedBlocks);
+  const loadRxChainOrderFromServer = useAudioSuiteStore((s) => s.loadRxChainOrderFromServer);
+  const loadRxMasterBypassFromServer = useAudioSuiteStore(
+    (s) => s.loadRxMasterBypassFromServer,
+  );
+  const loadRxProcessingModeFromServer = useAudioSuiteStore(
+    (s) => s.loadRxProcessingModeFromServer,
+  );
+
+  const slots = useMemo(() => {
+    const orderIndex = new Map(rxChainOrder.map((id, i) => [id, i] as const));
+    return chainPanels
+      .filter((p) => orderIndex.has(p.pluginId))
+      .sort((a, b) => orderIndex.get(a.pluginId)! - orderIndex.get(b.pluginId)!)
+      .map((p) => ({
+        id: p.pluginId,
+        title: (p.title || p.pluginId.split('.').pop() || 'RX VST').toUpperCase(),
+        installed: true,
+      }));
+  }, [chainPanels, rxChainOrder]);
+
+  const statusLabel = rxVstEngineActive
+    ? 'VST ON'
+    : rxVstEngineAvailable
+      ? 'VST IDLE'
+      : 'VST OFF';
+  const statusTitle = rxVstEngineActive
+    ? `Receive VST engine active (${rxVstActivePlugins} plugin${rxVstActivePlugins === 1 ? '' : 's'}, ${rxVstDegradedBlocks} degraded blocks).`
+    : rxVstEngineAvailable
+      ? 'Receive VST engine is available but idle.'
+      : 'Receive VST engine is not installed.';
+
+  useEffect(() => {
+    loadRxChainOrderFromServer();
+    loadRxMasterBypassFromServer();
+    loadRxProcessingModeFromServer();
+  }, [loadRxChainOrderFromServer, loadRxMasterBypassFromServer, loadRxProcessingModeFromServer]);
+
+  return (
+    <RouteRail
+      route="rx"
+      title="RX Audio"
+      status={
+        <RouteStatusPill
+          route="rx"
+          label={statusLabel}
+          title={statusTitle}
+          muted={!rxVstEngineActive}
+        />
+      }
+      actions={<SuiteButton route="rx" />}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <RxMasterBypassButton />
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          flex: '1 1 260px',
+          flexWrap: 'wrap',
+          minWidth: 0,
+        }}
+      >
+        <span
+          style={{
+            color: 'var(--fg-1)',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: 0,
+            flex: '0 0 auto',
+          }}
+        >
+          RX VST chain
+        </span>
+        <ChainStageChips
+          slots={slots}
+          bypassed={rxMasterBypassed}
+          emptyText="No active RX VST plugins"
+          bypassTitle="RX master bypass engaged — this stage is inert. Click BYPASS to engage the RX chain."
+        />
+      </div>
+    </RouteRail>
+  );
+}
+
 function MasterBypassButton() {
   const masterBypassed = useAudioSuiteStore((s) => s.masterBypassed);
   const setMasterBypassed = useAudioSuiteStore((s) => s.setMasterBypassed);
@@ -188,37 +468,54 @@ function MasterBypassButton() {
       aria-pressed={masterBypassed}
       title={
         masterBypassed
-          ? 'Master bypass ENGAGED — entire plugin chain (NoiseGate / EQ / Comp / Exciter / Bass / Reverb) is inert; mic passes through untouched. CFC is unaffected. Click to engage the chain.'
-          : 'Plugin chain ACTIVE — all installed plugins are processing your mic. Click to disengage the whole chain in one shot (per-plugin bypass states are preserved).'
+          ? 'TX master bypass ENGAGED — transmit plugin chain is inert; mic passes through untouched. CFC is unaffected. Click to engage the TX chain.'
+          : 'TX plugin chain ACTIVE — installed plugins are processing your mic. Click to bypass the TX chain.'
       }
-      style={{
-        padding: '4px 12px',
-        borderRadius: 4,
-        border: '1px solid ' + (masterBypassed ? 'var(--tx)' : 'var(--accent)'),
-        background: masterBypassed ? 'var(--tx)' : 'var(--bg-2)',
-        color: masterBypassed ? '#fff' : 'var(--fg-2)',
-        cursor: 'pointer',
-        fontSize: 10,
-        fontWeight: 700,
-        letterSpacing: 1.2,
-        textTransform: 'uppercase',
-        fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
-        minWidth: 72,
-        transition: 'background 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out',
-      }}
+      style={routeButtonStyle(masterBypassed)}
     >
       Bypass
     </button>
   );
 }
 
-// Native ↔ VST processing-route selector. Native (default) = Brian's
-// in-process Audio Suite chain. VST = the operator's VST3 plugins hosted in
-// the out-of-process VSTHost engine (crash-isolated from the radio). The two
-// are mutually exclusive. PROVISIONAL placement/labels — the maintainer owns
-// the final Audio Suite UX; this is a functional control so the route can be
-// driven and tested. Palette uses tokens only (--accent for the active VST
-// route, --tx for a "VST selected but engine not live" warning).
+function RxMasterBypassButton() {
+  const rxMasterBypassed = useAudioSuiteStore((s) => s.rxMasterBypassed);
+  const setRxMasterBypassed = useAudioSuiteStore((s) => s.setRxMasterBypassed);
+  return (
+    <button
+      type="button"
+      onClick={() => setRxMasterBypassed(!rxMasterBypassed)}
+      aria-pressed={rxMasterBypassed}
+      title={
+        rxMasterBypassed
+          ? 'RX Audio Suite bypass ENGAGED — receive VST inserts are inert. Click to engage the RX chain.'
+          : 'RX Audio Suite ACTIVE — receive VST inserts are processing audio. Click to bypass the RX chain.'
+      }
+      style={routeButtonStyle(rxMasterBypassed)}
+    >
+      Bypass
+    </button>
+  );
+}
+
+function routeButtonStyle(active: boolean): CSSProperties {
+  return {
+    padding: '4px 12px',
+    borderRadius: 4,
+    border: '1px solid ' + (active ? 'var(--tx)' : 'var(--accent)'),
+    background: active ? 'var(--tx)' : 'var(--bg-2)',
+    color: active ? '#fff' : 'var(--fg-2)',
+    cursor: 'pointer',
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+    fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
+    minWidth: 72,
+    transition: 'background 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out',
+  };
+}
+
 function ProcessingModeButton() {
   const mode = useAudioSuiteStore((s) => s.processingMode);
   const engineAvailable = useAudioSuiteStore((s) => s.vstEngineAvailable);
@@ -226,19 +523,19 @@ function ProcessingModeButton() {
   const setProcessingMode = useAudioSuiteStore((s) => s.setProcessingMode);
 
   const isVst = mode === 'vst';
-  const vstWarn = isVst && !engineActive; // selected but engine not routing
+  const vstWarn = isVst && !engineActive;
 
   const border = isVst ? (vstWarn ? 'var(--tx)' : 'var(--accent)') : 'var(--line)';
   const background = isVst && !vstWarn ? 'var(--accent)' : 'var(--bg-2)';
   const color = isVst ? (vstWarn ? 'var(--tx)' : '#fff') : 'var(--fg-2)';
 
   const title = !isVst
-    ? 'Processing route: NATIVE — the in-process Audio Suite chain (default). Click to route TX mic audio through the out-of-process VST engine instead.'
+    ? 'Processing route: NATIVE — the in-process Audio Suite chain. Click to route TX mic audio through the out-of-process VST engine instead.'
     : engineActive
-    ? 'Processing route: VST — TX mic audio runs through the out-of-process VST engine (your Audio Suite VST3 plugins, loaded at default settings). Click to return to the native chain.'
-    : engineAvailable
-    ? 'VST route selected, but the engine is not routing yet (starting up, or it failed to come up). TX audio passes through clean meanwhile. Click to return to the native chain.'
-    : 'VST route selected, but no VST engine is installed — install VSTHost (github.com/KlayaR/VSTHost). TX audio passes through clean. Click to return to the native chain.';
+      ? 'Processing route: VST — TX mic audio runs through the out-of-process VST engine. Click to return to the native chain.'
+      : engineAvailable
+        ? 'VST route selected, but the engine is not routing yet. TX audio passes through clean meanwhile. Click to return to the native chain.'
+        : 'VST route selected, but no VST engine is installed. TX audio passes through clean. Click to return to the native chain.';
 
   return (
     <button
@@ -255,7 +552,7 @@ function ProcessingModeButton() {
         cursor: 'pointer',
         fontSize: 10,
         fontWeight: 700,
-        letterSpacing: 1.2,
+        letterSpacing: 0,
         whiteSpace: 'nowrap',
         minWidth: 72,
         transition: 'background 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out',
@@ -266,10 +563,7 @@ function ProcessingModeButton() {
   );
 }
 
-// Opens the Audio Suite floating window. Disabled (visually dimmed) when
-// no chain plugins are installed — there's nothing to show, and the
-// Download Audio Suite button to its right is the right action.
-function AudioSuiteOpenButton() {
+function SuiteButton({ route }: { route: AudioRoute }) {
   const openTx = useAudioSuiteStore((s) => s.openTx);
   const openRx = useAudioSuiteStore((s) => s.openRx);
   const buttonStyle: CSSProperties = {
@@ -280,55 +574,78 @@ function AudioSuiteOpenButton() {
     color: 'var(--fg-0)',
     cursor: 'pointer',
     fontSize: 10,
-    fontWeight: 600,
-    letterSpacing: 1,
+    fontWeight: 700,
+    letterSpacing: 0,
     textTransform: 'uppercase',
     fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
     whiteSpace: 'nowrap',
   };
   return (
-    <>
-      <button
-        type="button"
-        onClick={openTx}
-        style={buttonStyle}
-        title="Open the TX Audio Suite window to reorder, preview, and tune transmit plugins"
-      >
-        TX Suite
-      </button>
-      <button
-        type="button"
-        onClick={openRx}
-        style={buttonStyle}
-        title="Open the RX Audio Suite window to reorder and tune receive VST inserts"
-      >
-        RX Suite
-      </button>
-    </>
+    <button
+      type="button"
+      onClick={route === 'tx' ? openTx : openRx}
+      style={buttonStyle}
+      title={
+        route === 'tx'
+          ? 'Open the TX Audio Suite window to reorder, preview, and tune transmit plugins'
+          : 'Open the RX Audio Suite window to reorder and tune receive VST inserts'
+      }
+    >
+      {route === 'tx' ? 'TX Suite' : 'RX Suite'}
+    </button>
   );
 }
 
-// ---------------------------------------------------------------
-// TxAudioToolsPanel — chain-flow strip + CFC.
-//
-// Audio-chain plugins (issue #332, Phase 2 onward) live in the Audio
-// Suite floating window — click the "Audio Suite" button in the chain
-// strip header to open it. The strip here is purely informational:
-// one tile per known v1/v2 block showing whether it's installed, so
-// the operator can see at a glance what's loaded without opening the
-// window. CFC stays inline — it's WDSP-driven, ships in Zeus core,
-// and isn't part of the reorderable plugin chain.
-// ---------------------------------------------------------------
 export function TxAudioToolsPanel() {
   const allPanels = usePluginPanels();
   const chainPanels = useMemo(
     () => allPanels.filter((p) => p.slot === CHAIN_SLOT),
     [allPanels],
   );
+  const rxChainPanels = useMemo(
+    () => allPanels.filter((p) => p.slot === RX_CHAIN_SLOT),
+    [allPanels],
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <ChainFlow chainPanels={chainPanels} />
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))',
+          gap: 12,
+          alignItems: 'stretch',
+        }}
+      >
+        <TxChainFlow chainPanels={chainPanels} />
+        <RxChainFlow chainPanels={rxChainPanels} />
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          color: 'var(--fg-2)',
+          fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
+          fontSize: 11,
+          fontWeight: 800,
+          letterSpacing: 0,
+        }}
+      >
+        <span
+          style={{
+            padding: '2px 7px',
+            borderRadius: 3,
+            border: '1px solid var(--tx)',
+            background: 'var(--bg-2)',
+            color: 'var(--tx)',
+          }}
+        >
+          TX
+        </span>
+        <span>Transmit tools</span>
+      </div>
 
       <div className="ps-card">
         <h4>
@@ -338,7 +655,6 @@ export function TxAudioToolsPanel() {
         <TxFidelityPanel />
       </div>
 
-      {/* CFC — WDSP-driven, always available, always last in the chain. */}
       <CfcSettingsPanel />
     </div>
   );

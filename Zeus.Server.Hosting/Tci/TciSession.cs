@@ -1727,9 +1727,8 @@ public sealed class TciSession : IDisposable
     private void HandleRxNrEnableEx(string[] args)
     {
         // rx_nr_enable / rx_nr_enable_ex:<rx>,<bool>[,<level>]  — spec §5.4.
-        // level 1..4 maps to NrMode: 1=Anr (NR), 2=Emnr (NR2), 3=Sbnr (NR4),
-        // 4=Nr5 (SPNR). bool=false → NrMode.Off
-        // regardless of level.
+        // level maps to NrMode: 1=Anr (NR), 2=Emnr (NR2), 3=Sbnr (NR4).
+        // Unsupported levels and bool=false resolve to NrMode.Off.
         if (args.Length < 2) return;
         if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
         if (!TciProtocol.TryParseBool(args[1], out bool enable)) return;
@@ -1744,7 +1743,7 @@ public sealed class TciSession : IDisposable
             {
                 2 => NrMode.Emnr,
                 3 => NrMode.Sbnr,
-                4 => NrMode.Nr5,
+                > 3 => NrMode.Off,
                 _ => NrMode.Anr,
             };
         }

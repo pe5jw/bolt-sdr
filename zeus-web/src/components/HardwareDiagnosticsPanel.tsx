@@ -155,11 +155,6 @@ function pct(v: number | null | undefined): string {
   return `${v.toFixed(1)}%`;
 }
 
-function lin(v: number | null | undefined): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return '-';
-  return Math.abs(v) < 0.01 ? v.toFixed(6) : v.toFixed(3);
-}
-
 function count(v: number | null | undefined): string {
   if (v === null || v === undefined) return '-';
   return Number.isFinite(v) ? Math.round(v).toLocaleString() : '-';
@@ -1460,7 +1455,6 @@ function DspLiveDiagnosticsPanel({ diag }: { diag: DspLiveDiagnosticsDto | null 
 
   const candidates = diag.externalEngineCandidates.slice(0, 4);
   const constraints = diag.constraints.length > 0 ? diag.constraints.join(', ') : 'none';
-  const nr5TuningConstraints = diag.nr5TuningConstraints.length > 0 ? diag.nr5TuningConstraints.join(', ') : 'none';
   const externalBakeoffConstraints = diag.externalEngineBakeoffConstraints.length > 0
     ? diag.externalEngineBakeoffConstraints.join(', ')
     : 'none';
@@ -1475,19 +1469,12 @@ function DspLiveDiagnosticsPanel({ diag }: { diag: DspLiveDiagnosticsDto | null 
           { label: 'Tone', value: diag.qualityTone },
           { label: 'Score', value: `${diag.readinessScore}/100` },
           { label: 'Live Benchmark', value: boolLabel(diag.readyForLiveBenchmark) },
-          { label: 'NR5 Legacy', value: `${boolLabel(diag.readyForNr5Tuning)} / ${diag.nr5TuningStatus}` },
           { label: 'RX Suite Bakeoff', value: `${boolLabel(diag.readyForExternalEngineBakeoff)} / ${diag.externalEngineBakeoffStatus}` },
           { label: 'Rollout Gate', value: diag.rolloutGate },
           { label: 'Scene', value: `${diag.frontendSceneStatus} / ${age(diag.frontendSceneAgeMs)}` },
           { label: 'Runtime', value: `${diag.requestedNrMode} -> ${diag.effectiveNrMode}` },
           { label: 'NR Aligned', value: boolLabel(diag.runtimeAligned) },
           { label: 'RX Chain', value: diag.rxChainScore === null ? diag.rxChainLabel : `${diag.rxChainScore} / ${diag.rxChainLabel ?? '-'}` },
-          { label: 'NR5 Confidence', value: lin(diag.nr5SignalConfidence) },
-          { label: 'NR5 AGC Gate', value: lin(diag.nr5AgcGate) },
-          { label: 'NR5 Probability', value: lin(diag.nr5SignalProbability) },
-          { label: 'NR5 Texture', value: lin(diag.nr5TextureFill) },
-          { label: 'NR5 Mask Smooth', value: lin(diag.nr5MaskSmoothing) },
-          { label: 'NR5 Floor Push', value: db(diag.nr5FloorReductionDb) },
           { label: 'Benchmark Plan', value: diag.benchmarkPlanEndpoint },
           { label: 'Scenarios', value: diag.benchmarkScenarioCount },
           { label: 'Next Scenarios', value: diag.nextBenchmarkScenarios.join(', ') || '-' },
@@ -1499,9 +1486,6 @@ function DspLiveDiagnosticsPanel({ diag }: { diag: DspLiveDiagnosticsDto | null 
       </div>
       <div className="mono" style={{ fontSize: 10, color: diag.constraints.length > 0 ? 'var(--tx)' : 'var(--fg-3)', overflowWrap: 'anywhere' }}>
         constraints: {constraints}
-      </div>
-      <div className="mono" style={{ fontSize: 10, color: diag.readyForNr5Tuning ? 'var(--fg-3)' : 'var(--tx)', overflowWrap: 'anywhere' }}>
-        nr5 legacy: {nr5TuningConstraints}
       </div>
       <div className="mono" style={{ fontSize: 10, color: diag.readyForExternalEngineBakeoff ? 'var(--fg-3)' : 'var(--tx)', overflowWrap: 'anywhere' }}>
         rx suite bakeoff: {externalBakeoffConstraints}
@@ -2159,7 +2143,6 @@ export function HardwareDiagnosticsPanel() {
   const rxMeters = dsp?.rxMeters;
   const rxDynamicRange = dsp?.rxDynamicRange;
   const audio = dsp?.audio;
-  const nr5Spnr = dsp?.nr5SpnrDiagnostics ?? rxDsp?.nr5SpnrDiagnostics ?? smartNrCondition?.nr5SpnrDiagnostics ?? null;
   const listenability = dsp?.listenability;
   const frontendAudio = diag?.frontendAudioPlayback;
   const dspFields: Field[] = [
@@ -2170,33 +2153,9 @@ export function HardwareDiagnosticsPanel() {
     { label: 'WDSP Native', value: boolLabel(dsp?.wdspNativeLoadable) },
     { label: 'NR2 Post2', value: boolLabel(dsp?.wdspEmnrPost2Available) },
     { label: 'NR4 SBNR', value: boolLabel(dsp?.wdspNr4SbnrAvailable) },
-    { label: 'NR5 SPNR', value: boolLabel(dsp?.wdspNr5SpnrAvailable) },
     { label: 'NR4 Readiness', value: dsp?.nr4Readiness },
-    { label: 'NR5 Readiness', value: dsp?.nr5Readiness },
     { label: 'NR Requested', value: dsp?.requestedNrMode },
     { label: 'NR Effective', value: dsp?.effectiveNrMode },
-    { label: 'NR5 Learning', value: nr5Spnr ? count(nr5Spnr.learnedFrames) : null },
-    { label: 'NR5 Presence', value: lin(nr5Spnr?.presencePeak) },
-    { label: 'NR5 Salience', value: lin(nr5Spnr?.saliencePeak) },
-    { label: 'NR5 Coherence', value: lin(nr5Spnr?.coherencePeak) },
-    { label: 'NR5 Ridge', value: lin(nr5Spnr?.ridgePeak) },
-    { label: 'NR5 Confidence', value: lin(nr5Spnr?.signalConfidence) },
-    { label: 'NR5 AGC Gate', value: lin(nr5Spnr?.agcGate) },
-    { label: 'NR5 Probability', value: lin(nr5Spnr?.signalProbability) },
-    { label: 'NR5 Texture Fill', value: lin(nr5Spnr?.textureFill) },
-    { label: 'NR5 Mask Smooth', value: lin(nr5Spnr?.maskSmoothing) },
-    { label: 'NR5 Level Drive', value: lin(nr5Spnr?.levelDrive) },
-    { label: 'NR5 Recovery', value: lin(nr5Spnr?.recoveryDrive) },
-    { label: 'NR5 Makeup', value: db(nr5Spnr?.makeupGainDb) },
-    { label: 'NR5 Suppression', value: db(nr5Spnr?.suppressionDb) },
-    { label: 'NR5 Floor Push', value: db(nr5Spnr?.floorReductionDb) },
-    { label: 'NR5 Adj Trust', value: lin(nr5Spnr?.adjacentNoiseTrust) },
-    { label: 'NR5 Adj Drive', value: lin(nr5Spnr?.adjacentNoiseDrive) },
-    { label: 'NR5 Adj Balance', value: lin(nr5Spnr?.adjacentNoiseSideBalance) },
-    { label: 'NR5 Adj Skew', value: db(nr5Spnr?.adjacentNoiseAsymmetryDb) },
-    { label: 'NR5 Range', value: db(nr5Spnr?.dynamicRangeDb) },
-    { label: 'NR5 AGC Gain', value: db(nr5Spnr?.agcGainDb) },
-    { label: 'NR5 Output', value: db(nr5Spnr?.outputDbfs) },
     { label: 'Wisdom', value: dsp?.wdspWisdomPhase },
     { label: 'Channel', value: dsp?.channelId },
     { label: 'DSP Rate', value: dsp?.sampleRateHz },
@@ -2289,21 +2248,7 @@ export function HardwareDiagnosticsPanel() {
     { label: 'NB Threshold', value: rxDsp?.nbThreshold },
     { label: 'Manual Notches', value: rxDsp?.manualNotchCount },
     { label: 'Active Notches', value: rxDsp?.activeManualNotchCount },
-    { label: 'NR5 SPNR', value: boolLabel(rxDsp?.wdspNr5SpnrAvailable) },
     { label: 'NR4 Ready', value: rxDsp?.nr4Readiness },
-    { label: 'NR5 Ready', value: rxDsp?.nr5Readiness },
-    { label: 'NR5 Run', value: boolLabel(nr5Spnr?.run) },
-    { label: 'NR5 AGC', value: boolLabel(nr5Spnr?.agcRun) },
-    { label: 'NR5 Target', value: lin(nr5Spnr?.targetRms) },
-    { label: 'NR5 In', value: db(nr5Spnr?.inputDbfs) },
-    { label: 'NR5 Out', value: db(nr5Spnr?.outputDbfs) },
-    { label: 'NR5 Noise', value: db(nr5Spnr?.noiseFloorDb) },
-    { label: 'NR5 Coherence', value: lin(nr5Spnr?.coherencePeak) },
-    { label: 'NR5 Ridge', value: lin(nr5Spnr?.ridgePeak) },
-    { label: 'NR5 Confidence', value: lin(nr5Spnr?.signalConfidence) },
-    { label: 'NR5 AGC Gate', value: lin(nr5Spnr?.agcGate) },
-    { label: 'NR5 Floor Push', value: db(nr5Spnr?.floorReductionDb) },
-    { label: 'NR5 Range', value: db(nr5Spnr?.dynamicRangeDb) },
     { label: 'NR Applied', value: boolLabel(rxDsp?.appliedNrMatchesRequested) },
     { label: 'AGC Applied', value: boolLabel(rxDsp?.appliedAgcMatchesRequested) },
     { label: 'SQL Applied', value: boolLabel(rxDsp?.appliedSquelchMatchesRequested) },
@@ -2680,7 +2625,7 @@ export function HardwareDiagnosticsPanel() {
             <div className="ps-card">
               <h4>
                 DSP Modernization Readiness
-                <span className="ps-card-hint">live gate for NR5 / benchmark / external candidates</span>
+                <span className="ps-card-hint">live gate for benchmarks and external candidates</span>
               </h4>
               <DspLiveDiagnosticsPanel diag={dspLiveDiagnostics} />
             </div>

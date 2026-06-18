@@ -58,17 +58,14 @@ import { NrSettingsSection, type NrSettingsMode } from './nr/NrSettingsSection';
 // Leveler max-gain moved to TxFilterPanel (alongside DRV/TUN/MIC) — it's
 // a TX-only stage and lives with the other TX controls now.
 
-// Mirrors NrControls.tsx. NR3 (RNNR) is intentionally skipped; NR5/SPNR is
-// retained in the DTO/backend for saved-profile compatibility, but no longer
-// appears in the normal operator cycle now that RX Suite VST denoise is the
-// preferred receive cleanup path.
+// Mirrors NrControls.tsx. NR3 (RNNR) is intentionally skipped, and removed
+// NR modes are not exposed in the normal operator cycle.
 const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
 const NR_LABEL: Record<NrMode, string> = {
   Off: 'NR',
   Anr: 'NR',
   Emnr: 'NR2',
   Sbnr: 'NR4',
-  Nr5: 'NR5',
 };
 
 function nrButtonTitle(mode: NrMode): string {
@@ -77,7 +74,6 @@ function nrButtonTitle(mode: NrMode): string {
     case 'Anr': return 'NR1 (ANR, time-domain LMS) — right-click for tunables';
     case 'Emnr': return 'NR2 (EMNR, spectral) — right-click for tunables';
     case 'Sbnr': return 'NR4 (SBNR, libspecbleach) — right-click for tunables';
-    case 'Nr5': return 'NR5 (SPNR weak-signal spectral NR, experimental)';
   }
 }
 

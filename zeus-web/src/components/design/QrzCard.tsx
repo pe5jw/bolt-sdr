@@ -48,9 +48,12 @@ import { useQrzStore } from '../../state/qrz-store';
 import { useRotatorStore } from '../../state/rotator-store';
 import { useContactPropagation } from '../../state/use-contact-propagation';
 import type { PropagationBand } from '../../api/propagation';
+import type { WorkedCallsignRecentQso, WorkedCallsignSummary } from '../../api/log';
 
 type QrzCardProps = {
   contact: Contact | null;
+  workedSummary?: WorkedCallsignSummary | null;
+  workedSummaryLoading?: boolean;
   enriching: boolean;
   lookupError?: string | null;
   onLogQso?: () => void;
@@ -61,6 +64,41 @@ type QrzCardProps = {
 
 function fmtBearing(deg: number): string {
   return `${Math.round(((deg % 360) + 360) % 360).toString().padStart(3, '0')}°`;
+}
+
+function formatQsoTimeUtc(isoString: string): string {
+  const date = new Date(isoString);
+  return date.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'UTC',
+  });
+}
+
+function formatQsoDateUtc(isoString: string): string {
+  const date = new Date(isoString);
+  return date.toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+function formatQsoDateTimeUtc(isoString: string): string {
+  return `${formatQsoDateUtc(isoString)} ${formatQsoTimeUtc(isoString)}Z`;
+}
+
+function fmtMhz(freq: number | null | undefined): string | null {
+  return typeof freq === 'number' && Number.isFinite(freq) ? `${freq.toFixed(3)} MHz` : null;
+}
+
+function compactList(parts: Array<string | null | undefined>): string {
+  return parts.filter((p): p is string => !!p).join(' · ');
+}
+
+function qsoReport(sent: string | null | undefined, rcvd: string | null | undefined): string | null {
+  return sent || rcvd ? `RST ${sent ?? '—'}/${rcvd ?? '—'}` : null;
 }
 
 const DAY_NIGHT_GLYPH: Record<string, { icon: string; label: string }> = {
@@ -79,7 +117,108 @@ function propClass(status: string): string {
   }
 }
 
-export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso, onClear, canClear }: QrzCardProps) {
+function recentQsoLine(qso: WorkedCallsignRecentQso): string {
+  return compactList([
+    qso.band,
+    qso.mode,
+    fmtMhz(qso.frequencyMhz),
+    qsoReport(qso.rstSent, qso.rstRcvd),
+  ]);
+}
+
+function WorkedBeforePanel({
+  summary,
+  loading,
+}: {
+  summary: WorkedCallsignSummary | null | undefined;
+  loading: boolean | undefined;
+}) {
+  if (loading && !summary) {
+    return (
+      <div className="qrz-worked qrz-worked--loading">
+        <div className="qrz-worked-head">
+          <span className="qrz-worked-label">Logbook · Worked Before</span>
+          <span className="qrz-worked-pill mono">Checking</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!summary) return null;
+
+  const lastWhen = summary.lastWorkedUtc ? formatQsoDateTimeUtc(summary.lastWorkedUtc) : null;
+  const lastMeta = compactList([
+    summary.lastBand,
+    summary.lastMode,
+    fmtMhz(summary.lastFrequencyMhz),
+    qsoReport(summary.lastRstSent, summary.lastRstRcvd),
+  ]);
+  const lastPlace = compactList([summary.lastGrid, summary.lastState, summary.lastCountry]);
+
+  return (
+    <div className={`qrz-worked ${summary.workedBefore ? 'qrz-worked--hit' : 'qrz-worked--new'}`}>
+      <div className="qrz-worked-head">
+        <span className="qrz-worked-label">Logbook · Worked Before</span>
+        <span className="qrz-worked-pill mono">
+          {summary.workedBefore
+            ? `${summary.totalCount} QSO${summary.totalCount === 1 ? '' : 's'}`
+            : 'New call'}
+        </span>
+      </div>
+
+      {summary.workedBefore ? (
+        <>
+          <div className="qrz-worked-last">
+            <div className="qrz-worked-last-date mono">{lastWhen}</div>
+            <div className="qrz-worked-last-meta mono">{lastMeta}</div>
+            {(lastPlace || summary.lastComment) && (
+              <div className="qrz-worked-last-note">
+                {compactList([lastPlace, summary.lastComment])}
+              </div>
+            )}
+          </div>
+          <div className="qrz-worked-chips">
+            {summary.bands.slice(0, 6).map((band) => (
+              <span key={`band-${band}`} className="qrz-worked-chip">{band}</span>
+            ))}
+            {summary.modes.slice(0, 6).map((mode) => (
+              <span key={`mode-${mode}`} className="qrz-worked-chip qrz-worked-chip--mode">{mode}</span>
+            ))}
+          </div>
+          {summary.recentQsos.length > 0 && (
+            <div className="qrz-worked-recent">
+              {summary.recentQsos.slice(0, 3).map((qso) => (
+                <div
+                  key={`${qso.qsoDateTimeUtc}-${qso.band ?? ''}-${qso.mode ?? ''}-${qso.frequencyMhz}`}
+                  className="qrz-worked-recent-row mono"
+                  title={compactList([recentQsoLine(qso), qso.grid, qso.state, qso.country, qso.comment])}
+                >
+                  <span>{formatQsoDateTimeUtc(qso.qsoDateTimeUtc)}</span>
+                  <span>{recentQsoLine(qso)}</span>
+                  {qso.qrzLogId && <span className="qrz-worked-sync">QRZ</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="qrz-worked-empty mono">No previous QSOs in local log</div>
+      )}
+    </div>
+  );
+}
+
+export function QrzCard({
+  contact,
+  workedSummary,
+  workedSummaryLoading,
+  enriching,
+  lookupError,
+  onLogQso,
+  canLogQso,
+  onClear,
+  canClear,
+}: QrzCardProps) {
   const qrzHome = useQrzStore((s) => s.home);
   const rotConnected = useRotatorStore((s) => !!s.status?.connected);
   const setRotatorAz = useRotatorStore((s) => s.setAzimuth);
@@ -214,6 +353,8 @@ export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso, 
           {enriching && <div className="qrz-scan" />}
         </div>
       </div>
+
+      <WorkedBeforePanel summary={workedSummary} loading={workedSummaryLoading} />
 
       {prop?.available && (
         <div className="qrz-prop">

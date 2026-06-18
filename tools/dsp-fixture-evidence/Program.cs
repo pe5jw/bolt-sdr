@@ -130,7 +130,7 @@ internal static class WdspFixtureEvidenceTool
                         ["windowedRmsSpreadDb"] = Math.Round(run.Metrics.WindowedRmsSpreadDb, 6),
                         ["clippingCount"] = run.ClippingCount,
                         ["txStageMeters"] = run.TxMeters,
-                        ["nr5Diagnostics"] = run.Nr5Diagnostics,
+                        ["candidateDiagnostics"] = run.CandidateDiagnostics,
                         ["expectedTonesHz"] = fixture.ExpectedTonesHz.Select(kv => new Dictionary<string, object?>
                         {
                             ["name"] = kv.Key,
@@ -370,10 +370,6 @@ internal static class WdspFixtureEvidenceTool
             sw.Stop();
             float[] analysis = Tail(audio, AnalysisSamples);
             var metrics = MeasureStage(stages, "rx-analyze-audio", "RXA output analysis", () => DspBenchmarkAnalyzer.AnalyzeAudio(analysis, AudioSampleRateHz, fixture.ExpectedTonesHz));
-            var nr5Diagnostics = profile.NrMode == NrMode.Nr5
-                ? MeasureStage(stages, "rx-fetch-nr5-diagnostics", "RXA NR5/SPNR diagnostics fetch", () => engine.TryGetNr5SpnrDiagnostics(channel))
-                : null;
-
             return new FixtureRunResult(
                 Profile: profile.Label,
                 SampleRateHz: AudioSampleRateHz,
@@ -384,7 +380,7 @@ internal static class WdspFixtureEvidenceTool
                 IntermodulationProxy: 0.0,
                 SamplePreview: PreviewAudio(analysis),
                 TxMeters: null,
-                Nr5Diagnostics: nr5Diagnostics,
+                CandidateDiagnostics: null,
                 StageProbes: stages);
         }
         finally
@@ -455,7 +451,7 @@ internal static class WdspFixtureEvidenceTool
                 IntermodulationProxy: ComputeIntermodulationProxy(analysis, AudioSampleRateHz, fixture.ExpectedTonesHz),
                 SamplePreview: PreviewIq(analysis),
                 TxMeters: TxMetersToJson(txMeters),
-                Nr5Diagnostics: null,
+                CandidateDiagnostics: null,
                 StageProbes: stages);
         }
         finally
@@ -1174,7 +1170,7 @@ internal static class WdspFixtureEvidenceTool
             "off" or "baseline" => "off-baseline",
             "thetis" => "thetis-parity",
             "current" or "zeus-current" or "zeus" => "current-zeus",
-            "nr5" or "spnr" => "nr5-spnr",
+            "candidate-dsp" or "candidate-opt-in" => "candidate-under-test",
             "candidate" => "candidate-under-test",
             "external" or "external-engine" => "candidate-external-engine-opt-in",
             _ => normalized,
@@ -1218,7 +1214,7 @@ internal static class WdspFixtureEvidenceTool
         double IntermodulationProxy,
         object SamplePreview,
         IReadOnlyDictionary<string, object?>? TxMeters,
-        object? Nr5Diagnostics,
+        object? CandidateDiagnostics,
         IReadOnlyList<StageProbe> StageProbes);
 
     private sealed record StageProbe(
@@ -1246,7 +1242,7 @@ internal static class WdspFixtureEvidenceTool
                 return normalized switch
                 {
                     "thetis-parity" => new(normalized, "wdsp-txa-thetis-defaults", NrMode.Off),
-                    "candidate-under-test" or "nr5-spnr" => new(normalized, "wdsp-txa-current-safe-bypass", NrMode.Off),
+                    "candidate-under-test" => new(normalized, "wdsp-txa-current-safe-bypass", NrMode.Off),
                     _ => new(normalized, "wdsp-txa-current-defaults", NrMode.Off),
                 };
             }
@@ -1254,8 +1250,7 @@ internal static class WdspFixtureEvidenceTool
             return normalized switch
             {
                 "thetis-parity" => new(normalized, "wdsp-emnr-nr2-thetis-parity", NrMode.Emnr),
-                "candidate-under-test" => new(normalized, "wdsp-nr5-spnr-candidate", NrMode.Nr5),
-                "nr5-spnr" => new(normalized, "wdsp-nr5-spnr", NrMode.Nr5),
+                "candidate-under-test" => new(normalized, "wdsp-current-safe-bypass", NrMode.Off),
                 "candidate-external-engine-opt-in" => new(normalized, "post-demod-external-bypass", NrMode.Off),
                 _ => new(normalized, "wdsp-current-nr-off", NrMode.Off),
             };
@@ -1357,7 +1352,7 @@ internal sealed record ToolOptions(
         }
 
         if (comparisonIds.Count == 0)
-            comparisonIds.AddRange(["off-baseline", "thetis-parity", "current-zeus", "candidate-under-test", "nr5-spnr"]);
+            comparisonIds.AddRange(["off-baseline", "thetis-parity", "current-zeus", "candidate-under-test", "candidate-external-engine-opt-in"]);
 
         return new ToolOptions(
             bundleDir,

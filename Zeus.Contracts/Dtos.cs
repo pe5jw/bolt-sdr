@@ -42,6 +42,9 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace Zeus.Contracts;
 
 public enum RxMode : byte
@@ -58,15 +61,51 @@ public enum PsFeedbackSource : byte { Internal = 0, External = 1 }
 
 public enum ConnectionStatus { Disconnected, Connecting, Connected, Error }
 
-// Thetis NR-button state: Off = no spectral NR, Anr = NR1 (time-domain LMS),
-// Emnr = NR2 (Ephraim–Malah spectral), Sbnr = NR4 (libspecbleach spectral
-// bleaching — issue #79), Nr5 = Zeus experimental signal-preserving NR.
+// Thetis NR-button state: Off = no NR, Anr = NR1 (time-domain LMS),
+// Emnr = NR2 (Ephraim-Malah), Sbnr = NR4 (libspecbleach, issue #79).
 // NR3 (RNNR) is intentionally absent: training data for the bundled RNNoise
 // model is voice-corpus-only and underperforms on HF noise. All modes are
 // mutually exclusive in WDSP, so the button carries them in one enum. Byte
 // order is fixed — appending only — because persisted DspSettingsStore rows
 // would mis-deserialize on a reorder.
-public enum NrMode : byte { Off, Anr, Emnr, Sbnr = 3, Nr5 = 4 }
+[JsonConverter(typeof(NrModeJsonConverter))]
+public enum NrMode : byte
+{
+    Off,
+    Anr,
+    Emnr,
+    Sbnr = 3,
+}
+
+public sealed class NrModeJsonConverter : JsonConverter<NrMode>
+{
+    public override NrMode Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Number && reader.TryGetByte(out var numericValue))
+            return numericValue <= (byte)NrMode.Sbnr ? (NrMode)numericValue : NrMode.Off;
+
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            var stringValue = reader.GetString();
+            if (string.Equals(stringValue, nameof(NrMode.Anr), StringComparison.OrdinalIgnoreCase)) return NrMode.Anr;
+            if (string.Equals(stringValue, nameof(NrMode.Emnr), StringComparison.OrdinalIgnoreCase)) return NrMode.Emnr;
+            if (string.Equals(stringValue, nameof(NrMode.Sbnr), StringComparison.OrdinalIgnoreCase)) return NrMode.Sbnr;
+        }
+
+        return NrMode.Off;
+    }
+
+    public override void Write(Utf8JsonWriter writer, NrMode value, JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(value switch
+        {
+            NrMode.Anr => nameof(NrMode.Anr),
+            NrMode.Emnr => nameof(NrMode.Emnr),
+            NrMode.Sbnr => nameof(NrMode.Sbnr),
+            _ => nameof(NrMode.Off),
+        });
+    }
+}
 
 // Pre-RXA time-domain blanker. Nb1 = ANB (noise blanker), Nb2 = NOB (noise gate).
 // Engine silently ignores this until the pre-RXA pipeline lands (task #4);
@@ -174,12 +213,9 @@ public sealed record SmartNrConditionDto(
     bool WdspNativeLoadable,
     bool WdspEmnrPost2Available,
     bool WdspNr4SbnrAvailable,
-    bool WdspNr5SpnrAvailable,
     string Nr4Readiness,
-    string Nr5Readiness,
     string RequestedNrMode,
     string EffectiveNrMode,
-    Nr5SpnrDiagnosticsDto? Nr5SpnrDiagnostics,
     string? ExpectedNrMode,
     bool? RuntimeAligned,
     string RuntimeAlignmentStatus,
@@ -364,25 +400,17 @@ public sealed record DspLiveRuntimeEvidenceDto(
     double? RxAudioLevelerOutputLimitReductionDb,
     int? RxAudioLevelerOutputLimitSampleCount,
     int? RxAudioLevelerPauseHoldBlocks,
-    int? RxAudioLevelerNr5SpeechHoldBlocks,
     bool? RxAudioLevelerBoostSlewLimited,
     bool? RxAudioLevelerPeakLimited,
     bool? RxAudioLevelerOutputLimited,
     long MonitorBacklogSamples,
     int AudioSinkCount,
-    string DiagnosticRecommendation,
-    double? RxAudioLevelerNr5HybridSpeechPrior = null,
-    double? RxAudioLevelerNr5NoSignalNoisePrior = null,
-    double? RxAudioLevelerNr5NoiseProfilePrior = null,
-    bool? RxAudioLevelerNr5NoSignalNoiseCap = null,
-    bool? RxAudioLevelerNr5FarPeakNoiseCap = null,
-    bool? RxAudioLevelerNr5NoProofNoiseCap = null,
-    int? RxAudioLevelerNr5SpeechHangoverBlocks = null);
+    string DiagnosticRecommendation);
 
 // Tool-facing live DSP modernization summary. This fuses the Smart NR scene,
-// WDSP runtime capability, RX-chain health, NR5/SPNR legacy diagnostics, and
-// post-demod external-engine bakeoff readiness into one read-only gate for
-// G2/on-air benchmarking. It is diagnostic evidence only:
+// WDSP runtime capability, RX-chain health, and post-demod external-engine
+// bakeoff readiness into one read-only gate for G2/on-air benchmarking. It is
+// diagnostic evidence only:
 // RolloutGate remains opt-in unless a separate benchmark + hardware review
 // approves changing defaults.
 public sealed record DspLiveDiagnosticsDto(
@@ -392,9 +420,6 @@ public sealed record DspLiveDiagnosticsDto(
     string QualityTone,
     int ReadinessScore,
     bool ReadyForLiveBenchmark,
-    bool ReadyForNr5Tuning,
-    string Nr5TuningStatus,
-    string[] Nr5TuningConstraints,
     bool ReadyForExternalEngineBakeoff,
     string ExternalEngineBakeoffStatus,
     string[] ExternalEngineBakeoffConstraints,
@@ -403,9 +428,7 @@ public sealed record DspLiveDiagnosticsDto(
     bool WdspNativeLoadable,
     bool WdspEmnrPost2Available,
     bool WdspNr4SbnrAvailable,
-    bool WdspNr5SpnrAvailable,
     string Nr4Readiness,
-    string Nr5Readiness,
     bool FrontendSceneAvailable,
     string FrontendSceneStatus,
     bool FrontendSceneFresh,
@@ -443,19 +466,6 @@ public sealed record DspLiveDiagnosticsDto(
     string? RadioMode,
     bool? RadioCtunEnabled,
     int? RadioSampleRate,
-    Nr5SpnrDiagnosticsDto? Nr5SpnrDiagnostics,
-    double? Nr5SignalConfidence,
-    double? Nr5AgcGate,
-    double? Nr5SignalProbability,
-    double? Nr5TextureFill,
-    double? Nr5MaskSmoothing,
-    double? Nr5WeakSignalMemory,
-    double? Nr5MeanGain,
-    double? Nr5FloorReductionDb,
-    double? Nr5OutputPeakDbfs,
-    double? Nr5PeakEvidence,
-    double? Nr5PeakLimitDbfs,
-    double? Nr5PeakReductionDb,
     DspLiveRuntimeEvidenceDto? RuntimeEvidence,
     string[] Evidence,
     string[] Constraints,
@@ -511,70 +521,6 @@ public sealed record HardwarePotentialDto(
     string[] DitherRandomAudit,
     string[] FilterAndWindowAudit,
     string DiagnosticRecommendation);
-
-public sealed record Nr5SpnrDiagnosticsDto(
-    int SchemaVersion,
-    int ChannelId,
-    bool Run,
-    int Position,
-    int LearnedFrames,
-    double Aggressiveness,
-    bool AgcRun,
-    double TargetRms,
-    double MaxGain,
-    double AgcGain,
-    double AgcGainDb,
-    double PresencePeak,
-    double SaliencePeak,
-    double CoherencePeak,
-    double RidgePeak,
-    double MeanGain,
-    double MinGain,
-    double SuppressionDb,
-    double NoiseFloorDb,
-    double FloorReductionDb,
-    double DynamicRangeDb,
-    double SignalProbability,
-    double TextureFill,
-    double MaskSmoothing,
-    double SignalConfidence,
-    double AgcGate,
-    double LevelDrive,
-    double RecoveryDrive,
-    double WeakSignalMemory,
-    double MakeupGain,
-    double MakeupGainDb,
-    double InputRms,
-    double InputDbfs,
-    double OutputRms,
-    double OutputDbfs,
-    double OutputPeak,
-    double OutputPeakDbfs,
-    double PeakEvidence,
-    double PeakLimit,
-    double PeakLimitDbfs,
-    double PeakReductionDb,
-    bool AdjacentNoiseUsable,
-    int AdjacentNoiseBins,
-    double AdjacentNoiseFloorDb,
-    double AdjacentNoiseTrust,
-    double AdjacentNoiseDrive,
-    double AdjacentNoiseRejectedPct,
-    int AdjacentNoiseLeftBins,
-    int AdjacentNoiseRightBins,
-    double AdjacentNoiseLeftFloorDb,
-    double AdjacentNoiseRightFloorDb,
-    double AdjacentNoiseSideBalance,
-    double AdjacentNoiseAsymmetryDb)
-{
-    public int ManagedChannelGeneration { get; init; }
-    public int ManagedNr5ApplyCount { get; init; }
-    public int ManagedNr5PositionApplyCount { get; init; }
-    public int ManagedNr5PolicyApplyCount { get; init; }
-    public int ManagedNr5NoopApplyCount { get; init; }
-    public int ManagedNr5RunApplyCount { get; init; }
-    public string? ManagedNr5LastApplyReason { get; init; }
-}
 
 public sealed record SmartNrRxChainRuntimeDto(
     int SchemaVersion,
@@ -1082,6 +1028,10 @@ public sealed record StateDto(
     // splits without changing the UI contract.
     bool Rx2Enabled = false,
     long VfoBHz = 14_200_000,
+    RxMode ModeB = RxMode.USB,
+    int FilterLowHzB = 100,
+    int FilterHighHzB = 2850,
+    string? FilterPresetNameB = "VAR1",
     Zeus.Contracts.Rx2AudioMode Rx2AudioMode = Zeus.Contracts.Rx2AudioMode.Both,
     double Rx2AfGainDb = 0.0,
     Zeus.Contracts.TxVfo TxVfo = Zeus.Contracts.TxVfo.A,

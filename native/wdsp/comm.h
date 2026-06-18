@@ -68,7 +68,6 @@ warren@wpratt.com
 #include "emnr.h"
 #include "rnnr.h" // NR3 + NR4 support
 #include "sbnr.h" // NR3 + NR4 support
-#include "spnr.h" // Zeus NR5 support
 #include "emph.h"
 #include "eq.h"
 #include "fcurve.h"

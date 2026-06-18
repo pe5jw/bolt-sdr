@@ -551,6 +551,15 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
+      # The DeepCW ONNX model lives in a git submodule and is a build-time
+      # dependency of the web bundle (decode-worker.ts statically imports
+      # model.onnx?url). Without it the `npm run build` step below fails to
+      # resolve the import and no installer is produced. Targeted init keeps
+      # the heavy vst3sdk submodule out of this job (the VST bridge is staged
+      # separately in build-native-windows).
+      - name: Init DeepCW model submodule (frontend build dependency)
+        run: git submodule update --init zeus-web/external/deepcw-engine
+
       - name: Determine version
         id: version
         shell: bash

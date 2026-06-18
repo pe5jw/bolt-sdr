@@ -52,6 +52,8 @@ import { useNotchStore } from '../state/notch-store';
 import * as viewCenter from '../state/view-center';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import { roundToStep } from './number';
+import { applyCtunZoomCenterAfterState, centerCtunForZoomIn } from './ctun-zoom-center';
+import { rulerDragTargetHz } from './use-ruler-pan-gesture';
 
 const MAX_HZ = 60_000_000;
 const CLICK_SLOP_PX = 3;
@@ -108,13 +110,6 @@ export function quantizeToStepHz(hz: number, stepHz: number): number {
 function clampHz(hz: number): number {
   if (!Number.isFinite(hz)) return 0;
   return Math.min(MAX_HZ, Math.max(0, hz));
-}
-
-function effectiveLoHz(mode: string, vfoHz: number, cwPitchHz: number): number {
-  const pitch = Number.isFinite(cwPitchHz) ? cwPitchHz : 600;
-  if (mode === 'CWU') return vfoHz - pitch;
-  if (mode === 'CWL') return vfoHz + pitch;
-  return vfoHz;
 }
 
 function clampZoom(z: number): ZoomLevel {
@@ -301,6 +296,7 @@ export function createVfoNudgeController(receiver: SpectrumReceiver = 'A'): VfoN
 export type PanTuneGestureOptions = {
   touchMode?: 'normal' | 'pinch-only';
   tuneReceiver?: SpectrumReceiver;
+  dragMode?: 'tune' | 'ruler-pan';
 };
 
 function readView(receiver: SpectrumReceiver = 'A'): { centerHz: number; spanHz: number } | null {
@@ -339,10 +335,18 @@ export function usePanTuneGesture(
     const canvas = canvasRef.current;
     if (!canvas) return;
     const tuneReceiver = options.tuneReceiver ?? receiver;
+    const dragMode = options.dragMode ?? 'tune';
     const receiverIsB = tuneReceiver === 'B';
+    const panReceiverIsB = receiver === 'B';
     const touchPinchOnly = options.touchMode === 'pinch-only';
 
-    type Drag = { startX: number; startHz: number; spanHz: number; moved: boolean };
+    type Drag = {
+      startX: number;
+      startHz: number;
+      spanHz: number;
+      moved: boolean;
+      mode: 'tune' | 'ruler-pan';
+    };
     type MapDrag = { lastX: number; lastY: number };
     type Pinch = {
       baseDist: number;     // pointer separation when the pinch began (px)
@@ -368,6 +372,9 @@ export function usePanTuneGesture(
     let pendingHz: number | null = null;
     let pendingAbort: AbortController | null = null;
     let pendingRaf = 0;
+    let pendingPanHz: number | null = null;
+    let pendingPanAbort: AbortController | null = null;
+    let pendingPanRaf = 0;
 
     const pinchDistance = (): number => {
       const arr = Array.from(pointers.values());
@@ -390,7 +397,6 @@ export function usePanTuneGesture(
     // notch on a mouse wheel should be one tune/zoom step, not three.
     let wheelAccum = 0;
     let zoomInflight: AbortController | null = null;
-    let zoomCenterInflight: AbortController | null = null;
 
     // The commanded-frequency chain: pendingHz when a POST is queued, else
     // the optimistic store value. All view-center nudges are DELTAS against
@@ -411,6 +417,7 @@ export function usePanTuneGesture(
     // independent instances), so dragging either stitched half pans smoothly and
     // optimistically — the gesture leads the frames, which then reconcile.
     const vc = viewCenter.viewCenterFor(tuneReceiver);
+    const panVc = viewCenter.viewCenterFor(receiver);
     // "CTUN sweep" — absolute cursor→dial mapping over a FROZEN window — applies
     // whenever CTUN is enabled, on EITHER receiver. RX2 now mirrors RX1: under
     // CTUN the backend freezes the RX2 DDC centre (_rx2LoHz) and roams the dial
@@ -419,6 +426,32 @@ export function usePanTuneGesture(
     const ctunSweep = () => useConnectionStore.getState().ctunEnabled;
 
     const commandedHz = () => pendingHz ?? readVfo();
+    const fallbackPanCenterHz = () =>
+      panReceiverIsB
+        ? useConnectionStore.getState().vfoBHz
+        : Number(selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz);
+    const writePanCenter = (hz: number) =>
+      useConnectionStore.setState(panReceiverIsB ? { vfoBHz: hz } : { radioLoHz: hz });
+    const postPanCenter = (hz: number, signal?: AbortSignal) =>
+      panReceiverIsB ? setVfoB(hz, signal) : setRadioLo(hz, signal);
+    const commandedPanHz = () =>
+      pendingPanHz ?? (panVc.isInitialized() ? panVc.getTargetCenterHz() : fallbackPanCenterHz());
+    const readPanViewport = (): { centerHz: number; spanHz: number } | null => {
+      const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
+      const width = s.width || s.panDb?.length || 0;
+      if (!width || s.hzPerPixel <= 0) return null;
+      return {
+        centerHz: panVc.isInitialized() ? panVc.getTargetCenterHz() : fallbackPanCenterHz(),
+        spanHz: width * s.hzPerPixel,
+      };
+    };
+    const reconcileAppliedPan = (appliedHz: number) => {
+      const next = clampHz(appliedHz);
+      writePanCenter(next);
+      if (pendingPanHz !== null) return;
+      const delta = next - commandedPanHz();
+      if (delta !== 0) panVc.nudgeTargetHz(delta);
+    };
 
     const flushPending = () => {
       pendingRaf = 0;
@@ -435,6 +468,41 @@ export function usePanTuneGesture(
 
     const scheduleFlush = () => {
       if (pendingRaf === 0) pendingRaf = requestAnimationFrame(flushPending);
+    };
+
+    const flushPanPending = () => {
+      pendingPanRaf = 0;
+      const hz = pendingPanHz;
+      pendingPanHz = null;
+      if (hz == null) return;
+
+      panVc.markOptimisticTune();
+      writePanCenter(hz);
+      pendingPanAbort?.abort();
+      const ctrl = new AbortController();
+      pendingPanAbort = ctrl;
+      postPanCenter(hz, ctrl.signal)
+        .then((state) => {
+          if (ctrl.signal.aborted) return;
+          useConnectionStore.getState().applyState(state, { trustVfo: false });
+          reconcileAppliedPan(panReceiverIsB ? state.vfoBHz : state.radioLoHz);
+        })
+        .catch(() => {});
+    };
+
+    const schedulePanFlush = () => {
+      if (pendingPanRaf === 0) pendingPanRaf = requestAnimationFrame(flushPanPending);
+    };
+
+    const idleCursor = () => (dragMode === 'ruler-pan' ? 'grab' : SPECTRUM_TUNE_CURSOR);
+
+    const queuePanCenter = (nextHz: number) => {
+      const hz = clampHz(nextHz);
+      if (hz === pendingPanHz) return;
+      panVc.nudgeTargetHz(hz - commandedPanHz());
+      writePanCenter(hz);
+      pendingPanHz = hz;
+      schedulePanFlush();
     };
 
     // `exact` skips the PAN_STEP_HZ grid — used by snap-to-signal so the dial
@@ -494,61 +562,22 @@ export function usePanTuneGesture(
       const cur = state.zoomLevel;
       const next = clampZoom(cur + delta);
       if (next === cur) return;
-      const centeredLoHz = next > cur ? centerCtunZoomIn() : null;
       useConnectionStore.getState().setZoomLevel(next);
       zoomInflight?.abort();
       const ctrl = new AbortController();
       zoomInflight = ctrl;
+      const centeredLoHz =
+        receiver === 'A' && tuneReceiver === 'A'
+          ? centerCtunForZoomIn(cur, next, ctrl.signal)
+          : null;
       setZoom(next, ctrl.signal)
         .then((s) => {
           if (!ctrl.signal.aborted) {
             useConnectionStore.getState().applyState(s);
-            if (centeredLoHz != null && useConnectionStore.getState().ctunEnabled) {
-              applyLocalCtunZoomCenter(centeredLoHz);
-            }
+            applyCtunZoomCenterAfterState(centeredLoHz);
           }
         })
         .catch(() => {});
-    };
-
-    const currentViewCenterHz = () => {
-      const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
-      return vc.isInitialized() ? vc.getTargetCenterHz() : Number(s.centerHz);
-    };
-
-    const applyLocalCtunZoomCenter = (loHz: number) => {
-      const nextLoHz = clampHz(loHz);
-      const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
-      if (vc.isInitialized()) {
-        vc.nudgeTargetHz(nextLoHz - vc.getTargetCenterHz());
-      } else {
-        vc.snapTo(nextLoHz, s.hzPerPixel > 0 ? s.hzPerPixel : undefined);
-        vc.markOptimisticTune();
-      }
-      useConnectionStore.setState({ radioLoHz: nextLoHz });
-    };
-
-    const centerCtunZoomIn = (): number | null => {
-      const s = useConnectionStore.getState();
-      if (!s.ctunEnabled || receiver !== 'A' || tuneReceiver !== 'A') return null;
-      const targetLoHz = clampHz(effectiveLoHz(s.mode, s.vfoHz, s.cwPitchHz));
-      const loMoves = Math.abs(targetLoHz - s.radioLoHz) > 0.5;
-      const viewMoves = Math.abs(targetLoHz - currentViewCenterHz()) > 0.5;
-      if (!loMoves && !viewMoves) return null;
-
-      applyLocalCtunZoomCenter(targetLoHz);
-      if (loMoves) {
-        zoomCenterInflight?.abort();
-        const ctrl = new AbortController();
-        zoomCenterInflight = ctrl;
-        setRadioLo(targetLoHz, ctrl.signal)
-          .then((state) => {
-            if (ctrl.signal.aborted) return;
-            applyLocalCtunZoomCenter(state.radioLoHz);
-          })
-          .catch(() => {});
-      }
-      return targetLoHz;
     };
 
     const onPointerDown = (e: PointerEvent) => {
@@ -599,6 +628,8 @@ export function usePanTuneGesture(
         canvas.style.cursor = SPECTRUM_TUNE_CURSOR;
         return;
       }
+      const dragView = dragMode === 'ruler-pan' ? readPanViewport() : view;
+      if (!dragView) return;
       e.preventDefault();
       try {
         canvas.setPointerCapture(e.pointerId);
@@ -607,11 +638,12 @@ export function usePanTuneGesture(
       }
       drag = {
         startX: e.clientX,
-        startHz: view.centerHz,
-        spanHz: view.spanHz,
+        startHz: dragView.centerHz,
+        spanHz: dragView.spanHz,
         moved: false,
+        mode: dragMode,
       };
-      canvas.style.cursor = SPECTRUM_TUNE_CURSOR;
+      canvas.style.cursor = dragMode === 'ruler-pan' ? 'grabbing' : SPECTRUM_TUNE_CURSOR;
     };
 
     const onPointerMove = (e: PointerEvent) => {
@@ -674,6 +706,10 @@ export function usePanTuneGesture(
       drag.moved = true;
       const rect = canvas.getBoundingClientRect();
       if (rect.width <= 0) return;
+      if (drag.mode === 'ruler-pan') {
+        queuePanCenter(rulerDragTargetHz(drag.startHz, drag.startX, e.clientX, rect.width, drag.spanHz));
+        return;
+      }
       // RX1 CTUN: drag sweeps the dial across the frozen spectrum. The frame
       // center doesn't move (NCO frozen on the backend), so drag.startHz — the
       // view center captured at grab — is stationary; resolve the live pointer X
@@ -710,7 +746,7 @@ export function usePanTuneGesture(
       if (notchDrag) {
         const start = notchDrag;
         notchDrag = null;
-        canvas.style.cursor = SPECTRUM_TUNE_CURSOR;
+        canvas.style.cursor = idleCursor();
         if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
         const ns = useNotchStore.getState();
         ns.setPending(null);
@@ -741,27 +777,33 @@ export function usePanTuneGesture(
           // than an enforced clean break.
           cancelPinchRaf();
           pinch = null;
-          canvas.style.cursor = SPECTRUM_TUNE_CURSOR;
+          canvas.style.cursor = idleCursor();
         }
         return;
       }
       if (mapDrag) {
         mapDrag = null;
-        canvas.style.cursor = SPECTRUM_TUNE_CURSOR;
+        canvas.style.cursor = idleCursor();
         if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
         return;
       }
       const d = drag;
       if (!d) return;
       drag = null;
-      canvas.style.cursor = SPECTRUM_TUNE_CURSOR;
+      canvas.style.cursor = idleCursor();
       if (canvas.hasPointerCapture(e.pointerId)) {
         canvas.releasePointerCapture(e.pointerId);
       }
       const rect = canvas.getBoundingClientRect();
       if (rect.width <= 0) return;
       if (d.moved) {
-        if (ctunSweep()) {
+        if (d.mode === 'ruler-pan') {
+          queuePanCenter(rulerDragTargetHz(d.startHz, d.startX, e.clientX, rect.width, d.spanHz));
+          if (pendingPanRaf !== 0) {
+            cancelAnimationFrame(pendingPanRaf);
+            flushPanPending();
+          }
+        } else if (ctunSweep()) {
           // RX1 CTUN: commit the dial at the release-point frequency (cursor-
           // relative against the frozen view center), matching the drag-move
           // sweep above.
@@ -839,7 +881,7 @@ export function usePanTuneGesture(
       nudgeVfo(dir * useToolbarFavoritesStore.getState().stepHz);
     };
 
-    canvas.style.cursor = SPECTRUM_TUNE_CURSOR;
+    canvas.style.cursor = idleCursor();
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('pointermove', onPointerMove);
     canvas.addEventListener('pointerup', onPointerUp);
@@ -849,15 +891,16 @@ export function usePanTuneGesture(
 
     return () => {
       if (pendingRaf !== 0) cancelAnimationFrame(pendingRaf);
+      if (pendingPanRaf !== 0) cancelAnimationFrame(pendingPanRaf);
       cancelPinchRaf();
       pendingAbort?.abort();
+      pendingPanAbort?.abort();
       zoomInflight?.abort();
-      zoomCenterInflight?.abort();
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('pointerup', onPointerUp);
       canvas.removeEventListener('pointercancel', onPointerUp);
       canvas.removeEventListener('wheel', onWheel);
     };
-  }, [canvasRef, receiver, wheelActions, options.touchMode, options.tuneReceiver]);
+  }, [canvasRef, receiver, wheelActions, options.touchMode, options.tuneReceiver, options.dragMode]);
 }

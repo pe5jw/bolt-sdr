@@ -3,7 +3,7 @@
 // AudioSuiteWindow — draggable floating window containing the audio
 // plugin chain. Replaces the inline rendering that used to live in
 // TxAudioToolsPanel (per Phase 2 of issue #332). Operators open it
-// via the "Audio Suite" button on TX Audio Tools, drag tiles at the
+// via the "Audio Suite" button on Audio Tools, drag tiles at the
 // top to reorder the chain, toggle Preview to hear the chain output
 // in their RX playback path, and adjust per-plugin settings in the
 // stacked panels below.
@@ -14,6 +14,7 @@
 // docs/lessons/dev-conventions.md.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Star } from 'lucide-react';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import type { RegisteredPluginPanel } from '../plugins/runtime/pluginRuntime';
 import { AudioChainMeters } from './AudioChainMeters';
@@ -32,7 +33,7 @@ const RX_CHAIN_SLOT = 'rx-audio-tools.chain';
 
 // Plugin editors (the built-in EQ graph, gate, etc.) are responsive and
 // stretch to fill whatever width they're given. The embedded host lives
-// in the TX Audio Tools settings pane, which is ~2000 px wide on a normal
+// in the Audio Tools settings pane, which is ~2000 px wide on a normal
 // monitor — letting a 10-band EQ sprawl across all of it looks cheap and
 // makes the controls hard to read. Cap the rack column at a sane width
 // and centre it so each unit reads like a real rack module (the VSTHost
@@ -270,6 +271,23 @@ function vstUninstallButtonStyle(
   };
 }
 
+function vstFavoriteButtonStyle(active: boolean, size: number): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: size,
+    height: size,
+    borderRadius: 3,
+    border: '1px solid ' + (active ? 'var(--power)' : 'var(--line)'),
+    background: active ? 'var(--bg-2)' : 'var(--bg-1)',
+    color: active ? 'var(--power)' : 'var(--fg-3)',
+    cursor: 'pointer',
+    padding: 0,
+    flex: '0 0 auto',
+  };
+}
+
 /** Six-dot drag-handle glyph — the universal "grab to reorder" cue. */
 function DragHandleIcon() {
   return (
@@ -292,8 +310,10 @@ interface ChainChipProps {
   selected: boolean;
   isDragTarget: boolean;
   isDragSource: boolean;
+  isFavorite: boolean;
   onSelect(): void;
   onRemove(): void;
+  onToggleFavorite(): void;
   onHandleDown(): void;
   onDragStart(e: React.DragEvent): void;
   onDragOver(e: React.DragEvent): void;
@@ -316,8 +336,10 @@ function ChainChip({
   selected,
   isDragTarget,
   isDragSource,
+  isFavorite,
   onSelect,
   onRemove,
+  onToggleFavorite,
   onHandleDown,
   onDragStart,
   onDragOver,
@@ -405,6 +427,19 @@ function ChainChip({
         </span>
       )}
 
+      {isVst && (
+        <button
+          type="button"
+          draggable={false}
+          onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
+          aria-label={isFavorite ? `Remove ${panel.title} from favorites` : `Favorite ${panel.title}`}
+          title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+          style={vstFavoriteButtonStyle(isFavorite, 17)}
+        >
+          <Star size={12} strokeWidth={2} fill={isFavorite ? 'currentColor' : 'none'} />
+        </button>
+      )}
+
       {/* Remove from chain = park (non-destructive). Stops it
           processing and moves it to the sidebar's Available list;
           the plugin stays installed. */}
@@ -459,7 +494,8 @@ interface PluginSidebarProps {
   onScanDefault(): void;
   onScanBothDefault(): void;
   scanning: boolean;
-  scanRouteLabel: 'TX' | 'RX';
+  favoriteVstIds: ReadonlySet<string>;
+  onToggleFavorite(pluginId: string): void;
   /** VST processing route active — gates the VST3 scan controls (they make
    *  no sense in Native mode, where VSTs aren't part of the chain). */
   vstMode: boolean;
@@ -491,7 +527,8 @@ function PluginSidebar({
   onScanDefault,
   onScanBothDefault,
   scanning,
-  scanRouteLabel,
+  favoriteVstIds,
+  onToggleFavorite,
   vstMode,
   embedded,
 }: PluginSidebarProps) {
@@ -564,7 +601,9 @@ function PluginSidebar({
     );
   }
 
-  const row = (panel: RegisteredPluginPanel, inChain: boolean) => (
+  const row = (panel: RegisteredPluginPanel, inChain: boolean) => {
+    const isFavorite = panel.editorBacked === true && favoriteVstIds.has(panel.pluginId);
+    return (
     <div
       key={panel.pluginId}
       draggable={!inChain}
@@ -586,6 +625,18 @@ function PluginSidebar({
         cursor: inChain ? 'default' : 'grab',
       }}
     >
+      {panel.editorBacked === true && (
+        <button
+          type="button"
+          draggable={false}
+          onClick={() => onToggleFavorite(panel.pluginId)}
+          aria-label={isFavorite ? `Remove ${panel.title} from favorites` : `Favorite ${panel.title}`}
+          title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+          style={vstFavoriteButtonStyle(isFavorite, 18)}
+        >
+          <Star size={12} strokeWidth={2} fill={isFavorite ? 'currentColor' : 'none'} />
+        </button>
+      )}
       <span
         style={{
           flex: 1,
@@ -655,7 +706,8 @@ function PluginSidebar({
         {inChain ? '−' : '+'}
       </button>
     </div>
-  );
+    );
+  };
 
   const q = query.trim().toLowerCase();
   const filteredParked = q
@@ -665,6 +717,16 @@ function PluginSidebar({
           p.pluginId.toLowerCase().includes(q),
       )
     : parked;
+  const favoriteParked = filteredParked.filter(
+    (p) => p.editorBacked === true && favoriteVstIds.has(p.pluginId),
+  );
+  const favoriteTotal = parked.filter(
+    (p) => p.editorBacked === true && favoriteVstIds.has(p.pluginId),
+  ).length;
+  const favoriteVisibleIds = new Set(favoriteParked.map((p) => p.pluginId));
+  const regularParked = filteredParked.filter((p) => !favoriteVisibleIds.has(p.pluginId));
+  const regularTotal = parked.length - favoriteTotal;
+  const showAvailableGroup = regularParked.length > 0 || favoriteParked.length === 0;
 
   return (
     <div
@@ -755,23 +817,35 @@ function PluginSidebar({
           gap: 10,
         }}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={groupLabelStyle}>
-            Available · {filteredParked.length}
-            {q && filteredParked.length !== parked.length ? ` / ${parked.length}` : ''}
-          </span>
-          {parked.length === 0 && (
-            <span style={emptyHintStyle}>
-              {vstMode
-                ? 'No VST3 plugins available — use Scan for VSTs below.'
-                : 'All installed plugins are in the chain.'}
+        {favoriteParked.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={groupLabelStyle}>
+              Favorites · {favoriteParked.length}
+              {q && favoriteParked.length !== favoriteTotal ? ` / ${favoriteTotal}` : ''}
             </span>
-          )}
-          {parked.length > 0 && filteredParked.length === 0 && (
-            <span style={emptyHintStyle}>No plugins match “{query.trim()}”.</span>
-          )}
-          {filteredParked.map((p) => row(p, false))}
-        </div>
+            {favoriteParked.map((p) => row(p, false))}
+          </div>
+        )}
+
+        {showAvailableGroup && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={groupLabelStyle}>
+              Available · {regularParked.length}
+              {q && regularParked.length !== regularTotal ? ` / ${regularTotal}` : ''}
+            </span>
+            {parked.length === 0 && (
+              <span style={emptyHintStyle}>
+                {vstMode
+                  ? 'No VST3 plugins available — use Scan for VSTs below.'
+                  : 'All installed plugins are in the chain.'}
+              </span>
+            )}
+            {parked.length > 0 && filteredParked.length === 0 && (
+              <span style={emptyHintStyle}>No plugins match “{query.trim()}”.</span>
+            )}
+            {regularParked.map((p) => row(p, false))}
+          </div>
+        )}
       </div>
 
       {/* Footer — VST3 scan controls. Only shown on the VST route: in Native
@@ -790,19 +864,19 @@ function PluginSidebar({
             type="button"
             onClick={onScanDefault}
             disabled={scanning}
-            title={`Scan the standard Windows VST3 folders and register plugins for the ${scanRouteLabel} route`}
+            title="Scan the standard Windows VST3 folders and register plugins for this audio suite"
             style={scanBtnStyle(scanning, true)}
           >
-            {scanning ? 'Scanning...' : `Scan ${scanRouteLabel} VSTs`}
+            {scanning ? 'Scanning...' : 'Scan VSTs'}
           </button>
           <button
             type="button"
             onClick={onScanBothDefault}
             disabled={scanning}
-            title="Scan the standard Windows VST3 folders and register separate TX and RX plugin instances"
+            title="Scan the standard Windows VST3 folders for both audio suites"
             style={scanBtnStyle(scanning, false)}
           >
-            Scan TX + RX
+            Scan Both Suites
           </button>
           <button
             type="button"
@@ -920,6 +994,8 @@ export function AudioSuiteWindow({
   const deleteProfile = useAudioSuiteStore((s) => s.deleteProfile);
   const scanVstDirectory = useAudioSuiteStore((s) => s.scanVstDirectory);
   const uninstallPlugin = useAudioSuiteStore((s) => s.uninstallPlugin);
+  const favoriteVstIds = useAudioSuiteStore((s) => s.favoriteVstIds);
+  const toggleFavoriteVst = useAudioSuiteStore((s) => s.toggleFavoriteVst);
   const processingMode = useAudioSuiteStore((s) => s.processingMode);
   const loadProcessingModeFromServer = useAudioSuiteStore(
     (s) => s.loadProcessingModeFromServer,
@@ -992,6 +1068,10 @@ export function AudioSuiteWindow({
   const activeOrder = isRxSuite ? rxChainOrder : chainOrder;
   const reorderActiveChain = isRxSuite ? reorderRxChain : reorderChain;
   const setActiveChainMembership = isRxSuite ? setRxChainMembership : setChainMembership;
+  const favoriteVstIdSet = useMemo(
+    () => new Set(favoriteVstIds),
+    [favoriteVstIds],
+  );
   // Active rack = the panels whose plugin ID is in the server's active
   // order, sorted by it. Parking removes an ID from chainOrder, so a
   // parked plugin simply falls out of here and into the sidebar.
@@ -1433,7 +1513,7 @@ export function AudioSuiteWindow({
   );
   const SelectedComponent = selectedPanel?.component ?? null;
 
-  // Embedded mode (rendered inline inside TX Audio Tools) is always
+  // Embedded mode (rendered inline inside Audio Tools) is always
   // visible; the floating window only renders when opened.
   if (!embedded && !isOpen) return null;
 
@@ -1629,10 +1709,10 @@ export function AudioSuiteWindow({
           <span
             title={
               rxVstEngineActive
-                ? `RX VST engine active (${rxVstActivePlugins} plugin${rxVstActivePlugins === 1 ? '' : 's'}, ${rxVstDegradedBlocks} degraded blocks)`
+                ? `VST engine active (${rxVstActivePlugins} plugin${rxVstActivePlugins === 1 ? '' : 's'}, ${rxVstDegradedBlocks} degraded blocks)`
                 : rxVstEngineAvailable
-                  ? 'RX VST engine idle'
-                  : 'RX VST engine not installed'
+                  ? 'VST engine idle'
+                  : 'VST engine not installed'
             }
             style={{
               marginLeft: 'auto',
@@ -1654,7 +1734,7 @@ export function AudioSuiteWindow({
               whiteSpace: 'nowrap',
             }}
           >
-            RX VST {rxVstEngineActive ? 'ON' : rxVstEngineAvailable ? 'IDLE' : 'OFF'}
+            VST {rxVstEngineActive ? 'ON' : rxVstEngineAvailable ? 'IDLE' : 'OFF'}
           </span>
         </div>
       )}
@@ -1782,7 +1862,8 @@ export function AudioSuiteWindow({
           onScanDefault={onScanDefaultVstDirectory}
           onScanBothDefault={onScanBothDefaultVstDirectory}
           scanning={scanning}
-          scanRouteLabel={isRxSuite ? 'RX' : 'TX'}
+          favoriteVstIds={favoriteVstIdSet}
+          onToggleFavorite={toggleFavoriteVst}
           vstMode={vstRack}
           embedded={embedded}
         />
@@ -1851,8 +1932,8 @@ export function AudioSuiteWindow({
             {parkedPanels.length > 0
               ? 'Empty — add a plugin from the Available list, or drag it here.'
               : isRxSuite
-                ? 'No RX VSTs installed — scan for VSTs, then add one from Available.'
-                : 'No audio plugins installed — use Download Audio Suite on the TX Audio Tools panel.'}
+                ? 'No VSTs installed — scan for VSTs, then add one from Available.'
+                : 'No audio plugins installed — use Download Audio Suite on the Audio Tools panel.'}
           </span>
         )}
         {chainPanels.map((panel, idx) => (
@@ -1863,8 +1944,10 @@ export function AudioSuiteWindow({
             selected={panel.pluginId === effectiveSelectedId}
             isDragTarget={cardDragOver === idx}
             isDragSource={cardDragFrom === idx}
+            isFavorite={favoriteVstIdSet.has(panel.pluginId)}
             onSelect={() => setSelectedChainId(panel.pluginId)}
             onRemove={() => void setActiveChainMembership(panel.pluginId, false)}
+            onToggleFavorite={() => toggleFavoriteVst(panel.pluginId)}
             onHandleDown={onCardHandleDown}
             onDragStart={onCardDragStart(idx)}
             onDragOver={onCardDragOver(idx)}

@@ -7,13 +7,25 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 
 import {
+  fetchTxDiagnostics,
   fetchTxFidelityPolicy,
   fetchTxStationProfiles,
   resetTxStationProfile,
   saveTxFidelityPolicy,
   saveTxStationProfile,
+  setCfcConfig,
+  setDrive,
+  setLevelerMaxGain,
+  setMicGain,
+  type TxDiagnosticsDto,
 } from '../../api/client';
 import { applyTxStationProfile } from '../../audio/apply-tx-station-profile';
+import {
+  recommendTxAutoTune,
+  type TxAutoTunePlan,
+  type TxAutoTuneSample,
+  type TxAutoTuneSettings,
+} from '../../audio/tx-auto-tune';
 import {
   formatTxStationProfileSummary,
   getTxStationProfile,
@@ -44,6 +56,23 @@ type ApplyPhase =
 
 type ActivationReason = 'selected' | 'chain' | 'saved' | 'reset';
 
+const AUTO_TUNE_SAMPLE_MS = 15_000;
+const AUTO_TUNE_POLL_MS = 250;
+const AUTO_TUNE_CHAIN_DBFS_FLOOR = -119.5;
+
+type AutoTunePhase = 'idle' | 'sampling' | 'applying' | 'applied' | 'error';
+
+type AutoTuneChainMeters = {
+  outputDbfs: number | null;
+};
+
+type AutoTuneCounters = {
+  vstDegradedBlocks: number | null;
+  ingestDroppedFrames: number | null;
+  p2TransportFailures: number | null;
+  p2QueueFailures: number | null;
+};
+
 function controlInputStyle(): CSSProperties {
   return {
     width: '100%',
@@ -58,6 +87,150 @@ function controlInputStyle(): CSSProperties {
     fontWeight: 800,
     padding: '0 6px',
   };
+}
+
+function finiteDbfs(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) && v > AUTO_TUNE_CHAIN_DBFS_FLOOR ? v : null;
+}
+
+function finiteCount(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
+}
+
+function finitePositive(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+}
+
+function counterDelta(prev: number | null, next: number | null): number | null {
+  if (next === null) return null;
+  if (prev === null) return 0;
+  return Math.max(0, next - prev);
+}
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error('Auto tune canceled'));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        reject(new Error('Auto tune canceled'));
+      },
+      { once: true },
+    );
+  });
+}
+
+async function fetchAutoTuneChainMeters(signal: AbortSignal): Promise<AutoTuneChainMeters> {
+  try {
+    const res = await fetch('/api/tx-audio-suite/chain/meters', { signal });
+    if (!res.ok) return { outputDbfs: null };
+    const body = (await res.json()) as {
+      outputDb?: unknown;
+      outputDbfs?: unknown;
+    };
+    return {
+      outputDbfs: finiteDbfs(body.outputDbfs ?? body.outputDb),
+    };
+  } catch {
+    return { outputDbfs: null };
+  }
+}
+
+function autoTuneSampleFromDiagnostics(
+  diag: TxDiagnosticsDto,
+  chain: AutoTuneChainMeters,
+  prev: AutoTuneCounters,
+): { sample: TxAutoTuneSample; counters: AutoTuneCounters } {
+  const tx = useTxStore.getState();
+  const degradedBlocks = finiteCount(diag.vstEngine?.degradedBlocks);
+  const droppedFrames = finiteCount(diag.ingest.droppedFrames);
+  const p2TransportFailures = finiteCount(diag.protocol2?.sendFailures);
+  const p2QueueFailures = finiteCount(diag.protocol2?.queueWriteFailures);
+  const counters = {
+    vstDegradedBlocks: degradedBlocks,
+    ingestDroppedFrames: droppedFrames,
+    p2TransportFailures,
+    p2QueueFailures,
+  };
+
+  return {
+    counters,
+    sample: {
+      micPkDbfs: diag.stage.micPkDbfs ?? finiteDbfs(tx.wdspMicPk) ?? finiteDbfs(tx.micDbfs),
+      outPkDbfs: diag.stage.outPkDbfs ?? finiteDbfs(tx.outPk),
+      outAvDbfs: diag.stage.outAvDbfs ?? finiteDbfs(tx.outAv),
+      audioSuiteOutputDbfs: chain.outputDbfs,
+      alcGrDb: Number.isFinite(diag.stage.alcGrDb) ? diag.stage.alcGrDb : tx.alcGr,
+      lvlrGrDb: Number.isFinite(diag.stage.lvlrGrDb) ? diag.stage.lvlrGrDb : tx.lvlrGr,
+      cfcGrDb: Number.isFinite(diag.stage.cfcGrDb) ? diag.stage.cfcGrDb : tx.cfcGr,
+      swr: Number.isFinite(tx.swr) && tx.swr > 0 ? tx.swr : 1,
+      psFeedbackLevel: finitePositive(tx.psFeedbackLevel),
+      vstDegradedDelta: counterDelta(prev.vstDegradedBlocks, degradedBlocks),
+      ingestDroppedFrameDelta: counterDelta(prev.ingestDroppedFrames, droppedFrames),
+      p2QueuedPackets: finiteCount(diag.protocol2?.queuedPackets),
+      p2TransportFailureDelta: counterDelta(prev.p2TransportFailures, p2TransportFailures),
+      p2QueueFailureDelta: counterDelta(prev.p2QueueFailures, p2QueueFailures),
+    },
+  };
+}
+
+async function collectTxAutoTuneSamples(
+  signal: AbortSignal,
+  onProgress: (progress: number) => void,
+): Promise<TxAutoTuneSample[]> {
+  const samples: TxAutoTuneSample[] = [];
+  const started = Date.now();
+  let counters: AutoTuneCounters = {
+    vstDegradedBlocks: null,
+    ingestDroppedFrames: null,
+    p2TransportFailures: null,
+    p2QueueFailures: null,
+  };
+
+  while (!signal.aborted) {
+    const [diag, chain] = await Promise.all([
+      fetchTxDiagnostics(signal),
+      fetchAutoTuneChainMeters(signal),
+    ]);
+    const next = autoTuneSampleFromDiagnostics(diag, chain, counters);
+    counters = next.counters;
+    samples.push(next.sample);
+    const elapsed = Date.now() - started;
+    onProgress(Math.min(1, elapsed / AUTO_TUNE_SAMPLE_MS));
+    if (elapsed >= AUTO_TUNE_SAMPLE_MS) break;
+    await sleep(Math.min(AUTO_TUNE_POLL_MS, AUTO_TUNE_SAMPLE_MS - elapsed), signal);
+  }
+
+  return samples;
+}
+
+function cfcConfigChanged(a: TxAutoTuneSettings['cfcConfig'], b: TxAutoTuneSettings['cfcConfig']): boolean {
+  if (
+    a.enabled !== b.enabled ||
+    a.postEqEnabled !== b.postEqEnabled ||
+    a.preCompDb !== b.preCompDb ||
+    a.prePeqDb !== b.prePeqDb ||
+    a.bands.length !== b.bands.length
+  ) {
+    return true;
+  }
+  return a.bands.some((band, i) => {
+    const other = b.bands[i];
+    return !other ||
+      band.freqHz !== other.freqHz ||
+      band.compLevelDb !== other.compLevelDb ||
+      band.postGainDb !== other.postGainDb;
+  });
+}
+
+function autoTuneMessage(plan: TxAutoTunePlan): string {
+  if (plan.actions.length === 0) return plan.summary;
+  return `${plan.summary}: ${plan.actions.join(', ')}`;
 }
 
 function controlLabelStyle(): CSSProperties {
@@ -183,6 +356,277 @@ function AudioSuitePreviewToggle() {
       >
         {previewEnabled ? 'ON' : 'OFF'}
       </button>
+    </section>
+  );
+}
+
+function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: number }) {
+  const status = useConnectionStore((s) => s.status);
+  const applyState = useConnectionStore((s) => s.applyState);
+  const hydrateTxFromState = useTxStore((s) => s.hydrateFromState);
+  const tunOn = useTxStore((s) => s.tunOn);
+  const setMicGainDb = useTxStore((s) => s.setMicGainDb);
+  const setLevelerMaxGainDb = useTxStore((s) => s.setLevelerMaxGainDb);
+  const setDrivePercent = useTxStore((s) => s.setDrivePercent);
+  const setCfcConfigLocal = useTxStore((s) => s.setCfcConfig);
+  const loadPreviewState = useAudioSuiteStore((s) => s.loadPreviewState);
+  const setPreviewEnabled = useAudioSuiteStore((s) => s.setPreviewEnabled);
+  const [phase, setPhase] = useState<AutoTunePhase>('idle');
+  const [message, setMessage] = useState('Ready / 15s sample');
+  const [progress, setProgress] = useState(0);
+  const [lastPlan, setLastPlan] = useState<TxAutoTunePlan | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    void loadPreviewState();
+  }, [loadPreviewState]);
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  const applyPlan = useCallback(
+    async (plan: TxAutoTunePlan, signal: AbortSignal) => {
+      const before = useTxStore.getState();
+      if (plan.settings.micGainDb !== before.micGainDb) {
+        const mic = await setMicGain(plan.settings.micGainDb, signal);
+        setMicGainDb(mic.micGainDb);
+      }
+      if (plan.settings.levelerMaxGainDb !== before.levelerMaxGainDb) {
+        const leveler = await setLevelerMaxGain(plan.settings.levelerMaxGainDb, signal);
+        setLevelerMaxGainDb(leveler.levelerMaxGainDb);
+      }
+      if (cfcConfigChanged(before.cfcConfig, plan.settings.cfcConfig)) {
+        const state = await setCfcConfig(plan.settings.cfcConfig, signal);
+        applyState(state);
+        hydrateTxFromState(state);
+        setCfcConfigLocal(state.cfc);
+      }
+      if (plan.settings.drivePercent !== before.drivePercent) {
+        const drive = await setDrive(plan.settings.drivePercent, signal);
+        setDrivePercent(drive.drivePercent);
+      }
+    },
+    [
+      applyState,
+      hydrateTxFromState,
+      setCfcConfigLocal,
+      setDrivePercent,
+      setLevelerMaxGainDb,
+      setMicGainDb,
+    ],
+  );
+
+  const runAutoTune = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setLastPlan(null);
+    setProgress(0);
+    // True only when Auto Tune itself armed the monitor for this run, so the
+    // finally block restores the off-air state and never disturbs a Preview the
+    // operator turned on themselves.
+    let startedSilentPreview = false;
+
+    try {
+      if (status !== 'Connected') {
+        setPhase('error');
+        setMessage('Connect radio first');
+        return;
+      }
+      if (useTxStore.getState().tunOn) {
+        setPhase('error');
+        setMessage('Use voice MOX or Preview');
+        return;
+      }
+
+      let tx = useTxStore.getState();
+      if (!tx.moxOn && !tx.txMonitorEnabled) {
+        let audio = useAudioSuiteStore.getState();
+        if (!audio.previewSupported) {
+          await loadPreviewState();
+          audio = useAudioSuiteStore.getState();
+        }
+        if (!audio.previewSupported) {
+          setPhase('error');
+          setMessage('Enable Preview or key MOX');
+          return;
+        }
+        // Meter-only: the chain runs so the stage meters animate and we can
+        // sample, but the demodulated monitor stays silent — the operator does
+        // not hear the preview while Auto Tune works in the background.
+        await setPreviewEnabled(true, true);
+        startedSilentPreview = true;
+        await sleep(250, controller.signal);
+        tx = useTxStore.getState();
+        if (!tx.moxOn && !tx.txMonitorEnabled) {
+          setPhase('error');
+          setMessage('Preview did not start');
+          return;
+        }
+      }
+
+      setPhase('sampling');
+      setMessage('Talk now / 15s');
+      const samples = await collectTxAutoTuneSamples(controller.signal, (p) => {
+        setProgress(p);
+        const remaining = Math.max(0, Math.ceil((1 - p) * (AUTO_TUNE_SAMPLE_MS / 1000)));
+        setMessage(remaining > 0 ? `Talk now / ${remaining}s` : 'Analyzing...');
+      });
+
+      tx = useTxStore.getState();
+      const audio = useAudioSuiteStore.getState();
+      const plan = recommendTxAutoTune(
+        {
+          micGainDb: tx.micGainDb,
+          levelerMaxGainDb: tx.levelerMaxGainDb,
+          drivePercent: tx.drivePercent,
+          cfcConfig: tx.cfcConfig,
+          targetSpectralDensity,
+          keyed: tx.moxOn,
+          audioSuiteActive: !audio.masterBypassed && (tx.moxOn || tx.txMonitorEnabled),
+          vstActive: audio.processingMode === 'vst' || audio.vstEngineActive,
+        },
+        samples,
+      );
+      setLastPlan(plan);
+
+      if (plan.changed) {
+        setPhase('applying');
+        setMessage('Applying...');
+        await applyPlan(plan, controller.signal);
+      }
+
+      setProgress(1);
+      setPhase('applied');
+      setMessage(autoTuneMessage(plan));
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      setPhase('error');
+      setMessage(err instanceof Error ? err.message : 'Auto tune failed');
+    } finally {
+      // Tear down the silent monitor we armed for this run so the radio returns
+      // to its off-air state — leaving it on would keep the chain metering (and
+      // hold the mic uplink) after Auto Tune is done.
+      if (startedSilentPreview) {
+        void setPreviewEnabled(false);
+      }
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+      }
+    }
+  }, [applyPlan, loadPreviewState, setPreviewEnabled, status, targetSpectralDensity]);
+
+  const busy = phase === 'sampling' || phase === 'applying';
+  const color =
+    phase === 'applied'
+      ? 'var(--signal)'
+      : phase === 'error'
+        ? 'var(--tx)'
+        : busy
+          ? 'var(--accent)'
+          : 'var(--fg-2)';
+  const disabled = busy || status !== 'Connected' || tunOn;
+  const detailTitle = lastPlan
+    ? [
+        lastPlan.summary,
+        lastPlan.actions.length ? `Actions: ${lastPlan.actions.join(', ')}` : '',
+        lastPlan.blockers.length ? `Blocked: ${lastPlan.blockers.join(', ')}` : '',
+      ]
+        .filter(Boolean)
+        .join(' / ')
+    : message;
+
+  return (
+    <section
+      aria-label="TX fidelity auto tune"
+      title={detailTitle}
+      style={{
+        display: 'grid',
+        gap: 6,
+        minWidth: 0,
+        padding: '7px 8px',
+        border: '1px solid var(--line)',
+        borderRadius: 5,
+        background: 'var(--bg-2)',
+      }}
+    >
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1fr) auto',
+          gap: 8,
+          alignItems: 'center',
+          minWidth: 0,
+        }}
+      >
+        <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+          <span className="label-xs" style={{ color: 'var(--fg-2)', fontWeight: 900 }}>
+            Auto Tune
+          </span>
+          <span
+            className="mono"
+            style={{
+              minWidth: 0,
+              color,
+              fontSize: 10,
+              fontWeight: 800,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {message}
+          </span>
+        </div>
+        <button
+          type="button"
+          aria-label="Auto tune TX fidelity"
+          disabled={disabled}
+          onClick={() => void runAutoTune()}
+          style={{
+            minWidth: 74,
+            height: 26,
+            border: `1px solid ${busy ? 'var(--accent)' : 'var(--line)'}`,
+            borderRadius: 4,
+            background: busy ? 'var(--accent-soft)' : 'var(--bg-1)',
+            color: busy ? 'var(--accent)' : 'var(--fg-0)',
+            cursor: disabled ? 'not-allowed' : 'pointer',
+            fontSize: 10,
+            fontWeight: 900,
+            opacity: disabled && !busy ? 0.55 : 1,
+            padding: '0 9px',
+            textTransform: 'uppercase',
+          }}
+        >
+          {phase === 'applying' ? 'Apply' : phase === 'sampling' ? 'Sampling' : 'Auto'}
+        </button>
+      </div>
+      {busy && (
+        <div
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progress * 100)}
+          style={{
+            height: 4,
+            overflow: 'hidden',
+            borderRadius: 3,
+            background: 'var(--bg-0)',
+          }}
+        >
+          <div
+            style={{
+              width: `${Math.round(progress * 100)}%`,
+              height: '100%',
+              background: 'var(--accent)',
+              transition: 'width 120ms linear',
+            }}
+          />
+        </div>
+      )}
     </section>
   );
 }
@@ -1023,6 +1467,7 @@ export function TxFidelityPanel() {
       }}
     >
       <TxFidelityAdvisor targetSpectralDensity={targetSpectralDensity} />
+      <TxFidelityAutoTune targetSpectralDensity={targetSpectralDensity} />
       <AudioSuitePreviewToggle />
       <AudioChainMeters compact title="Audio Suite Chain" />
       <TxStationProfiles

@@ -521,7 +521,6 @@ describe('smart NR supervisor', () => {
       wdspActive: true,
       wdspEmnrPost2Available: true,
       wdspNr4SbnrAvailable: false,
-      wdspNr5SpnrAvailable: true,
     });
 
     expect(shaped.nrMode).toBe('Sbnr');
@@ -539,7 +538,6 @@ describe('smart NR supervisor', () => {
         wdspActive: true,
         wdspEmnrPost2Available: false,
         wdspNr4SbnrAvailable: true,
-        wdspNr5SpnrAvailable: true,
       },
     );
 
@@ -550,20 +548,4 @@ describe('smart NR supervisor', () => {
     expect(adapted.capabilityRecommendation).toContain('post2');
   });
 
-  it('downgrades NR5 weak-signal recommendations when SPNR exports are unavailable', () => {
-    const adapted = adaptSmartNrToDspCapabilities(
-      { ...NR_CONFIG_DEFAULT, nrMode: 'Nr5' },
-      {
-        wdspActive: true,
-        wdspEmnrPost2Available: true,
-        wdspNr4SbnrAvailable: true,
-        wdspNr5SpnrAvailable: false,
-      },
-    );
-
-    expect(adapted.nr.nrMode).toBe('Sbnr');
-    expect(adapted.nr.nr4ReductionAmount).toBe(7);
-    expect(adapted.capabilityLimited).toBe(true);
-    expect(adapted.capabilityRecommendation).toContain('NR5/SPNR unavailable');
-  });
 });

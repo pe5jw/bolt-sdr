@@ -31,6 +31,7 @@ import {
   getFilterPresets,
   type FilterPresetDto,
   type RxMode,
+  type TxVfo,
 } from '../../api/client';
 import {
   getPresetsForMode,
@@ -113,24 +114,35 @@ export function FilterRibbon({
   section = 'all',
 }: { embedded?: boolean; section?: FilterRibbonSection } = {}) {
   const mode = useConnectionStore((s) => s.mode);
+  const modeB = useConnectionStore((s) => s.modeB);
   const filterLow = useConnectionStore((s) => s.filterLowHz);
   const filterHigh = useConnectionStore((s) => s.filterHighHz);
+  const filterLowB = useConnectionStore((s) => s.filterLowHzB);
+  const filterHighB = useConnectionStore((s) => s.filterHighHzB);
   const filterPresetName = useConnectionStore((s) => s.filterPresetName);
+  const filterPresetNameB = useConnectionStore((s) => s.filterPresetNameB);
+  const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
+  const rxFocus = useConnectionStore((s) => s.rxFocus);
   const open = useConnectionStore((s) => s.filterAdvancedPaneOpen);
   const applyState = useConnectionStore((s) => s.applyState);
-  const favoriteSlotNames = useFavoritesForMode(mode);
+  const activeReceiver: TxVfo = rxFocus === 'B' && rx2Enabled ? 'B' : 'A';
+  const activeMode = activeReceiver === 'B' ? modeB : mode;
+  const activeFilterLow = activeReceiver === 'B' ? filterLowB : filterLow;
+  const activeFilterHigh = activeReceiver === 'B' ? filterHighB : filterHigh;
+  const activeFilterPresetName = activeReceiver === 'B' ? filterPresetNameB : filterPresetName;
+  const favoriteSlotNames = useFavoritesForMode(activeMode);
   const [serverPresets, setServerPresets] = useState<FilterPresetDto[] | null>(null);
   const [dragSlot, setDragSlot] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    getFilterPresets(mode)
+    getFilterPresets(activeMode)
       .then((list) => { if (!cancelled) setServerPresets(list); })
       .catch(() => { /* fall back to local table */ });
     return () => { cancelled = true; };
-  }, [mode]);
+  }, [activeMode]);
 
-  const presets = useMemo(() => mergePresets(mode, serverPresets), [mode, serverPresets]);
+  const presets = useMemo(() => mergePresets(activeMode, serverPresets), [activeMode, serverPresets]);
 
   // PRESETS grid order: F-slots ascending by passband width, then VAR1, VAR2.
   // The local table is descending (5.0k → 1.0k); operators read narrow-to-wide
@@ -146,14 +158,22 @@ export function FilterRibbon({
 
   const selectPreset = useCallback((slot: FilterPresetSlot) => {
     useConnectionStore.setState({
-      filterLowHz: slot.lowHz,
-      filterHighHz: slot.highHz,
-      filterPresetName: slot.slotName,
+      ...(activeReceiver === 'B'
+        ? {
+            filterLowHzB: slot.lowHz,
+            filterHighHzB: slot.highHz,
+            filterPresetNameB: slot.slotName,
+          }
+        : {
+            filterLowHz: slot.lowHz,
+            filterHighHz: slot.highHz,
+            filterPresetName: slot.slotName,
+          }),
     });
-    setFilter(slot.lowHz, slot.highHz, slot.slotName)
+    setFilter(slot.lowHz, slot.highHz, slot.slotName, undefined, activeReceiver)
       .then(applyState)
       .catch(() => {});
-  }, [applyState]);
+  }, [activeReceiver, applyState]);
 
   const closeRibbon = useCallback(() => {
     useConnectionStore.setState({ filterAdvancedPaneOpen: false });
@@ -168,42 +188,50 @@ export function FilterRibbon({
   //   - VAR2 active → write to VAR2
   //   - F1..F10 active → fall back to VAR1 (F-slots are Thetis defaults
   //     and must never be overwritten; freeform edits land in VAR1).
-  const activeVarSlot: 'VAR1' | 'VAR2' = filterPresetName === 'VAR2' ? 'VAR2' : 'VAR1';
-  const seedAbs = signedToAbs(mode, filterLow, filterHigh);
+  const activeVarSlot: 'VAR1' | 'VAR2' = activeFilterPresetName === 'VAR2' ? 'VAR2' : 'VAR1';
+  const seedAbs = signedToAbs(activeMode, activeFilterLow, activeFilterHigh);
   const [loDraft, setLoDraft] = useState<string>(String(seedAbs.lo));
   const [hiDraft, setHiDraft] = useState<string>(String(seedAbs.hi));
 
   // Reseed the drafts when the live filter changes (preset click, mode flip,
   // server reconciliation). The CUSTOM inputs always reflect what's playing.
   useEffect(() => {
-    const abs = signedToAbs(mode, filterLow, filterHigh);
+    const abs = signedToAbs(activeMode, activeFilterLow, activeFilterHigh);
     setLoDraft(String(abs.lo));
     setHiDraft(String(abs.hi));
-  }, [mode, filterLow, filterHigh]);
+  }, [activeMode, activeFilterLow, activeFilterHigh]);
 
   const commitCustom = useCallback(async () => {
     const loAbs = Number.parseInt(loDraft, 10);
     const hiAbs = Number.parseInt(hiDraft, 10);
     if (!Number.isFinite(loAbs) || !Number.isFinite(hiAbs)) return;
-    const { low, high } = absToSigned(mode, loAbs, hiAbs);
+    const { low, high } = absToSigned(activeMode, loAbs, hiAbs);
     if (high <= low + 50) return;
     // Writes land on the currently-active VAR slot. F1..F10 are Thetis
     // defaults and never get overwritten — when one is active the edit falls
     // back to VAR1 (set by activeVarSlot above).
     const target = activeVarSlot;
     useConnectionStore.setState({
-      filterLowHz: low,
-      filterHighHz: high,
-      filterPresetName: target,
+      ...(activeReceiver === 'B'
+        ? {
+            filterLowHzB: low,
+            filterHighHzB: high,
+            filterPresetNameB: target,
+          }
+        : {
+            filterLowHz: low,
+            filterHighHz: high,
+            filterPresetName: target,
+          }),
     });
     try {
-      await setFilter(low, high, target).then(applyState);
-      await setFilterPresetOverride(mode, target, low, high);
+      await setFilter(low, high, target, undefined, activeReceiver).then(applyState);
+      await setFilterPresetOverride(activeMode, target, low, high);
       // Refresh preset list so the VAR chip shows the new values.
-      const fresh = await getFilterPresets(mode);
+      const fresh = await getFilterPresets(activeMode);
       setServerPresets(fresh);
     } catch { /* next state poll reconciles */ }
-  }, [loDraft, hiDraft, mode, applyState, activeVarSlot]);
+  }, [loDraft, hiDraft, activeMode, activeReceiver, applyState, activeVarSlot]);
 
   const onCustomKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') e.currentTarget.blur();
@@ -220,26 +248,33 @@ export function FilterRibbon({
       if (e.target instanceof HTMLInputElement) return;
       if (e.key === 'Escape' && !embedded) { closeRibbon(); return; }
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-      const step = nudgeStepHz(mode) * (e.shiftKey ? 10 : 1);
+      const step = nudgeStepHz(activeMode) * (e.shiftKey ? 10 : 1);
       const dir = e.key === 'ArrowRight' ? 1 : -1;
       const s = useConnectionStore.getState();
-      const newHi = s.filterHighHz + dir * step;
-      if (newHi <= s.filterLowHz + 50) return;
-      const slot = s.filterPresetName && /^VAR[12]$/.test(s.filterPresetName) ? s.filterPresetName : 'VAR1';
-      useConnectionStore.setState({ filterHighHz: newHi, filterPresetName: slot });
-      setFilter(s.filterLowHz, newHi, slot).then(applyState).catch(() => {});
+      const currentLow = activeReceiver === 'B' ? s.filterLowHzB : s.filterLowHz;
+      const currentHigh = activeReceiver === 'B' ? s.filterHighHzB : s.filterHighHz;
+      const currentPreset = activeReceiver === 'B' ? s.filterPresetNameB : s.filterPresetName;
+      const newHi = currentHigh + dir * step;
+      if (newHi <= currentLow + 50) return;
+      const slot = currentPreset && /^VAR[12]$/.test(currentPreset) ? currentPreset : 'VAR1';
+      useConnectionStore.setState(
+        activeReceiver === 'B'
+          ? { filterHighHzB: newHi, filterPresetNameB: slot }
+          : { filterHighHz: newHi, filterPresetName: slot },
+      );
+      setFilter(currentLow, newHi, slot, undefined, activeReceiver).then(applyState).catch(() => {});
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [embedded, open, mode, applyState, closeRibbon, section]);
+  }, [embedded, open, activeMode, activeReceiver, applyState, closeRibbon, section]);
 
   if (!embedded && !open) return null;
   // The mini-pan section can render before the preset table resolves; only
   // the presets/all sections need a populated table to show anything.
   if (section !== 'minipan' && presets.length === 0) return null;
 
-  const currentWidth = Math.abs(filterHigh - filterLow);
-  const isLowDisabled = isSymmetricMode(mode);
+  const currentWidth = Math.abs(activeFilterHigh - activeFilterLow);
+  const isLowDisabled = isSymmetricMode(activeMode);
 
   const startDrag = (e: React.DragEvent, slotName: string) => {
     e.dataTransfer.setData(FILTER_DRAG_MIME, slotName);
@@ -288,7 +323,7 @@ export function FilterRibbon({
           <div className="filter-ribbon__preset-grid">
             {sortedPresets.map((slot) => {
               const slotWidth = Math.abs(slot.highHz - slot.lowHz);
-              const isActive = filterPresetName === slot.slotName
+              const isActive = activeFilterPresetName === slot.slotName
                 || (Math.abs(slotWidth - currentWidth) <= 20 && !slot.isVar);
               const isPinned = favoriteSlotNames.includes(slot.slotName);
               const label = slot.isVar ? slot.slotName : slot.label;

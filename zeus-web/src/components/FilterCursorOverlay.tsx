@@ -108,11 +108,14 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
       const band = bandRef.current;
       if (band) {
         if (hzPerPixel > 0 && len > 0 && rectW > 0) {
+          const filterLowHz = receiver === 'B' ? conn.filterLowHzB : conn.filterLowHz;
+          const filterHighHz = receiver === 'B' ? conn.filterHighHzB : conn.filterHighHz;
+          const mode = receiver === 'B' ? conn.modeB : conn.mode;
           const hzPerCssPx = (len * hzPerPixel) / rectW;
-          const lowPx = conn.filterLowHz / hzPerCssPx;
-          const highPx = conn.filterHighHz / hzPerCssPx;
+          const lowPx = filterLowHz / hzPerCssPx;
+          const highPx = filterHighHz / hzPerCssPx;
           const widthPx = Math.max(1, highPx - lowPx);
-          const isCw = conn.mode === 'CWL' || conn.mode === 'CWU';
+          const isCw = mode === 'CWL' || mode === 'CWU';
           // CW centres the passband on the spot you click (the tone lands at
           // the cursor); other modes keep the asymmetric carrier-relative band.
           const leftPx = isCw ? cursorX - widthPx / 2 : cursorX + lowPx;
@@ -183,7 +186,10 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
         visible &&
         (s.filterLowHz !== prev.filterLowHz ||
           s.filterHighHz !== prev.filterHighHz ||
-          s.mode !== prev.mode)
+          s.filterLowHzB !== prev.filterLowHzB ||
+          s.filterHighHzB !== prev.filterHighHzB ||
+          s.mode !== prev.mode ||
+          s.modeB !== prev.modeB)
       ) {
         schedule();
       }

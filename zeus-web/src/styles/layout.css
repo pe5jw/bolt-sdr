@@ -1381,7 +1381,7 @@
    * grab handle, but a chip / slider / input shouldn't show grab. */
   cursor: default;
 }
-.hero-vfo-switch {
+.hero-rx-audio-switch {
   position: absolute;
   left: 50%;
   /* Vertically centred in the 26px header strip rather than pinned to the
@@ -1390,9 +1390,9 @@
   top: 50%;
   z-index: 4;
   display: grid;
-  grid-template-columns: repeat(2, minmax(30px, 1fr));
+  grid-template-columns: minmax(34px, 1fr) minmax(40px, 1.12fr) minmax(34px, 1fr) 1px 24px 24px;
   gap: 2px;
-  max-width: 24%;
+  width: clamp(176px, 32%, 236px);
   padding: 1px;
   overflow: hidden;
   transform: translate(-50%, -50%);
@@ -1404,41 +1404,42 @@
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 6px 18px rgba(0,0,0,0.36);
   cursor: default;
 }
-.hero-vfo-switch__key {
+.hero-rx-audio-switch__key {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 3px;
-  min-width: 30px;
+  min-width: 36px;
   height: 18px;
-  padding: 0 7px;
+  padding: 0 5px;
   color: var(--fg-2);
   background: transparent;
   border: 0;
   border-radius: 6px;
-  font: 800 11px/1 var(--font-sans);
+  font: 800 10px/1 var(--font-sans);
   letter-spacing: 0;
   cursor: pointer;
 }
-.hero-vfo-switch__key:hover {
+.hero-rx-audio-switch__key--vfo {
+  min-width: 24px;
+  padding: 0 4px;
+}
+.hero-rx-audio-switch__divider {
+  align-self: stretch;
+  width: 1px;
+  margin: 2px 0;
+  background: rgba(255,255,255,0.14);
+  box-shadow: 1px 0 0 rgba(0,0,0,0.38);
+}
+.hero-rx-audio-switch__key:hover {
   color: var(--fg-0);
   background: rgba(255,255,255,0.06);
 }
-.hero-vfo-switch__key.is-active {
+.hero-rx-audio-switch__key.is-active {
   color: var(--fg-0);
   background: linear-gradient(180deg, var(--accent-bright), var(--accent));
   box-shadow: 0 0 12px rgba(78,166,255,0.26);
-}
-.hero-vfo-switch__tx {
-  color: var(--tx);
-  font-size: 8px;
-  font-weight: 800;
-  line-height: 1;
-}
-.hero-vfo-switch__key.is-active .hero-vfo-switch__tx {
-  color: var(--fg-0);
-  opacity: 0.86;
 }
 .spectrum-wrap,
 .spectrum-canvas,
@@ -1845,8 +1846,7 @@
 .vfo-rx2-pill,
 .vfo-tool-key,
 .vfo-focus-key,
-.vfo-tx-key,
-.vfo-segment {
+.vfo-tx-key {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1869,8 +1869,7 @@
 .vfo-rx2-pill:hover,
 .vfo-tool-key:hover,
 .vfo-focus-key:hover,
-.vfo-tx-key:hover,
-.vfo-segment:hover {
+.vfo-tx-key:hover {
   color: var(--fg-0);
   background:
     linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.035)),
@@ -1880,8 +1879,7 @@
 .vfo-rx2-pill:disabled,
 .vfo-tool-key:disabled,
 .vfo-focus-key:disabled,
-.vfo-tx-key:disabled,
-.vfo-segment:disabled {
+.vfo-tx-key:disabled {
   opacity: 0.42;
   cursor: default;
 }
@@ -2044,7 +2042,7 @@
 }
 .vfo-audio-strip {
   display: grid;
-  grid-template-columns: minmax(142px, auto) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: 6px;
   padding: 6px;
@@ -2054,32 +2052,6 @@
     rgba(0,0,0,0.13);
   border: 1px solid rgba(255,255,255,0.08);
   border-radius: 8px;
-}
-.vfo-listen-bank {
-  display: grid;
-  grid-template-columns: 24px repeat(3, minmax(36px, 1fr));
-  align-items: center;
-  gap: 3px;
-  min-width: 0;
-}
-.vfo-audio-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 26px;
-  color: var(--fg-2);
-}
-.vfo-segment {
-  min-height: 26px;
-  padding: 0 7px;
-  font-size: 10px;
-}
-.vfo-segment.is-active {
-  color: var(--fg-0);
-  background: linear-gradient(180deg, var(--accent-bright), var(--accent));
-  border-color: rgba(78,166,255,0.62);
-  box-shadow: 0 0 12px rgba(78,166,255,0.22);
 }
 .vfo-af-control {
   display: grid;
@@ -2620,6 +2592,118 @@
   background: var(--ok-soft); color: var(--ok); border: 1px solid var(--ok);
 }
 
+/* ── Local logbook worked-before summary ───────────────────────────────── */
+.qrz-worked {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.qrz-worked--hit { border-color: color-mix(in srgb, var(--accent) 60%, var(--line-strong)); }
+.qrz-worked--new, .qrz-worked--loading { color: var(--fg-2); }
+.qrz-worked-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.qrz-worked-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+}
+.qrz-worked-pill {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 800;
+  color: var(--accent-bright);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-xs);
+  padding: 1px 6px;
+  background: var(--accent-soft);
+}
+.qrz-worked-last {
+  display: grid;
+  grid-template-columns: minmax(92px, auto) 1fr;
+  gap: 2px 10px;
+  align-items: baseline;
+}
+.qrz-worked-last-date {
+  color: var(--fg-0);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.qrz-worked-last-meta {
+  color: var(--fg-1);
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qrz-worked-last-note {
+  grid-column: 1 / -1;
+  color: var(--fg-2);
+  font-size: 10px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qrz-worked-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.qrz-worked-chip {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  color: var(--fg-0);
+  background: var(--bg-1);
+  border: 1px solid var(--line-strong);
+}
+.qrz-worked-chip--mode {
+  color: var(--power);
+  border-color: color-mix(in srgb, var(--power) 55%, var(--line-strong));
+}
+.qrz-worked-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.qrz-worked-recent-row {
+  display: grid;
+  grid-template-columns: 92px 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  color: var(--fg-2);
+  font-size: 9px;
+  min-width: 0;
+}
+.qrz-worked-recent-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qrz-worked-sync {
+  color: var(--accent-bright);
+  font-weight: 800;
+}
+.qrz-worked-empty {
+  color: var(--fg-2);
+  font-size: 10px;
+}
+
 /* ── Point-to-point propagation (HamClock P.533-14 engine) ─────────────── */
 .qrz-prop {
   margin-top: 8px; padding-top: 6px;
@@ -2785,6 +2869,46 @@
 .log-row .t-call { color: var(--accent); font-weight: 700; }
 .log-row .t-mode { color: var(--fg-2); }
 .log-row .t-name { color: var(--fg-2); }
+.log-cell-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  line-height: 1.15;
+}
+.log-sub {
+  font-size: 9px;
+  color: var(--fg-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-name-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.log-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-sync-pill {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 800;
+}
+.log-meta-line {
+  color: var(--fg-3);
+  font-size: 9px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .log-foot {
   padding: 5px 10px;
   display: flex;

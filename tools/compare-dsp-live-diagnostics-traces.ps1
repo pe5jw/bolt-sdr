@@ -231,13 +231,13 @@ function Get-StatValue {
     return Get-NumericValue (Get-JsonValue $stats $Name)
 }
 
-function Get-Nr5WeakSignalValue {
+function Get-CandidateWeakSignalValue {
     param(
         $Report,
         [Parameter(Mandatory = $true)][string]$Name
     )
 
-    $watch = Get-JsonValue $Report "nr5WeakSignalWatch"
+    $watch = Get-JsonValue $Report "candidateWeakSignalWatch"
     if ($null -eq $watch) {
         return 0.0
     }
@@ -250,11 +250,11 @@ function Get-Nr5WeakSignalValue {
     return $value
 }
 
-function Get-Nr5WeakRecoveryPct {
+function Get-CandidateWeakRecoveryPct {
     param($Report)
 
-    $weakInputs = Get-Nr5WeakSignalValue $Report "weakInputSampleCount"
-    $weakRecovered = Get-Nr5WeakSignalValue $Report "weakRecoveredSampleCount"
+    $weakInputs = Get-CandidateWeakSignalValue $Report "weakInputSampleCount"
+    $weakRecovered = Get-CandidateWeakSignalValue $Report "weakRecoveredSampleCount"
     if ($weakInputs -le 0.0) {
         return 100.0
     }
@@ -265,9 +265,9 @@ function Get-Nr5WeakRecoveryPct {
 function Test-CandidateWeakDropoutsRecoveredAudibly {
     param($CandidateReport)
 
-    $strictDropouts = Get-Nr5WeakSignalValue $CandidateReport "weakDropoutSampleCount"
-    $candidateLoss = Get-Nr5WeakSignalValue $CandidateReport "weakDropoutCandidateLossSampleCount"
-    $finalAudiblePct = Get-Nr5WeakSignalValue $CandidateReport "weakDropoutFinalAudiblePct"
+    $strictDropouts = Get-CandidateWeakSignalValue $CandidateReport "weakDropoutSampleCount"
+    $candidateLoss = Get-CandidateWeakSignalValue $CandidateReport "weakDropoutCandidateLossSampleCount"
+    $finalAudiblePct = Get-CandidateWeakSignalValue $CandidateReport "weakDropoutFinalAudiblePct"
     if ($strictDropouts -le 0.0) {
         return $false
     }
@@ -276,18 +276,18 @@ function Test-CandidateWeakDropoutsRecoveredAudibly {
         [double]$finalAudiblePct -ge 90.0)
 }
 
-function Get-Nr5LowEvidenceLiftValue {
+function Get-CandidateLowEvidenceLiftValue {
     param(
         $Report,
         [Parameter(Mandatory = $true)][string]$Name
     )
 
-    $nr5Samples = Get-NumericValue (Get-JsonValue $Report "nr5SampleCount")
-    if ($null -eq $nr5Samples -or $nr5Samples -le 0.0) {
+    $candidateSamples = Get-NumericValue (Get-JsonValue $Report "candidateSampleCount")
+    if ($null -eq $candidateSamples -or $candidateSamples -le 0.0) {
         return $null
     }
 
-    $watch = Get-JsonValue $Report "nr5LowEvidenceLiftWatch"
+    $watch = Get-JsonValue $Report "candidateLowEvidenceLiftWatch"
     if ($null -eq $watch) {
         return $null
     }
@@ -295,10 +295,10 @@ function Get-Nr5LowEvidenceLiftValue {
     return Get-NumericValue (Get-JsonValue $watch $Name)
 }
 
-function Get-Nr5SampleCount {
+function Get-CandidateSampleCount {
     param($Report)
 
-    $value = Get-NumericValue (Get-JsonValue $Report "nr5SampleCount")
+    $value = Get-NumericValue (Get-JsonValue $Report "candidateSampleCount")
     if ($null -eq $value) {
         return 0.0
     }
@@ -306,15 +306,15 @@ function Get-Nr5SampleCount {
     return $value
 }
 
-function Get-Nr5ArtifactWatchValue {
+function Get-CandidateArtifactWatchValue {
     param(
         $Report,
         [Parameter(Mandatory = $true)][string]$WatchName,
         [Parameter(Mandatory = $true)][string]$Name
     )
 
-    $nr5Samples = Get-Nr5SampleCount $Report
-    if ($nr5Samples -le 0.0) {
+    $candidateSamples = Get-CandidateSampleCount $Report
+    if ($candidateSamples -le 0.0) {
         return 0.0
     }
 
@@ -326,34 +326,34 @@ function Get-Nr5ArtifactWatchValue {
     return Get-NumericValue (Get-JsonValue $watch $Name)
 }
 
-function Get-Nr5LowEvidenceLiftComparisonValue {
+function Get-CandidateLowEvidenceLiftComparisonValue {
     param(
         $Report,
         [Parameter(Mandatory = $true)][string]$Name
     )
 
-    return Get-Nr5ArtifactWatchValue -Report $Report -WatchName "nr5LowEvidenceLiftWatch" -Name $Name
+    return Get-CandidateArtifactWatchValue -Report $Report -WatchName "candidateLowEvidenceLiftWatch" -Name $Name
 }
 
-function Get-Nr5AudioAlignmentMismatchPct {
+function Get-CandidateAudioAlignmentMismatchPct {
     param($Report)
 
-    return Get-Nr5ArtifactWatchValue -Report $Report -WatchName "nr5AudioAlignmentWatch" -Name "mismatchPct"
+    return Get-CandidateArtifactWatchValue -Report $Report -WatchName "candidateAudioAlignmentWatch" -Name "mismatchPct"
 }
 
-function Get-Nr5ArtifactRiskScore {
+function Get-CandidateArtifactRiskScore {
     param($Report)
 
-    $nr5Samples = Get-Nr5SampleCount $Report
-    if ($nr5Samples -le 0.0) {
+    $candidateSamples = Get-CandidateSampleCount $Report
+    if ($candidateSamples -le 0.0) {
         return 0.0
     }
 
-    $liftedSamples = Get-Nr5LowEvidenceLiftComparisonValue $Report "liftedSampleCount"
-    $liftedPct = Get-Nr5LowEvidenceLiftComparisonValue $Report "liftedPct"
-    $audioAlignmentMismatchPct = Get-Nr5AudioAlignmentMismatchPct $Report
-    $textureFillAverage = Get-StatValue $Report "nr5TextureFill" "average"
-    $signalProbabilityAverage = Get-StatValue $Report "nr5SignalProbability" "average"
+    $liftedSamples = Get-CandidateLowEvidenceLiftComparisonValue $Report "liftedSampleCount"
+    $liftedPct = Get-CandidateLowEvidenceLiftComparisonValue $Report "liftedPct"
+    $audioAlignmentMismatchPct = Get-CandidateAudioAlignmentMismatchPct $Report
+    $textureFillAverage = Get-StatValue $Report "candidateTextureFill" "average"
+    $signalProbabilityAverage = Get-StatValue $Report "candidateSignalProbability" "average"
 
     $sourceValueCount = @(
         $liftedSamples,
@@ -385,15 +385,15 @@ function Get-Nr5ArtifactRiskScore {
     return $score
 }
 
-function Get-Nr5ArtifactRiskStatus {
+function Get-CandidateArtifactRiskStatus {
     param($Report)
 
-    $nr5Samples = Get-Nr5SampleCount $Report
-    if ($nr5Samples -le 0.0) {
-        return "no-nr5-samples"
+    $candidateSamples = Get-CandidateSampleCount $Report
+    if ($candidateSamples -le 0.0) {
+        return "no-candidate-samples"
     }
 
-    $score = Get-Nr5ArtifactRiskScore $Report
+    $score = Get-CandidateArtifactRiskScore $Report
     if ($null -eq $score) {
         return "artifact-fields-missing"
     }
@@ -565,49 +565,49 @@ function Test-NullableMetricRegression {
     return (([double]$candidate - [double]$baseline) -gt $Threshold)
 }
 
-function New-Nr5WeakSignalComparison {
+function New-CandidateWeakSignalComparison {
     param(
         $BaselineReport,
         $CandidateReport
     )
 
-    $baselineWeakInput = Get-Nr5WeakSignalValue $BaselineReport "weakInputSampleCount"
-    $candidateWeakInput = Get-Nr5WeakSignalValue $CandidateReport "weakInputSampleCount"
-    $baselineWeakRecovered = Get-Nr5WeakSignalValue $BaselineReport "weakRecoveredSampleCount"
-    $candidateWeakRecovered = Get-Nr5WeakSignalValue $CandidateReport "weakRecoveredSampleCount"
-    $baselineWeakDropout = Get-Nr5WeakSignalValue $BaselineReport "weakDropoutSampleCount"
-    $candidateWeakDropout = Get-Nr5WeakSignalValue $CandidateReport "weakDropoutSampleCount"
-    $baselineCandidateWeakLoss = Get-Nr5WeakSignalValue $BaselineReport "weakDropoutCandidateLossSampleCount"
-    $candidateCandidateWeakLoss = Get-Nr5WeakSignalValue $CandidateReport "weakDropoutCandidateLossSampleCount"
-    $baselineFinalAudibleDropouts = Get-Nr5WeakSignalValue $BaselineReport "weakDropoutFinalAudibleSampleCount"
-    $candidateFinalAudibleDropouts = Get-Nr5WeakSignalValue $CandidateReport "weakDropoutFinalAudibleSampleCount"
-    $baselineFinalAudiblePct = Get-Nr5WeakSignalValue $BaselineReport "weakDropoutFinalAudiblePct"
-    $candidateFinalAudiblePct = Get-Nr5WeakSignalValue $CandidateReport "weakDropoutFinalAudiblePct"
-    $baselineHotMakeup = Get-Nr5WeakSignalValue $BaselineReport "hotMakeupSampleCount"
-    $candidateHotMakeup = Get-Nr5WeakSignalValue $CandidateReport "hotMakeupSampleCount"
-    $baselineRecoveryPct = Get-Nr5WeakRecoveryPct $BaselineReport
-    $candidateRecoveryPct = Get-Nr5WeakRecoveryPct $CandidateReport
-    $baselineOutputMovement = Get-StatValue $BaselineReport "nr5OutputDbfs" "movement"
-    $candidateOutputMovement = Get-StatValue $CandidateReport "nr5OutputDbfs" "movement"
-    $baselineMakeupMovement = Get-StatValue $BaselineReport "nr5MakeupGainDb" "movement"
-    $candidateMakeupMovement = Get-StatValue $CandidateReport "nr5MakeupGainDb" "movement"
-    $baselineMakeupMax = Get-StatValue $BaselineReport "nr5MakeupGainDb" "max"
-    $candidateMakeupMax = Get-StatValue $CandidateReport "nr5MakeupGainDb" "max"
-    $baselineRecoveryMovement = Get-StatValue $BaselineReport "nr5RecoveryDrive" "movement"
-    $candidateRecoveryMovement = Get-StatValue $CandidateReport "nr5RecoveryDrive" "movement"
-    $baselineTextureAverage = Get-StatValue $BaselineReport "nr5TextureFill" "average"
-    $candidateTextureAverage = Get-StatValue $CandidateReport "nr5TextureFill" "average"
-    $baselineLowEvidenceLifted = Get-Nr5LowEvidenceLiftComparisonValue $BaselineReport "liftedSampleCount"
-    $candidateLowEvidenceLifted = Get-Nr5LowEvidenceLiftComparisonValue $CandidateReport "liftedSampleCount"
-    $baselineLowEvidenceLiftedPct = Get-Nr5LowEvidenceLiftComparisonValue $BaselineReport "liftedPct"
-    $candidateLowEvidenceLiftedPct = Get-Nr5LowEvidenceLiftComparisonValue $CandidateReport "liftedPct"
-    $baselineAudioAlignmentMismatchPct = Get-Nr5AudioAlignmentMismatchPct $BaselineReport
-    $candidateAudioAlignmentMismatchPct = Get-Nr5AudioAlignmentMismatchPct $CandidateReport
-    $baselineArtifactRiskScore = Get-Nr5ArtifactRiskScore $BaselineReport
-    $candidateArtifactRiskScore = Get-Nr5ArtifactRiskScore $CandidateReport
-    $baselineArtifactRiskStatus = Get-Nr5ArtifactRiskStatus $BaselineReport
-    $candidateArtifactRiskStatus = Get-Nr5ArtifactRiskStatus $CandidateReport
-    $nr5StatComparisonAvailable = ($null -ne $baselineOutputMovement -and
+    $baselineWeakInput = Get-CandidateWeakSignalValue $BaselineReport "weakInputSampleCount"
+    $candidateWeakInput = Get-CandidateWeakSignalValue $CandidateReport "weakInputSampleCount"
+    $baselineWeakRecovered = Get-CandidateWeakSignalValue $BaselineReport "weakRecoveredSampleCount"
+    $candidateWeakRecovered = Get-CandidateWeakSignalValue $CandidateReport "weakRecoveredSampleCount"
+    $baselineWeakDropout = Get-CandidateWeakSignalValue $BaselineReport "weakDropoutSampleCount"
+    $candidateWeakDropout = Get-CandidateWeakSignalValue $CandidateReport "weakDropoutSampleCount"
+    $baselineCandidateWeakLoss = Get-CandidateWeakSignalValue $BaselineReport "weakDropoutCandidateLossSampleCount"
+    $candidateCandidateWeakLoss = Get-CandidateWeakSignalValue $CandidateReport "weakDropoutCandidateLossSampleCount"
+    $baselineFinalAudibleDropouts = Get-CandidateWeakSignalValue $BaselineReport "weakDropoutFinalAudibleSampleCount"
+    $candidateFinalAudibleDropouts = Get-CandidateWeakSignalValue $CandidateReport "weakDropoutFinalAudibleSampleCount"
+    $baselineFinalAudiblePct = Get-CandidateWeakSignalValue $BaselineReport "weakDropoutFinalAudiblePct"
+    $candidateFinalAudiblePct = Get-CandidateWeakSignalValue $CandidateReport "weakDropoutFinalAudiblePct"
+    $baselineHotMakeup = Get-CandidateWeakSignalValue $BaselineReport "hotMakeupSampleCount"
+    $candidateHotMakeup = Get-CandidateWeakSignalValue $CandidateReport "hotMakeupSampleCount"
+    $baselineRecoveryPct = Get-CandidateWeakRecoveryPct $BaselineReport
+    $candidateRecoveryPct = Get-CandidateWeakRecoveryPct $CandidateReport
+    $baselineOutputMovement = Get-StatValue $BaselineReport "candidateOutputDbfs" "movement"
+    $candidateOutputMovement = Get-StatValue $CandidateReport "candidateOutputDbfs" "movement"
+    $baselineMakeupMovement = Get-StatValue $BaselineReport "candidateMakeupGainDb" "movement"
+    $candidateMakeupMovement = Get-StatValue $CandidateReport "candidateMakeupGainDb" "movement"
+    $baselineMakeupMax = Get-StatValue $BaselineReport "candidateMakeupGainDb" "max"
+    $candidateMakeupMax = Get-StatValue $CandidateReport "candidateMakeupGainDb" "max"
+    $baselineRecoveryMovement = Get-StatValue $BaselineReport "candidateRecoveryDrive" "movement"
+    $candidateRecoveryMovement = Get-StatValue $CandidateReport "candidateRecoveryDrive" "movement"
+    $baselineTextureAverage = Get-StatValue $BaselineReport "candidateTextureFill" "average"
+    $candidateTextureAverage = Get-StatValue $CandidateReport "candidateTextureFill" "average"
+    $baselineLowEvidenceLifted = Get-CandidateLowEvidenceLiftComparisonValue $BaselineReport "liftedSampleCount"
+    $candidateLowEvidenceLifted = Get-CandidateLowEvidenceLiftComparisonValue $CandidateReport "liftedSampleCount"
+    $baselineLowEvidenceLiftedPct = Get-CandidateLowEvidenceLiftComparisonValue $BaselineReport "liftedPct"
+    $candidateLowEvidenceLiftedPct = Get-CandidateLowEvidenceLiftComparisonValue $CandidateReport "liftedPct"
+    $baselineAudioAlignmentMismatchPct = Get-CandidateAudioAlignmentMismatchPct $BaselineReport
+    $candidateAudioAlignmentMismatchPct = Get-CandidateAudioAlignmentMismatchPct $CandidateReport
+    $baselineArtifactRiskScore = Get-CandidateArtifactRiskScore $BaselineReport
+    $candidateArtifactRiskScore = Get-CandidateArtifactRiskScore $CandidateReport
+    $baselineArtifactRiskStatus = Get-CandidateArtifactRiskStatus $BaselineReport
+    $candidateArtifactRiskStatus = Get-CandidateArtifactRiskStatus $CandidateReport
+    $candidateStatComparisonAvailable = ($null -ne $baselineOutputMovement -and
         $null -ne $candidateOutputMovement -and
         $null -ne $baselineMakeupMovement -and
         $null -ne $candidateMakeupMovement -and
@@ -617,7 +617,7 @@ function New-Nr5WeakSignalComparison {
         $null -ne $candidateRecoveryMovement)
 
     return [ordered]@{
-        nr5StatComparisonAvailable = $nr5StatComparisonAvailable
+        candidateStatComparisonAvailable = $candidateStatComparisonAvailable
         baselineWeakInputSampleCount = [int][Math]::Round($baselineWeakInput)
         candidateWeakInputSampleCount = [int][Math]::Round($candidateWeakInput)
         weakInputSampleDelta = [int][Math]::Round($candidateWeakInput - $baselineWeakInput)
@@ -783,12 +783,12 @@ function Get-TraceSeverity {
         "final-audio-not-fresh" { return 60 }
         "rx-meters-not-fresh" { return 50 }
         "runtime-evidence-missing" { return 50 }
-        "nr5-agc-diagnostics-missing" { return 45 }
+        "candidate-agc-diagnostics-missing" { return 45 }
         "agc-pumping-watch" { return 40 }
         "agc-movement-watch" { return 35 }
         "audio-level-watch" { return 35 }
-        "nr5-output-level-watch" { return 35 }
-        "nr5-low-evidence-lift-watch" { return 35 }
+        "candidate-output-level-watch" { return 35 }
+        "candidate-low-evidence-lift-watch" { return 35 }
         "rx-leveler-cap-watch" { return 35 }
         "rx-leveler-settling-watch" { return 35 }
         "rx-leveler-headroom-watch" { return 35 }
@@ -900,7 +900,7 @@ function Get-TraceMetricDefinitions {
             threshold = 1.0
             safetyClass = "pumping"
             acceptanceScope = "live-diagnostics-trace-comparison"
-            rationale = "Voice-like AGC movement should not increase when evaluating speech-preservation and NR5 recovery behavior."
+            rationale = "Voice-like AGC movement should not increase when evaluating speech-preservation and Candidate recovery behavior."
         },
         [ordered]@{
             id = "agcPumpingRisk"
@@ -972,29 +972,29 @@ function Get-TraceMetricDefinitions {
             threshold = 3.0
             safetyClass = "noise-gate"
             acceptanceScope = "live-diagnostics-trace-comparison"
-            rationale = "Candidate DSP should increase the level gap between tuned passband audio and off-passband/no-evidence audio."
+            rationale = "The comparison under test should increase the level gap between tuned passband audio and off-passband/no-evidence audio."
         },
         [ordered]@{
-            id = "nr5WeakDropoutSampleCount"
-            label = "NR5 strict weak-input dropout samples"
+            id = "candidateWeakDropoutSampleCount"
+            label = "Candidate strict weak-input dropout samples"
             direction = "lower"
             threshold = 0.0
             safetyClass = "weak-signal"
             acceptanceScope = "live-diagnostics-trace-comparison"
-            rationale = "Strict NR5 weak-output thresholds flag weak-burst rows for inspection; final-audio-audible rows are not automatically candidate weak loss."
+            rationale = "Strict Candidate weak-output thresholds flag weak-burst rows for inspection; final-audio-audible rows are not automatically candidate weak loss."
         },
         [ordered]@{
-            id = "nr5CandidateWeakLossSampleCount"
-            label = "NR5 candidate weak-loss samples"
+            id = "candidateCandidateWeakLossSampleCount"
+            label = "Candidate candidate weak-loss samples"
             direction = "lower"
             threshold = 0.0
             safetyClass = "weak-signal"
             acceptanceScope = "live-diagnostics-trace-comparison"
-            rationale = "Candidate NR5 live traces must not add weak-input rows that remain below input and are not already final-audio audible or natively lifted."
+            rationale = "Candidate Candidate live traces must not add weak-input rows that remain below input and are not already final-audio audible or natively lifted."
         },
         [ordered]@{
-            id = "nr5WeakRecoveryPct"
-            label = "NR5 weak-input recovery percent"
+            id = "candidateWeakRecoveryPct"
+            label = "Candidate weak-input recovery percent"
             direction = "higher"
             threshold = 5.0
             safetyClass = "weak-signal"
@@ -1002,26 +1002,26 @@ function Get-TraceMetricDefinitions {
             rationale = "Weak-signal preservation should improve or stay within 5 percentage points of the baseline recovery rate."
         },
         [ordered]@{
-            id = "nr5HotMakeupSampleCount"
-            label = "NR5 hot makeup samples"
+            id = "candidateHotMakeupSampleCount"
+            label = "Candidate hot makeup samples"
             direction = "lower"
             threshold = 0.0
             safetyClass = "pumping"
             acceptanceScope = "live-diagnostics-trace-comparison"
-            rationale = "Candidate NR5 live traces must not add samples with makeup gain above the watcher hot-makeup threshold."
+            rationale = "Candidate Candidate live traces must not add samples with makeup gain above the watcher hot-makeup threshold."
         },
         [ordered]@{
-            id = "nr5LowEvidenceLiftSampleCount"
-            label = "NR5 low-evidence lifted samples"
+            id = "candidateLowEvidenceLiftSampleCount"
+            label = "Candidate low-evidence lifted samples"
             direction = "lower"
             threshold = 0.0
             safetyClass = "noise-gate"
             acceptanceScope = "live-diagnostics-trace-comparison"
-            rationale = "Candidate NR5 live traces must not increase low-confidence weak-input samples that are lifted into audible output."
+            rationale = "Candidate Candidate live traces must not increase low-confidence weak-input samples that are lifted into audible output."
         },
         [ordered]@{
-            id = "nr5LowEvidenceLiftedPct"
-            label = "NR5 low-evidence lifted percent"
+            id = "candidateLowEvidenceLiftedPct"
+            label = "Candidate low-evidence lifted percent"
             direction = "lower"
             threshold = 5.0
             safetyClass = "artifact-control"
@@ -1029,17 +1029,17 @@ function Get-TraceMetricDefinitions {
             rationale = "Low-evidence lift must stay bounded so speech-artifact review rows cannot hide inside weak-signal recovery gains."
         },
         [ordered]@{
-            id = "nr5AudioAlignmentMismatchPct"
-            label = "NR5 audio-alignment mismatch percent"
+            id = "candidateAudioAlignmentMismatchPct"
+            label = "Candidate audio-alignment mismatch percent"
             direction = "lower"
             threshold = 10.0
             safetyClass = "artifact-control"
             acceptanceScope = "live-diagnostics-trace-comparison"
-            rationale = "NR5 artifact-control evidence is unsafe when candidate output rows diverge from the aligned final-audio window."
+            rationale = "Candidate artifact-control evidence is unsafe when candidate output rows diverge from the aligned final-audio window."
         },
         [ordered]@{
-            id = "nr5ArtifactRiskScore"
-            label = "NR5 artifact-risk score"
+            id = "candidateArtifactRiskScore"
+            label = "Candidate artifact-risk score"
             direction = "lower"
             threshold = 0.0
             safetyClass = "artifact-control"
@@ -1047,44 +1047,44 @@ function Get-TraceMetricDefinitions {
             rationale = "Candidate traces must not introduce the matrix artifact-review score from low-evidence lift, alignment mismatch, or unsupported texture fill."
         },
         [ordered]@{
-            id = "nr5OutputMovementDb"
-            label = "NR5 output movement dB"
+            id = "candidateOutputMovementDb"
+            label = "Candidate output movement dB"
             direction = "lower"
             threshold = 1.0
             safetyClass = "pumping"
             acceptanceScope = "live-diagnostics-trace-comparison"
-            rationale = "Candidate NR5 output level should not swing more than the baseline trace; larger movement risks audible level pumping."
+            rationale = "Candidate Candidate output level should not swing more than the baseline trace; larger movement risks audible level pumping."
         },
         [ordered]@{
-            id = "nr5MakeupMovementDb"
-            label = "NR5 makeup movement dB"
+            id = "candidateMakeupMovementDb"
+            label = "Candidate makeup movement dB"
             direction = "lower"
             threshold = 1.0
             safetyClass = "pumping"
             acceptanceScope = "live-diagnostics-trace-comparison"
-            rationale = "Large makeup-gain movement is a direct review signal for NR5 output-level watch traces."
+            rationale = "Large makeup-gain movement is a direct review signal for Candidate output-level watch traces."
         },
         [ordered]@{
-            id = "nr5MakeupMaxDb"
-            label = "NR5 maximum makeup dB"
+            id = "candidateMakeupMaxDb"
+            label = "Candidate maximum makeup dB"
             direction = "lower"
             threshold = 1.0
             safetyClass = "pumping"
             acceptanceScope = "live-diagnostics-trace-comparison"
-            rationale = "Candidate NR5 tuning should not require a higher maximum makeup boost to recover weak content."
+            rationale = "Candidate Candidate tuning should not require a higher maximum makeup boost to recover weak content."
         },
         [ordered]@{
-            id = "nr5RecoveryDriveMovement"
-            label = "NR5 recovery-drive movement"
+            id = "candidateRecoveryDriveMovement"
+            label = "Candidate recovery-drive movement"
             direction = "lower"
             threshold = 0.1
             safetyClass = "pumping"
             acceptanceScope = "live-diagnostics-trace-comparison"
-            rationale = "Recovery-drive movement is the fast control surface behind many NR5 output-level watch traces."
+            rationale = "Recovery-drive movement is the fast control surface behind many Candidate output-level watch traces."
         },
         [ordered]@{
-            id = "nr5TextureFillAverage"
-            label = "NR5 texture-fill average"
+            id = "candidateTextureFillAverage"
+            label = "Candidate texture-fill average"
             direction = "informational"
             threshold = 0.01
             safetyClass = "weak-signal"
@@ -1092,22 +1092,22 @@ function Get-TraceMetricDefinitions {
             rationale = "Texture fill helps distinguish weak-signal hole-fill from persistent makeup; direction is scenario-dependent."
         },
         [ordered]@{
-            id = "nr5PeakReductionMaxDb"
-            label = "NR5 maximum peak reduction dB"
+            id = "candidatePeakReductionMaxDb"
+            label = "Candidate maximum peak reduction dB"
             direction = "lower"
             threshold = 1.0
             safetyClass = "clipping"
             acceptanceScope = "live-diagnostics-trace-comparison"
-            rationale = "Higher NR5 peak-shaper pressure means the candidate is creating or passing larger crests before final audio."
+            rationale = "Higher Candidate peak-shaper pressure means the candidate is creating or passing larger crests before final audio."
         },
         [ordered]@{
-            id = "nr5OutputPeakMaxDbfs"
-            label = "NR5 maximum output peak dBFS"
+            id = "candidateOutputPeakMaxDbfs"
+            label = "Candidate maximum output peak dBFS"
             direction = "lower"
             threshold = 1.0
             safetyClass = "clipping"
             acceptanceScope = "live-diagnostics-trace-comparison"
-            rationale = "NR5 output peaks should not move closer to clipping before downstream audio processing."
+            rationale = "Candidate output peaks should not move closer to clipping before downstream audio processing."
         },
         [ordered]@{
             id = "audioRmsMovementDb"
@@ -1143,7 +1143,7 @@ function Get-TraceMetricDefinitions {
             threshold = 1.0
             safetyClass = "pumping"
             acceptanceScope = "live-diagnostics-trace-comparison"
-            rationale = "Large final leveler gain swings indicate downstream loudness pumping even when NR5 output is stable."
+            rationale = "Large final leveler gain swings indicate downstream loudness pumping even when Candidate output is stable."
         },
         [ordered]@{
             id = "rxAudioLevelerConstrainedSampleCount"
@@ -1296,21 +1296,21 @@ function Get-MetricValue {
         "passbandAudioMovementDb" { return Get-PassbandAudioWatchValue $Report "passbandAudioMovementDb" }
         "offPassbandAudioAverageDbfs" { return Get-PassbandAudioWatchValue $Report "offPassbandAudioAverageDbfs" }
         "passbandNoiseSeparationDb" { return Get-PassbandAudioWatchValue $Report "passbandNoiseSeparationDb" }
-        "nr5WeakDropoutSampleCount" { return Get-Nr5WeakSignalValue $Report "weakDropoutSampleCount" }
-        "nr5CandidateWeakLossSampleCount" { return Get-Nr5WeakSignalValue $Report "weakDropoutCandidateLossSampleCount" }
-        "nr5WeakRecoveryPct" { return Get-Nr5WeakRecoveryPct $Report }
-        "nr5HotMakeupSampleCount" { return Get-Nr5WeakSignalValue $Report "hotMakeupSampleCount" }
-        "nr5LowEvidenceLiftSampleCount" { return Get-Nr5LowEvidenceLiftValue $Report "liftedSampleCount" }
-        "nr5LowEvidenceLiftedPct" { return Get-Nr5LowEvidenceLiftComparisonValue $Report "liftedPct" }
-        "nr5AudioAlignmentMismatchPct" { return Get-Nr5AudioAlignmentMismatchPct $Report }
-        "nr5ArtifactRiskScore" { return Get-Nr5ArtifactRiskScore $Report }
-        "nr5OutputMovementDb" { return Get-StatValue $Report "nr5OutputDbfs" "movement" }
-        "nr5MakeupMovementDb" { return Get-StatValue $Report "nr5MakeupGainDb" "movement" }
-        "nr5MakeupMaxDb" { return Get-StatValue $Report "nr5MakeupGainDb" "max" }
-        "nr5RecoveryDriveMovement" { return Get-StatValue $Report "nr5RecoveryDrive" "movement" }
-        "nr5TextureFillAverage" { return Get-StatValue $Report "nr5TextureFill" "average" }
-        "nr5PeakReductionMaxDb" { return Get-StatValue $Report "nr5PeakReductionDb" "max" }
-        "nr5OutputPeakMaxDbfs" { return Get-StatValue $Report "nr5OutputPeakDbfs" "max" }
+        "candidateWeakDropoutSampleCount" { return Get-CandidateWeakSignalValue $Report "weakDropoutSampleCount" }
+        "candidateCandidateWeakLossSampleCount" { return Get-CandidateWeakSignalValue $Report "weakDropoutCandidateLossSampleCount" }
+        "candidateWeakRecoveryPct" { return Get-CandidateWeakRecoveryPct $Report }
+        "candidateHotMakeupSampleCount" { return Get-CandidateWeakSignalValue $Report "hotMakeupSampleCount" }
+        "candidateLowEvidenceLiftSampleCount" { return Get-CandidateLowEvidenceLiftValue $Report "liftedSampleCount" }
+        "candidateLowEvidenceLiftedPct" { return Get-CandidateLowEvidenceLiftComparisonValue $Report "liftedPct" }
+        "candidateAudioAlignmentMismatchPct" { return Get-CandidateAudioAlignmentMismatchPct $Report }
+        "candidateArtifactRiskScore" { return Get-CandidateArtifactRiskScore $Report }
+        "candidateOutputMovementDb" { return Get-StatValue $Report "candidateOutputDbfs" "movement" }
+        "candidateMakeupMovementDb" { return Get-StatValue $Report "candidateMakeupGainDb" "movement" }
+        "candidateMakeupMaxDb" { return Get-StatValue $Report "candidateMakeupGainDb" "max" }
+        "candidateRecoveryDriveMovement" { return Get-StatValue $Report "candidateRecoveryDrive" "movement" }
+        "candidateTextureFillAverage" { return Get-StatValue $Report "candidateTextureFill" "average" }
+        "candidatePeakReductionMaxDb" { return Get-StatValue $Report "candidatePeakReductionDb" "max" }
+        "candidateOutputPeakMaxDbfs" { return Get-StatValue $Report "candidateOutputPeakDbfs" "max" }
         "audioRmsMovementDb" { return Get-StatValue $Report "audioRmsDbfs" "movement" }
         "audioPeakMaxDbfs" { return Get-StatValue $Report "audioPeakDbfs" "max" }
         "rxAudioLevelerOutputRmsMovementDb" { return Get-StatValue $Report "rxAudioLevelerOutputRmsDbfs" "movement" }
@@ -1401,7 +1401,7 @@ function New-CandidateActivationComparison {
         candidateKind = "unspecified"
         status = "not-applicable"
         readinessBlocking = $false
-        reason = "No retired NR5 gate activation check is applied."
+        reason = "No retired Candidate gate activation check is applied."
         candidateComparisonId = $candidateComparisonId
     }
 }
@@ -1428,6 +1428,25 @@ function Test-MetricNotApplicableForScenario {
     }
 }
 
+function Test-CandidateEngineMetric {
+    param([Parameter(Mandatory = $true)][string]$MetricId)
+
+    switch ($MetricId) {
+        "candidateLowEvidenceLiftSampleCount" { return $true }
+        "candidateLowEvidenceLiftedPct" { return $true }
+        "candidateAudioAlignmentMismatchPct" { return $true }
+        "candidateArtifactRiskScore" { return $true }
+        "candidateOutputMovementDb" { return $true }
+        "candidateMakeupMovementDb" { return $true }
+        "candidateMakeupMaxDb" { return $true }
+        "candidateRecoveryDriveMovement" { return $true }
+        "candidateTextureFillAverage" { return $true }
+        "candidatePeakReductionMaxDb" { return $true }
+        "candidateOutputPeakMaxDbfs" { return $true }
+        default { return $false }
+    }
+}
+
 function Test-SafeCandidateAudioHeadroom {
     param($CandidateReport)
 
@@ -1443,17 +1462,17 @@ function Test-SafeCandidateAudioHeadroom {
         ($null -eq $capReduction -or [double]$capReduction -le 0.5))
 }
 
-function Test-SafeCandidateNr5OutputPeak {
+function Test-SafeCandidateCandidateOutputPeak {
     param($CandidateReport)
 
-    $nr5OutputPeak = Get-MetricValue $CandidateReport "nr5OutputPeakMaxDbfs"
-    $nr5PeakReduction = Get-MetricValue $CandidateReport "nr5PeakReductionMaxDb"
-    if ($null -eq $nr5OutputPeak) {
+    $candidateOutputPeak = Get-MetricValue $CandidateReport "candidateOutputPeakMaxDbfs"
+    $candidatePeakReduction = Get-MetricValue $CandidateReport "candidatePeakReductionMaxDb"
+    if ($null -eq $candidateOutputPeak) {
         return $false
     }
 
-    return ([double]$nr5OutputPeak -le -6.0 -and
-        ($null -eq $nr5PeakReduction -or [double]$nr5PeakReduction -le 0.5) -and
+    return ([double]$candidateOutputPeak -le -6.0 -and
+        ($null -eq $candidatePeakReduction -or [double]$candidatePeakReduction -le 0.5) -and
         (Test-SafeCandidateAudioHeadroom $CandidateReport))
 }
 
@@ -1476,13 +1495,13 @@ function Test-StableCandidateLevelerOutput {
 function Test-CandidateLowEvidenceNoiseSuppressed {
     param($CandidateReport)
 
-    $lowEvidence = Get-Nr5LowEvidenceLiftValue $CandidateReport "lowEvidenceSampleCount"
-    $lifted = Get-Nr5LowEvidenceLiftValue $CandidateReport "liftedSampleCount"
-    $suppressedPct = Get-Nr5LowEvidenceLiftValue $CandidateReport "suppressedPct"
+    $lowEvidence = Get-CandidateLowEvidenceLiftValue $CandidateReport "lowEvidenceSampleCount"
+    $lifted = Get-CandidateLowEvidenceLiftValue $CandidateReport "liftedSampleCount"
+    $suppressedPct = Get-CandidateLowEvidenceLiftValue $CandidateReport "suppressedPct"
     $audioAverage = Get-StatValue $CandidateReport "audioRmsDbfs" "average"
-    $nr5OutputAverage = Get-StatValue $CandidateReport "nr5OutputDbfs" "average"
+    $candidateOutputAverage = Get-StatValue $CandidateReport "candidateOutputDbfs" "average"
     if ($null -eq $lowEvidence -or $null -eq $lifted -or $null -eq $suppressedPct -or
-        $null -eq $audioAverage -or $null -eq $nr5OutputAverage) {
+        $null -eq $audioAverage -or $null -eq $candidateOutputAverage) {
         return $false
     }
 
@@ -1490,7 +1509,7 @@ function Test-CandidateLowEvidenceNoiseSuppressed {
         [double]$lifted -le 1.0 -and
         [double]$suppressedPct -ge 80.0 -and
         [double]$audioAverage -le -45.0 -and
-        [double]$nr5OutputAverage -le -55.0)
+        [double]$candidateOutputAverage -le -55.0)
 }
 
 function Test-BothTracesHaveSafeAdcHeadroom {
@@ -1525,7 +1544,7 @@ function Get-AdjustedComparisonVerdict {
     }
 
     switch ($MetricId) {
-        "nr5WeakDropoutSampleCount" {
+        "candidateWeakDropoutSampleCount" {
             if (Test-CandidateWeakDropoutsRecoveredAudibly $CandidateReport) {
                 return [ordered]@{
                     verdict = "tie"
@@ -1539,7 +1558,7 @@ function Get-AdjustedComparisonVerdict {
                 }
             }
         }
-        "nr5WeakRecoveryPct" {
+        "candidateWeakRecoveryPct" {
             if (Test-CandidateWeakDropoutsRecoveredAudibly $CandidateReport) {
                 return [ordered]@{
                     verdict = "tie"
@@ -1553,7 +1572,7 @@ function Get-AdjustedComparisonVerdict {
                 }
             }
         }
-        "nr5OutputMovementDb" {
+        "candidateOutputMovementDb" {
             if (Test-CandidateLowEvidenceNoiseSuppressed $CandidateReport) {
                 return [ordered]@{
                     verdict = "tie"
@@ -1577,11 +1596,11 @@ function Get-AdjustedComparisonVerdict {
                 }
             }
         }
-        "nr5OutputPeakMaxDbfs" {
-            if (Test-SafeCandidateNr5OutputPeak $CandidateReport) {
+        "candidateOutputPeakMaxDbfs" {
+            if (Test-SafeCandidateCandidateOutputPeak $CandidateReport) {
                 return [ordered]@{
                     verdict = "tie"
-                    note = "safe-nr5-output-headroom-no-peak-pressure"
+                    note = "safe-candidate-output-headroom-no-peak-pressure"
                 }
             }
         }
@@ -1678,6 +1697,12 @@ function Compare-Metrics {
             (Test-MetricNotApplicableForScenario -MetricId $metricId -ScenarioId $ScenarioId)) {
             $verdict = "not-applicable"
             $verdictNote = "$ScenarioId-no-active-passband-metric"
+        }
+        elseif ($null -eq $baselineValue -and
+            $null -eq $candidateValue -and
+            (Test-CandidateEngineMetric -MetricId $metricId)) {
+            $verdict = "not-applicable"
+            $verdictNote = "candidate-engine-diagnostics-not-present"
         }
 
         $comparisons.Add([ordered]@{
@@ -1909,13 +1934,13 @@ function Build-MarkdownReport {
         $lines.Add("") | Out-Null
     }
 
-    $weakSignal = Get-JsonValue $Report "nr5WeakSignalComparison"
+    $weakSignal = Get-JsonValue $Report "candidateWeakSignalComparison"
     if ($null -ne $weakSignal -and
         ([int](Get-JsonValue $weakSignal "baselineWeakInputSampleCount") -gt 0 -or
             [int](Get-JsonValue $weakSignal "candidateWeakInputSampleCount") -gt 0 -or
             [double](Get-NumericValue (Get-JsonValue $weakSignal "baselineArtifactRiskScore")) -gt 0.0 -or
             [double](Get-NumericValue (Get-JsonValue $weakSignal "candidateArtifactRiskScore")) -gt 0.0)) {
-        $lines.Add("## NR5 Weak-Signal Summary") | Out-Null
+        $lines.Add("## Candidate Weak-Signal Summary") | Out-Null
         $lines.Add("") | Out-Null
         $lines.Add("| Metric | Baseline | Candidate | Delta |") | Out-Null
         $lines.Add("|---|---:|---:|---:|") | Out-Null
@@ -2031,7 +2056,7 @@ $baselineReport = $baselineInput.report
 $candidateReport = $candidateInput.report
 
 $captureReadinessComparison = New-CaptureReadinessComparison $baselineReport $candidateReport
-$nr5WeakSignalComparison = New-Nr5WeakSignalComparison $baselineReport $candidateReport
+$candidateWeakSignalComparison = New-CandidateWeakSignalComparison $baselineReport $candidateReport
 $rxAudioLevelerComparison = New-RxAudioLevelerComparison $baselineReport $candidateReport
 $traceMetricDefinitions = @(Get-TraceMetricDefinitions)
 $baselineScenarioId = Get-ReportScenarioId $baselineReport
@@ -2173,7 +2198,7 @@ $report = [ordered]@{
     notApplicableMetricValueCount = $notApplicableCount
     captureReadinessComparison = $captureReadinessComparison
     candidateActivationComparison = $candidateActivationComparison
-    nr5WeakSignalComparison = $nr5WeakSignalComparison
+    candidateWeakSignalComparison = $candidateWeakSignalComparison
     rxAudioLevelerComparison = $rxAudioLevelerComparison
     metricRegressionSafetyClassCounts = @($metricRegressionSafetyClassCounts)
     metricMissingSafetyClassCounts = @($metricMissingSafetyClassCounts)

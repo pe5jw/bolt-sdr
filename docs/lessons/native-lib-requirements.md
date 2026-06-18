@@ -103,19 +103,19 @@ test -f Zeus.Dsp/runtimes/linux-x64/native/libwdsp.so
 test -f Zeus.Dsp/runtimes/osx-arm64/native/libwdsp.dylib
 ```
 
-For NR5/SPNR rollout, file presence is not enough. Verify the native export
+For candidate DSP rollout, file presence is not enough. Verify the native export
 surface and bundled FFTW dependency state:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\audit-wdsp-runtime-artifacts.ps1 -FailOnMissingWinX64Nr5
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\audit-wdsp-runtime-artifacts.ps1 -FailOnMissingWinX64CurrentNr
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\audit-wdsp-native-symbols.ps1 -BinaryPath Zeus.Dsp\runtimes\win-x64\native\wdsp.dll -RequireBinaryExports
 ```
 
-The current packaged NR5 status is intentionally conservative: `win-x64` is
-ready for NR5/SPNR because `wdsp.dll` exports the SPNR symbols and the required
+The current packaged Candidate status is intentionally conservative: `win-x64` is
+ready for candidate DSP because `wdsp.dll` exports the Candidate symbols and the required
 `libfftw3-3.dll` / `libfftw3f-3.dll` files sit beside it in the runtime
 directory. `win-arm64`, Linux, and macOS WDSP artifacts are present but still
-need native rebuilds before Zeus should report NR5 as packaged on those RIDs.
+need native rebuilds before Zeus should report Candidate as packaged on those RIDs.
 
 Run the application and check logs for successful WDSP wisdom initialization:
 ```

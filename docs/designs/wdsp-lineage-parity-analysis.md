@@ -26,7 +26,7 @@
 | CMake build, runtime native packaging, export wrappers, and fallback symbol probing | Port/build support | These are expected Zeus differences and should not be "reverted to Thetis" unless they are proven defective. |
 | RX audio leveler, adaptive squelch, Auto-AGC policy, Smart NR, and frontend chain-health logic | Zeus product policy | These sit above WDSP. They may improve operation, but must be measured separately from WDSP parity. |
 | SBNR/RNNR bindings and capability guards | Thetis parity plus portability | Thetis contains SBNR/RNNR-era code that the older g0orx tree lacks. Zeus should keep graceful fallback when native symbols are absent. |
-| NR5/SPNR native stage and diagnostics | Experimental enhancement | Preserve as active local work. It remains opt-in/experimental until benchmark and on-air evidence prove it. |
+| Under-test comparison labels and diagnostics | Experimental evidence workflow | Current WDSP v2 evidence uses neutral comparison IDs such as `candidate-under-test`; no retired native comparison stage is active. |
 | Broad native WDSP source drift from Thetis | Needs audit | Key files differ in line count and hash. Classify each delta before importing, deleting, or refactoring native code. |
 | Crashing broad NR combinatorial test mode | Likely lifecycle/test defect | Keep focused lifecycle tests as gates; run broad combinatorics only as an opt-in diagnostic until the native lifecycle issue is isolated. |
 
@@ -38,7 +38,7 @@ The WDSP RXA chain is the main receive engine. Zeus must validate the following 
 2. Buffer/rate model: RXA input/dsp block sizes, sample-rate conversion, analyzer rate, and G2 high-rate DDC behavior.
 3. Front-end stages: frequency shift, input resample, generators, ADC meter, pre-noise blankers, and first bandpass.
 4. Demod and squelch: SSQL/AMSQ/FMSQ mode selection and adaptive squelch interaction.
-5. Post-demod conditioning: SNBA, EQ, ANF/ANR, EMNR, RNNR, SBNR, SPNR, AGC, notches, carrier block, CW filters, patch panel, and output resample.
+5. Post-demod conditioning: SNBA, EQ, ANF/ANR, EMNR, RNNR, SBNR, AGC, notches, carrier block, CW filters, patch panel, and output resample.
 6. Meter contract: ADC, signal, AGC gain/envelope, NR diagnostics, and frontend telemetry must agree on units and sentinel behavior.
 
 ## TXA Audit Map
@@ -61,11 +61,11 @@ can affect transmitted spectral cleanliness.
 | RX filters | `SetFilter`, `ApplyBandpassForMode`, `NativeMethods.SetRXABandpassFreqs`, `RXANBPSetFreqs`, `SetRXASNBAOutputBandwidth` | Uses the three active WDSP stages needed for SSB parity. | Audit tap count, min-phase, and per-mode width caps against Thetis. |
 | AGC | `SetAgcMode`, `SetAgcTop`, Auto-AGC path in `RadioService` | Thetis mode/custom controls exist; Zeus adds an operator policy layer for Auto-AGC. | Add AGC pumping/loudness benchmark from the `AgcStep` fixture. |
 | Squelch | `SetSquelch`, adaptive squelch in `DspPipelineService` | WDSP SSQL/AMSQ/FMSQ are mode-aware; Zeus adds adaptive server policy. | Use `SquelchTransition` fixture to measure open/close latency and false-open behavior. |
-| NR/NB | `SetNoiseReduction`, NR1/NR2/NR4/NR5 bindings, NB1/NB2/SNB setters | Mutual exclusion is enforced in the engine; SBNR and SPNR are capability guarded. | Promote NR5 diagnostic tests into shared benchmark reports and add NR-off/NR-on comparisons. |
+| NR/NB | `SetNoiseReduction`, NR1/NR2/NR4 bindings, NB1/NB2/SNB setters | Mutual exclusion is enforced in the engine; SBNR is capability guarded. | Promote focused current-NR diagnostic tests into shared benchmark reports and add NR-off/NR-on comparisons. |
 | RX audio policy | `DspPipelineService` audio leveler and sanitizer | Zeus policy above WDSP, not Thetis parity. | Measure post-WDSP level stability separately from WDSP AGC so tuning does not mask a WDSP regression. |
 | TX leveler/CFC/compressor/ALC | `SetTxLeveling`, CFC setters, TXA processing path | Leveler/CFC wiring exists; TX compressor/ALC behavior must stay Thetis-compatible. | Add TX two-tone and voice-like benchmark runner through `ProcessTxBlock`. |
 | PureSignal/CFIR | PureSignal setters, feedback display analyzer, TXA profile selection | Safety-sensitive parity area; no modernization should alter default PureSignal state. | Validate PureSignal disabled/enabled bypass behavior on G2 before any TX profile change. |
-| Capability reporting | native export probes and diagnostics DTOs | SBNR/SPNR fallbacks are present; external engines not integrated. | Add an opt-in capability surface only after an external engine passes licensing/package review. |
+| Capability reporting | native export probes and diagnostics DTOs | SBNR fallback is present; external engines are not integrated into default WDSP IQ processing. | Add an opt-in capability surface only after an external engine passes licensing/package review. |
 
 ## Benchmark Foundation
 
@@ -98,11 +98,11 @@ catalog for live tools and scripts: frontend scene freshness, weak CW/carrier pr
 SSB-like speech, fading carrier, impulse noise, strong adjacent signal, noise-only gating, AGC
 level steps, squelch transitions, TX two-tone, TX voice-like audio, PureSignal-safe bypass, and
 WDSP channel lifecycle. Each scenario lists required comparisons, metrics, artifacts, and failure
-gates. The default source plan requires off, Thetis-parity, current-Zeus, and `nr5-spnr` evidence,
-but not external-engine evidence. RX benchmark scenarios require `nr5-spnr` alongside off,
-Thetis-parity, current-Zeus, and generic candidate-under-test comparisons; TX, PureSignal,
-frontend-scene, and lifecycle scenarios keep the generic candidate contract without implying NR5
-applies to those paths. This endpoint is the checklist for G2 capture sessions and later
+gates. The default benchmark plan requires off, Thetis-parity, current-Zeus, and
+`candidate-under-test` evidence, but not external-engine evidence. RX benchmark scenarios require
+`candidate-under-test` alongside off, Thetis-parity, and current-Zeus comparisons. TX, PureSignal,
+frontend-scene, and lifecycle scenarios stay on off/Thetis/current comparisons until a specific
+TX-safe or lifecycle-safe enhancement path is explicitly scoped. This endpoint is the checklist for G2 capture sessions and later
 cross-radio validation.
 Strict validation checks this as an acceptance scenario-family contract, not merely a list of
 whatever scenarios happen to be present. It surfaces `benchmarkPlanStatus`,
@@ -137,18 +137,18 @@ The local helper `tools/capture-dsp-modernization-bundle.ps1` captures that endp
 supporting diagnostics endpoints into an ignored `captures/dsp-modernization/<timestamp>/` folder:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\capture-dsp-modernization-bundle.ps1 -BaseUrl http://localhost:6060 -Label g2-nr5-before
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl http://localhost:6060 -Samples 60 -IntervalMs 1000 -Label g2-nr5-weak-cw
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\capture-dsp-modernization-bundle.ps1 -BaseUrl http://localhost:6060 -Label g2-candidate-before
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl http://localhost:6060 -Samples 60 -IntervalMs 1000 -Label g2-candidate-weak-cw
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\new-dsp-artifact-manifest.ps1 -BundleDir captures\dsp-modernization\<timestamp>
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\audit-wdsp-native-symbols.ps1 -ReportPath captures\dsp-modernization\<timestamp>\artifacts\wdsp-native-symbol-audit.json -RequireBinaryExports
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\audit-wdsp-runtime-artifacts.ps1 -ReportPath captures\dsp-modernization\<timestamp>\artifacts\wdsp-runtime-artifact-audit.json -FailOnMissingWinX64Nr5
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\audit-wdsp-runtime-artifacts.ps1 -ReportPath captures\dsp-modernization\<timestamp>\artifacts\wdsp-runtime-artifact-audit.json -FailOnMissingWinX64CurrentNr
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ComparisonId off-baseline -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.off-baseline.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.off-baseline.json -Samples 60 -IntervalMs 1000
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ComparisonId thetis-parity -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.thetis-parity.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.thetis-parity.json -Samples 60 -IntervalMs 1000
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ComparisonId current-zeus -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.baseline.json -Samples 60 -IntervalMs 1000
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ComparisonId nr5-spnr -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.candidate.json -Samples 60 -IntervalMs 1000
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ComparisonId candidate-under-test -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.candidate.json -Samples 60 -IntervalMs 1000
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-live-diagnostics-history.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-history.json
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -BaselineComparisonId current-zeus -CandidateComparisonId nr5-spnr -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.json -FailOnRegression
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.thetis-parity.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -BaselineComparisonId thetis-parity -CandidateComparisonId nr5-spnr -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.thetis-parity.json -FailOnRegression
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -BaselineComparisonId current-zeus -CandidateComparisonId candidate-under-test -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.json -FailOnRegression
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.thetis-parity.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -BaselineComparisonId thetis-parity -CandidateComparisonId candidate-under-test -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.thetis-parity.json -FailOnRegression
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\new-dsp-artifact-manifest.ps1 -BundleDir captures\dsp-modernization\<timestamp> -AcceptanceManifest -RequireLiveAcceptanceArtifacts -Force
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-traces.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselinePath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-baseline.jsonl -CandidatePath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace.jsonl -FailOnRegression
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-wdsp-fixture-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -Force
@@ -164,8 +164,8 @@ live diagnostics watchers so self-signed local certificates do not break G2 evid
 
 The scaffold generator writes `artifact-manifest.template.json` by default and includes required
 non-endpoint artifacts; pass `-IncludeOptionalArtifacts` when a review needs optional evidence
-placeholders too. The default NR5/SPNR source plan does not put
-`candidate-external-engine-opt-in` in scope, so ordinary NR5 evidence bundles do not require an
+placeholders too. The default benchmark plan does not put
+`candidate-external-engine-opt-in` in scope, so ordinary WDSP v2 evidence bundles do not require an
 external bakeoff report. If a custom benchmark plan, benchmark capture manifest, artifact manifest,
 or captured comparison report includes that comparison, the scaffold preserves or emits
 `external-engine-bakeoff-report` as a required artifact even without `-IncludeOptionalArtifacts`,
@@ -189,9 +189,9 @@ WDSP native symbol audits, and TX/PureSignal traces. The required
 `tools/audit-wdsp-native-symbols.ps1` with binary export evaluation enabled; strict validation
 rejects reports with missing required source/export symbols, signature mismatches, or
 `readyForReview=false`. The required `wdsp-runtime-artifact-audit` artifact must be generated by
-`tools/audit-wdsp-runtime-artifacts.ps1`; it records which packaged RIDs actually carry NR4/NR5
+`tools/audit-wdsp-runtime-artifacts.ps1`; it records which packaged RIDs actually carry current NR4/SBNR
 symbols, native/dependency SHA-256 hashes, and whether side-by-side FFTW dependencies are present,
-so Win x64 NR5 readiness is not confused with pending Linux/macOS/ARM64 rebuild work. Use
+so Win x64 runtime readiness is not confused with pending Linux/macOS/ARM64 rebuild work. Use
 `tools/compare-wdsp-source-drift.ps1 -ReferenceDir <local-thetis-wdsp> -CandidateDir native/wdsp`
 before importing, deleting, or refactoring vendored WDSP source. It writes
 `artifacts/wdsp-source-drift-report.json`, normalizes line endings before hashing, and classifies
@@ -228,11 +228,11 @@ These traces are optional artifact evidence and do not approve changing defaults
 `tools/compare-dsp-live-diagnostics-traces.ps1` to compare candidate windows against a current-Zeus
 or Thetis-parity baseline; pass `-BundleDir` when the comparison report is stored in a capture
 bundle so input, JSON, and Markdown paths remain portable. The comparator rejects regressions in
-blockers, readiness, AGC/audio movement, NR5 weak-input dropouts/recovery/hot-makeup counters,
-low-evidence lift percent, audio-alignment mismatch percent, the composite NR5 artifact-risk score,
-NR5 output movement, makeup-gain movement/max, recovery-drive movement, clipping-risk proxy peaks,
+blockers, readiness, AGC/audio movement, comparison weak-input dropouts/recovery/hot-makeup counters,
+low-evidence lift percent, audio-alignment mismatch percent, the composite artifact-risk score,
+comparison output movement, makeup-gain movement/max, recovery-drive movement, clipping-risk proxy peaks,
 ADC headroom, monitor backlog, and diagnostic freshness before any on-air acceptance claim. Its JSON
-and Markdown reports also include an NR5 weak-signal comparison summary with baseline/candidate
+and Markdown reports also include a weak-signal comparison summary with baseline/comparison-under-test
 weak-input, recovered, dropout, hot-makeup, recovery-percent, output movement, makeup movement/max,
 recovery-drive movement, texture-fill, low-evidence lift, audio-alignment mismatch, and
 artifact-risk deltas for quick live tuning review.
@@ -245,7 +245,7 @@ band hunting with `-PassCount` and `-PassDelaySec`, and can supply known active 
 are only captured when `-AllowRetune` is present. In retune mode it posts to `/api/vfo`, waits for RX
 settling, delegates every window to `watch-dsp-live-diagnostics.ps1`, refreshes frontend/live
 diagnostics each pass, and restores the original VFO in cleanup. Its report ranks candidate windows
-by weak/strong NR5 sample coverage, weak/strong output or final-audio gap, AGC pumping risk, candidate
+by weak/strong comparison sample coverage, weak/strong output or final-audio gap, AGC pumping risk, comparison
 weak-loss rows, and hot makeup. This is an RX evidence-hunting tool, not a DSP behavior change and not
 an acceptance shortcut: promote a found window into live history and baseline/candidate comparisons
 before using it for tuning. The report's `ok=true` means the scan ran and restored state; use
@@ -267,13 +267,13 @@ with absolute or missing child paths are classified invalid and surfaced through
 Use `tools/run-dsp-live-diagnostics-matrix.ps1` when a G2 session needs repeatable live windows
 across several benchmark scenarios. It delegates to the single-window watcher, writes one JSONL trace
 and summary per scenario, and produces `artifacts/live-diagnostics-trace-index.json` for optional
-`trace` artifact validation. Matrix runs and trace-index entries carry NR5 weak-input, recovered,
+`trace` artifact validation. Matrix runs and trace-index entries carry comparison weak-input, recovered,
 dropout, and hot-makeup counts from the watcher summaries so review reports can see weak-signal
 tradeoffs even before a baseline/candidate comparison is generated. Matrix schema v2 also copies
 `strongInputSampleCount`, `weakStrongOutputGapDb`, `mixedWeakStrongEvidenceStatus`,
 `mixedWeakStrongEvidenceReady`, `weakStrongOutputParityReady`, and
-`nr5MixedWeakStrongHuntScore` into each run and trace-index entry, plus aggregate
-`nr5MixedWeakStrongHuntReady`, mixed trace/ready/missing/gap-watch counts, status counts, and
+`candidateMixedWeakStrongHuntScore` into each run and trace-index entry, plus aggregate
+`candidateMixedWeakStrongHuntReady`, mixed trace/ready/missing/gap-watch counts, status counts, and
 `bestMixedWeakStrongRun`. These fields are capture-selection evidence: they help the G2 operator
 find the missing mixed weak+strong speech window before running the heavier acceptance cycle, but
 they do not change the DSP engine or acceptance defaults. Strict validation now rolls these fields up
@@ -281,7 +281,7 @@ as `liveMatrixMixedWeakStrong*`, and the triage report exposes an advisory
 `live-matrix-mixed-weak-strong-hunt` gate plus a Markdown section that names the best matrix run to
 feed into live-history and live-comparison evidence.
 Matrix schema v3 adds advisory artifact-control rollups copied from watcher summaries:
-`nr5ArtifactRiskScore`, `nr5ArtifactRiskStatus`, low-evidence lift counters, audio-alignment
+`candidateArtifactRiskScore`, `candidateArtifactRiskStatus`, low-evidence lift counters, audio-alignment
 mismatch, texture fill, and signal-probability averages. Strict validation exposes these as
 `liveMatrixArtifactControl*`, and the triage report surfaces a non-required
 `live-matrix-artifact-control` gate so a high-scoring mixed weak+strong window is not promoted for
@@ -291,12 +291,12 @@ explicitly so history coverage does not depend only on bundle folder names. Matr
 entries now also copy `captureReadinessWatch` status, hard-gate pass, strict-preflight pass, and top
 hard/soft capture constraints so a multi-scenario run exposes stale frontend scene or Smart NR
 profile-publishing problems without opening each watch summary. Watcher summaries and matrix reports
-also carry `comparisonStateReadiness`, requested/effective NR mode counts, and NR5 diagnostic
-coverage counts. Required `nr5-spnr` traces must prove requested/effective `Nr5` state plus NR5
-diagnostic coverage, and required `off-baseline` traces must prove requested/effective `Off` state
-with no NR5 diagnostic samples; `current-zeus` and `thetis-parity` remain advisory state labels.
+also carry `comparisonStateReadiness`, requested/effective NR mode counts, and optional comparison diagnostic
+coverage counts. Required `candidate-under-test` traces must prove comparison preflight readiness and
+fresh runtime evidence; required `off-baseline` traces must prove requested/effective `Off` state.
+`current-zeus` and `thetis-parity` remain advisory state labels.
 Use `-ComparisonId current-zeus`
-or `thetis-parity` for baseline windows and candidate IDs such as `nr5-spnr` for opt-in candidate windows. Pass
+or `thetis-parity` for baseline windows and candidate IDs such as `candidate-under-test` for opt-in candidate windows. Pass
 separate `-IndexPath` and `-ReportPath` values for baseline and candidate matrix runs when reusing
 the same bundle so one capture does not overwrite the other. Pass
 `-PlanOnly` to print the full G2 acceptance command cycle, including the four comparison matrix
@@ -349,16 +349,16 @@ indexes; it matches scenario entries, reuses the single-trace comparator for eac
 one aggregate `live-diagnostics-trace-comparison` report for bundle validation. G2 acceptance now
 requires two aggregate reports: `live-diagnostics-trace-comparison.json` for current-Zeus vs
 candidate and `live-diagnostics-trace-comparison.thetis-parity.json` for Thetis-parity vs candidate,
-so opt-in NR5/SPNR evidence cannot pass without preserving the WDSP behavior authority. Each aggregate report
+so under-test comparison evidence cannot pass without preserving the WDSP behavior authority. Each aggregate report
 also carries per-scenario metric, hard-constraint, gate, and missing-metric detail arrays so review
 can identify the exact weak-signal, pumping, clipping, freshness, or latency regression without
-opening every scenario report first. It aggregates the per-scenario NR5 weak-signal summaries into a
+opening every scenario report first. It aggregates the per-scenario comparison weak-signal summaries into a
 single baseline-vs-candidate rollup for weak recovery/dropout/hot-makeup plus output movement,
 makeup movement/max, recovery-drive movement, texture-fill, low-evidence lift, audio-alignment
 mismatch, and artifact-risk score. It also aggregates RX audio-leveler
 constraint summaries for constrained samples/percent, boost-slew, peak-headroom, output-cap, output
 RMS movement, and applied gain movement. Strict bundle validation surfaces those deltas and
-regression counts in `liveTraceComparisonNr5*` and `liveTraceComparisonRxAudioLeveler*` fields.
+regression counts in `liveTraceComparisonCandidate*` and `liveTraceComparisonRxAudioLeveler*` fields.
 Single-trace and matrix comparison reports also carry capture-readiness comparison evidence. Matrix
 comparisons aggregate `captureReadinessComparisonSummary`; strict validation recomputes it from
 scenario rows and surfaces it through `liveTraceComparisonCaptureReadiness*` fields, including
@@ -395,14 +395,14 @@ instead of treating them as optional evidence warnings.
 If a `run-dsp-live-diagnostics-matrix` report is included as a bundle artifact, strict validation
 recomputes its `runs[]` summary before trusting the report-level fields. It checks scenario,
 failed/not-ready/hard-blocker counts, per-run sample totals, collection/acceptance readiness,
-aggregated NR5 weak counters, and `indexSha256` against the referenced trace index. When the
+aggregated comparison weak counters, and `indexSha256` against the referenced trace index. When the
 referenced trace index is present, each report run must also match exactly one trace-index file entry
-by scenario/comparison, JSONL path, summary path, sample count, and copied NR5 weak counters; for
-matrix-generated indexes, missing sample or NR5 counter fields fail validation. This catches
+by scenario/comparison, JSONL path, summary path, sample count, and copied comparison weak counters; for
+matrix-generated indexes, missing sample or comparison counter fields fail validation. This catches
 hand-edited matrix reports before they can steer candidate comparison or on-air acceptance review.
 For `live-diagnostics-trace-index` entries, bundle validation also reads each referenced
 `summaryPath` and rejects acceptance evidence when the watcher summary is not benchmark-ready or an
-NR5/SPNR window lacks complete `levelDrive`, `recoveryDrive`, and `makeupGainDb` diagnostics.
+under-test comparison window lacks complete level-drive, recovery-drive, and makeup-gain diagnostics when those metrics are present.
 When a watcher summary includes explicit `scenarioId` or `comparisonId` metadata, strict validation
 also checks that it matches the trace-index entry that points to the summary. Older watcher summaries
 without this metadata remain legacy-compatible, but copied or swapped summaries now fail with
@@ -422,11 +422,11 @@ trace files, and compares the JSONL record count with `files[].sampleCount` and 
 `live-trace-index-file-sample-count-mismatch` or
 `live-trace-index-summary-sample-count-mismatch`, so stale summaries and truncated traces cannot be
 used as acceptance evidence.
-Matrix trace-index entries also copy NR5 weak-input, recovered, dropout, hot-makeup, strong-input,
+Matrix trace-index entries also copy comparison weak-input, recovered, dropout, hot-makeup, strong-input,
 weak/strong output-gap, mixed-status, parity-ready, and hunt-score fields for quick review. When
-those copied `nr5Weak*` counters are present, strict validation compares them
+those copied `candidateWeak*` counters are present, strict validation compares them
 against the referenced watcher summary and fails stale weak-signal values with
-`live-trace-index-nr5-weak-counter-mismatch`. Older indexes without copied counters remain
+`live-trace-index-candidate-weak-counter-mismatch`. Older indexes without copied counters remain
 compatible, but they are reported as `legacy-missing-index` in `artifactReferencedFiles`.
 New matrix trace indexes include SHA-256 hashes for the referenced JSONL (`sha256`) and watcher
 summary (`summarySha256`). Strict validation recomputes both hashes when present and fails tampered
@@ -444,32 +444,32 @@ entries, including risk status/score, low-evidence lift, alignment mismatch, tex
 probability. Valid bundles expose `liveMatrixArtifactControl*` rollups; `artifact-review` is an
 operator advisory for choosing a cleaner capture window, not a default-behavior blocker by itself.
 
-Use `tools/summarize-dsp-live-diagnostics-history.ps1` after several NR5/NR2 live tuning attempts
+Use `tools/summarize-dsp-live-diagnostics-history.ps1` after several under-test and baseline live tuning attempts
 have been captured. The history report scans watch summaries, ranks the latest, best weak-signal,
-lowest-pumping, and best balanced NR5 traces, rolls all safety signals up by class, and emits
+lowest-pumping, and best balanced comparison traces, rolls all safety signals up by class, and emits
 Markdown recommendations. This is tuning guidance rather than acceptance by itself; use it to choose
 which live window should become the next candidate/baseline comparison and to avoid optimizing weak
 recovery while reintroducing output-level pumping. Pass `-BundleDir` when writing the optional
 `live-diagnostics-history` artifact so the report, Markdown path, scanned watch summaries, and trace
 paths stay bundle-relative. Strict bundle validation surfaces
-`liveDiagnosticsHistoryTraceCount`, `liveDiagnosticsHistoryNr5TraceCount`,
+`liveDiagnosticsHistoryTraceCount`, `liveDiagnosticsHistoryCandidateTraceCount`,
 `liveDiagnosticsHistoryLatestReviewStatus`, best-trace IDs, aggregate pumping/weak-signal counts,
 path portability fields, and `liveDiagnosticsHistoryPromotion*` fields when the artifact is present.
-The report's `latestNr5Decision` is deliberately scoped to "candidate comparison only": a ready
+The report's `latestCandidateDecision` is deliberately scoped to "candidate comparison only": a ready
 decision means the latest trace is clean enough to compare against current-Zeus/Thetis evidence,
 while a blocked decision carries blocker classes and recommends the best-balanced, best weak-signal,
 or lowest-pumping trace as the next tuning reference. It never authorizes default DSP behavior
 changes by itself. Each trace also carries `candidateComparisonReady`, `promotionBlockerClasses`,
-and `promotionBlockerClassCounts`; the report rolls those into `readyNr5TraceCount` and
-`candidateReadyNr5TraceCount` so review can distinguish "benchmark-ready capture" from "safe enough
+and `promotionBlockerClassCounts`; the report rolls those into `readyCandidateTraceCount` and
+`candidateReadyCandidateTraceCount` so review can distinguish "benchmark-ready capture" from "safe enough
 to promote into the next candidate comparison." Strict validation recomputes best-balanced,
 best-weak, and lowest-pumping trace selections from the full `traces` records, checks compact trace
-decision fields against the full records, and derives `latestNr5Decision` from latest-trace safety
+decision fields against the full records, and derives `latestCandidateDecision` from latest-trace safety
 signals and trace-derived references. It verifies promotion status, ready flags, recommended and
 reference trace IDs/roles, `nextAction`, blocker projections, blocker readiness summaries,
 `latestIsBestBalanced`, and risk score deltas so a hand-edited decision cannot steer tuning or
 experiment plans. It also recomputes review status counts, exported tuning thresholds,
-latest-vs-previous NR5 numeric deltas, RX audio-leveler constrained-sample fields, and ordered
+latest-vs-previous comparison numeric deltas, RX audio-leveler constrained-sample fields, and ordered
 recommendations from the same trace evidence so advisory report fields cannot drift away from
 producer semantics. Strict validation also resolves
 each full `traces[].path` entry back to its referenced `watch-dsp-live-diagnostics` summary and
@@ -486,7 +486,7 @@ bundle validation recomputes those gaps and the per-class rollups, and surfaces
 `liveDiagnosticsHistoryAggregateReadinessGaps`, `liveDiagnosticsHistoryReadinessGapSignalCount`,
 `liveDiagnosticsHistoryReadinessGapNumericSignalCount`, and `liveDiagnosticsHistoryReadinessGapMax`
 when the optional history artifact is present. Schema v3 adds
-`latestVsPreviousNr5ReadinessGapTrend`, comparing the latest NR5 trace against the previous NR5 trace
+`latestVsPreviousCandidateReadinessGapTrend`, comparing the latest under-test trace against the previous under-test trace
 by safety class, signal name, threshold direction, and readiness-gap unit. It reports `new-gap`,
 `resolved-gap`, `gap-narrowed`, `gap-widened`, and `unchanged` details plus unit-safe
 `readinessGapTrendBuckets`; strict validation recomputes the trend from the full `traces` records and
@@ -495,7 +495,7 @@ surfaces `liveDiagnosticsHistoryReadinessTrendStatus`,
 `liveDiagnosticsHistoryReadinessTrendImprovedSignalCount`,
 `liveDiagnosticsHistoryReadinessTrendRegressedSignalCount`, and
 `liveDiagnosticsHistoryReadinessTrendGapMaxDelta`. Schema v4 adds
-`latestVsReferenceNr5ReadinessGapTrend`, which compares the latest NR5 trace against the
+`latestVsReferenceCandidateReadinessGapTrend`, which compares the latest under-test trace against the
 trace-derived `promotionDecision.referenceTraceId` rather than the recommended trace. This keeps the tuning
 reference stable when the latest trace is blocked or when the latest trace is promotable but still
 needs comparison against the best-balanced reference. The reference trend includes
@@ -509,7 +509,7 @@ records, rejects role/id mismatches, and surfaces
 `liveDiagnosticsHistoryReferenceTrendGapMaxDelta`. Schema v5 adds
 `latestTuningActionPlan`, a deterministic review-only plan that converts the latest blocker set and
 latest-vs-previous/reference readiness trends into ranked tuning actions. Each action names a
-`safetyClass`, `signalName`, `controlFamily`, latest readiness gap, and guardrail so NR5/SPNR/AGC
+`safetyClass`, `signalName`, `controlFamily`, latest readiness gap, and guardrail so comparison/AGC
 tuning can focus on the most relevant control surface without changing operator defaults. Strict
 validation checks that the plan matches the trace-derived `promotionDecision`, the latest trace,
 the reference trace, and both trend statuses, derives the expected action list from trace safety signals and readiness
@@ -523,14 +523,14 @@ guardrails, readiness gaps, trend deltas, and reference fields, and surfaces
 `liveDiagnosticsHistoryTuningActionPlanActionCount`. Schema v6 adds
 `latestLiveExperimentPlan`, which turns the ranked tuning actions into concrete live matrix capture
 guidance. It lists scenario IDs, purpose, control family, safety class, sample/interval settings,
-quick tuning comparisons (`current-zeus`, `nr5-spnr`), full G2 RX acceptance comparisons
-(`off-baseline`, `thetis-parity`, `current-zeus`, `nr5-spnr`), acceptance gates, and
+quick tuning comparisons (`current-zeus`, `candidate-under-test`), full G2 RX acceptance comparisons
+(`off-baseline`, `thetis-parity`, `current-zeus`, `candidate-under-test`), acceptance gates, and
 off-baseline/Thetis/baseline/candidate/compare command templates for
 `tools/run-dsp-live-diagnostics-matrix.ps1` and
 `tools/compare-dsp-live-diagnostics-matrix.ps1`, with the compare command explicitly binding
-`current-zeus` as the baseline comparison and `nr5-spnr` as the candidate comparison. This plan sets
+`current-zeus` as the baseline comparison and `candidate-under-test` as the candidate comparison. This plan sets
 `defaultBehaviorChangeReady=false`; it exists to make the next G2 evidence run repeatable and to
-prevent NR5 tuning evidence from being mistaken for final Thetis/parity acceptance. Strict
+prevent under-test tuning evidence from being mistaken for final Thetis/parity acceptance. Strict
 validation checks that the experiment plan matches
 `latestTuningActionPlan`, includes the required comparisons, keeps valid scenario priorities and
 sampling settings, carries acceptance gates, and matches the generated scenario IDs, purposes,
@@ -549,16 +549,16 @@ fallback, so live-history summaries are not misordered by a stale or future-skew
 When matrix summaries live under `artifacts/live-diagnostics-traces/<scenario>/<comparison>`, the
 trace ID keeps the timestamped capture ancestor and appends the scenario/comparison path suffix, so
 traces from the same bundle remain unique while sharing the capture sequence. Strict validation
-checks that traces are ordered by `traceSequenceUtc`, `latestTrace` matches the highest NR5 sequence,
-compact trace provenance matches the full record, and `previousNr5Trace` matches the second-highest
-NR5 sequence. It surfaces `liveDiagnosticsHistoryLatestTraceSequenceUtc`,
+checks that traces are ordered by `traceSequenceUtc`, `latestTrace` matches the highest under-test sequence,
+compact trace provenance matches the full record, and `previousCandidateTrace` matches the second-highest
+under-test sequence. It surfaces `liveDiagnosticsHistoryLatestTraceSequenceUtc`,
 `liveDiagnosticsHistoryLatestTraceSortKeySource`, `liveDiagnosticsHistoryTraceOrderingStatus`, and
 `liveDiagnosticsHistoryTraceOrderingViolationCount`. Schema v8 adds
 `latestLiveExperimentCoverage`, which compares the current trace records against
 `latestLiveExperimentPlan.scenarios` and their required comparisons. Matrix traces use explicit
 watcher `scenarioId`/`comparisonId` metadata when present and path-derived metadata for older
 summaries; coverage counts only when the trace is benchmark-ready, so the history report can show
-whether the next off-baseline, Thetis-parity, current-Zeus, and NR5/SPNR live matrix evidence is
+whether the next off-baseline, Thetis-parity, current-Zeus, and comparison-under-test live matrix evidence is
 complete, partial, or not started. Strict validation recomputes the coverage from `traces` against the generated live
 experiment plan, not a hand-edited plan body, and surfaces
 `liveDiagnosticsHistoryLiveExperimentCoverageStatus`,
@@ -583,16 +583,16 @@ recomputed watcher-summary/JSONL hashes so reviewers can drill into the exact fa
 Schema v10 adds RX audio-leveler constrained sample counts, constrained percent, boost-slew,
 peak-headroom, output-cap, output RMS movement, and applied gain movement to full and compact
 history traces. It also adds leveler thresholds and latest-vs-previous deltas so the lowest-pumping
-selection and strict validation cannot treat downstream RX leveler limiting as acceptable NR5/SPNR
+selection and strict validation cannot treat downstream RX leveler limiting as acceptable comparison-under-test
 progress.
 Schema v11 carries watcher `constraintCounts`, `hardConstraintCounts`, and `statusCounts` into full
 history traces and copies `hardConstraintCounts` plus the top hard-constraint name/count into compact
 traces. History recommendations now name the top hard gate, such as stale frontend scene evidence,
-so the next capture action is clear before anyone tunes NR5 or the RX leveler from blocked traces.
-Schema v12 expands `latestLiveExperimentPlan` from quick current-vs-NR5 tuning evidence to full G2
+so the next capture action is clear before anyone tunes the comparison under test or the RX leveler from blocked traces.
+Schema v12 expands `latestLiveExperimentPlan` from quick current-vs-under-test tuning evidence to full G2
 RX acceptance evidence. The plan now separates `tuningComparisons` from `acceptanceComparisons`,
 requires each live scenario to cover `off-baseline`, `thetis-parity`, `current-zeus`, and
-`nr5-spnr`, and emits explicit off-baseline and Thetis matrix commands. External engine bakeoff
+`candidate-under-test`, and emits explicit off-baseline and Thetis matrix commands. External engine bakeoff
 comparisons remain absent from the default plan unless explicitly scoped elsewhere in the bundle.
 Schema v13 carries `agcStabilityWatch` into full and compact history traces, adds
 `agc-active-gain-movement-db`, `agc-voice-like-gain-movement-db`, and `agc-pumping-risk` as
@@ -610,21 +610,21 @@ comparator. The live acceptance-cycle wrapper carries those same fields in summa
 requires `liveDiagnosticsHistoryAgcStabilityReady=true` before it can report
 `liveAcceptanceEvidenceReady=true`.
 Schema v14 adds the mixed weak/strong volume-parity contract. The live watcher now classifies each
-NR5 trace inside `nr5WeakSignalWatch.mixedWeakStrongEvidenceStatus` as `ready`,
+under-test trace inside `candidateWeakSignalWatch.mixedWeakStrongEvidenceStatus` as `ready`,
 `missing-strong-input`, `missing-weak-input`, `missing-weak-and-strong-input`,
-`missing-output-gap`, `weak-strong-output-gap-watch`, or `no-nr5-samples`, and its recommendations
+`missing-output-gap`, `weak-strong-output-gap-watch`, or `no-candidate-samples`, and its recommendations
 call out the capture action needed before using the trace as volume-parity evidence. Full and compact
 history traces carry `strongInputSampleCount`, `mixedWeakStrongEvidenceReady`,
 `weakStrongOutputParityReady`, `mixedWeakStrongEvidenceStatus`, and `weakStrongOutputGapDb`. A trace
-only counts as mixed evidence when it contains at least one weak and one strong NR5 input sample, and
+only counts as mixed evidence when it contains at least one weak and one strong comparison input sample, and
 it is parity-ready only when the absolute weak/strong output gap is within 6 dB. The history rollup exposes `mixedWeakStrongEvidenceReady`,
 `mixedWeakStrongEvidenceStatus`, mixed trace/ready/missing/gap-watch counts, and
 `mixedWeakStrongBestTrace`. Strict validation mirrors those fields as
 `liveDiagnosticsHistoryMixedWeakStrong*`, validation triage emits a required
 `live-history-mixed-weak-strong` evidence gate, and the live acceptance wrapper refuses
 `liveAcceptanceEvidenceReady=true` until G2 mixed weak+strong evidence is ready.
-Schema v15 adds advisory NR5 speech-artifact control evidence. Full and compact history traces now
-carry `nr5ArtifactRiskScore`, `nr5ArtifactRiskStatus`, low-evidence lifted sample count/percent,
+Schema v15 adds advisory comparison speech-artifact control evidence. Full and compact history traces now
+carry `candidateArtifactRiskScore`, `candidateArtifactRiskStatus`, low-evidence lifted sample count/percent,
 low-evidence alignment mismatch percent, audio-alignment mismatch percent, texture-fill average, and
 signal-probability average. Strict validation exposes `liveDiagnosticsHistoryArtifactControlSignalCount`
 and rejects stale schema-v15 histories that omit those fields or misreport the rollup. The live
@@ -686,7 +686,7 @@ action, follow-up, the external bakeoff advisory, and the PureSignal safe-bypass
 present so the G2 operator does not have to inspect nested JSON before the next capture.
 Incomplete live-history coverage is surfaced through the `live-history-provenance` gate with
 `coverage-*` status, missing comparison IDs, and a regenerate/capture action whose command steps
-capture the required off-baseline, Thetis-parity, current-Zeus, and NR5/SPNR matrix before
+capture the required off-baseline, Thetis-parity, current-Zeus, and comparison-under-test matrix before
 regenerating history. The history cannot guide tuning or acceptance review until that coverage is
 complete.
 When the matrix hunt has already found a best mixed weak/strong window but schema-v14 live history
@@ -704,17 +704,17 @@ read-only, while the script may temporarily move RX VFO through `/api/vfo` and r
 Peak-hunt reports now also preserve compact `mixedWeakStrongTuningFocus` steering fields from each
 watcher window: best-run action, output/final-audio gap direction and excess, weak lift/trim needs,
 and top weak/strong row counts. These fields decide whether the next live pass should retune/extend
-dwell or inspect bounded weak-speech lift rows; they do not approve NR5/SPNR defaults without the
+dwell or inspect bounded weak-speech lift rows; they do not approve comparison-under-test defaults without the
 required live-history, comparison, and cross-radio evidence gates.
 For operator-driven tuning, `tools/watch-dsp-manual-tune-observer.ps1` schema v2 now emits a
 `primaryManualTuneAction` object and prints concise per-poll status in non-JSON mode. The action
 collapses the observer result into one read-only next step such as `manual-tune-to-frontend-suggestion`,
-`wait-for-nr5-capture-readiness`, `recapture-manual-observer-near-strong-vfo`,
+`wait-for-candidate-capture-readiness`, `recapture-manual-observer-near-strong-vfo`,
 `recapture-manual-observer-weak-only-vfo`, or
-`promote-manual-observer-mixed-weak-strong-capture`. The optional `-RequireNr5CaptureReady` gate
-keeps child watcher captures from being spent while requested/effective NR5 state, NR5 diagnostics,
-or fresh runtime audio evidence are not ready. Manual captures also preserve the delegated watcher's
-capture-readiness, comparison-state, NR5 tuning status, mixed-focus action, and AGC pumping-risk
+`promote-manual-observer-mixed-weak-strong-capture`. The optional `-RequireCandidateCaptureReady`
+compatibility gate keeps child watcher captures from being spent while comparison preflight or fresh
+runtime audio evidence is not ready. Manual captures also preserve the delegated watcher's
+capture-readiness, comparison-state, tuning status, mixed-focus action, and AGC pumping-risk
 fields so manual-tune evidence has the same steering vocabulary as peak-hunt evidence.
 Frontend tune candidates and manual observer suggestions are dial-step aware: the operator-facing
 `suggested*` fields are snapped to the configured step (`-TuneStepHz` or `-SuggestedVfoStepHz`,
@@ -725,7 +725,7 @@ is incorrect because the peak-hunt report is a summary JSON, not a `files[]` tra
 If the same matrix window also carries `liveMatrixArtifactControlStatus=artifact-review`, triage
 emits the advisory `recapture-matrix-artifact-control-window` action. That action is not a required
 acceptance gate by itself, but it appears before the mixed weak/strong promotion action so operators
-recapture or choose a cleaner active window before optimizing NR5/SPNR from low-evidence lift,
+recapture or choose a cleaner active window before optimizing the comparison under test from low-evidence lift,
 audio-alignment mismatch, or unsupported texture-fill artifacts.
 The validation triage report also displays live-trace capture-readiness comparison gates and top
 constraints so operators can clear setup hard gates before treating metric regressions as DSP
@@ -814,9 +814,9 @@ covers the scenario's required benchmark comparisons from `/api/dsp/benchmark-pl
       "comparison": "current-zeus"
     },
     {
-      "path": "artifacts/audio/weak-cw-nr5.wav",
+      "path": "artifacts/audio/weak-cw-candidate.wav",
       "scenarioId": "weak-cw-carrier",
-      "candidate": "nr5-spnr"
+      "candidate": "candidate-under-test"
     }
   ]
 }
@@ -959,7 +959,7 @@ still need G2 and cross-radio evidence before any default change is considered.
 
 The live readiness surface is `/api/dsp/live-diagnostics`. It is read-only and combines the current
 Smart NR condition, WDSP native capability probes, frontend DSP scene freshness, RX-chain health,
-and NR5/SPNR diagnostics into a tool-friendly readiness score, constraint list, recommended action,
+and comparison diagnostics into a tool-friendly readiness score, constraint list, recommended action,
 and candidate tool list for G2 benchmark sessions. It is an evidence aggregator only; it does not
 change DSP defaults or promote experimental behavior.
 
@@ -968,7 +968,7 @@ existing diagnostic caches rather than new realtime work. It records RXA meter f
 headroom, AGC gain, final RX/TX-monitor audio freshness, RMS/peak dBFS, squelch open/tail/gate
 state, monitor backlog, audio sink count, and a runtime recommendation. Acceptance captures should
 treat `final-audio-not-fresh`, `final-audio-clipping-risk`, and `adc-headroom-low` as blockers
-before tuning AGC, NR5/SPNR, squelch, or post-demod external engines.
+before tuning AGC, squelch, post-demod external engines, or any comparison-under-test behavior.
 
 `tools/watch-dsp-live-diagnostics.ps1` also summarizes post-NR RX audio-leveler constraints under
 `rxAudioLevelerWatch`. That block preserves constrained-sample counts, percentages, thresholds, and
@@ -978,12 +978,12 @@ without manually mining the JSONL. `tools/compare-dsp-live-diagnostics-traces.ps
 block when present, falls back to legacy top-level leveler counts when comparing older summaries, and
 fails candidate review when constrained-sample count or percentage regresses. The live-history
 summarizer carries the same fields into trace records and uses them in lowest-pumping selection, so
-candidate tuning evidence cannot hide NR5/SPNR pumping behind the post-demod RX leveler.
+comparison tuning evidence cannot hide pumping behind the post-demod RX leveler.
 The watcher also emits `agcStabilityWatch`, which splits AGC gain movement across total,
 active-audio, voice-like, quiet/no-evidence, and RX-leveler-constrained buckets. A trace with active
 or voice-like AGC movement above the pumping threshold gets `trendStatus=agc-pumping-watch`; wide
 movement that is only quiet-floor or leveler-constrained remains distinguishable before anyone
-retunes WDSP AGC or NR5 recovery/makeup from live captures.
+retunes WDSP AGC or comparison recovery/makeup from live captures.
 `compare-dsp-live-diagnostics-traces.ps1` treats active AGC movement, voice-like AGC movement, and
 the explicit pumping-risk flag as pumping-class metrics, so matrix and bundle validation can reject a
 candidate that improves weak-signal recovery by reintroducing audible AGC movement.
@@ -1039,7 +1039,7 @@ review RNNoise, DeepFilterNet, SpeexDSP, WebRTC APM, or another external engine;
 it required automatically when `benchmark-plan.requiredComparisons` or
 `benchmark-capture-manifest.requiredComparisons` includes `candidate-external-engine-opt-in`, and
 `-IncludeOptionalArtifacts` still adds it as optional for exploratory external-engine review. The
-default source benchmark plan does not include this external comparison, so NR5/SPNR acceptance
+default source benchmark plan does not include this external comparison, so WDSP v2 acceptance
 captures remain independent of external ML/DSP bakeoff work. If
 `candidate-external-engine-opt-in` appears in a benchmark plan, the benchmark capture manifest,
 artifact comparison scope, or captured comparison-report content, strict validation requires the
@@ -1047,7 +1047,7 @@ bakeoff report before accepting the bundle for
 external-engine review and records the exact source in `externalEngineBakeoffScopeTriggers`. Schema v2 bakeoff reports
 also include `externalBakeoffPlan`, an opt-in post-demod bakeoff plan with candidate-specific
 scenarios, required `current-zeus`,
-`nr5-spnr`, and `candidate-external-engine-opt-in` comparisons, acceptance gates, required controls,
+`candidate-under-test`, and `candidate-external-engine-opt-in` comparisons, acceptance gates, required controls,
 package/runtime gates, and fixture/live command templates. Strict validation checks that this plan
 does not allow raw WDSP IQ replacement, TX/PureSignal coupling, or default behavior changes,
 derives top-level scenario coverage from the summarized candidate IDs, and verifies each
@@ -1131,6 +1131,6 @@ keep AEC/AGC/high-pass behavior disabled unless a separate radio-safety review a
 
 - Run `compare-wdsp-source-drift.ps1` against the local Thetis WDSP source and resolve or explicitly classify any `likely-defect` source drift.
 - Add internal WDSP C stage timing and allocator probes once wrapper-level `native-stage-timing-report` evidence is stable.
-- Promote focused NR5/SPNR fixtures from diagnostic tests into the shared benchmark catalog.
+- Promote focused current-NR, AGC, and comparison-under-test fixtures from diagnostic tests into the shared benchmark catalog.
 - Run the G2 PureSignal disabled/enabled TX bench capture and summarize it with `tools/summarize-dsp-puresignal-bench.ps1` so `puresignal-safe-bypass-report` becomes ready in strict validation.
 - Record G2 bench results alongside fixture metrics before any opt-in profile graduates.

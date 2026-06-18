@@ -75,7 +75,6 @@ import { DspSceneDiagnosticsPublisher } from './components/DspSceneDiagnosticsPu
 import { AudioPlaybackDiagnosticsPublisher } from './components/AudioPlaybackDiagnosticsPublisher';
 import { ThemeApplier } from './components/ThemeApplier';
 import { TxStationProfileActivator } from './components/TxStationProfileActivator';
-import { TxBandSafetyDialog } from './tx/TxBandSafetyDialog';
 import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
 import { BOARD_LABELS } from './api/radio';
@@ -295,7 +294,7 @@ export default function App() {
 
   useEffect(() => {
     return useConnectionStore.subscribe((state, prev) => {
-      if (state.mode !== prev.mode) getAudioClient().reset();
+      if (state.mode !== prev.mode || state.modeB !== prev.modeB) getAudioClient().reset();
     });
   }, []);
 
@@ -393,6 +392,10 @@ export default function App() {
   const logSelectedIds = useLoggerStore((s) => s.selectedIds);
   const logPublishSelected = useLoggerStore((s) => s.publishSelectedToQrz);
   const logExportAdif = useLoggerStore((s) => s.exportAdif);
+  const workedSummary = useLoggerStore((s) => s.workedSummary);
+  const workedSummaryLoading = useLoggerStore((s) => s.workedSummaryLoading);
+  const loadWorkedSummary = useLoggerStore((s) => s.loadWorkedSummary);
+  const clearWorkedSummary = useLoggerStore((s) => s.clearWorkedSummary);
   const qrzHasApiKey = useQrzStore((s) => s.hasApiKey);
 
   const logbookTitle = logPublishInFlight
@@ -443,6 +446,19 @@ export default function App() {
   const contact: Contact | null = qrzActive
     ? qrzStationToContact(qrzLookup, qrzHome)
     : (CONTACTS[callsign.toUpperCase()] ?? null);
+
+  const workedSummaryCallsign = contact?.callsign ?? null;
+
+  useEffect(() => {
+    if (!workedSummaryCallsign) {
+      clearWorkedSummary();
+      return;
+    }
+
+    const ac = new AbortController();
+    void loadWorkedSummary(workedSummaryCallsign, ac.signal);
+    return () => ac.abort();
+  }, [workedSummaryCallsign, loadWorkedSummary, clearWorkedSummary]);
 
   // Log QSO handler - creates a lazy log entry with RST based on mode
   const handleLogQso = useCallback(() => {
@@ -688,6 +704,8 @@ export default function App() {
     enriching,
     lookupKey,
     contact,
+    workedSummary,
+    workedSummaryLoading,
     qrzLookupError,
     qrzActive,
     mapAvailable,
@@ -716,7 +734,7 @@ export default function App() {
     connected, moxOn, tunOn, mode, vfoHz,
     callsign, terminatorActive, imageMode, bgActive, panBackground,
     backgroundImage, backgroundImageFit,
-    enriching, lookupKey, contact,
+    enriching, lookupKey, contact, workedSummary, workedSummaryLoading,
     qrzLookupError, qrzActive, mapAvailable, mapInteractive, effectiveHome,
     beamOverrideDeg, beamInputStr, rotLiveAz, sp, lp, dist,
     // heroTitle and logbookActions are ReactNodes (new objects each render);
@@ -984,7 +1002,6 @@ export default function App() {
           <p>This keeps the layout tab but replaces its current panel positions.</p>
         </ConfirmDialog>
       )}
-      <TxBandSafetyDialog />
       <UpdatePrompt show={updateAvailable} onUpdate={installUpdate} />
     </div>
     </SpectrumWheelActionsContext.Provider>

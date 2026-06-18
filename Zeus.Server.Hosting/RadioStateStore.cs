@@ -188,6 +188,10 @@ public sealed class RadioStateEntry
     public long RadioLoHz { get; set; }
     public bool Rx2Enabled { get; set; }
     public long VfoBHz { get; set; } = 14_200_000;
+    public RxMode ModeB { get; set; } = RxMode.USB;
+    public int FilterLowHzB { get; set; } = 100;
+    public int FilterHighHzB { get; set; } = 2850;
+    public string? FilterPresetNameB { get; set; } = "VAR1";
     public Zeus.Contracts.Rx2AudioMode Rx2AudioMode { get; set; } = Zeus.Contracts.Rx2AudioMode.Both;
     public double Rx2AfGainDb { get; set; }
     public TxVfo TxVfo { get; set; } = TxVfo.A;

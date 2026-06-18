@@ -60,7 +60,8 @@ public sealed record FilterStateFrame(
 public sealed record FilterSetRequest(
     int LowHz,
     int HighHz,
-    string? PresetName = null);
+    string? PresetName = null,
+    int Receiver = 0);
 
 // Request to write a VAR1 or VAR2 slot. Server rejects SlotName values
 // outside {VAR1, VAR2} with HTTP 409.

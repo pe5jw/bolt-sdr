@@ -35,6 +35,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The DeepCW ONNX model lives in a git submodule and is a build-time
+      # dependency of the web bundle (decode-worker.ts statically imports
+      # model.onnx?url). Without it the "Build zeus-web bundle" step fails to
+      # resolve the import. Targeted init avoids pulling the heavy vst3sdk
+      # submodule.
+      - name: Init DeepCW model submodule (frontend build dependency)
+        run: git submodule update --init zeus-web/external/deepcw-engine
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
