@@ -83,6 +83,7 @@ function maybeRegisterGenericAudioPanel(plugin: PluginDto): void {
       ? CHAIN_UI_SLOT
       : null;
   if (slot === null) return;
+  const route = slot === RX_CHAIN_UI_SLOT ? 'rx' : 'tx';
   const name = plugin.name;
   const id = plugin.id;
   registered.set(`${id}::generic`, {
@@ -92,7 +93,7 @@ function maybeRegisterGenericAudioPanel(plugin: PluginDto): void {
     icon: '',
     category: 'audio',
     slot,
-    component: () => createElement(GenericVstPanel, { pluginId: id, name }),
+    component: () => createElement(GenericVstPanel, { pluginId: id, name, route }),
     editorBacked: true,
   });
 }

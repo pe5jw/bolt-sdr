@@ -451,6 +451,37 @@ public static class ZeusEndpoints
                 return MapEditorResult(result, open: false);
             });
 
+        // Explicit RX Audio Suite editor route. The older /api/audio-suite
+        // editor endpoint remains as the TX/back-compat path and still
+        // auto-detects RX slots, but route-aware callers should use this
+        // receive-side URL so separate TX/RX VST instances never depend on
+        // ambiguous editor routing.
+        app.MapGet("/api/rx-audio-suite/plugins/{id}/editor",
+            (string id, RxVstEngineService rxVst) =>
+            {
+                if (!rxVst.HasEngineSlot(id))
+                    return Results.NotFound(new { error = "No such plugin in the RX Audio Suite chain." });
+                return Results.Ok(new { open = rxVst.IsEditorOpen(id) });
+            });
+
+        app.MapPost("/api/rx-audio-suite/plugins/{id}/editor",
+            (string id, RxVstEngineService rxVst) =>
+            {
+                var result = rxVst.HasEngineSlot(id)
+                    ? rxVst.OpenEditor(id)
+                    : EditorActionResult.NotFound;
+                return MapEditorResult(result, open: true);
+            });
+
+        app.MapDelete("/api/rx-audio-suite/plugins/{id}/editor",
+            (string id, RxVstEngineService rxVst) =>
+            {
+                var result = rxVst.HasEngineSlot(id)
+                    ? rxVst.CloseEditor(id)
+                    : EditorActionResult.NotFound;
+                return MapEditorResult(result, open: false);
+            });
+
         // WAV recorder / player. Records RX or processed-TX audio to float32
         // WAVs in the Downloads folder, and plays recordings back to the local
         // monitor (no keying). Over-the-air playback is a later layer.

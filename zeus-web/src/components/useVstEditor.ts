@@ -9,6 +9,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
+export type VstEditorRoute = 'tx' | 'rx';
+
 export interface VstEditorState {
   /** True while the plugin's native editor window is up. */
   open: boolean;
@@ -27,9 +29,15 @@ export interface VstEditorState {
  * @param enabled   When false the hook stays inert (no mount fetch, no
  *                  requests) — lets a generic list render it for every
  *                  slot while only VST slots actually talk to the bridge.
+ * @param route     Which audio-suite route owns this plugin instance.
  */
-export function useVstEditor(pluginId: string, enabled = true): VstEditorState {
-  const base = `/api/audio-suite/plugins/${encodeURIComponent(pluginId)}/editor`;
+export function useVstEditor(
+  pluginId: string,
+  enabled = true,
+  route: VstEditorRoute = 'tx',
+): VstEditorState {
+  const routePrefix = route === 'rx' ? '/api/rx-audio-suite' : '/api/audio-suite';
+  const base = `${routePrefix}/plugins/${encodeURIComponent(pluginId)}/editor`;
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

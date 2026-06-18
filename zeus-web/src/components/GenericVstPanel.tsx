@@ -10,15 +10,20 @@
 // from the rack slot chrome, and the VST processes audio regardless.
 
 import { useEffect, useRef } from 'react';
-import { useVstEditor } from './useVstEditor';
+import { useVstEditor, type VstEditorRoute } from './useVstEditor';
 
 interface GenericVstPanelProps {
   pluginId: string;
   name: string;
+  route?: VstEditorRoute;
 }
 
-export function GenericVstPanel({ pluginId, name }: GenericVstPanelProps) {
-  const { open, busy, error, toggle, openEditor } = useVstEditor(pluginId);
+export function GenericVstPanel({ pluginId, name, route = 'tx' }: GenericVstPanelProps) {
+  const { open, busy, error, toggle, openEditor } = useVstEditor(
+    pluginId,
+    true,
+    route,
+  );
 
   // Selecting this VST's chip mounts the panel — auto-open its real
   // editor window so the chip click alone pops the GUI (no extra button
