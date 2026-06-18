@@ -2,7 +2,7 @@
 //
 // AudioChainMeters — chain-level IN / OUT signal meters for the Audio
 // Suite, modelled on the VSTHost rack meters. Polls
-// /api/audio-suite/chain/meters at ~15 Hz while the window is open and
+// /api/tx-audio-suite/chain/meters at ~15 Hz while the window is open and
 // renders two horizontal bars (green → yellow → red) with peak-hold.
 //
 // Isolated into its own component so the high-frequency level updates
@@ -169,7 +169,7 @@ export function AudioChainMeters({ compact = false, title }: AudioChainMetersPro
     let timer: ReturnType<typeof setTimeout> | null = null;
     const tick = async () => {
       try {
-        const res = await fetch('/api/audio-suite/chain/meters');
+        const res = await fetch('/api/tx-audio-suite/chain/meters');
         if (alive && res.ok) {
           const body = (await res.json()) as Partial<ChainMetersDto>;
           setMeters(normalizeMeters(body));

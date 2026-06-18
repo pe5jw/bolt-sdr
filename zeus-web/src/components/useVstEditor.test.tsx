@@ -26,7 +26,7 @@ describe('useVstEditor', () => {
     await flushAsyncWork();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/audio-suite/plugins/com.openhpsdr.zeus.vst.clear/editor',
+      '/api/tx-audio-suite/plugins/com.openhpsdr.zeus.vst.clear/editor',
     );
 
     await act(async () => {
@@ -36,7 +36,7 @@ describe('useVstEditor', () => {
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/audio-suite/plugins/com.openhpsdr.zeus.vst.clear/editor',
+      '/api/tx-audio-suite/plugins/com.openhpsdr.zeus.vst.clear/editor',
       { method: 'POST' },
     );
 

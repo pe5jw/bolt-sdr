@@ -36,7 +36,7 @@ export function useVstEditor(
   enabled = true,
   route: VstEditorRoute = 'tx',
 ): VstEditorState {
-  const routePrefix = route === 'rx' ? '/api/rx-audio-suite' : '/api/audio-suite';
+  const routePrefix = route === 'rx' ? '/api/rx-audio-suite' : '/api/tx-audio-suite';
   const base = `${routePrefix}/plugins/${encodeURIComponent(pluginId)}/editor`;
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);

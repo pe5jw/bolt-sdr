@@ -9,7 +9,7 @@
 //   - Chain order: the canonical ordered list of plugin IDs in the
 //     audio chain. Server is the source of truth (ChainOrderService);
 //     this store mirrors what the server publishes via the
-//     /api/plugins/chain/order REST endpoint and the AudioChainOrder
+//     /api/tx-audio-suite/chain/order REST endpoint and the AudioChainOrder
 //     (0x1E) WebSocket broadcast frame. The local store is NOT
 //     persisted to localStorage — on reload we fetch fresh from the
 //     server to avoid drift if the operator reorders on a second
@@ -69,7 +69,7 @@ function normalizeAudioProfileSummary(profile: AudioProfileSummaryResponse): Aud
   };
 }
 
-/** Result of a VST directory scan (POST /api/audio-suite/scan-vst-directory). */
+/** Result of a VST directory scan (POST /api/{tx,rx}-audio-suite/scan-vst-directory). */
 export interface VstScanResult {
   ok: boolean;
   error?: string;
@@ -494,7 +494,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         }
         try {
           const res = await fetch(
-            `/api/plugins/${encodeURIComponent(pluginId)}/chain-membership`,
+            `/api/tx-audio-suite/plugins/${encodeURIComponent(pluginId)}/chain-membership`,
             {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
@@ -556,7 +556,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
 
       loadProfiles: async () => {
         try {
-          const res = await fetch('/api/audio-suite/profiles');
+          const res = await fetch('/api/tx-audio-suite/profiles');
           if (!res.ok) return;
           const body = (await res.json()) as { profiles?: AudioProfileSummaryResponse[] };
           if (Array.isArray(body.profiles)) {
@@ -582,7 +582,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         if (!trimmed) return { ok: false, error: 'Profile name is required.' };
         try {
           const res = await fetch(
-            `/api/audio-suite/profiles/${encodeURIComponent(trimmed)}`,
+            `/api/tx-audio-suite/profiles/${encodeURIComponent(trimmed)}`,
             { method: 'PUT' },
           );
           if (!res.ok) {
@@ -605,7 +605,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         if (!trimmed) return { ok: false, error: 'Profile name is required.' };
         try {
           const res = await fetch(
-            `/api/audio-suite/profiles/${encodeURIComponent(trimmed)}/apply`,
+            `/api/tx-audio-suite/profiles/${encodeURIComponent(trimmed)}/apply`,
             { method: 'POST' },
           );
           if (!res.ok) {
@@ -655,7 +655,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
 
       deleteProfile: async (name) => {
         try {
-          const res = await fetch(`/api/audio-suite/profiles/${encodeURIComponent(name)}`, {
+          const res = await fetch(`/api/tx-audio-suite/profiles/${encodeURIComponent(name)}`, {
             method: 'DELETE',
           });
           if (!res.ok) {
@@ -684,7 +684,13 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           errors: [],
         };
         try {
-          const res = await fetch('/api/audio-suite/scan-vst-directory', {
+          const scanUrl =
+            route === 'tx'
+              ? '/api/tx-audio-suite/scan-vst-directory'
+              : route === 'rx'
+                ? '/api/rx-audio-suite/scan-vst-directory'
+                : '/api/audio-suite/scan-vst-directory';
+          const res = await fetch(scanUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ directory, route }),
@@ -769,7 +775,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         set({ chainOrder: next });
 
         try {
-          const res = await fetch('/api/plugins/chain/order', {
+          const res = await fetch('/api/tx-audio-suite/chain/order', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pluginIds: next }),
@@ -792,7 +798,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
 
       loadChainOrderFromServer: async () => {
         try {
-          const res = await fetch('/api/plugins/chain/order');
+          const res = await fetch('/api/tx-audio-suite/chain/order');
           if (!res.ok) return;
           const body = (await res.json()) as { pluginIds?: string[] };
           if (Array.isArray(body.pluginIds)) {
@@ -858,7 +864,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
 
       loadPreviewState: async () => {
         try {
-          const res = await fetch('/api/audio-suite/preview');
+          const res = await fetch('/api/tx-audio-suite/preview');
           if (!res.ok) {
             set({ previewSupported: false, previewEnabled: false });
             return;
@@ -884,7 +890,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         set({ previewEnabled: enabled });
         useTxStore.getState().setTxMonitorEnabled(enabled);
         try {
-          const res = await fetch('/api/audio-suite/preview', {
+          const res = await fetch('/api/tx-audio-suite/preview', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ enabled }),
@@ -916,7 +922,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
 
       loadMasterBypassFromServer: async () => {
         try {
-          const res = await fetch('/api/audio-suite/master-bypass');
+          const res = await fetch('/api/tx-audio-suite/master-bypass');
           if (!res.ok) return;
           const body = (await res.json()) as { bypassed?: boolean };
           if (typeof body.bypassed === 'boolean') {
@@ -934,7 +940,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         // Optimistic update so the toggle feels instant.
         set({ masterBypassed: bypassed });
         try {
-          const res = await fetch('/api/audio-suite/master-bypass', {
+          const res = await fetch('/api/tx-audio-suite/master-bypass', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ bypassed }),
@@ -995,7 +1001,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       // VST engine). Server is authoritative; fetched on Audio Suite mount.
       loadProcessingModeFromServer: async () => {
         try {
-          const res = await fetch('/api/audio-suite/processing-mode');
+          const res = await fetch('/api/tx-audio-suite/processing-mode');
           if (!res.ok) return;
           const body = (await res.json()) as {
             mode?: string;
@@ -1043,7 +1049,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         // Optimistic so the toggle feels instant; reconcile from the response.
         set({ processingMode: mode });
         try {
-          const res = await fetch('/api/audio-suite/processing-mode', {
+          const res = await fetch('/api/tx-audio-suite/processing-mode', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ mode }),

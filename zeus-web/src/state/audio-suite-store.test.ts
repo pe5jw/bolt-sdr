@@ -138,10 +138,10 @@ describe('audio-suite-store profile selection', () => {
   it('marks a profile selected after a successful apply', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === '/api/audio-suite/profiles/Native%20x1/apply') {
+      if (url === '/api/tx-audio-suite/profiles/Native%20x1/apply') {
         return response({ pluginIds: ['noise-gate', 'compressor'] });
       }
-      if (url === '/api/audio-suite/master-bypass') {
+      if (url === '/api/tx-audio-suite/master-bypass') {
         return response({ bypassed: false });
       }
       return response({});
@@ -153,7 +153,7 @@ describe('audio-suite-store profile selection', () => {
 
     expect(result).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/audio-suite/profiles/Native%20x1/apply',
+      '/api/tx-audio-suite/profiles/Native%20x1/apply',
       { method: 'POST' },
     );
     expect(useAudioSuiteStore.getState().selectedProfile).toBe('Native x1');
@@ -164,7 +164,7 @@ describe('audio-suite-store profile selection', () => {
   it('switches to the processing mode returned by a profile apply', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === '/api/audio-suite/profiles/VST%20rack/apply') {
+      if (url === '/api/tx-audio-suite/profiles/VST%20rack/apply') {
         return response({
           pluginIds: ['com.openhpsdr.zeus.vst.comp'],
           processingMode: 'vst',
@@ -193,7 +193,7 @@ describe('audio-suite-store profile selection', () => {
   it('switches back to native mode returned by a profile apply', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === '/api/audio-suite/profiles/Native%20rack/apply') {
+      if (url === '/api/tx-audio-suite/profiles/Native%20rack/apply') {
         return response({
           pluginIds: ['com.openhpsdr.zeus.samples.eq'],
           processingMode: 'native',
@@ -242,7 +242,7 @@ describe('audio-suite-store profile selection', () => {
 
   it('mirrors preview onto the TX monitor store', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
-      if (String(input) === '/api/audio-suite/preview') {
+      if (String(input) === '/api/tx-audio-suite/preview') {
         return response({ supported: true, enabled: true });
       }
       return response({});
@@ -256,7 +256,7 @@ describe('audio-suite-store profile selection', () => {
 
     expect(useAudioSuiteStore.getState().previewEnabled).toBe(true);
     expect(useTxStore.getState().txMonitorEnabled).toBe(true);
-    expect(fetchMock).toHaveBeenCalledWith('/api/audio-suite/preview', {
+    expect(fetchMock).toHaveBeenCalledWith('/api/tx-audio-suite/preview', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: true }),
@@ -293,7 +293,7 @@ describe('audio-suite-store profile selection', () => {
       if (url === '/api/plugins') {
         return response({ plugins: [] });
       }
-      if (url === '/api/plugins/chain/order') {
+      if (url === '/api/tx-audio-suite/chain/order') {
         return response({ pluginIds: ['com.openhpsdr.zeus.vst.supertoneclear'] });
       }
       if (url === '/api/rx-audio-suite/chain/order') {
@@ -330,6 +330,58 @@ describe('audio-suite-store profile selection', () => {
     ]);
     expect(useAudioSuiteStore.getState().rxVstEngineActive).toBe(true);
     expect(useAudioSuiteStore.getState().rxVstActivePlugins).toBe(1);
+  });
+
+  it('uses route-specific VST scan endpoints for TX and RX scans', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (
+        url === '/api/tx-audio-suite/scan-vst-directory' ||
+        url === '/api/rx-audio-suite/scan-vst-directory'
+      ) {
+        return response({
+          directory: url.includes('/rx-') ? 'C:\\RX VST' : 'C:\\TX VST',
+          registered: [],
+          skipped: [],
+          errors: [],
+        });
+      }
+      if (url === '/api/plugins') {
+        return response({ plugins: [] });
+      }
+      if (url === '/api/tx-audio-suite/chain/order') {
+        return response({ pluginIds: [] });
+      }
+      if (url === '/api/rx-audio-suite/chain/order') {
+        return response({ pluginIds: [] });
+      }
+      if (url === '/api/rx-audio-suite/processing-mode') {
+        return response({
+          engineAvailable: true,
+          engineActive: false,
+          activePlugins: 0,
+          degradedBlocks: 0,
+        });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { useAudioSuiteStore } = await import('./audio-suite-store');
+
+    await useAudioSuiteStore.getState().scanVstDirectory('C:\\TX VST', 'tx');
+    await useAudioSuiteStore.getState().scanVstDirectory('C:\\RX VST', 'rx');
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/tx-audio-suite/scan-vst-directory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ directory: 'C:\\TX VST', route: 'tx' }),
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/rx-audio-suite/scan-vst-directory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ directory: 'C:\\RX VST', route: 'rx' }),
+    });
   });
 
   it('loads RX VST engine diagnostics separately from TX mode', async () => {
