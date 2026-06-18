@@ -906,9 +906,10 @@ public class DspPipelineService : BackgroundService,
                 inputRmsDbfs >= -44.0 &&
                 inputRmsDbfs <= -24.0 &&
                 nr5.InputDbfs >= -24.0 &&
-                nr5.OutputDbfs >= -31.0 &&
+                nr5.OutputDbfs >= -38.0 &&
                 nr5.OutputDbfs <= -23.0 &&
                 nr5.OutputPeakDbfs <= -18.5 &&
+                nr5.OutputPeakDbfs >= -36.5 &&
                 nr5.SignalConfidence >= 0.200 &&
                 nr5.SignalConfidence <= 0.330 &&
                 nr5.SignalProbability <= 0.160 &&
@@ -920,9 +921,16 @@ public class DspPipelineService : BackgroundService,
                     ClampUnit(state.Nr5SpeechHoldBlocks / (double)RxLevelerNr5SpeechHoldBlocks),
                     ClampUnit(state.PauseHoldBlocks / (double)RxLevelerPauseHoldBlocks));
                 double underReportInput = ClampUnit((nr5.InputDbfs + 24.0) / 14.0);
+                double underReportSuppression = ClampUnit((nr5.InputDbfs - nr5.OutputDbfs - 12.0) / 12.0);
                 double underReportOutput = Math.Max(
-                    ClampUnit((nr5.OutputDbfs + 31.0) / 8.0),
-                    0.72 * ClampUnit((nr5.OutputPeakDbfs + 30.0) / 10.0));
+                    Math.Max(
+                        ClampUnit((nr5.OutputDbfs + 31.0) / 8.0),
+                        0.72 * ClampUnit((nr5.OutputPeakDbfs + 30.0) / 10.0)),
+                    Math.Max(
+                        0.68 * ClampUnit((nr5.OutputDbfs + 38.0) / 12.0),
+                        Math.Max(
+                            0.56 * ClampUnit((nr5.OutputPeakDbfs + 36.0) / 14.0),
+                            0.78 * underReportSuppression)));
                 double underReportGate = ClampUnit((nr5.AgcGate - 0.380) / 0.300);
                 nr5HeldPassbandStrongUnderReportProof = ClampUnit(Math.Sqrt(ClampUnit(
                     nr5FrontendTopPeakProof *
@@ -931,9 +939,9 @@ public class DspPipelineService : BackgroundService,
                     Math.Max(underReportOutput, 0.20) *
                     Math.Max(underReportGate, 0.18))));
                 nr5HeldPassbandStrongUnderReportCandidate =
-                    nr5HeldPassbandStrongUnderReportProof >= 0.18 &&
-                    underReportOutput >= 0.18 &&
-                    underReportInput >= 0.12;
+                    nr5HeldPassbandStrongUnderReportProof >= 0.16 &&
+                    underReportInput >= 0.12 &&
+                    (underReportOutput >= 0.18 || underReportSuppression >= 0.32);
             }
             nr5ProfiledValleyProof = Nr5LevelerProfiledValleyProof(nr5);
             nr5ProfiledValleyCandidate =
