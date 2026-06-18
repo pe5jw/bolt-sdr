@@ -615,6 +615,42 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Assert.Equal("aligned", root.GetProperty("runtimeAlignmentStatus").GetString());
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("   ")]
+    public void SmartNrCondition_UsesRuntimeOnlyAlignmentWhenSceneHasNoProfileButNr5IsStable(string? smartNrProfile)
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        PublishScene(service, smartNrProfile);
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(
+            service.SmartNrCondition(Runtime(requested: "Nr5", effective: "Nr5")),
+            CamelCaseJson));
+        var root = doc.RootElement;
+
+        Assert.True(root.GetProperty("profile").ValueKind is JsonValueKind.Null);
+        Assert.Equal("Nr5", root.GetProperty("expectedNrMode").GetString());
+        Assert.True(root.GetProperty("runtimeAligned").GetBoolean());
+        Assert.Equal("runtime-only-aligned", root.GetProperty("runtimeAlignmentStatus").GetString());
+        Assert.Contains("backend runtime evidence only", root.GetProperty("runtimeAlignmentRecommendation").GetString());
+    }
+
+    [Fact]
+    public void SmartNrCondition_DoesNotInferRuntimeOnlyAlignmentWhenBlankProfileRuntimeIsPending()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        PublishScene(service, smartNrProfile: null);
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(
+            service.SmartNrCondition(Runtime(requested: "Nr5", effective: "Emnr")),
+            CamelCaseJson));
+        var root = doc.RootElement;
+
+        Assert.True(root.GetProperty("expectedNrMode").ValueKind is JsonValueKind.Null);
+        Assert.True(root.GetProperty("runtimeAligned").ValueKind is JsonValueKind.Null);
+        Assert.Equal("no-profile", root.GetProperty("runtimeAlignmentStatus").GetString());
+    }
+
     [Fact]
     public void SmartNrCondition_ReportsPendingWhenRequestedModeHasNotApplied()
     {
@@ -667,7 +703,7 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Assert.Contains("cannot be evaluated", root.GetProperty("runtimeAlignmentRecommendation").GetString());
     }
 
-    private static void PublishScene(FrontendDspSceneDiagnosticsService service, string smartNrProfile) =>
+    private static void PublishScene(FrontendDspSceneDiagnosticsService service, string? smartNrProfile) =>
         service.Update(new FrontendDspSceneDiagnosticsRequest(
             SourceClientId: "client",
             Mode: "USB",

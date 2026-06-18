@@ -94,6 +94,27 @@ public sealed class DspLiveDiagnosticsServiceTests
     }
 
     [Fact]
+    public void Build_RuntimeOnlyAlignedNr5SceneDoesNotEmitProfileUnmappedConstraint()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        PublishScene(service, profile: null, held: false, rxScore: 94, rxTone: "neutral", coherent: true);
+        var condition = service.SmartNrCondition(
+            Runtime("Nr5", "Nr5", nr5Available: true, nr5: Nr5(learnedFrames: 80, confidence: 0.72, agcGate: 0.66)),
+            RxChain(score: 94));
+
+        var diag = DspLiveDiagnosticsService.Build(condition, RuntimeEvidence());
+
+        Assert.Equal("ready-for-live-benchmark", diag.Status);
+        Assert.True(diag.ReadyForLiveBenchmark);
+        Assert.True(diag.ReadyForNr5Tuning);
+        Assert.True(diag.RuntimeAligned);
+        Assert.Equal("runtime-only-aligned", diag.RuntimeAlignmentStatus);
+        Assert.Equal("Nr5", diag.ExpectedNrMode);
+        Assert.Contains("smart-nr-runtime-aligned", diag.Evidence);
+        Assert.DoesNotContain("smart-nr-profile-unmapped", diag.Constraints);
+    }
+
+    [Fact]
     public void Build_CarriesRadioStateForStableLiveTraceEvidence()
     {
         var service = new FrontendDspSceneDiagnosticsService();
@@ -654,7 +675,7 @@ public sealed class DspLiveDiagnosticsServiceTests
 
     private static void PublishScene(
         FrontendDspSceneDiagnosticsService service,
-        string profile,
+        string? profile,
         bool held,
         int rxScore,
         string rxTone,

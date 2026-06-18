@@ -725,6 +725,15 @@ public sealed class FrontendDspSceneDiagnosticsService
         string? profile = Clean(latest?.SmartNrProfile, 48);
         if (string.IsNullOrWhiteSpace(profile))
         {
+            if (latest is not null && StableRuntimeOnlyNrMode(nrRuntime) is { } runtimeOnlyMode)
+            {
+                return new(
+                    ExpectedNrMode: runtimeOnlyMode,
+                    RuntimeAligned: true,
+                    Status: "runtime-only-aligned",
+                    Recommendation: $"No Smart NR profile was published with the frontend scene, but WDSP is active and stably running {runtimeOnlyMode}; use this as backend runtime evidence only and keep Smart NR profile publishing under review.");
+            }
+
             return new(
                 ExpectedNrMode: null,
                 RuntimeAligned: null,
@@ -787,6 +796,35 @@ public sealed class FrontendDspSceneDiagnosticsService
             "NR5" => "Nr5",
             "LIGHT" => "Off",
             "NOTCH" => "Off",
+            _ => null,
+        };
+    }
+
+    private static string? StableRuntimeOnlyNrMode(DspNrRuntimeSnapshot nrRuntime)
+    {
+        if (!nrRuntime.WdspActive)
+            return null;
+
+        string? requested = SpectralNrRuntimeMode(nrRuntime.RequestedNrMode);
+        string? effective = SpectralNrRuntimeMode(nrRuntime.EffectiveNrMode);
+        return requested is not null &&
+            effective is not null &&
+            string.Equals(requested, effective, StringComparison.OrdinalIgnoreCase)
+                ? effective
+                : null;
+    }
+
+    private static string? SpectralNrRuntimeMode(string? mode)
+    {
+        if (string.IsNullOrWhiteSpace(mode))
+            return null;
+
+        return mode.Trim().ToUpperInvariant() switch
+        {
+            "ANR" => "Anr",
+            "EMNR" => "Emnr",
+            "SBNR" => "Sbnr",
+            "NR5" => "Nr5",
             _ => null,
         };
     }
