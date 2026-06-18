@@ -554,7 +554,16 @@ public sealed record Nr5SpnrDiagnosticsDto(
     double AdjacentNoiseLeftFloorDb,
     double AdjacentNoiseRightFloorDb,
     double AdjacentNoiseSideBalance,
-    double AdjacentNoiseAsymmetryDb);
+    double AdjacentNoiseAsymmetryDb)
+{
+    public int ManagedChannelGeneration { get; init; }
+    public int ManagedNr5ApplyCount { get; init; }
+    public int ManagedNr5PositionApplyCount { get; init; }
+    public int ManagedNr5PolicyApplyCount { get; init; }
+    public int ManagedNr5NoopApplyCount { get; init; }
+    public int ManagedNr5RunApplyCount { get; init; }
+    public string? ManagedNr5LastApplyReason { get; init; }
+}
 
 public sealed record SmartNrRxChainRuntimeDto(
     int SchemaVersion,

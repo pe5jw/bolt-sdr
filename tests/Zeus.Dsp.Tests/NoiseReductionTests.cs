@@ -145,6 +145,55 @@ public class NoiseReductionTests
     }
 
     [SkippableFact]
+    public void Wdsp_Nr5StateReplay_DoesNotFlushLearnedFrames()
+    {
+        Skip.IfNot(WdspAvailable(), "libwdsp not available");
+        Skip.IfNot(SpnrAvailable(), "Requires libwdsp rebuild with NR5/SPNR exports.");
+
+        using var engine = new WdspDspEngine();
+        int channel = engine.OpenChannel(192_000, 1024);
+        try
+        {
+            engine.SetMode(channel, RxMode.USB);
+            engine.SetFilter(channel, 150, 2850);
+            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
+
+            var learned = FeedToneUntilNr5Learns(engine, channel, minLearnedFrames: 20);
+            Assert.True(learned.LearnedFrames >= 20, $"expected NR5 to pass the live readiness threshold before replay, got {learned.LearnedFrames}");
+            Assert.Equal(1, learned.ManagedNr5PositionApplyCount);
+            Assert.Equal(1, learned.ManagedNr5PolicyApplyCount);
+            int generation = learned.ManagedChannelGeneration;
+
+            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
+            var afterSameNrReplay = engine.TryGetNr5SpnrDiagnostics(channel);
+            Assert.NotNull(afterSameNrReplay);
+            Assert.Equal(generation, afterSameNrReplay.ManagedChannelGeneration);
+            Assert.Equal(learned.ManagedNr5PositionApplyCount, afterSameNrReplay.ManagedNr5PositionApplyCount);
+            Assert.Equal(learned.ManagedNr5PolicyApplyCount, afterSameNrReplay.ManagedNr5PolicyApplyCount);
+            Assert.True(afterSameNrReplay.ManagedNr5NoopApplyCount > learned.ManagedNr5NoopApplyCount);
+            Assert.True(
+                afterSameNrReplay.LearnedFrames >= learned.LearnedFrames,
+                $"same NR5 replay flushed learner: before={learned.LearnedFrames}, after={afterSameNrReplay.LearnedFrames}");
+
+            engine.SetFilter(channel, 300, 2100);
+            var afterFilterPolicyChange = engine.TryGetNr5SpnrDiagnostics(channel);
+            Assert.NotNull(afterFilterPolicyChange);
+            Assert.Equal(generation, afterFilterPolicyChange.ManagedChannelGeneration);
+            Assert.Equal(afterSameNrReplay.ManagedNr5PositionApplyCount, afterFilterPolicyChange.ManagedNr5PositionApplyCount);
+            Assert.True(afterFilterPolicyChange.ManagedNr5PolicyApplyCount > afterSameNrReplay.ManagedNr5PolicyApplyCount);
+            Assert.True(
+                afterFilterPolicyChange.LearnedFrames >= afterSameNrReplay.LearnedFrames,
+                $"NR5 filter-policy reapply flushed learner: before={afterSameNrReplay.LearnedFrames}, after={afterFilterPolicyChange.LearnedFrames}");
+            Assert.InRange(afterFilterPolicyChange.Aggressiveness, 0.56, 0.58);
+            Assert.InRange(afterFilterPolicyChange.TargetRms, 0.071, 0.073);
+        }
+        finally
+        {
+            engine.CloseChannel(channel);
+        }
+    }
+
+    [SkippableFact]
     public void Wdsp_Nr5AdjacentNoiseProfile_RoundTripsThroughNativeDiagnostics()
     {
         Skip.IfNot(WdspAvailable(), "libwdsp not available");
@@ -836,5 +885,43 @@ public class NoiseReductionTests
         Assert.NotNull(back);
         Assert.Equal(cfg, back);
         Assert.Contains("\"Sbnr\"", json);
+    }
+
+    private static Nr5SpnrDiagnosticsDto FeedToneUntilNr5Learns(
+        WdspDspEngine engine,
+        int channel,
+        int minLearnedFrames)
+    {
+        const int sampleRate = 192_000;
+        const int chunkComplex = 126;
+        const int totalComplex = 96 * 1024;
+        const double amplitude = 0.18;
+
+        var iq = new double[totalComplex * 2];
+        for (int n = 0; n < totalComplex; n++)
+        {
+            double phase = 2.0 * Math.PI * 1_200.0 * n / sampleRate;
+            iq[2 * n] = amplitude * Math.Cos(phase);
+            iq[2 * n + 1] = amplitude * Math.Sin(phase);
+        }
+
+        for (int off = 0; off < totalComplex; off += chunkComplex)
+        {
+            int take = Math.Min(chunkComplex, totalComplex - off);
+            engine.FeedIq(channel, iq.AsSpan(2 * off, 2 * take));
+        }
+
+        var audio = new float[4096];
+        Nr5SpnrDiagnosticsDto? latest = null;
+        for (int i = 0; i < 120; i++)
+        {
+            Thread.Sleep(10);
+            _ = engine.ReadAudio(channel, audio);
+            latest = engine.TryGetNr5SpnrDiagnostics(channel);
+            if (latest is not null && latest.LearnedFrames >= minLearnedFrames)
+                return latest;
+        }
+
+        return latest ?? throw new InvalidOperationException("NR5 diagnostics were not available after feeding IQ.");
     }
 }

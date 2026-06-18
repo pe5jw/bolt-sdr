@@ -223,6 +223,7 @@ public sealed class WdspDspEngine : IDspEngine
     private sealed class ChannelState
     {
         public required int Id;
+        public required int Generation;
         public required int SampleRateHz;
         public required int PixelWidth;
         public required int OutDoubles;
@@ -263,6 +264,16 @@ public sealed class WdspDspEngine : IDspEngine
         // Re-applies passband-aware NR5 tuning when the operator changes the
         // filter while NR5 is already running.
         public volatile NrMode CurrentNrMode = NrMode.Off;
+        public bool Nr5PositionApplied;
+        public int Nr5AppliedPosition = int.MinValue;
+        public double Nr5AppliedAggressiveness = double.NaN;
+        public double Nr5AppliedAgcTargetRms = double.NaN;
+        public int Nr5ApplyCount;
+        public int Nr5PositionApplyCount;
+        public int Nr5PolicyApplyCount;
+        public int Nr5NoopApplyCount;
+        public int Nr5RunApplyCount;
+        public string Nr5LastApplyReason = "never";
         // Zoom level (1..32). Changing it re-calls SetAnalyzer with shifted
         // fscLin/fscHin; the worker's Spectrum0 and the pixel drain's GetPixels
         // take this lock so they never interleave with an in-flight reconfig.
@@ -273,6 +284,7 @@ public sealed class WdspDspEngine : IDspEngine
     private readonly ConcurrentDictionary<int, ChannelState> _channels = new();
     private readonly ILogger _log;
     private int _disposed;
+    private int _channelGeneration;
 
     // TXA lifecycle is disjoint from RXA's (no analyzer, no audio ring, no NB)
     // so we don't register it in _channels. _txaLock serializes OpenTxChannel
@@ -553,6 +565,7 @@ public sealed class WdspDspEngine : IDspEngine
         var state = new ChannelState
         {
             Id = id,
+            Generation = Interlocked.Increment(ref _channelGeneration),
             SampleRateHz = sampleRateHz,
             PixelWidth = pixelWidth,
             OutDoubles = outDoubles,
@@ -664,7 +677,7 @@ public sealed class WdspDspEngine : IDspEngine
         ApplyBandpassForMode(state);
         if (state.CurrentNrMode == NrMode.Nr5)
         {
-            ApplyNr5Spnr(state);
+            ApplyNr5Spnr(state, "filter-policy");
         }
     }
 
@@ -847,7 +860,7 @@ public sealed class WdspDspEngine : IDspEngine
                 TrySetEmnrPost2Run(channelId, 0);
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
-                ApplyNr5Spnr(state);
+                ApplyNr5Spnr(state, "nr5-mode-apply");
                 break;
             default:
                 NativeMethods.SetRXAANRRun(channelId, 0);
@@ -858,6 +871,14 @@ public sealed class WdspDspEngine : IDspEngine
                 break;
         }
         state.CurrentNrMode = cfg.NrMode;
+        if (cfg.NrMode != NrMode.Nr5)
+        {
+            state.Nr5PositionApplied = false;
+            state.Nr5AppliedPosition = int.MinValue;
+            state.Nr5AppliedAggressiveness = double.NaN;
+            state.Nr5AppliedAgcTargetRms = double.NaN;
+            state.Nr5LastApplyReason = $"nr5-mode-exit-{cfg.NrMode}";
+        }
 
         if (cfg.AnfEnabled)
         {
@@ -1076,17 +1097,41 @@ public sealed class WdspDspEngine : IDspEngine
     // NR5 (SPNR) parameter push + Run=1. Defaults are conservative while the
     // mode is experimental: moderate suppression, post-NR audio normalization
     // on, and a target below full scale so WDSP AGC still has headroom.
-    private void ApplyNr5Spnr(ChannelState state)
+    private void ApplyNr5Spnr(ChannelState state, string reason)
     {
         int channelId = state.Id;
         try
         {
+            state.Nr5ApplyCount++;
+            state.Nr5LastApplyReason = reason;
+            bool positionApplied = false;
+            bool policyApplied = false;
             var policy = ComputeNr5PassbandPolicy(state.FilterLowAbsHz, state.FilterHighAbsHz);
-            NativeMethods.SetRXASPNRPosition(channelId, NrDefaults.Nr5Position);
-            NativeMethods.SetRXASPNRAggressiveness(channelId, policy.Aggressiveness);
-            NativeMethods.SetRXASPNRAgcTarget(channelId, policy.AgcTargetRms);
+            if (!state.Nr5PositionApplied || state.Nr5AppliedPosition != NrDefaults.Nr5Position)
+            {
+                NativeMethods.SetRXASPNRPosition(channelId, NrDefaults.Nr5Position);
+                state.Nr5PositionApplied = true;
+                state.Nr5AppliedPosition = NrDefaults.Nr5Position;
+                state.Nr5PositionApplyCount++;
+                positionApplied = true;
+            }
+            if (!NearlyEqual(state.Nr5AppliedAggressiveness, policy.Aggressiveness))
+            {
+                NativeMethods.SetRXASPNRAggressiveness(channelId, policy.Aggressiveness);
+                state.Nr5AppliedAggressiveness = policy.Aggressiveness;
+                policyApplied = true;
+            }
+            if (!NearlyEqual(state.Nr5AppliedAgcTargetRms, policy.AgcTargetRms))
+            {
+                NativeMethods.SetRXASPNRAgcTarget(channelId, policy.AgcTargetRms);
+                state.Nr5AppliedAgcTargetRms = policy.AgcTargetRms;
+                policyApplied = true;
+            }
+            if (policyApplied) state.Nr5PolicyApplyCount++;
+            if (!positionApplied && !policyApplied) state.Nr5NoopApplyCount++;
             NativeMethods.SetRXASPNRAgcRun(channelId, 1);
             NativeMethods.SetRXASPNRRun(channelId, 1);
+            state.Nr5RunApplyCount++;
         }
         catch (EntryPointNotFoundException ex)
         {
@@ -1095,6 +1140,11 @@ public sealed class WdspDspEngine : IDspEngine
                 channelId, ex.Message);
         }
     }
+
+    private static bool NearlyEqual(double left, double right) =>
+        double.IsFinite(left) &&
+        double.IsFinite(right) &&
+        Math.Abs(left - right) <= 1.0e-12;
 
     internal readonly record struct Nr5PassbandPolicy(double Aggressiveness, double AgcTargetRms);
 
@@ -1182,7 +1232,10 @@ public sealed class WdspDspEngine : IDspEngine
 
     public Nr5SpnrDiagnosticsDto? TryGetNr5SpnrDiagnostics(int channelId)
     {
-        if (channelId < 0 || !IsRxChannelOpen(channelId) || !Nr5SpnrDiagnosticsAvailable)
+        if (channelId < 0 ||
+            !_channels.TryGetValue(channelId, out var state) ||
+            state.Stopped ||
+            !Nr5SpnrDiagnosticsAvailable)
             return null;
 
         try
@@ -1479,7 +1532,16 @@ public sealed class WdspDspEngine : IDspEngine
                 AdjacentNoiseLeftFloorDb: RoundDiag(adjacentNoiseLeftFloorDb, 1),
                 AdjacentNoiseRightFloorDb: RoundDiag(adjacentNoiseRightFloorDb, 1),
                 AdjacentNoiseSideBalance: RoundDiag(Math.Clamp(adjacentNoiseSideBalance, 0.0, 1.0), 3),
-                AdjacentNoiseAsymmetryDb: RoundDiag(Math.Max(0.0, adjacentNoiseAsymmetryDb), 1));
+                AdjacentNoiseAsymmetryDb: RoundDiag(Math.Max(0.0, adjacentNoiseAsymmetryDb), 1))
+            {
+                ManagedChannelGeneration = state.Generation,
+                ManagedNr5ApplyCount = state.Nr5ApplyCount,
+                ManagedNr5PositionApplyCount = state.Nr5PositionApplyCount,
+                ManagedNr5PolicyApplyCount = state.Nr5PolicyApplyCount,
+                ManagedNr5NoopApplyCount = state.Nr5NoopApplyCount,
+                ManagedNr5RunApplyCount = state.Nr5RunApplyCount,
+                ManagedNr5LastApplyReason = state.Nr5LastApplyReason,
+            };
         }
         catch (EntryPointNotFoundException)
         {
