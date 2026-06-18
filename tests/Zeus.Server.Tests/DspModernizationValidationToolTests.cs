@@ -2469,6 +2469,73 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task WatchLiveDiagnosticsMarksActiveOffPassbandNr5TraceAsEvidenceMissing()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-off-passband-nr5-watch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var jsonlPath = Path.Combine(bundleDir, "off-passband-nr5.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                jsonlPath,
+                new[]
+                {
+                    AgcWatchSample(0, agcGainDb: -42.5, audioRmsDbfs: -31.0, includeNr5: true, nr5InputDbfs: -36.0, frontendTopPeaks:
+                    [
+                        FrontendTopPeak(14_248_000, 8_000, 26.0, -72.0)
+                    ]),
+                    AgcWatchSample(1, agcGainDb: -42.5, audioRmsDbfs: -30.5, includeNr5: true, nr5InputDbfs: -35.0, frontendTopPeaks:
+                    [
+                        FrontendTopPeak(14_249_500, 9_500, 24.0, -74.0)
+                    ]),
+                    AgcWatchSample(2, agcGainDb: -42.5, audioRmsDbfs: -30.8, includeNr5: true, nr5InputDbfs: -34.5, frontendTopPeaks:
+                    [
+                        FrontendTopPeak(14_246_800, 6_800, 22.0, -76.0)
+                    ])
+                });
+
+            var reportPath = Path.Combine(bundleDir, "off-passband-nr5.summary.json");
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, watch.ExitCode);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+
+            Assert.True(root.GetProperty("readyForBenchmarkTrace").GetBoolean());
+            Assert.True(root.GetProperty("nr5TuningReadyTrace").GetBoolean());
+            Assert.Equal("passband-evidence-missing", root.GetProperty("trendStatus").GetString());
+
+            var passbandAudioWatch = root.GetProperty("passbandAudioWatch");
+            Assert.Equal("no-passband-peaks", passbandAudioWatch.GetProperty("status").GetString());
+            Assert.True(passbandAudioWatch.GetProperty("passbandEvidenceMissing").GetBoolean());
+            Assert.Equal(3, passbandAudioWatch.GetProperty("offPassbandPeakSampleCount").GetInt32());
+            Assert.Equal(0, passbandAudioWatch.GetProperty("passbandPeakSampleCount").GetInt32());
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task WatchLiveDiagnosticsMarksRxStateDriftTraceNotBenchmarkReady()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
@@ -2814,6 +2881,85 @@ public sealed class DspModernizationValidationToolTests
             Assert.DoesNotContain(
                 root.GetProperty("recommendations").EnumerateArray(),
                 recommendation => (recommendation.GetString() ?? "").Contains("tune normalization before judging", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task WatchLiveDiagnosticsExcludesTxMonitorAudioFromNr5FinalAudioStats()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-tx-monitor-exclusion-watch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var jsonlPath = Path.Combine(bundleDir, "nr5-tx-monitor-exclusion.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                jsonlPath,
+                new[]
+                {
+                    Nr5LevelerAlignmentWatchSample(
+                        41,
+                        nr5InputDbfs: -43.4,
+                        nr5OutputDbfs: -24.4,
+                        levelerInputRmsDbfs: -40.0,
+                        levelerOutputRmsDbfs: -29.0,
+                        txMonitorRequested: true,
+                        txMonitorAudioRmsDbfs: -8.3),
+                    Nr5LevelerAlignmentWatchSample(
+                        42,
+                        nr5InputDbfs: -42.7,
+                        nr5OutputDbfs: -26.1,
+                        levelerInputRmsDbfs: -41.8,
+                        levelerOutputRmsDbfs: -29.6),
+                    Nr5LevelerAlignmentWatchSample(
+                        43,
+                        nr5InputDbfs: -20.0,
+                        nr5OutputDbfs: -23.0,
+                        levelerInputRmsDbfs: -50.0,
+                        levelerOutputRmsDbfs: -18.0)
+                });
+
+            var reportPath = Path.Combine(bundleDir, "nr5-tx-monitor-exclusion.summary.json");
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, watch.ExitCode);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+            var weakWatch = root.GetProperty("nr5WeakSignalWatch");
+
+            Assert.Equal(1, root.GetProperty("txMonitorSampleCount").GetInt32());
+            Assert.Equal(2, root.GetProperty("nr5TuningReadySampleCount").GetInt32());
+            Assert.False(root.GetProperty("nr5TuningReadyTrace").GetBoolean());
+            Assert.Equal("nr5-tuning-preflight-required", root.GetProperty("nr5TuningTraceStatus").GetString());
+
+            Assert.Equal(2, weakWatch.GetProperty("weakInputSampleCount").GetInt32());
+            Assert.Equal(1, weakWatch.GetProperty("weakFinalAudioDbfs").GetProperty("count").GetInt32());
+            Assert.Equal(-29.6, weakWatch.GetProperty("weakFinalAudioDbfs").GetProperty("max").GetDouble(), precision: 3);
+            Assert.Equal(1, weakWatch.GetProperty("speechQualifiedWeakInputSampleCount").GetInt32());
+            Assert.Equal(-29.6, weakWatch.GetProperty("speechQualifiedWeakFinalAudioDbfs").GetProperty("max").GetDouble(), precision: 3);
+            Assert.Equal(-18.0, weakWatch.GetProperty("strongFinalAudioDbfs").GetProperty("max").GetDouble(), precision: 3);
+            Assert.Equal(-18.0, root.GetProperty("audioRmsDbfs").GetProperty("max").GetDouble(), precision: 3);
         }
         finally
         {
@@ -8770,8 +8916,18 @@ public sealed class DspModernizationValidationToolTests
         double levelerOutputRmsDbfs,
         object[]? frontendTopPeaks = null,
         int rxChainFilterLowHz = 100,
-        int rxChainFilterHighHz = 2600)
+        int rxChainFilterHighHz = 2600,
+        bool txMonitorRequested = false,
+        double? txMonitorAudioRmsDbfs = null)
     {
+        var runtimeStatus = txMonitorRequested ? "audio-tx-monitor" : "ready";
+        var audioStatus = txMonitorRequested ? "tx-monitor" : "ready";
+        var audioSource = txMonitorRequested ? "tx-monitor" : "rx";
+        var audioRmsDbfs = txMonitorAudioRmsDbfs ?? levelerOutputRmsDbfs;
+        double? runtimeLevelerInputRmsDbfs = txMonitorRequested ? null : levelerInputRmsDbfs;
+        double? runtimeLevelerOutputRmsDbfs = txMonitorRequested ? null : levelerOutputRmsDbfs;
+        double? runtimeLevelerAppliedGainDb = txMonitorRequested ? null : Math.Round(levelerOutputRmsDbfs - levelerInputRmsDbfs, 1);
+
         return new
         {
             sampleIndex,
@@ -8784,9 +8940,9 @@ public sealed class DspModernizationValidationToolTests
                 qualityTone = "ready",
                 readinessScore = 92,
                 readyForLiveBenchmark = true,
-                readyForNr5Tuning = true,
-                nr5TuningStatus = "ready-for-nr5-live-tuning",
-                nr5TuningConstraints = Array.Empty<string>(),
+                readyForNr5Tuning = !txMonitorRequested,
+                nr5TuningStatus = txMonitorRequested ? "nr5-tuning-preflight-required" : "ready-for-nr5-live-tuning",
+                nr5TuningConstraints = txMonitorRequested ? new[] { "tx-monitor-audio-active" } : Array.Empty<string>(),
                 frontendTopPeaks = frontendTopPeaks ?? Array.Empty<object>(),
                 rxChainFilterLowHz,
                 rxChainFilterHighHz,
@@ -8798,25 +8954,26 @@ public sealed class DspModernizationValidationToolTests
                 recommendedActions = Array.Empty<string>(),
                 runtimeEvidence = new
                 {
-                    status = "ready",
-                    audioStatus = "ready",
+                    status = runtimeStatus,
+                    audioStatus,
+                    audioSource,
                     rxMetersFresh = true,
                     audioFresh = true,
                     agcGainDb = -42.5,
-                    audioRmsDbfs = levelerOutputRmsDbfs,
-                    audioPeakDbfs = levelerOutputRmsDbfs + 4.0,
+                    audioRmsDbfs,
+                    audioPeakDbfs = audioRmsDbfs + 4.0,
                     adcHeadroomDb = 48.0,
                     monitorBacklogSamples = 0,
-                    txMonitorRequested = false,
+                    txMonitorRequested,
                     squelchEnabled = false,
                     squelchOpen = true,
                     squelchTailActive = false,
-                    rxAudioLevelerInputRmsDbfs = levelerInputRmsDbfs,
-                    rxAudioLevelerOutputRmsDbfs = levelerOutputRmsDbfs,
-                    rxAudioLevelerAppliedGainDb = Math.Round(levelerOutputRmsDbfs - levelerInputRmsDbfs, 1),
-                    rxAudioLevelerBoostSlewLimited = false,
-                    rxAudioLevelerPeakLimited = false,
-                    rxAudioLevelerOutputLimited = false
+                    rxAudioLevelerInputRmsDbfs = runtimeLevelerInputRmsDbfs,
+                    rxAudioLevelerOutputRmsDbfs = runtimeLevelerOutputRmsDbfs,
+                    rxAudioLevelerAppliedGainDb = runtimeLevelerAppliedGainDb,
+                    rxAudioLevelerBoostSlewLimited = txMonitorRequested ? (bool?)null : false,
+                    rxAudioLevelerPeakLimited = txMonitorRequested ? (bool?)null : false,
+                    rxAudioLevelerOutputLimited = txMonitorRequested ? (bool?)null : false
                 },
                 nr5SpnrDiagnostics = new
                 {

@@ -1469,6 +1469,31 @@ function Get-Nr5TuningReadiness {
     }
 }
 
+function Test-RuntimeRxAudio {
+    param($Runtime)
+
+    if ($null -eq $Runtime) {
+        return $false
+    }
+
+    $runtimeStatus = [string](Get-JsonValue $Runtime "status")
+    $audioStatus = [string](Get-JsonValue $Runtime "audioStatus")
+    $audioSource = ([string](Get-JsonValue $Runtime "audioSource")).Trim()
+
+    if (Test-Truthy (Get-JsonValue $Runtime "txMonitorRequested")) {
+        return $false
+    }
+    if ([string]::Equals($runtimeStatus, "audio-tx-monitor", [StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($audioStatus, "tx-monitor", [StringComparison]::OrdinalIgnoreCase)) {
+        return $false
+    }
+    if ([string]::IsNullOrWhiteSpace($audioSource)) {
+        return $true
+    }
+
+    return [string]::Equals($audioSource, "rx", [StringComparison]::OrdinalIgnoreCase)
+}
+
 function Build-Report {
     param(
         [object[]]$SampleRecords,
@@ -2016,12 +2041,16 @@ function Build-Report {
             $nr5MakeupGainDbNumber = Get-NumericValue $nr5MakeupGainDb
             $nr5PeakEvidenceNumber = Get-NumericValue $nr5PeakEvidence
             $runtimeAudioRmsDbfsNumber = Get-NumericValue (Get-JsonValue $runtime "audioRmsDbfs")
+            $runtimeIsRxAudio = Test-RuntimeRxAudio $runtime
             $runtimeLevelerInputRmsDbfsNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerInputRmsDbfs")
             $runtimeLevelerOutputRmsDbfsNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerOutputRmsDbfs")
             $runtimeLevelerAppliedGainDbNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerAppliedGainDb")
             $runtimeLevelerPauseHoldBlocksNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerPauseHoldBlocks")
             $runtimeLevelerNr5SpeechHoldBlocksNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHoldBlocks")
-            $runtimeFinalAudioRmsDbfsNumber = if ($null -ne $runtimeLevelerOutputRmsDbfsNumber) {
+            $runtimeFinalAudioRmsDbfsNumber = if (-not $runtimeIsRxAudio) {
+                $null
+            }
+            elseif ($null -ne $runtimeLevelerOutputRmsDbfsNumber) {
                 $runtimeLevelerOutputRmsDbfsNumber
             }
             else {
@@ -2111,10 +2140,8 @@ function Build-Report {
                 $nr5OutputLiftedLowEvidence = ($null -ne $nr5OutputDbfs -and
                     $nr5OutputDbfs -ge $nr5LowEvidenceOutputThresholdDbfs)
                 $runtimeLiftedLowEvidence = (-not $nr5AudioAlignmentMismatch -and
-                    (($null -ne $runtimeAudioRmsDbfsNumber -and
-                            $runtimeAudioRmsDbfsNumber -ge $nr5LowEvidenceAudioThresholdDbfs) -or
-                        ($null -ne $runtimeLevelerOutputRmsDbfsNumber -and
-                            $runtimeLevelerOutputRmsDbfsNumber -ge $nr5LowEvidenceAudioThresholdDbfs)))
+                    $null -ne $runtimeFinalAudioRmsDbfsNumber -and
+                    $runtimeFinalAudioRmsDbfsNumber -ge $nr5LowEvidenceAudioThresholdDbfs)
                 $nr5LiftedLowEvidence = $nr5OutputLiftedLowEvidence -or $runtimeLiftedLowEvidence
                 if ($nr5AudioAlignmentMismatch) {
                     $nr5LowEvidenceAlignmentMismatchCount++
@@ -2175,6 +2202,7 @@ function Build-Report {
                 }
                 Add-Number $nr5WeakFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
                 $nr5SpeechQualifiedWeakInput = (
+                    $runtimeIsRxAudio -and
                     -not $isLowEvidenceWeakInput -and
                     -not $nr5AudioAlignmentMismatch -and
                     $null -ne $nr5OutputDbfs -and
@@ -2243,10 +2271,8 @@ function Build-Report {
                     $null -ne $nr5OutputDbfs -and $nr5OutputDbfs -le -35.0) {
                     $nr5WeakDropoutCount++
                     $nr5WeakDropoutFinalAudible = (
-                        ($null -ne $runtimeAudioRmsDbfsNumber -and
-                            $runtimeAudioRmsDbfsNumber -ge $nr5WeakDropoutFinalAudibleThresholdDbfs) -or
-                        ($null -ne $runtimeLevelerOutputRmsDbfsNumber -and
-                            $runtimeLevelerOutputRmsDbfsNumber -ge $nr5WeakDropoutFinalAudibleThresholdDbfs))
+                        $null -ne $runtimeFinalAudioRmsDbfsNumber -and
+                        $runtimeFinalAudioRmsDbfsNumber -ge $nr5WeakDropoutFinalAudibleThresholdDbfs)
                     $nr5WeakDropoutNativeLifted = ($nr5OutputDbfs -ge ($nr5InputDbfs + $nr5WeakDropoutNativeLiftThresholdDb))
                     $nr5WeakDropoutBelowInput = ($nr5OutputDbfs -lt ($nr5InputDbfs - $nr5WeakDropoutBelowInputThresholdDb))
                     $nr5WeakDropoutCandidateLoss = (-not $nr5WeakDropoutFinalAudible -and
@@ -2442,11 +2468,14 @@ function Build-Report {
             Add-Number $agcValues $runtimeAgcGainDbNumber
             Add-Number $headroomValues (Get-JsonValue $runtime "adcHeadroomDb")
             $runtimeAudioRmsDbfsNumber = Get-NumericValue (Get-JsonValue $runtime "audioRmsDbfs")
-            Add-Number $rmsValues $runtimeAudioRmsDbfsNumber
-            Add-Number $peakValues (Get-JsonValue $runtime "audioPeakDbfs")
-            $audioIsFloor = ($null -ne $runtimeAudioRmsDbfsNumber -and
+            $runtimeIsRxAudio = Test-RuntimeRxAudio $runtime
+            if ($runtimeIsRxAudio) {
+                Add-Number $rmsValues $runtimeAudioRmsDbfsNumber
+                Add-Number $peakValues (Get-JsonValue $runtime "audioPeakDbfs")
+            }
+            $audioIsFloor = ($runtimeIsRxAudio -and $null -ne $runtimeAudioRmsDbfsNumber -and
                 $runtimeAudioRmsDbfsNumber -le $signalFloorAudioThresholdDbfs)
-            $audioIsActive = ($null -ne $runtimeAudioRmsDbfsNumber -and
+            $audioIsActive = ($runtimeIsRxAudio -and $null -ne $runtimeAudioRmsDbfsNumber -and
                 $runtimeAudioRmsDbfsNumber -ge $signalActiveAudioThresholdDbfs)
             $voiceLikeEvidence = ($null -ne $nr5ConfidenceNumber -and $nr5ConfidenceNumber -ge $signalEvidenceConfidenceThreshold) -or
                 ($null -ne $nr5SignalProbabilityNumber -and $nr5SignalProbabilityNumber -ge $signalEvidenceProbabilityThreshold) -or
@@ -2465,8 +2494,10 @@ function Build-Report {
             }
             if ($voiceLikeEvidence) {
                 $signalVoiceLikeEvidenceCount++
-                Add-Number $voiceLikeAudioRmsValues $runtimeAudioRmsDbfsNumber
-                Add-Number $voiceLikeAgcValues $runtimeAgcGainDbNumber
+                if ($runtimeIsRxAudio) {
+                    Add-Number $voiceLikeAudioRmsValues $runtimeAudioRmsDbfsNumber
+                    Add-Number $voiceLikeAgcValues $runtimeAgcGainDbNumber
+                }
             }
             if ($audioIsFloor -and -not $voiceLikeEvidence) {
                 $signalQuietNoEvidenceCount++
@@ -2478,9 +2509,12 @@ function Build-Report {
             $rxAudioLevelerOutputRmsDbfs = Get-JsonValue $runtime "rxAudioLevelerOutputRmsDbfs"
             $rxAudioLevelerInputPeakDbfs = Get-JsonValue $runtime "rxAudioLevelerInputPeakDbfs"
             $rxAudioLevelerOutputPeakDbfs = Get-JsonValue $runtime "rxAudioLevelerOutputPeakDbfs"
-            $runtimePassbandAudioRmsDbfsNumber = Get-NumericValue $rxAudioLevelerOutputRmsDbfs
-            if ($null -eq $runtimePassbandAudioRmsDbfsNumber) {
-                $runtimePassbandAudioRmsDbfsNumber = $runtimeAudioRmsDbfsNumber
+            $runtimePassbandAudioRmsDbfsNumber = $null
+            if ($runtimeIsRxAudio) {
+                $runtimePassbandAudioRmsDbfsNumber = Get-NumericValue $rxAudioLevelerOutputRmsDbfs
+                if ($null -eq $runtimePassbandAudioRmsDbfsNumber) {
+                    $runtimePassbandAudioRmsDbfsNumber = $runtimeAudioRmsDbfsNumber
+                }
             }
             if ($null -ne $runtimePassbandAudioRmsDbfsNumber) {
                 $passbandAudioRecord = [ordered]@{
@@ -3075,6 +3109,10 @@ function Build-Report {
             $passbandAudioStatus = "passband-low-audio"
         }
     }
+    $passbandEvidenceMissing = ($nr5SampleCount -gt 0 -and
+        $signalActiveAudioCount -gt 0 -and
+        $frontendTopPeakSampleCount -gt 0 -and
+        $passbandAudioRmsValues.Count -eq 0)
     $rxAudioLevelerConstrainedCount = @($rxAudioLevelerConstrainedSamples.ToArray()).Count
     $rxAudioLevelerConstrainedPct = $null
     $rxAudioLevelerBoostSlewLimitedPct = $null
@@ -3493,6 +3531,9 @@ function Build-Report {
     elseif ($rxAudioLevelerHeadroomNeedsReview) {
         $trendStatus = "rx-leveler-headroom-watch"
     }
+    elseif ($passbandEvidenceMissing) {
+        $trendStatus = "passband-evidence-missing"
+    }
     elseif ($readyCount -eq $okCount) {
         $trendStatus = "ready-trace"
     }
@@ -3765,6 +3806,7 @@ function Build-Report {
         }
         passbandAudioWatch = [ordered]@{
             status = $passbandAudioStatus
+            passbandEvidenceMissing = $passbandEvidenceMissing
             nearPassbandThresholdHz = [int]$frontendNearPassbandThresholdHz
             filterPassbandEdgeToleranceHz = [int]$frontendFilterPassbandEdgeToleranceHz
             filterLowHz = $rxChainFilterLowHz
