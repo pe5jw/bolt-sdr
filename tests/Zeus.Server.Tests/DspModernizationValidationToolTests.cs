@@ -8809,6 +8809,131 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task G2RxPeakHuntReconnectsBeforeRestoreWhenStateIsDisconnected()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell G2 peak-hunt restore smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"zeus-g2-rx-peak-hunt-reconnect-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var reportPath = Path.Combine(tempRoot, "g2-rx-peak-hunt-report.json");
+            var watcherPath = Path.Combine(tempRoot, "fake-watch-dsp-live-diagnostics.ps1");
+            await WriteReadyG2PeakHuntWatcherAsync(watcherPath);
+
+            using var server = JsonRouteServer.Start(new Dictionary<string, string>
+            {
+                ["/api/radio/diagnostics"] = JsonSerializer.Serialize(new
+                {
+                    connectionStatus = "Connected",
+                    endpoint = "192.168.1.25:1024",
+                    effectiveBoard = "OrionMkII",
+                    orionMkIIVariant = "G2",
+                    vfoHz = 7_335_000L,
+                    mode = "LSB",
+                    sampleRate = 384_000
+                }, CamelCaseJson),
+                ["/api/state"] = JsonSerializer.Serialize(new
+                {
+                    status = "Disconnected",
+                    vfoHz = 7_335_000L,
+                    radioLoHz = 7_335_000L,
+                    mode = "LSB"
+                }, CamelCaseJson),
+                ["/api/radio/diagnostics/dsp-scene"] = JsonSerializer.Serialize(new
+                {
+                    status = "fresh",
+                    fresh = true,
+                    signalProfile = "quiet",
+                    maxSnrDb = 0.0,
+                    coherentMaxSnrDb = 0.0,
+                    topPeaks = Array.Empty<object>()
+                }, CamelCaseJson),
+                ["/api/dsp/live-diagnostics"] = JsonSerializer.Serialize(new
+                {
+                    status = "ready",
+                    readyForLiveBenchmark = true,
+                    wdspActive = true,
+                    wdspNativeLoadable = true,
+                    requestedNrMode = "Nr5",
+                    effectiveNrMode = "Nr5",
+                    readyForNr5Tuning = true,
+                    frontendSceneFresh = true
+                }, CamelCaseJson),
+                ["/api/connect/p2"] = "{}",
+                ["/api/vfo"] = "{}",
+                ["/api/radio/lo"] = "{}",
+                ["/api/mode"] = "{}"
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "run-dsp-g2-rx-peak-hunt.ps1"),
+                "-BaseUrl", server.BaseUrl,
+                "-AllowRetune",
+                "-SkipCurrentVfo",
+                "-StopOnReady",
+                "-SamplesPerWindow", "1",
+                "-IntervalMs", "1",
+                "-WindowsPerPeak", "1",
+                "-PassCount", "1",
+                "-SettleMs", "0",
+                "-CandidateFrequencyHz", "7130000",
+                "-MaxPeaks", "0",
+                "-WatchScriptPath", watcherPath,
+                "-OutputRoot", tempRoot,
+                "-ReportPath", reportPath,
+                "-JsonOnly",
+                "-ContinueOnError");
+
+            var failureDetail = run.CombinedOutput;
+            if (File.Exists(reportPath))
+            {
+                failureDetail = $"{failureDetail}{Environment.NewLine}{await File.ReadAllTextAsync(reportPath)}";
+            }
+
+            Assert.True(run.ExitCode == 0, failureDetail);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+            Assert.True(root.GetProperty("ok").GetBoolean());
+            Assert.Equal("mixed-ready", root.GetProperty("evidenceAcceptanceStatus").GetString());
+            Assert.Equal(7_335_000L, root.GetProperty("originalVfoHz").GetInt64());
+            Assert.Equal(7_335_000L, root.GetProperty("restoredVfoHz").GetInt64());
+            Assert.Equal("LSB", root.GetProperty("originalMode").GetString());
+            Assert.Equal("LSB", root.GetProperty("restoredMode").GetString());
+            Assert.Equal("192.168.1.25:1024", root.GetProperty("originalEndpoint").GetString());
+
+            var safety = root.GetProperty("safety");
+            Assert.True(safety.GetProperty("restoreReconnectAttempted").GetBoolean());
+            Assert.True(safety.GetProperty("restoreReconnectSucceeded").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, safety.GetProperty("restoreReconnectError").ValueKind);
+            Assert.True(safety.GetProperty("originalVfoRestored").GetBoolean());
+            Assert.True(safety.GetProperty("originalRadioLoRestored").GetBoolean());
+            Assert.True(safety.GetProperty("originalModeRestored").GetBoolean());
+
+            var connectPost = Assert.Single(server.Requests, request => request.Path == "/api/connect/p2");
+            using var connectDoc = JsonDocument.Parse(connectPost.Body);
+            Assert.Equal("192.168.1.25:1024", connectDoc.RootElement.GetProperty("endpoint").GetString());
+            Assert.Equal(384_000, connectDoc.RootElement.GetProperty("sampleRate").GetInt32());
+            Assert.Equal(10, connectDoc.RootElement.GetProperty("boardId").GetInt32());
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task G2RxPeakHuntCompactsLongArtifactPaths()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell G2 peak-hunt path compaction smoke runs on Windows.");

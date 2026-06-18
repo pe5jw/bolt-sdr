@@ -530,12 +530,39 @@ function Invoke-JsonPost {
     return $response.Content | ConvertFrom-Json
 }
 
+function Test-RadioStateDisconnected {
+    param($State)
+
+    $status = [string](Get-JsonValue $State "status")
+    return [string]::Equals($status, "Disconnected", [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Invoke-P2Reconnect {
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)][string]$Endpoint,
+        [int]$SampleRate = 192000,
+        [int]$BoardId = 10,
+        [int]$RequestTimeoutSec = 5,
+        [switch]$SkipCertificate
+    )
+
+    Invoke-JsonPost `
+        -Url "$BaseUrl/api/connect/p2" `
+        -Body @{ endpoint = $Endpoint; sampleRate = $SampleRate; boardId = $BoardId } `
+        -RequestTimeoutSec $RequestTimeoutSec `
+        -SkipCertificate:$SkipCertificate | Out-Null
+}
+
 function Restore-OriginalTuning {
     param(
         [Parameter(Mandatory = $true)][string]$BaseUrl,
         [Parameter(Mandatory = $true)][long]$OriginalVfo,
         $OriginalRadioLo = $null,
         [string]$OriginalMode = "",
+        [string]$OriginalEndpoint = "",
+        [int]$OriginalConnectSampleRate = 192000,
+        [int]$OriginalBoardId = 10,
         [int]$RequestTimeoutSec = 5,
         [int]$SettleMs = 1000,
         [int]$MaxAttempts = 2,
@@ -544,12 +571,38 @@ function Restore-OriginalTuning {
 
     $lastState = $null
     $lastError = $null
+    $reconnectAttempted = $false
+    $reconnectSucceeded = $false
+    $reconnectError = $null
     $loRequired = ($null -ne $OriginalRadioLo -and [long]$OriginalRadioLo -gt 0)
     $modeRequired = -not [string]::IsNullOrWhiteSpace($OriginalMode)
     $sleepMs = [Math]::Max(0, $SettleMs)
+    $canReconnect = -not [string]::IsNullOrWhiteSpace($OriginalEndpoint)
 
     for ($attempt = 1; $attempt -le [Math]::Max(1, $MaxAttempts); $attempt++) {
         try {
+            if ($canReconnect) {
+                try {
+                    $preRestoreState = Invoke-JsonGet -Url "$BaseUrl/api/state" -RequestTimeoutSec $RequestTimeoutSec -SkipCertificate:$SkipCertificate
+                    if (Test-RadioStateDisconnected $preRestoreState) {
+                        $reconnectAttempted = $true
+                        Invoke-P2Reconnect `
+                            -BaseUrl $BaseUrl `
+                            -Endpoint $OriginalEndpoint `
+                            -SampleRate $OriginalConnectSampleRate `
+                            -BoardId $OriginalBoardId `
+                            -RequestTimeoutSec $RequestTimeoutSec `
+                            -SkipCertificate:$SkipCertificate
+                        $reconnectSucceeded = $true
+                        Start-Sleep -Milliseconds $sleepMs
+                    }
+                }
+                catch {
+                    $reconnectError = $_.Exception.Message
+                    $lastError = $reconnectError
+                }
+            }
+
             if ($loRequired) {
                 Invoke-JsonPost -Url "$BaseUrl/api/radio/lo" -Body @{ hz = [long]$OriginalRadioLo } -RequestTimeoutSec $RequestTimeoutSec -SkipCertificate:$SkipCertificate | Out-Null
             }
@@ -573,6 +626,9 @@ function Restore-OriginalTuning {
                     attempts = $attempt
                     state = $lastState
                     error = $null
+                    reconnectAttempted = $reconnectAttempted
+                    reconnectSucceeded = $reconnectSucceeded
+                    reconnectError = $reconnectError
                 }
             }
         }
@@ -586,6 +642,9 @@ function Restore-OriginalTuning {
         attempts = [Math]::Max(1, $MaxAttempts)
         state = $lastState
         error = $lastError
+        reconnectAttempted = $reconnectAttempted
+        reconnectSucceeded = $reconnectSucceeded
+        reconnectError = $reconnectError
     }
 }
 
@@ -1910,6 +1969,11 @@ try {
     }
     $originalMode = [string](Get-JsonValue $hardware "mode")
     $originalRadioLo = Get-NullableLongValue (Get-JsonValue $initialState "radioLoHz")
+    $originalEndpoint = [string](Get-JsonValue $hardware "endpoint")
+    $originalConnectSampleRate = Get-IntValue (Get-JsonValue $hardware "sampleRate")
+    if ($originalConnectSampleRate -le 0) {
+        $originalConnectSampleRate = 192000
+    }
     if (-not [string]::IsNullOrWhiteSpace($targetMode) -and
         -not [string]::Equals($targetMode, $originalMode, [StringComparison]::OrdinalIgnoreCase)) {
         Invoke-JsonPost -Url "$base/api/mode" -Body @{ mode = $targetMode; receiver = 0 } -RequestTimeoutSec $TimeoutSec -SkipCertificate:$SkipCertificateCheck | Out-Null
@@ -2135,6 +2199,9 @@ $restoredVfo = $null
 $restoredRadioLo = $null
 $restoredMode = $null
 $restoreError = $null
+$restoreReconnectAttempted = $false
+$restoreReconnectSucceeded = $false
+$restoreReconnectError = $null
 $stoppedEarly = $false
 $completedPassCount = 0
 $plannedRunCount = 0
@@ -2154,6 +2221,8 @@ try {
                     -OriginalVfo $originalVfo `
                     -OriginalRadioLo $originalRadioLo `
                     -OriginalMode $originalMode `
+                    -OriginalEndpoint $originalEndpoint `
+                    -OriginalConnectSampleRate $originalConnectSampleRate `
                     -RequestTimeoutSec $TimeoutSec `
                     -SettleMs ([Math]::Min(1000, [Math]::Max(0, $SettleMs))) `
                     -MaxAttempts 2 `
@@ -2562,12 +2631,15 @@ catch {
     $scanError = $_.Exception.Message
 }
 finally {
+    $restoreResult = $null
     try {
         $restoreResult = Restore-OriginalTuning `
             -BaseUrl $base `
             -OriginalVfo $originalVfo `
             -OriginalRadioLo $originalRadioLo `
             -OriginalMode $originalMode `
+            -OriginalEndpoint $originalEndpoint `
+            -OriginalConnectSampleRate $originalConnectSampleRate `
             -RequestTimeoutSec $TimeoutSec `
             -SettleMs ([Math]::Min(1000, [Math]::Max(0, $SettleMs))) `
             -MaxAttempts 3 `
@@ -2576,12 +2648,20 @@ finally {
         $restoredVfo = Get-NullableLongValue (Get-JsonValue $afterRestore "vfoHz")
         $restoredRadioLo = Get-NullableLongValue (Get-JsonValue $afterRestore "radioLoHz")
         $restoredMode = [string](Get-JsonValue $afterRestore "mode")
+        $restoreReconnectAttempted = Test-Truthy $restoreResult.reconnectAttempted
+        $restoreReconnectSucceeded = Test-Truthy $restoreResult.reconnectSucceeded
+        $restoreReconnectError = [string]$restoreResult.reconnectError
         if (-not (Test-Truthy $restoreResult.ok)) {
             throw "state did not return to original VFO/LO after restore attempts"
         }
     }
     catch {
         $restoreError = $_.Exception.Message
+        if ($null -ne $restoreResult) {
+            $restoreReconnectAttempted = Test-Truthy $restoreResult.reconnectAttempted
+            $restoreReconnectSucceeded = Test-Truthy $restoreResult.reconnectSucceeded
+            $restoreReconnectError = [string]$restoreResult.reconnectError
+        }
     }
 }
 
@@ -2870,6 +2950,13 @@ $reportObject = [ordered]@{
     peakMergeHz = $PeakMergeHz
     minPeakSnrDb = $MinPeakSnrDb
     settleMs = $SettleMs
+    originalVfoHz = $originalVfo
+    restoredVfoHz = $restoredVfo
+    originalRadioLoHz = $originalRadioLo
+    restoredRadioLoHz = $restoredRadioLo
+    originalMode = $originalMode
+    restoredMode = $restoredMode
+    originalEndpoint = $originalEndpoint
     safety = [ordered]@{
         rxOnly = $true
         txEndpointsTouched = $false
@@ -2882,6 +2969,9 @@ $reportObject = [ordered]@{
         originalRadioLoRestored = ($null -ne $originalRadioLo -and $originalRadioLo -gt 0 -and $null -ne $restoredRadioLo -and [long]$restoredRadioLo -eq [long]$originalRadioLo)
         originalModeRestoreAttempted = -not [string]::IsNullOrWhiteSpace($originalMode)
         originalModeRestored = (-not [string]::IsNullOrWhiteSpace($originalMode) -and [string]::Equals([string]$restoredMode, [string]$originalMode, [StringComparison]::OrdinalIgnoreCase))
+        restoreReconnectAttempted = $restoreReconnectAttempted
+        restoreReconnectSucceeded = $restoreReconnectSucceeded
+        restoreReconnectError = if ([string]::IsNullOrWhiteSpace($restoreReconnectError)) { $null } else { $restoreReconnectError }
         restoreError = $restoreError
     }
     hardware = [ordered]@{
