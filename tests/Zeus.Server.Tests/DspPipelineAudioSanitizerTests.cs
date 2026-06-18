@@ -4514,7 +4514,7 @@ public sealed class DspPipelineAudioSanitizerTests
     }
 
     [Fact]
-    public void ApplyRxAudioLeveler_RmNoiseGateIsDefaultOff()
+    public void ApplyRxAudioLeveler_RmNoiseGateIsDefaultOn()
     {
         string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
         string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
@@ -4527,11 +4527,56 @@ public sealed class DspPipelineAudioSanitizerTests
 
             DspPipelineService.ApplyRxAudioLeveler(block, ref state, StableNoSignalRmNoiseDiagnostics());
 
-            Assert.False(state.Nr5RmNoiseGate);
-            Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
+            Assert.True(state.Nr5RmNoiseGate);
+            Assert.InRange(state.Nr5RmNoiseSuppressionDb, 12.0, 80.0);
             Assert.True(state.Nr5NoSignalNoiseCap);
             Assert.True(state.Nr5NoProofNoiseCap);
-            Assert.True(state.OutputRmsDbfs > -50.0);
+            Assert.True(state.DesiredGainDb <= -14.0);
+            Assert.True(state.OutputRmsDbfs <= -50.0);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
+            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
+        }
+    }
+
+    [Fact]
+    public void Nr5RmNoiseGatePolicyReportsDefaultOnSource()
+    {
+        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
+        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
+        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", null);
+        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
+        try
+        {
+            var policy = DspPipelineService.GetNr5RmNoiseGatePolicy();
+
+            Assert.True(policy.Enabled);
+            Assert.Equal("default", policy.Source);
+            Assert.Equal("default-on", policy.Reason);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
+            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
+        }
+    }
+
+    [Fact]
+    public void Nr5RmNoiseGatePolicyReportsExplicitOffSource()
+    {
+        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
+        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
+        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", "off");
+        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", "1");
+        try
+        {
+            var policy = DspPipelineService.GetNr5RmNoiseGatePolicy();
+
+            Assert.False(policy.Enabled);
+            Assert.Equal("ZEUS_NR5_RMNOISE_GATE", policy.Source);
+            Assert.Equal("explicit-off", policy.Reason);
         }
         finally
         {

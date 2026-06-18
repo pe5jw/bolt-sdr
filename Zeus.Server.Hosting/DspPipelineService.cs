@@ -157,6 +157,11 @@ public class DspPipelineService : BackgroundService,
         public bool OutputLimited;
     }
 
+    internal readonly record struct Nr5RmNoiseGatePolicy(
+        bool Enabled,
+        string Source,
+        string Reason);
+
     private RxAudioLevelerState _rxAudioLeveler;
 
     internal sealed class AdaptiveSquelchState
@@ -316,17 +321,43 @@ public class DspPipelineService : BackgroundService,
     private static double ClampUnit(double value) =>
         double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
 
-    private static bool IsNr5RmNoiseGateEnabled()
+    internal static Nr5RmNoiseGatePolicy GetNr5RmNoiseGatePolicy()
     {
-        string? value = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE")
-            ?? Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        if (string.IsNullOrWhiteSpace(value))
-            return false;
-        return !(string.Equals(value, "0", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(value, "false", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(value, "off", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(value, "no", StringComparison.OrdinalIgnoreCase));
+        const string primary = "ZEUS_NR5_RMNOISE_GATE";
+        const string legacy = "ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE";
+        string? primaryValue = Environment.GetEnvironmentVariable(primary);
+        if (!string.IsNullOrWhiteSpace(primaryValue))
+        {
+            bool enabled = !IsExplicitFalseSwitch(primaryValue);
+            return new Nr5RmNoiseGatePolicy(
+                enabled,
+                primary,
+                enabled ? "explicit-on" : "explicit-off");
+        }
+
+        string? legacyValue = Environment.GetEnvironmentVariable(legacy);
+        if (!string.IsNullOrWhiteSpace(legacyValue))
+        {
+            bool enabled = !IsExplicitFalseSwitch(legacyValue);
+            return new Nr5RmNoiseGatePolicy(
+                enabled,
+                legacy,
+                enabled ? "legacy-explicit-on" : "legacy-explicit-off");
+        }
+
+        return new Nr5RmNoiseGatePolicy(
+            Enabled: true,
+            Source: "default",
+            Reason: "default-on");
     }
+
+    private static bool IsNr5RmNoiseGateEnabled() => GetNr5RmNoiseGatePolicy().Enabled;
+
+    private static bool IsExplicitFalseSwitch(string value) =>
+        string.Equals(value, "0", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "false", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "off", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "no", StringComparison.OrdinalIgnoreCase);
 
     private static double UpdateNr5NoiseProfilePrior(double current, double observed, bool speechLike)
     {
@@ -5962,6 +5993,7 @@ public class DspPipelineService : BackgroundService,
             recommendation = "RX audio frames are fresh; use RMS/peak dBFS with RXA meters, squelch state, and display SNR to tune weak-signal fidelity.";
         }
 
+        var nr5RmNoisePolicy = GetNr5RmNoiseGatePolicy();
         return new AudioPathDiagnosticsDto(
             SchemaVersion: 1,
             Status: status,
@@ -6002,7 +6034,9 @@ public class DspPipelineService : BackgroundService,
             RxAudioLevelerNr5NoSignalNoiseCap: levelerValid ? levelerNr5NoSignalNoiseCap : null,
             RxAudioLevelerNr5FarPeakNoiseCap: levelerValid ? levelerNr5FarPeakNoiseCap : null,
             RxAudioLevelerNr5NoProofNoiseCap: levelerValid ? levelerNr5NoProofNoiseCap : null,
-            RxAudioLevelerNr5RmNoiseGateEnabled: levelerValid ? IsNr5RmNoiseGateEnabled() : null,
+            RxAudioLevelerNr5RmNoiseGateEnabled: levelerValid ? nr5RmNoisePolicy.Enabled : null,
+            RxAudioLevelerNr5RmNoiseGatePolicySource: levelerValid ? nr5RmNoisePolicy.Source : null,
+            RxAudioLevelerNr5RmNoiseGatePolicyReason: levelerValid ? nr5RmNoisePolicy.Reason : null,
             RxAudioLevelerNr5RmNoiseGate: levelerValid ? levelerNr5RmNoiseGate : null,
             RxAudioLevelerNr5RmNoiseGateHoldBlocks: levelerValid ? Math.Max(0, levelerNr5RmNoiseGateHoldBlocks) : null,
             RxAudioLevelerNr5RmNoiseSuppressionDb: RoundLevelerDb(levelerValid, levelerNr5RmNoiseSuppressionDb),
@@ -9204,6 +9238,8 @@ internal sealed record AudioPathDiagnosticsDto(
     bool? RxAudioLevelerNr5FarPeakNoiseCap,
     bool? RxAudioLevelerNr5NoProofNoiseCap,
     bool? RxAudioLevelerNr5RmNoiseGateEnabled,
+    string? RxAudioLevelerNr5RmNoiseGatePolicySource,
+    string? RxAudioLevelerNr5RmNoiseGatePolicyReason,
     bool? RxAudioLevelerNr5RmNoiseGate,
     int? RxAudioLevelerNr5RmNoiseGateHoldBlocks,
     double? RxAudioLevelerNr5RmNoiseSuppressionDb,
