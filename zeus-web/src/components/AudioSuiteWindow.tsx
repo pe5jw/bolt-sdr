@@ -935,8 +935,13 @@ export function AudioSuiteWindow({
   const previewEnabled = useAudioSuiteStore((s) => s.previewEnabled);
   const setPreviewEnabled = useAudioSuiteStore((s) => s.setPreviewEnabled);
   const loadPreviewState = useAudioSuiteStore((s) => s.loadPreviewState);
+  const rxMasterBypassed = useAudioSuiteStore((s) => s.rxMasterBypassed);
+  const setRxMasterBypassed = useAudioSuiteStore((s) => s.setRxMasterBypassed);
   const loadMasterBypassFromServer = useAudioSuiteStore(
     (s) => s.loadMasterBypassFromServer,
+  );
+  const loadRxMasterBypassFromServer = useAudioSuiteStore(
+    (s) => s.loadRxMasterBypassFromServer,
   );
   const setPosition = useCallback(
     (nextX: number, nextY: number) => setWindowPosition(route, nextX, nextY),
@@ -1008,6 +1013,7 @@ export function AudioSuiteWindow({
     if (isRxSuite) {
       loadRxChainOrderFromServer();
       loadRxProcessingModeFromServer();
+      loadRxMasterBypassFromServer();
       return;
     }
     loadChainOrderFromServer();
@@ -1025,6 +1031,7 @@ export function AudioSuiteWindow({
     loadRxProcessingModeFromServer,
     loadPreviewState,
     loadMasterBypassFromServer,
+    loadRxMasterBypassFromServer,
     loadProfiles,
   ]);
 
@@ -1544,6 +1551,36 @@ export function AudioSuiteWindow({
           </button>
         )}
 
+        {isRxSuite && (
+          <button
+            type="button"
+            data-no-drag
+            onClick={() => setRxMasterBypassed(!rxMasterBypassed)}
+            aria-pressed={rxMasterBypassed}
+            title={
+              rxMasterBypassed
+                ? 'RX Audio Suite bypass ENGAGED - receive VST inserts are inert. Click to engage the RX chain.'
+                : 'RX Audio Suite ACTIVE - receive VST inserts are processing audio. Click to bypass the RX chain.'
+            }
+            style={{
+              marginLeft: 'auto',
+              padding: '4px 12px',
+              borderRadius: 4,
+              border: '1px solid ' + (rxMasterBypassed ? 'var(--tx)' : 'var(--accent)'),
+              background: rxMasterBypassed ? 'var(--tx)' : 'var(--bg-2)',
+              color: rxMasterBypassed ? 'var(--fg-0)' : 'var(--fg-2)',
+              cursor: 'pointer',
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: 1,
+              textTransform: 'uppercase',
+              fontFamily: 'inherit',
+            }}
+          >
+            Bypass {rxMasterBypassed ? 'ON' : 'OFF'}
+          </button>
+        )}
+
         {!embedded && (
           <button
             type="button"
@@ -1552,7 +1589,6 @@ export function AudioSuiteWindow({
             aria-label="Close Audio Suite window"
             title="Close"
             style={{
-              marginLeft: isRxSuite ? 'auto' : undefined,
               padding: '2px 10px',
               borderRadius: 4,
               border: '1px solid var(--line)',

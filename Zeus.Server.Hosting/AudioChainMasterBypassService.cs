@@ -48,12 +48,14 @@ public sealed class AudioChainMasterBypassService : IHostedService
     private readonly ILogger<AudioChainMasterBypassService> _log;
     private readonly object _sync = new();
     private bool _bypassed;
+    private bool _rxBypassed;
 
     /// <summary>
     /// Fires AFTER the new state is persisted and written through to
     /// the chain. Fired off-lock.
     /// </summary>
     public event Action<bool>? MasterBypassedChanged;
+    public event Action<bool>? RxMasterBypassedChanged;
 
     public AudioChainMasterBypassService(
         AudioChainSettingsStore store,
@@ -73,9 +75,16 @@ public sealed class AudioChainMasterBypassService : IHostedService
         // (bypassed)" so a brand-new operator's chain is inert.
         var persisted = _store.GetMasterBypassed();
         var initial = persisted ?? true;
+        var rxPersisted = _store.GetRxMasterBypassed();
+        var rxInitial = rxPersisted ?? true;
 
-        lock (_sync) _bypassed = initial;
+        lock (_sync)
+        {
+            _bypassed = initial;
+            _rxBypassed = rxInitial;
+        }
         _bridge.SetMasterBypassed(initial);
+        _bridge.SetRxMasterBypassed(rxInitial);
 
         if (persisted is null)
         {
@@ -97,6 +106,12 @@ public sealed class AudioChainMasterBypassService : IHostedService
     public bool IsBypassed
     {
         get { lock (_sync) return _bypassed; }
+    }
+
+    /// <summary>Current RX Audio Suite master-bypass state.</summary>
+    public bool IsRxBypassed
+    {
+        get { lock (_sync) return _rxBypassed; }
     }
 
     /// <summary>
@@ -140,5 +155,33 @@ public sealed class AudioChainMasterBypassService : IHostedService
 
         MasterBypassedChanged?.Invoke(bypassed);
         _log.LogInformation("Audio suite master bypass set to {Bypassed}", bypassed);
+    }
+
+    /// <summary>
+    /// Set RX master bypass. This gates receive-side inserts independently from
+    /// TX so an RX denoiser can be auditioned without changing transmit audio.
+    /// </summary>
+    public void SetRxMasterBypassed(bool bypassed)
+    {
+        bool changed;
+        lock (_sync)
+        {
+            changed = _rxBypassed != bypassed;
+            if (changed) _rxBypassed = bypassed;
+        }
+        if (!changed) return;
+
+        try
+        {
+            _store.SetRxMasterBypassed(bypassed);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "AudioChainMasterBypassService RX persist threw");
+        }
+
+        _bridge.SetRxMasterBypassed(bypassed);
+        RxMasterBypassedChanged?.Invoke(bypassed);
+        _log.LogInformation("RX audio suite master bypass set to {Bypassed}", bypassed);
     }
 }

@@ -5,7 +5,7 @@ namespace Zeus.Server;
 
 /// <summary>
 /// Persists chain-level Audio Suite settings across server restarts.
-/// Currently one field: the operator's master-bypass state. Single-row
+/// Currently two fields: the operator's TX and RX master-bypass states. Single-row
 /// collection ("audio_chain_settings") sharing zeus-prefs.db with the
 /// other preference stores. Mirrors the ChainOrderStore pattern.
 ///
@@ -81,12 +81,49 @@ public sealed class AudioChainSettingsStore : IDisposable
         }
     }
 
+    /// <summary>
+    /// Returns the persisted RX Audio Suite master-bypass state, or null on
+    /// first run / older databases that only have the TX field.
+    /// </summary>
+    public bool? GetRxMasterBypassed()
+    {
+        lock (_sync)
+        {
+            var entry = _state.FindAll().FirstOrDefault();
+            return entry?.RxMasterBypassed;
+        }
+    }
+
+    public void SetRxMasterBypassed(bool bypassed)
+    {
+        lock (_sync)
+        {
+            var existing = _state.FindAll().FirstOrDefault();
+            var nowUtc = DateTime.UtcNow;
+            if (existing is null)
+            {
+                _state.Insert(new AudioChainSettingsEntry
+                {
+                    RxMasterBypassed = bypassed,
+                    UpdatedUtc = nowUtc,
+                });
+            }
+            else
+            {
+                existing.RxMasterBypassed = bypassed;
+                existing.UpdatedUtc = nowUtc;
+                _state.Update(existing);
+            }
+        }
+    }
+
     public void Dispose() => _db.Dispose();
 }
 
 public sealed class AudioChainSettingsEntry
 {
     public int Id { get; set; }
-    public bool MasterBypassed { get; set; }
+    public bool? MasterBypassed { get; set; }
+    public bool? RxMasterBypassed { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

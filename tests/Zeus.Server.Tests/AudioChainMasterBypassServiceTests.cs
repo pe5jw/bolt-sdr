@@ -46,11 +46,14 @@ public class AudioChainMasterBypassServiceTests : IDisposable
             await svc.StartAsync(CancellationToken.None);
 
             Assert.True(svc.IsBypassed);
+            Assert.True(svc.IsRxBypassed);
             Assert.True(bridge.IsMasterBypassed);
+            Assert.True(bridge.IsRxMasterBypassed);
             // Persistence semantics: first run should NOT have written a
             // row — only an explicit operator mutation writes to disk.
             // (Matches ChainOrderStore's seed-but-don't-persist pattern.)
             Assert.Null(store.GetMasterBypassed());
+            Assert.Null(store.GetRxMasterBypassed());
         }
         finally
         {
@@ -100,6 +103,53 @@ public class AudioChainMasterBypassServiceTests : IDisposable
         finally
         {
             store.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task SetRxMasterBypassed_PersistsAndWritesThroughWithoutTouchingTx()
+    {
+        var (svc, bridge, store) = MakeService();
+        try
+        {
+            await svc.StartAsync(CancellationToken.None);
+
+            svc.SetRxMasterBypassed(false);
+
+            Assert.True(svc.IsBypassed);
+            Assert.True(bridge.IsMasterBypassed);
+            Assert.False(svc.IsRxBypassed);
+            Assert.False(bridge.IsRxMasterBypassed);
+            Assert.Null(store.GetMasterBypassed());
+            Assert.False(store.GetRxMasterBypassed());
+        }
+        finally
+        {
+            store.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PersistedRxFalse_RestoresRxChainHotOnRestart()
+    {
+        using (var store = new AudioChainSettingsStore(
+            NullLogger<AudioChainSettingsStore>.Instance, _dbPath))
+        {
+            store.SetRxMasterBypassed(false);
+        }
+
+        var (svc, bridge, store2) = MakeService();
+        try
+        {
+            await svc.StartAsync(CancellationToken.None);
+            Assert.True(svc.IsBypassed);
+            Assert.True(bridge.IsMasterBypassed);
+            Assert.False(svc.IsRxBypassed);
+            Assert.False(bridge.IsRxMasterBypassed);
+        }
+        finally
+        {
+            store2.Dispose();
         }
     }
 
@@ -154,6 +204,31 @@ public class AudioChainMasterBypassServiceTests : IDisposable
             Assert.True(bridge.Chain.IsSlotBypassed(0));
             Assert.False(bridge.Chain.IsSlotBypassed(1));
             Assert.True(bridge.Chain.IsSlotBypassed(2));
+        }
+        finally
+        {
+            store.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task RxMasterBypassedChanged_Fires_OnChange()
+    {
+        var (svc, _, store) = MakeService();
+        try
+        {
+            await svc.StartAsync(CancellationToken.None);
+            bool? lastSeen = null;
+            int fires = 0;
+            svc.RxMasterBypassedChanged += b => { lastSeen = b; fires++; };
+
+            svc.SetRxMasterBypassed(false);
+            Assert.Equal(1, fires);
+            Assert.False(lastSeen);
+
+            svc.SetRxMasterBypassed(true);
+            Assert.Equal(2, fires);
+            Assert.True(lastSeen);
         }
         finally
         {

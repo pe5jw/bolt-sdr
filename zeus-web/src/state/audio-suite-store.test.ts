@@ -356,6 +356,34 @@ describe('audio-suite-store profile selection', () => {
     expect(useAudioSuiteStore.getState().rxVstDegradedBlocks).toBe(3);
   });
 
+  it('loads and toggles RX master bypass through RX endpoints', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/rx-audio-suite/master-bypass' && !init) {
+        return response({ bypassed: true });
+      }
+      if (url === '/api/rx-audio-suite/master-bypass') {
+        return response({ bypassed: false });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { useAudioSuiteStore } = await import('./audio-suite-store');
+    await useAudioSuiteStore.getState().loadRxMasterBypassFromServer();
+
+    expect(useAudioSuiteStore.getState().rxMasterBypassed).toBe(true);
+
+    await useAudioSuiteStore.getState().setRxMasterBypassed(false);
+
+    expect(useAudioSuiteStore.getState().rxMasterBypassed).toBe(false);
+    expect(fetchMock).toHaveBeenCalledWith('/api/rx-audio-suite/master-bypass', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bypassed: false }),
+    });
+  });
+
   it('refreshes RX VST diagnostics after RX chain membership changes', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
       const url = String(input);

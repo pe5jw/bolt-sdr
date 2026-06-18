@@ -243,6 +243,16 @@ public static class ZeusEndpoints
             return Results.BadRequest(new { error = err });
         });
 
+        app.MapGet("/api/rx-audio-suite/master-bypass", (AudioChainMasterBypassService svc) =>
+        {
+            return Results.Ok(new { bypassed = svc.IsRxBypassed });
+        });
+        app.MapPut("/api/rx-audio-suite/master-bypass", (MasterBypassSetRequest body, AudioChainMasterBypassService svc) =>
+        {
+            svc.SetRxMasterBypassed(body.Bypassed);
+            return Results.Ok(new { bypassed = svc.IsRxBypassed });
+        });
+
         app.MapGet("/api/rx-audio-suite/processing-mode", (RxVstEngineService rxVst) =>
         {
             return Results.Ok(new

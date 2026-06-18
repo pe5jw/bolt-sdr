@@ -32,6 +32,7 @@ public class AudioChainSettingsStoreTests : IDisposable
     {
         using var store = NewStore();
         Assert.Null(store.GetMasterBypassed());
+        Assert.Null(store.GetRxMasterBypassed());
     }
 
     [Fact]
@@ -77,5 +78,31 @@ public class AudioChainSettingsStoreTests : IDisposable
         var got = second.GetMasterBypassed();
         Assert.NotNull(got);
         Assert.False(got);
+    }
+
+    [Fact]
+    public void RxSetThenGet_RoundTripsFalseWithoutTouchingTx()
+    {
+        using var store = NewStore();
+        store.SetRxMasterBypassed(false);
+
+        Assert.Null(store.GetMasterBypassed());
+        var got = store.GetRxMasterBypassed();
+        Assert.NotNull(got);
+        Assert.False(got);
+    }
+
+    [Fact]
+    public void TxAndRxStatesPersistIndependently()
+    {
+        using (var first = NewStore())
+        {
+            first.SetMasterBypassed(false);
+            first.SetRxMasterBypassed(true);
+        }
+
+        using var second = NewStore();
+        Assert.False(second.GetMasterBypassed());
+        Assert.True(second.GetRxMasterBypassed());
     }
 }

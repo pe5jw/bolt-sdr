@@ -128,6 +128,7 @@ interface AudioSuiteState {
   // to WDSP; false = chain hot. Default on first launch is true; the
   // server (AudioChainMasterBypassService) is the source of truth.
   masterBypassed: boolean;
+  rxMasterBypassed: boolean;
 
   // Drag state — transient, not persisted.
   isDragging: boolean;
@@ -235,6 +236,8 @@ interface AudioSuiteState {
   setMasterBypassedFromServer(bypassed: boolean): void;
   loadMasterBypassFromServer(): Promise<void>;
   setMasterBypassed(bypassed: boolean): Promise<void>;
+  loadRxMasterBypassFromServer(): Promise<void>;
+  setRxMasterBypassed(bypassed: boolean): Promise<void>;
 
   // Audio Suite processing route: 'native' (in-process plugin chain, the
   // default) vs 'vst' (out-of-process VST engine). Mutually exclusive; server
@@ -324,6 +327,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       // on Audio Suite window mount overrides this with the persisted
       // value (if any) and any WS broadcast keeps it in sync after.
       masterBypassed: true,
+      rxMasterBypassed: true,
       processingMode: 'native',
       vstEngineAvailable: false,
       vstEngineActive: false,
@@ -943,6 +947,44 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           set({ masterBypassed: prev });
           // eslint-disable-next-line no-console
           console.warn('audio-suite master-bypass PUT threw', err);
+        }
+      },
+
+      loadRxMasterBypassFromServer: async () => {
+        try {
+          const res = await fetch('/api/rx-audio-suite/master-bypass');
+          if (!res.ok) return;
+          const body = (await res.json()) as { bypassed?: boolean };
+          if (typeof body.bypassed === 'boolean') {
+            set({ rxMasterBypassed: body.bypassed });
+          }
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('rx-audio-suite master-bypass GET threw', err);
+        }
+      },
+
+      setRxMasterBypassed: async (bypassed) => {
+        const prev = get().rxMasterBypassed;
+        if (prev === bypassed) return;
+        set({ rxMasterBypassed: bypassed });
+        try {
+          const res = await fetch('/api/rx-audio-suite/master-bypass', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ bypassed }),
+          });
+          if (!res.ok) {
+            set({ rxMasterBypassed: prev });
+            // eslint-disable-next-line no-console
+            console.warn(
+              `rx-audio-suite master-bypass PUT rejected: ${res.status} ${res.statusText}`,
+            );
+          }
+        } catch (err) {
+          set({ rxMasterBypassed: prev });
+          // eslint-disable-next-line no-console
+          console.warn('rx-audio-suite master-bypass PUT threw', err);
         }
       },
 

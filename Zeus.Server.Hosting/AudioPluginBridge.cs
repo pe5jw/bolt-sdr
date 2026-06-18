@@ -206,6 +206,15 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     /// <summary>Current master bypass state (mirrors <c>AudioChain.MasterBypassed</c>).</summary>
     public bool IsMasterBypassed => _chain.MasterBypassed;
 
+    /// <summary>Operator master-bypass write-through for receive-side inserts.</summary>
+    public void SetRxMasterBypassed(bool bypassed)
+    {
+        _rxChain.MasterBypassed = bypassed;
+    }
+
+    /// <summary>Current RX master bypass state.</summary>
+    public bool IsRxMasterBypassed => _rxChain.MasterBypassed;
+
     /// <summary>
     /// Chain-level signal meters (linear peak) for the Audio Suite IN /
     /// OUT bars: the level entering the TX insert chain and the level
@@ -973,6 +982,11 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     /// </summary>
     private void ProcessRxBlock(Span<float> audio, int frames, int sampleRate)
     {
+        if (_rxChain.MasterBypassed)
+        {
+            DspPipelineService.SanitizeAudioBuffer(audio[..frames]);
+            return;
+        }
         var ctx = new AudioBlockContext(sampleRate, channels: 1, frames: frames, sampleTime: 0, mox: false);
         _rxVstEngine?.ProcessIfActive(audio, audio, ctx);
         _rxChain.Process(audio, audio, ctx);
