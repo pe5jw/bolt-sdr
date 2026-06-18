@@ -127,6 +127,8 @@ public static class ZeusEndpoints
         // reach the radio, rather than the older plugin-chain-only preview.
         app.MapGet("/api/audio-suite/preview", GetAudioSuitePreview);
         app.MapPut("/api/audio-suite/preview", SetAudioSuitePreview);
+        app.MapGet("/api/tx-audio-suite/preview", GetAudioSuitePreview);
+        app.MapPut("/api/tx-audio-suite/preview", SetAudioSuitePreview);
 
         // Audio Suite master bypass — single operator-facing toggle that
         // disengages the entire plugin chain in one click. Default on first
@@ -140,6 +142,15 @@ public static class ZeusEndpoints
             return Results.Ok(new { bypassed = svc.IsBypassed });
         });
         app.MapPut("/api/audio-suite/master-bypass", (MasterBypassSetRequest body, AudioChainMasterBypassService svc) =>
+        {
+            svc.SetMasterBypassed(body.Bypassed);
+            return Results.Ok(new { bypassed = svc.IsBypassed });
+        });
+        app.MapGet("/api/tx-audio-suite/master-bypass", (AudioChainMasterBypassService svc) =>
+        {
+            return Results.Ok(new { bypassed = svc.IsBypassed });
+        });
+        app.MapPut("/api/tx-audio-suite/master-bypass", (MasterBypassSetRequest body, AudioChainMasterBypassService svc) =>
         {
             svc.SetMasterBypassed(body.Bypassed);
             return Results.Ok(new { bypassed = svc.IsBypassed });
@@ -174,6 +185,27 @@ public static class ZeusEndpoints
                 engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
             });
         });
+        app.MapGet("/api/tx-audio-suite/processing-mode", (AudioProcessingModeService svc) =>
+        {
+            return Results.Ok(new
+            {
+                mode = svc.Mode.ToString().ToLowerInvariant(),
+                engineActive = svc.EngineActive,
+                engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
+            });
+        });
+        app.MapPut("/api/tx-audio-suite/processing-mode", async (ProcessingModeSetRequest body, AudioProcessingModeService svc) =>
+        {
+            if (body?.Mode is null || !Enum.TryParse<AudioProcessingMode>(body.Mode, ignoreCase: true, out var mode))
+                return Results.BadRequest(new { error = "mode must be 'native' or 'vst'" });
+            var applied = await svc.SetModeAsync(mode);
+            return Results.Ok(new
+            {
+                mode = applied.ToString().ToLowerInvariant(),
+                engineActive = svc.EngineActive,
+                engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
+            });
+        });
 
         // Audio plugin chain order — operator's preferred sequence for
         // the plugins in the Audio Suite window. GET returns the
@@ -196,6 +228,18 @@ public static class ZeusEndpoints
                 return Results.Ok(new { pluginIds = chainOrder.CurrentOrder });
             return Results.BadRequest(new { error = err });
         });
+        app.MapGet("/api/tx-audio-suite/chain/order", (ChainOrderService chainOrder) =>
+        {
+            return Results.Ok(new { pluginIds = chainOrder.CurrentOrder });
+        });
+        app.MapPut("/api/tx-audio-suite/chain/order", (ChainOrderSetRequest body, ChainOrderService chainOrder) =>
+        {
+            if (body?.PluginIds is null)
+                return Results.BadRequest(new { error = "pluginIds is required" });
+            if (chainOrder.TrySetOrder(body.PluginIds, out var err))
+                return Results.Ok(new { pluginIds = chainOrder.CurrentOrder });
+            return Results.BadRequest(new { error = err });
+        });
 
         // Audio plugin chain membership — "park" / "un-park". An
         // installed audio plugin is by default IN the active chain;
@@ -209,6 +253,15 @@ public static class ZeusEndpoints
         // (0x1E) broadcast refreshes other clients. Returns the new
         // active order.
         app.MapPut("/api/plugins/{id}/chain-membership",
+            (string id, ChainMembershipSetRequest body, ChainOrderService chainOrder) =>
+        {
+            if (body is null)
+                return Results.BadRequest(new { error = "active is required" });
+            if (chainOrder.TrySetParked(id, parked: !body.Active, out var err))
+                return Results.Ok(new { pluginIds = chainOrder.CurrentOrder });
+            return Results.BadRequest(new { error = err });
+        });
+        app.MapPut("/api/tx-audio-suite/plugins/{id}/chain-membership",
             (string id, ChainMembershipSetRequest body, ChainOrderService chainOrder) =>
         {
             if (body is null)
@@ -284,9 +337,40 @@ public static class ZeusEndpoints
             });
             return Results.Ok(new { profiles = list });
         });
+        app.MapGet("/api/tx-audio-suite/profiles", (AudioProfileService profiles) =>
+        {
+            var list = profiles.List().Select(p => new
+            {
+                name = p.Name,
+                processingMode = p.ProcessingMode.ToString().ToLowerInvariant(),
+                order = p.Order,
+                parked = p.Parked,
+                masterBypass = p.MasterBypass,
+                createdUtc = p.CreatedUtc,
+                updatedUtc = p.UpdatedUtc,
+            });
+            return Results.Ok(new { profiles = list });
+        });
         // PUT saves (or overwrites) the named profile from the CURRENT
         // live chain config.
         app.MapPut("/api/audio-suite/profiles/{name}", async (string name, AudioProfileService profiles) =>
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return Results.BadRequest(new { error = "profile name is required" });
+            var entry = await profiles.SaveCurrentAsync(name.Trim());
+            return Results.Ok(new
+            {
+                name = entry.Name,
+                processingMode = entry.ProcessingMode.ToString().ToLowerInvariant(),
+                order = entry.Order,
+                parked = entry.Parked,
+                masterBypass = entry.MasterBypass,
+                vstStates = entry.PluginStates.Count,
+                createdUtc = entry.CreatedUtc,
+                updatedUtc = entry.UpdatedUtc,
+            });
+        });
+        app.MapPut("/api/tx-audio-suite/profiles/{name}", async (string name, AudioProfileService profiles) =>
         {
             if (string.IsNullOrWhiteSpace(name))
                 return Results.BadRequest(new { error = "profile name is required" });
@@ -324,7 +408,33 @@ public static class ZeusEndpoints
                 });
             return Results.NotFound(new { error = $"no audio profile named '{name}'" });
         });
+        app.MapPost("/api/tx-audio-suite/profiles/{name}/apply", async (
+            string name,
+            AudioProfileService profiles,
+            ChainOrderService chainOrder,
+            AudioProcessingModeService mode,
+            AudioChainMasterBypassService masterBypass,
+            CancellationToken ct) =>
+        {
+            var profile = await profiles.ApplyAsync(name, ct);
+            if (profile is not null)
+                return Results.Ok(new
+                {
+                    pluginIds = chainOrder.CurrentOrder,
+                    processingMode = mode.Mode.ToString().ToLowerInvariant(),
+                    engineActive = mode.EngineActive,
+                    engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
+                    masterBypass = masterBypass.IsBypassed,
+                });
+            return Results.NotFound(new { error = $"no audio profile named '{name}'" });
+        });
         app.MapDelete("/api/audio-suite/profiles/{name}", (string name, AudioProfileService profiles) =>
+        {
+            return profiles.Delete(name)
+                ? Results.Ok(new { deleted = name })
+                : Results.NotFound(new { error = $"no audio profile named '{name}'" });
+        });
+        app.MapDelete("/api/tx-audio-suite/profiles/{name}", (string name, AudioProfileService profiles) =>
         {
             return profiles.Delete(name)
                 ? Results.Ok(new { deleted = name })
@@ -374,6 +484,80 @@ public static class ZeusEndpoints
                 return Results.BadRequest(new { error = ex.Message });
             }
         });
+        app.MapPost("/api/tx-audio-suite/scan-vst-directory",
+            async (ScanVstDirectoryRequest body, VstDirectoryScanService scanner,
+                   ChainOrderService chainOrder, RxChainOrderService rxChainOrder, CancellationToken ct) =>
+        {
+            if (body is null || string.IsNullOrWhiteSpace(body.Directory))
+                return Results.BadRequest(new { error = "directory is required" });
+            try
+            {
+                var route = string.IsNullOrWhiteSpace(body.Route) || string.Equals(body.Route, "auto", StringComparison.OrdinalIgnoreCase)
+                    ? "tx"
+                    : body.Route;
+                var result = await scanner.ScanAsync(body.Directory, route, ct);
+                chainOrder.ParkAll(result.Registered
+                    .Where(r => VstDirectoryScanService.IsTxPluginId(r.Id))
+                    .Select(r => r.Id)
+                    .ToList());
+                rxChainOrder.ParkAll(result.Registered
+                    .Where(r => VstDirectoryScanService.IsRxPluginId(r.Id))
+                    .Select(r => r.Id)
+                    .ToList());
+                return Results.Ok(new
+                {
+                    directory = result.Directory,
+                    registered = result.Registered.Select(r => new { id = r.Id, name = r.Name }),
+                    skipped = result.Skipped.Select(r => new { id = r.Id, name = r.Name }),
+                    errors = result.Errors.Select(e => new { source = e.Vst3Source, message = e.Message }),
+                });
+            }
+            catch (DirectoryNotFoundException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+        app.MapPost("/api/rx-audio-suite/scan-vst-directory",
+            async (ScanVstDirectoryRequest body, VstDirectoryScanService scanner,
+                   ChainOrderService chainOrder, RxChainOrderService rxChainOrder, CancellationToken ct) =>
+        {
+            if (body is null || string.IsNullOrWhiteSpace(body.Directory))
+                return Results.BadRequest(new { error = "directory is required" });
+            try
+            {
+                var route = string.IsNullOrWhiteSpace(body.Route) || string.Equals(body.Route, "auto", StringComparison.OrdinalIgnoreCase)
+                    ? "rx"
+                    : body.Route;
+                var result = await scanner.ScanAsync(body.Directory, route, ct);
+                chainOrder.ParkAll(result.Registered
+                    .Where(r => VstDirectoryScanService.IsTxPluginId(r.Id))
+                    .Select(r => r.Id)
+                    .ToList());
+                rxChainOrder.ParkAll(result.Registered
+                    .Where(r => VstDirectoryScanService.IsRxPluginId(r.Id))
+                    .Select(r => r.Id)
+                    .ToList());
+                return Results.Ok(new
+                {
+                    directory = result.Directory,
+                    registered = result.Registered.Select(r => new { id = r.Id, name = r.Name }),
+                    skipped = result.Skipped.Select(r => new { id = r.Id, name = r.Name }),
+                    errors = result.Errors.Select(e => new { source = e.Vst3Source, message = e.Message }),
+                });
+            }
+            catch (DirectoryNotFoundException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
 
         // Audio Suite chain-level IN/OUT signal meters. Linear peak of
         // the block entering / leaving the TX insert chain, plus dBFS.
@@ -383,6 +567,18 @@ public static class ZeusEndpoints
         // per-plugin /meters polling (no new WS frame / wire-format
         // change).
         app.MapGet("/api/audio-suite/chain/meters", (AudioPluginBridge bridge) =>
+        {
+            var (inPk, outPk) = bridge.ChainMeters;
+            static double ToDb(float lin) => lin <= 1e-6f ? -120.0 : 20.0 * Math.Log10(lin);
+            return Results.Ok(new
+            {
+                inputPeak = inPk,
+                outputPeak = outPk,
+                inputDb = ToDb(inPk),
+                outputDb = ToDb(outPk),
+            });
+        });
+        app.MapGet("/api/tx-audio-suite/chain/meters", (AudioPluginBridge bridge) =>
         {
             var (inPk, outPk) = bridge.ChainMeters;
             static double ToDb(float lin) => lin <= 1e-6f ? -120.0 : 20.0 * Math.Log10(lin);
@@ -448,6 +644,32 @@ public static class ZeusEndpoints
                     : mode.EngineActive && mode.HasEngineSlot(id)
                         ? mode.CloseEditor(id)
                         : bridge.CloseEditor(id);
+                return MapEditorResult(result, open: false);
+            });
+
+        app.MapGet("/api/tx-audio-suite/plugins/{id}/editor",
+            (string id, AudioPluginBridge bridge, AudioProcessingModeService mode) =>
+            {
+                if (mode.EngineActive && mode.HasEngineSlot(id))
+                    return Results.Ok(new { open = mode.IsEditorOpen(id) });
+                return Results.Ok(new { open = bridge.IsEditorOpen(id) });
+            });
+
+        app.MapPost("/api/tx-audio-suite/plugins/{id}/editor",
+            (string id, AudioPluginBridge bridge, AudioProcessingModeService mode) =>
+            {
+                var result = mode.EngineActive && mode.HasEngineSlot(id)
+                    ? mode.OpenEditor(id)
+                    : bridge.OpenEditor(id);
+                return MapEditorResult(result, open: true);
+            });
+
+        app.MapDelete("/api/tx-audio-suite/plugins/{id}/editor",
+            (string id, AudioPluginBridge bridge, AudioProcessingModeService mode) =>
+            {
+                var result = mode.EngineActive && mode.HasEngineSlot(id)
+                    ? mode.CloseEditor(id)
+                    : bridge.CloseEditor(id);
                 return MapEditorResult(result, open: false);
             });
 
