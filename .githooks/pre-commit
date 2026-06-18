@@ -15,29 +15,8 @@ is_expected_identity() {
   esac
 }
 
-reject_old_identity() {
-  case "$1" in
-    *[Rr][Aa][Mm][Oo][Nn]*|*[Rr][Aa][Mm][Pp][Aa]*)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 author_ident="$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)"
 committer_ident="$(git var GIT_COMMITTER_IDENT 2>/dev/null || true)"
-
-for ident in "$author_ident" "$committer_ident"
-do
-  if reject_old_identity "$ident"; then
-    echo "Refusing commit with old Ramon/rampa identity:" >&2
-    echo "  $ident" >&2
-    echo "Use: $expected_primary" >&2
-    exit 1
-  fi
-done
 
 if ! is_expected_identity "$author_ident"; then
   echo "Refusing commit with unexpected author identity:" >&2
