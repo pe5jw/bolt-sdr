@@ -914,7 +914,8 @@ export default function App() {
           operator drags it without getting clipped by a parent. Mounted
           unconditionally (returns null when closed) so the open/close
           state in the store is the single source of truth. */}
-      <AudioSuiteWindow />
+      <AudioSuiteWindow route="tx" />
+      <AudioSuiteWindow route="rx" />
 
       {/* Transport — MOX/TUN + audio + mic + macro buttons on the left,
           PA/PRE chips, then the per-radio status (radio IP, rotator, QRZ)

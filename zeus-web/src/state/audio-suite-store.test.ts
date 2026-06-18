@@ -40,36 +40,77 @@ describe('audio-suite-store profile selection', () => {
     expect(reloaded.useAudioSuiteStore.getState().selectedProfile).toBe('Ragchew');
   });
 
-  it('opens TX and RX suites explicitly and persists the last route', async () => {
+  it('opens TX and RX suites as independent windows', async () => {
     const { useAudioSuiteStore } = await import('./audio-suite-store');
 
     expect(useAudioSuiteStore.getState().suiteRoute).toBe('tx');
 
+    useAudioSuiteStore.getState().openTx();
     useAudioSuiteStore.getState().openRx();
 
     expect(useAudioSuiteStore.getState().isOpen).toBe(true);
+    expect(useAudioSuiteStore.getState().txOpen).toBe(true);
+    expect(useAudioSuiteStore.getState().rxOpen).toBe(true);
     expect(useAudioSuiteStore.getState().suiteRoute).toBe('rx');
 
-    useAudioSuiteStore.getState().close();
-    useAudioSuiteStore.getState().openTx();
+    useAudioSuiteStore.getState().closeRx();
 
     expect(useAudioSuiteStore.getState().isOpen).toBe(true);
+    expect(useAudioSuiteStore.getState().txOpen).toBe(true);
+    expect(useAudioSuiteStore.getState().rxOpen).toBe(false);
     expect(useAudioSuiteStore.getState().suiteRoute).toBe('tx');
 
-    useAudioSuiteStore.getState().setSuiteRoute('rx');
+    useAudioSuiteStore.getState().openRx();
+    useAudioSuiteStore.getState().closeTx();
 
-    useAudioSuiteStore.getState().open();
+    expect(useAudioSuiteStore.getState().isOpen).toBe(true);
+    expect(useAudioSuiteStore.getState().txOpen).toBe(false);
+    expect(useAudioSuiteStore.getState().rxOpen).toBe(true);
+    expect(useAudioSuiteStore.getState().suiteRoute).toBe('rx');
 
-    expect(useAudioSuiteStore.getState().suiteRoute).toBe('tx');
-
-    useAudioSuiteStore.getState().setSuiteRoute('rx');
+    useAudioSuiteStore.getState().setWindowPosition('tx', 111, 122);
+    useAudioSuiteStore.getState().setWindowPosition('rx', 211, 222);
 
     const stored = JSON.parse(localStorage.getItem('zeus-audio-suite') ?? '{}');
+    expect(stored.state.txOpen).toBe(false);
+    expect(stored.state.rxOpen).toBe(true);
     expect(stored.state.suiteRoute).toBe('rx');
+    expect(stored.state.txX).toBe(111);
+    expect(stored.state.rxX).toBe(211);
 
     vi.resetModules();
     const reloaded = await import('./audio-suite-store');
     expect(reloaded.useAudioSuiteStore.getState().suiteRoute).toBe('rx');
+    expect(reloaded.useAudioSuiteStore.getState().txOpen).toBe(false);
+    expect(reloaded.useAudioSuiteStore.getState().rxOpen).toBe(true);
+    expect(reloaded.useAudioSuiteStore.getState().txX).toBe(111);
+    expect(reloaded.useAudioSuiteStore.getState().rxX).toBe(211);
+  });
+
+  it('migrates a legacy open RX suite into the RX window', async () => {
+    localStorage.setItem(
+      'zeus-audio-suite',
+      JSON.stringify({
+        state: {
+          isOpen: true,
+          suiteRoute: 'rx',
+          x: 321,
+          y: 123,
+          width: 777,
+          height: 555,
+        },
+        version: 0,
+      }),
+    );
+
+    const { useAudioSuiteStore } = await import('./audio-suite-store');
+
+    expect(useAudioSuiteStore.getState().rxOpen).toBe(true);
+    expect(useAudioSuiteStore.getState().txOpen).toBe(false);
+    expect(useAudioSuiteStore.getState().rxX).toBe(321);
+    expect(useAudioSuiteStore.getState().rxY).toBe(123);
+    expect(useAudioSuiteStore.getState().rxWidth).toBe(777);
+    expect(useAudioSuiteStore.getState().rxHeight).toBe(555);
   });
 
   it('clears a stale selected profile only after profiles load', async () => {

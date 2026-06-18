@@ -88,13 +88,27 @@ export interface AudioProfileMutationResult {
 }
 
 interface AudioSuiteState {
-  // Window placement
+  // Legacy single-window placement. Kept for localStorage migration and
+  // older callers; new UI code uses the per-route placement below.
   isOpen: boolean;
   x: number;
   y: number;
   width: number;
   height: number;
   suiteRoute: AudioSuiteRoute;
+
+  // Independent TX/RX Audio Suite windows. This lets an operator keep the
+  // transmit chain and receive VST chain open at the same time.
+  txOpen: boolean;
+  rxOpen: boolean;
+  txX: number;
+  txY: number;
+  txWidth: number;
+  txHeight: number;
+  rxX: number;
+  rxY: number;
+  rxWidth: number;
+  rxHeight: number;
 
   // Chain order — head = first in chain (processes mic first).
   // Mirrored from the server; updated by:
@@ -131,10 +145,12 @@ interface AudioSuiteState {
   // id (plugin parked/removed) falls back to the first chain plugin in
   // the component, so this never needs server validation.
   selectedChainId: string | null;
+  rxSelectedChainId: string | null;
 
   // Whether the plugin-browser sidebar is folded to a thin strip.
   // Presentation-only, persisted to localStorage.
   sidebarCollapsed: boolean;
+  rxSidebarCollapsed: boolean;
 
   // Saved profiles (chain-config snapshots). Server-authoritative;
   // loaded on window open, refreshed after save / delete. Not persisted
@@ -152,8 +168,12 @@ interface AudioSuiteState {
   openTx(): void;
   openRx(): void;
   close(): void;
+  closeTx(): void;
+  closeRx(): void;
   toggle(): void;
   setSuiteRoute(route: AudioSuiteRoute): void;
+  setWindowPosition(route: AudioSuiteRoute, x: number, y: number): void;
+  setWindowSize(route: AudioSuiteRoute, width: number, height: number): void;
   setPosition(x: number, y: number): void;
   setSize(width: number, height: number): void;
   setDragging(on: boolean): void;
@@ -162,9 +182,11 @@ interface AudioSuiteState {
   toggleCollapsed(pluginId: string): void;
   setAllCollapsed(collapsed: boolean, pluginIds: string[]): void;
   toggleSidebar(): void;
+  toggleSidebarForRoute(route: AudioSuiteRoute): void;
 
   // Chips+detail selection.
   setSelectedChainId(id: string | null): void;
+  setSelectedChainIdForRoute(route: AudioSuiteRoute, id: string | null): void;
 
   // Profile selection.
   setSelectedProfile(name: string): void;
@@ -230,11 +252,39 @@ interface AudioSuiteState {
   setProcessingMode(mode: 'native' | 'vst'): Promise<void>;
 }
 
+type AudioSuitePersistedState = Pick<
+  AudioSuiteState,
+  | 'isOpen'
+  | 'x'
+  | 'y'
+  | 'width'
+  | 'height'
+  | 'suiteRoute'
+  | 'txOpen'
+  | 'rxOpen'
+  | 'txX'
+  | 'txY'
+  | 'txWidth'
+  | 'txHeight'
+  | 'rxX'
+  | 'rxY'
+  | 'rxWidth'
+  | 'rxHeight'
+  | 'collapsed'
+  | 'selectedChainId'
+  | 'rxSelectedChainId'
+  | 'sidebarCollapsed'
+  | 'rxSidebarCollapsed'
+  | 'selectedProfile'
+>;
+
 // Default window placement — top-left quadrant, room for plugin panels.
 const DEFAULT_X = 80;
 const DEFAULT_Y = 80;
 const DEFAULT_WIDTH = 860;
 const DEFAULT_HEIGHT = 760;
+const DEFAULT_RX_X = DEFAULT_X + 44;
+const DEFAULT_RX_Y = DEFAULT_Y + 52;
 
 async function profileErrorMessage(res: Response): Promise<string> {
   try {
@@ -255,6 +305,16 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       width: DEFAULT_WIDTH,
       height: DEFAULT_HEIGHT,
       suiteRoute: 'tx',
+      txOpen: false,
+      rxOpen: false,
+      txX: DEFAULT_X,
+      txY: DEFAULT_Y,
+      txWidth: DEFAULT_WIDTH,
+      txHeight: DEFAULT_HEIGHT,
+      rxX: DEFAULT_RX_X,
+      rxY: DEFAULT_RX_Y,
+      rxWidth: DEFAULT_WIDTH,
+      rxHeight: DEFAULT_HEIGHT,
       chainOrder: [],
       rxChainOrder: [],
       previewSupported: false,
@@ -274,24 +334,116 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       isDragging: false,
       collapsed: {},
       selectedChainId: null,
+      rxSelectedChainId: null,
       sidebarCollapsed: false,
+      rxSidebarCollapsed: false,
       profiles: [],
       profilesLoaded: false,
       selectedProfile: '',
 
-      open: (route = 'tx') => set({ isOpen: true, suiteRoute: route }),
-      openTx: () => set({ isOpen: true, suiteRoute: 'tx' }),
-      openRx: () => set({ isOpen: true, suiteRoute: 'rx' }),
-      close: () => set({ isOpen: false }),
-      toggle: () => set((s) => ({ isOpen: !s.isOpen })),
-      setSuiteRoute: (route) => set({ suiteRoute: route }),
+      open: (route = 'tx') => {
+        if (route === 'rx') get().openRx();
+        else get().openTx();
+      },
+      openTx: () =>
+        set((s) => ({
+          isOpen: true,
+          txOpen: true,
+          suiteRoute: 'tx',
+          x: s.txX,
+          y: s.txY,
+          width: s.txWidth,
+          height: s.txHeight,
+        })),
+      openRx: () =>
+        set((s) => ({
+          isOpen: true,
+          rxOpen: true,
+          suiteRoute: 'rx',
+          x: s.rxX,
+          y: s.rxY,
+          width: s.rxWidth,
+          height: s.rxHeight,
+        })),
+      close: () => set({ isOpen: false, txOpen: false, rxOpen: false }),
+      closeTx: () =>
+        set((s) => ({
+          txOpen: false,
+          isOpen: s.rxOpen,
+          suiteRoute: s.rxOpen ? 'rx' : s.suiteRoute,
+        })),
+      closeRx: () =>
+        set((s) => ({
+          rxOpen: false,
+          isOpen: s.txOpen,
+          suiteRoute: s.txOpen ? 'tx' : s.suiteRoute,
+        })),
+      toggle: () => {
+        if (get().txOpen) get().closeTx();
+        else get().openTx();
+      },
+      setSuiteRoute: (route) =>
+        set((s) =>
+          route === 'rx'
+            ? {
+                suiteRoute: 'rx',
+                isOpen: true,
+                rxOpen: true,
+                x: s.rxX,
+                y: s.rxY,
+                width: s.rxWidth,
+                height: s.rxHeight,
+              }
+            : {
+                suiteRoute: 'tx',
+                isOpen: true,
+                txOpen: true,
+                x: s.txX,
+                y: s.txY,
+                width: s.txWidth,
+                height: s.txHeight,
+              },
+        ),
 
-      setPosition: (x, y) => set({ x, y }),
+      setWindowPosition: (route, x, y) =>
+        set((s) =>
+          route === 'rx'
+            ? {
+                rxX: x,
+                rxY: y,
+                ...(s.suiteRoute === 'rx' ? { x, y } : {}),
+              }
+            : {
+                txX: x,
+                txY: y,
+                ...(s.suiteRoute === 'tx' ? { x, y } : {}),
+              },
+        ),
+      setWindowSize: (route, width, height) => {
+        const nextWidth = Math.max(AUDIO_SUITE_WINDOW_MIN_WIDTH, width);
+        const nextHeight = Math.max(AUDIO_SUITE_WINDOW_MIN_HEIGHT, height);
+        set((s) =>
+          route === 'rx'
+            ? {
+                rxWidth: nextWidth,
+                rxHeight: nextHeight,
+                ...(s.suiteRoute === 'rx'
+                  ? { width: nextWidth, height: nextHeight }
+                  : {}),
+              }
+            : {
+                txWidth: nextWidth,
+                txHeight: nextHeight,
+                ...(s.suiteRoute === 'tx'
+                  ? { width: nextWidth, height: nextHeight }
+                  : {}),
+              },
+        );
+      },
+
+      setPosition: (x, y) => get().setWindowPosition(get().suiteRoute, x, y),
       setSize: (width, height) =>
-        set({
-          width: Math.max(AUDIO_SUITE_WINDOW_MIN_WIDTH, width),
-          height: Math.max(AUDIO_SUITE_WINDOW_MIN_HEIGHT, height),
-        }),
+        get().setWindowSize(get().suiteRoute, width, height),
       setDragging: (on) => set({ isDragging: on }),
 
       // Slots default to collapsed (absent === collapsed), so the
@@ -314,8 +466,16 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
 
       toggleSidebar: () =>
         set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+      toggleSidebarForRoute: (route) =>
+        set((s) =>
+          route === 'rx'
+            ? { rxSidebarCollapsed: !s.rxSidebarCollapsed }
+            : { sidebarCollapsed: !s.sidebarCollapsed },
+        ),
 
       setSelectedChainId: (id) => set({ selectedChainId: id }),
+      setSelectedChainIdForRoute: (route, id) =>
+        set(route === 'rx' ? { rxSelectedChainId: id } : { selectedChainId: id }),
 
       setSelectedProfile: (name) => set({ selectedProfile: name.trim() }),
 
@@ -863,6 +1023,95 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
     }),
     {
       name: 'zeus-audio-suite',
+      version: 1,
+      migrate: (persisted) => {
+        const state = persisted as Partial<AudioSuitePersistedState>;
+        const suiteRoute: AudioSuiteRoute = state.suiteRoute === 'rx' ? 'rx' : 'tx';
+        let txOpen = state.txOpen === true;
+        let rxOpen = state.rxOpen === true;
+        if (state.isOpen === true && !txOpen && !rxOpen) {
+          if (suiteRoute === 'rx') rxOpen = true;
+          else txOpen = true;
+        }
+
+        const legacyX = typeof state.x === 'number' ? state.x : DEFAULT_X;
+        const legacyY = typeof state.y === 'number' ? state.y : DEFAULT_Y;
+        const legacyWidth = typeof state.width === 'number' ? state.width : DEFAULT_WIDTH;
+        const legacyHeight = typeof state.height === 'number' ? state.height : DEFAULT_HEIGHT;
+        const txX =
+          typeof state.txX === 'number'
+            ? state.txX
+            : suiteRoute === 'tx'
+              ? legacyX
+              : DEFAULT_X;
+        const txY =
+          typeof state.txY === 'number'
+            ? state.txY
+            : suiteRoute === 'tx'
+              ? legacyY
+              : DEFAULT_Y;
+        const txWidth =
+          typeof state.txWidth === 'number'
+            ? state.txWidth
+            : suiteRoute === 'tx'
+              ? legacyWidth
+              : DEFAULT_WIDTH;
+        const txHeight =
+          typeof state.txHeight === 'number'
+            ? state.txHeight
+            : suiteRoute === 'tx'
+              ? legacyHeight
+              : DEFAULT_HEIGHT;
+        const rxX =
+          typeof state.rxX === 'number'
+            ? state.rxX
+            : suiteRoute === 'rx'
+              ? legacyX
+              : DEFAULT_RX_X;
+        const rxY =
+          typeof state.rxY === 'number'
+            ? state.rxY
+            : suiteRoute === 'rx'
+              ? legacyY
+              : DEFAULT_RX_Y;
+        const rxWidth =
+          typeof state.rxWidth === 'number'
+            ? state.rxWidth
+            : suiteRoute === 'rx'
+              ? legacyWidth
+              : DEFAULT_WIDTH;
+        const rxHeight =
+          typeof state.rxHeight === 'number'
+            ? state.rxHeight
+            : suiteRoute === 'rx'
+              ? legacyHeight
+              : DEFAULT_HEIGHT;
+
+        return {
+          isOpen: txOpen || rxOpen,
+          suiteRoute,
+          x: suiteRoute === 'rx' ? rxX : txX,
+          y: suiteRoute === 'rx' ? rxY : txY,
+          width: suiteRoute === 'rx' ? rxWidth : txWidth,
+          height: suiteRoute === 'rx' ? rxHeight : txHeight,
+          txOpen,
+          rxOpen,
+          txX,
+          txY,
+          txWidth,
+          txHeight,
+          rxX,
+          rxY,
+          rxWidth,
+          rxHeight,
+          collapsed: state.collapsed ?? {},
+          selectedChainId: state.selectedChainId ?? null,
+          rxSelectedChainId: state.rxSelectedChainId ?? null,
+          sidebarCollapsed: state.sidebarCollapsed === true,
+          rxSidebarCollapsed: state.rxSidebarCollapsed === true,
+          selectedProfile: state.selectedProfile ?? '',
+        } satisfies AudioSuitePersistedState;
+      },
       // Persist only window placement + open flag. Chain order and
       // preview state come from the server on every mount.
       partialize: (s) => ({
@@ -872,9 +1121,21 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         width: s.width,
         height: s.height,
         suiteRoute: s.suiteRoute,
+        txOpen: s.txOpen,
+        rxOpen: s.rxOpen,
+        txX: s.txX,
+        txY: s.txY,
+        txWidth: s.txWidth,
+        txHeight: s.txHeight,
+        rxX: s.rxX,
+        rxY: s.rxY,
+        rxWidth: s.rxWidth,
+        rxHeight: s.rxHeight,
         collapsed: s.collapsed,
         selectedChainId: s.selectedChainId,
+        rxSelectedChainId: s.rxSelectedChainId,
         sidebarCollapsed: s.sidebarCollapsed,
+        rxSidebarCollapsed: s.rxSidebarCollapsed,
         selectedProfile: s.selectedProfile,
       }),
     },

@@ -21,6 +21,7 @@ import {
   AUDIO_SUITE_WINDOW_MIN_WIDTH,
   AUDIO_SUITE_WINDOW_MIN_HEIGHT,
   useAudioSuiteStore,
+  type AudioSuiteRoute,
   type VstScanRoute,
 } from '../state/audio-suite-store';
 import { ConfirmDialog } from '../layout/ConfirmDialog';
@@ -94,13 +95,13 @@ function handleStyleFor(edge: ResizeEdge): React.CSSProperties {
  * keeps tracking even if the cursor leaves the handle while
  * dragging.
  */
-function ResizeHandle({ edge }: { edge: ResizeEdge }) {
-  const x = useAudioSuiteStore((s) => s.x);
-  const y = useAudioSuiteStore((s) => s.y);
-  const width = useAudioSuiteStore((s) => s.width);
-  const height = useAudioSuiteStore((s) => s.height);
-  const setPosition = useAudioSuiteStore((s) => s.setPosition);
-  const setSize = useAudioSuiteStore((s) => s.setSize);
+function ResizeHandle({ edge, route }: { edge: ResizeEdge; route: AudioSuiteRoute }) {
+  const x = useAudioSuiteStore((s) => (route === 'rx' ? s.rxX : s.txX));
+  const y = useAudioSuiteStore((s) => (route === 'rx' ? s.rxY : s.txY));
+  const width = useAudioSuiteStore((s) => (route === 'rx' ? s.rxWidth : s.txWidth));
+  const height = useAudioSuiteStore((s) => (route === 'rx' ? s.rxHeight : s.txHeight));
+  const setWindowPosition = useAudioSuiteStore((s) => s.setWindowPosition);
+  const setWindowSize = useAudioSuiteStore((s) => s.setWindowSize);
 
   const dragRef = useRef<{
     pointerId: number;
@@ -157,10 +158,10 @@ function ResizeHandle({ edge }: { edge: ResizeEdge }) {
       // Edges that include a dimension update push both position
       // and size in one render; setting them in order so the store
       // sees the combined change as a single React render.
-      setPosition(nX, nY);
-      setSize(nW, nH);
+      setWindowPosition(route, nX, nY);
+      setWindowSize(route, nW, nH);
     },
-    [edge, setPosition, setSize],
+    [edge, route, setWindowPosition, setWindowSize],
   );
 
   const onPointerUp = useCallback(
@@ -859,23 +860,35 @@ function profileBtnStyle(disabled: boolean): React.CSSProperties {
   };
 }
 
-export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = {}) {
-  const isOpen = useAudioSuiteStore((s) => s.isOpen);
-  const close = useAudioSuiteStore((s) => s.close);
-  const x = useAudioSuiteStore((s) => s.x);
-  const y = useAudioSuiteStore((s) => s.y);
-  const width = useAudioSuiteStore((s) => s.width);
-  const height = useAudioSuiteStore((s) => s.height);
-  const setPosition = useAudioSuiteStore((s) => s.setPosition);
+export function AudioSuiteWindow({
+  route = 'tx',
+  embedded = false,
+}: { route?: AudioSuiteRoute; embedded?: boolean } = {}) {
+  const isRxSuite = route === 'rx';
+  const isOpen = useAudioSuiteStore((s) => (isRxSuite ? s.rxOpen : s.txOpen));
+  const close = useAudioSuiteStore((s) => (isRxSuite ? s.closeRx : s.closeTx));
+  const x = useAudioSuiteStore((s) => (isRxSuite ? s.rxX : s.txX));
+  const y = useAudioSuiteStore((s) => (isRxSuite ? s.rxY : s.txY));
+  const width = useAudioSuiteStore((s) => (isRxSuite ? s.rxWidth : s.txWidth));
+  const height = useAudioSuiteStore((s) => (isRxSuite ? s.rxHeight : s.txHeight));
+  const setWindowPosition = useAudioSuiteStore((s) => s.setWindowPosition);
   const setDragging = useAudioSuiteStore((s) => s.setDragging);
   const chainOrder = useAudioSuiteStore((s) => s.chainOrder);
   const rxChainOrder = useAudioSuiteStore((s) => s.rxChainOrder);
   const reorderChain = useAudioSuiteStore((s) => s.reorderChain);
   const reorderRxChain = useAudioSuiteStore((s) => s.reorderRxChain);
-  const selectedChainId = useAudioSuiteStore((s) => s.selectedChainId);
-  const setSelectedChainId = useAudioSuiteStore((s) => s.setSelectedChainId);
-  const sidebarCollapsed = useAudioSuiteStore((s) => s.sidebarCollapsed);
-  const toggleSidebar = useAudioSuiteStore((s) => s.toggleSidebar);
+  const selectedChainId = useAudioSuiteStore((s) =>
+    isRxSuite ? s.rxSelectedChainId : s.selectedChainId,
+  );
+  const setSelectedChainIdForRoute = useAudioSuiteStore(
+    (s) => s.setSelectedChainIdForRoute,
+  );
+  const sidebarCollapsed = useAudioSuiteStore((s) =>
+    isRxSuite ? s.rxSidebarCollapsed : s.sidebarCollapsed,
+  );
+  const toggleSidebarForRoute = useAudioSuiteStore(
+    (s) => s.toggleSidebarForRoute,
+  );
   const setChainMembership = useAudioSuiteStore((s) => s.setChainMembership);
   const setRxChainMembership = useAudioSuiteStore((s) => s.setRxChainMembership);
   const profiles = useAudioSuiteStore((s) => s.profiles);
@@ -912,9 +925,18 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   const loadMasterBypassFromServer = useAudioSuiteStore(
     (s) => s.loadMasterBypassFromServer,
   );
-  const suiteRoute = useAudioSuiteStore((s) => s.suiteRoute);
-  const setSuiteRoute = useAudioSuiteStore((s) => s.setSuiteRoute);
-  const isRxSuite = suiteRoute === 'rx';
+  const setPosition = useCallback(
+    (nextX: number, nextY: number) => setWindowPosition(route, nextX, nextY),
+    [route, setWindowPosition],
+  );
+  const setSelectedChainId = useCallback(
+    (id: string | null) => setSelectedChainIdForRoute(route, id),
+    [route, setSelectedChainIdForRoute],
+  );
+  const toggleSidebar = useCallback(
+    () => toggleSidebarForRoute(route),
+    [route, toggleSidebarForRoute],
+  );
 
   const allPanels = usePluginPanels();
   // Every plugin that targets the TX/RX audio chains — installed, whether
@@ -996,11 +1018,15 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   useEffect(() => {
     if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
+      if (e.key !== 'Escape') return;
+      // RX renders above TX. If both are open, the TX window should leave
+      // Escape for the RX window instead of closing both at once.
+      if (!isRxSuite && useAudioSuiteStore.getState().rxOpen) return;
+      close();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen, close]);
+  }, [isOpen, isRxSuite, close]);
 
   // Viewport-resize clamp — if the operator shrinks their browser
   // window after the suite is positioned, the suite's stored x/y
@@ -1271,7 +1297,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   };
 
   // One-click sweep of the common VST3 locations.
-  const onScanDefaultVstDirectory = () => void runScan(COMMON_VST3_DIRS, 'both');
+  const onScanDefaultVstDirectory = () => void runScan(COMMON_VST3_DIRS, route);
   // Prompt for a specific folder, then scan just that one.
   const onScanVstDirectory = async () => {
     setScanFolderOpen(true);
@@ -1412,7 +1438,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
         // is never hidden by app chrome. Below modal dialogs
         // (AddPanelModal etc at zIndex 10000) so critical overlays
         // still win.
-        zIndex: 400,
+        zIndex: isRxSuite ? 410 : 400,
         display: 'flex',
         flexDirection: 'column',
         background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
@@ -1432,7 +1458,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     >
       {/* Resize handles — floating mode only (the embedded host resizes
           with its container). */}
-      {!embedded && RESIZE_EDGES.map((e) => <ResizeHandle key={e} edge={e} />)}
+      {!embedded && RESIZE_EDGES.map((e) => <ResizeHandle key={e} edge={e} route={route} />)}
 
       {/* Header — drag handle. Brass-plate styling per the v3 Lifted
           Dark spec ([[project_audio_chain_visual_direction]]). */}
@@ -1526,44 +1552,16 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
         )}
       </div>
 
-      <div
-        style={{
-          display: 'flex',
-          gap: 6,
-          padding: '7px 12px',
-          background: 'var(--bg-1)',
-          borderBottom: '1px solid var(--line)',
-        }}
-      >
-        {(['tx', 'rx'] as const).map((route) => {
-          const active = suiteRoute === route;
-          return (
-            <button
-              key={route}
-              type="button"
-              data-no-drag
-              onClick={() => setSuiteRoute(route)}
-              aria-pressed={active}
-              title={route === 'tx' ? 'Transmit audio chain' : 'Receive audio insert chain'}
-              style={{
-                padding: '4px 12px',
-                borderRadius: 4,
-                border: '1px solid ' + (active ? 'var(--accent)' : 'var(--line)'),
-                background: active ? 'var(--accent-soft)' : 'var(--bg-2)',
-                color: active ? 'var(--fg-0)' : 'var(--fg-2)',
-                cursor: 'pointer',
-                fontSize: 11,
-                fontWeight: 700,
-                letterSpacing: 1,
-                textTransform: 'uppercase',
-                fontFamily: 'inherit',
-              }}
-            >
-              {route.toUpperCase()}
-            </button>
-          );
-        })}
-        {isRxSuite && (
+      {isRxSuite && (
+        <div
+          style={{
+            display: 'flex',
+            gap: 6,
+            padding: '7px 12px',
+            background: 'var(--bg-1)',
+            borderBottom: '1px solid var(--line)',
+          }}
+        >
           <span
             title={
               rxVstEngineActive
@@ -1594,8 +1592,8 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           >
             RX VST {rxVstEngineActive ? 'ON' : rxVstEngineAvailable ? 'IDLE' : 'OFF'}
           </span>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Profiles bar — named snapshots of the chain config. Choosing
           one applies it; Save snapshots the current chain. */}
@@ -1910,7 +1908,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           onCancel={() => setScanFolderOpen(false)}
           onSubmit={(dir) => {
             setScanFolderOpen(false);
-            void runScan([dir], 'both');
+            void runScan([dir], route);
           }}
         >
           <p>Register every VST3 plugin Zeus finds in this folder.</p>
