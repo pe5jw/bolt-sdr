@@ -3728,6 +3728,9 @@ function Build-Report {
     elseif ($agcWideMovement) {
         $trendStatus = "agc-movement-watch"
     }
+    elseif ($passbandEvidenceMissing) {
+        $trendStatus = "passband-evidence-missing"
+    }
     elseif ($nr5OutputMotionNeedsReview) {
         $trendStatus = "nr5-output-level-watch"
     }
@@ -3748,9 +3751,6 @@ function Build-Report {
     }
     elseif ($rxAudioLevelerHeadroomNeedsReview) {
         $trendStatus = "rx-leveler-headroom-watch"
-    }
-    elseif ($passbandEvidenceMissing) {
-        $trendStatus = "passband-evidence-missing"
     }
     elseif ($readyCount -eq $okCount) {
         $trendStatus = "ready-trace"

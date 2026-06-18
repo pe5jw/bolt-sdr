@@ -2536,6 +2536,91 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task WatchLiveDiagnosticsPrioritizesPassbandEvidenceOverLevelerHeadroom()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-off-passband-leveler-priority-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var jsonlPath = Path.Combine(bundleDir, "off-passband-leveler-priority.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                jsonlPath,
+                new[]
+                {
+                    Nr5LevelerAlignmentWatchSample(
+                        0,
+                        nr5InputDbfs: -42.2,
+                        nr5OutputDbfs: -24.3,
+                        levelerInputRmsDbfs: -39.0,
+                        levelerOutputRmsDbfs: -29.0,
+                        frontendTopPeaks: [FrontendTopPeak(7_335_000, 30_000, 35.6, -33.7)],
+                        rxChainFilterLowHz: -4655,
+                        rxChainFilterHighHz: -100,
+                        rxAudioLevelerPeakLimited: true),
+                    Nr5LevelerAlignmentWatchSample(
+                        1,
+                        nr5InputDbfs: -43.5,
+                        nr5OutputDbfs: -25.0,
+                        levelerInputRmsDbfs: -43.0,
+                        levelerOutputRmsDbfs: -34.2,
+                        frontendTopPeaks: [FrontendTopPeak(7_335_000, 30_000, 34.8, -32.9)],
+                        rxChainFilterLowHz: -4655,
+                        rxChainFilterHighHz: -100),
+                    Nr5LevelerAlignmentWatchSample(
+                        2,
+                        nr5InputDbfs: -43.0,
+                        nr5OutputDbfs: -25.2,
+                        levelerInputRmsDbfs: -42.5,
+                        levelerOutputRmsDbfs: -33.7,
+                        frontendTopPeaks: [FrontendTopPeak(7_335_000, 30_000, 30.7, -36.2)],
+                        rxChainFilterLowHz: -4655,
+                        rxChainFilterHighHz: -100)
+                });
+
+            var reportPath = Path.Combine(bundleDir, "off-passband-leveler-priority.summary.json");
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, watch.ExitCode);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+
+            Assert.True(root.GetProperty("readyForBenchmarkTrace").GetBoolean());
+            Assert.True(root.GetProperty("nr5TuningReadyTrace").GetBoolean());
+            Assert.Equal("passband-evidence-missing", root.GetProperty("trendStatus").GetString());
+
+            var passbandAudioWatch = root.GetProperty("passbandAudioWatch");
+            Assert.Equal("no-passband-peaks", passbandAudioWatch.GetProperty("status").GetString());
+            Assert.True(passbandAudioWatch.GetProperty("passbandEvidenceMissing").GetBoolean());
+
+            var levelerWatch = root.GetProperty("rxAudioLevelerWatch");
+            Assert.Equal(1, levelerWatch.GetProperty("peakLimitedSampleCount").GetInt32());
+            Assert.NotEmpty(levelerWatch.GetProperty("topPeakLimitedSamples").EnumerateArray());
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task WatchLiveDiagnosticsReportsStableNr5LearnerReplayCounters()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
@@ -9414,7 +9499,10 @@ public sealed class DspModernizationValidationToolTests
         int rxChainFilterLowHz = 100,
         int rxChainFilterHighHz = 2600,
         bool txMonitorRequested = false,
-        double? txMonitorAudioRmsDbfs = null)
+        double? txMonitorAudioRmsDbfs = null,
+        bool rxAudioLevelerBoostSlewLimited = false,
+        bool rxAudioLevelerPeakLimited = false,
+        bool rxAudioLevelerOutputLimited = false)
     {
         var runtimeStatus = txMonitorRequested ? "audio-tx-monitor" : "ready";
         var audioStatus = txMonitorRequested ? "tx-monitor" : "ready";
@@ -9467,9 +9555,9 @@ public sealed class DspModernizationValidationToolTests
                     rxAudioLevelerInputRmsDbfs = runtimeLevelerInputRmsDbfs,
                     rxAudioLevelerOutputRmsDbfs = runtimeLevelerOutputRmsDbfs,
                     rxAudioLevelerAppliedGainDb = runtimeLevelerAppliedGainDb,
-                    rxAudioLevelerBoostSlewLimited = txMonitorRequested ? (bool?)null : false,
-                    rxAudioLevelerPeakLimited = txMonitorRequested ? (bool?)null : false,
-                    rxAudioLevelerOutputLimited = txMonitorRequested ? (bool?)null : false
+                    rxAudioLevelerBoostSlewLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerBoostSlewLimited,
+                    rxAudioLevelerPeakLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerPeakLimited,
+                    rxAudioLevelerOutputLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerOutputLimited
                 },
                 nr5SpnrDiagnostics = new
                 {
