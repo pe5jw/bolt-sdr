@@ -3287,6 +3287,92 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task WatchLiveDiagnosticsDoesNotAcceptLowEvidenceOnlyWeakFinalAudioParity()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-low-evidence-weak-parity-watch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var jsonlPath = Path.Combine(bundleDir, "nr5-low-evidence-weak-parity.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                jsonlPath,
+                new[]
+                {
+                    AgcWatchSample(
+                        31,
+                        agcGainDb: -37.0,
+                        audioRmsDbfs: -24.1,
+                        includeNr5: true,
+                        nr5InputDbfs: -32.6,
+                        signalConfidence: 0.318,
+                        agcGate: 0.492,
+                        signalProbability: 0.160,
+                        textureFill: 0.026,
+                        nr5OutputDbfs: -33.2,
+                        frontendTopPeaks: [FrontendTopPeak(7_304_813, -187, 38.2, -37.2)]),
+                    AgcWatchSample(
+                        32,
+                        agcGainDb: -37.0,
+                        audioRmsDbfs: -21.5,
+                        includeNr5: true,
+                        nr5InputDbfs: -18.0,
+                        signalConfidence: 0.346,
+                        agcGate: 0.567,
+                        signalProbability: 0.163,
+                        textureFill: 0.026,
+                        nr5OutputDbfs: -23.0,
+                        frontendTopPeaks: [FrontendTopPeak(7_304_813, -187, 39.0, -35.0)])
+                });
+
+            var reportPath = Path.Combine(bundleDir, "nr5-low-evidence-weak-parity.summary.json");
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, watch.ExitCode);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var weakWatch = reportDoc.RootElement.GetProperty("nr5WeakSignalWatch");
+            Assert.Equal("low-evidence-weak-input", weakWatch.GetProperty("mixedWeakStrongEvidenceStatus").GetString());
+            Assert.False(weakWatch.GetProperty("mixedWeakStrongEvidenceReady").GetBoolean());
+            Assert.True(weakWatch.GetProperty("weakStrongFinalAudioParityReady").GetBoolean());
+            Assert.Equal(1, weakWatch.GetProperty("weakInputSampleCount").GetInt32());
+            Assert.Equal(1, weakWatch.GetProperty("lowEvidenceWeakInputSampleCount").GetInt32());
+            Assert.Equal(0, weakWatch.GetProperty("evidenceQualifiedWeakInputSampleCount").GetInt32());
+            Assert.Equal(2.6, weakWatch.GetProperty("weakStrongFinalAudioGapDb").GetDouble(), precision: 3);
+
+            var focus = weakWatch.GetProperty("mixedWeakStrongTuningFocus");
+            Assert.Equal("low-evidence-weak-input", focus.GetProperty("status").GetString());
+            Assert.Equal(
+                "capture-speech-qualified-weak-input-before-accepting-final-audio-parity",
+                focus.GetProperty("preferredAction").GetString());
+
+            Assert.Contains(
+                reportDoc.RootElement.GetProperty("recommendations").EnumerateArray(),
+                recommendation => (recommendation.GetString() ?? "").Contains("only used low-evidence weak rows", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task WatchLiveDiagnosticsExcludesTxMonitorAudioFromNr5FinalAudioStats()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");

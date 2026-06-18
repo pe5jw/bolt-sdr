@@ -3012,6 +3012,8 @@ function Build-Report {
     $nr5WeakStrongOutputParityReady = $false
     $nr5WeakStrongFinalAudioParityReady = $false
     $nr5MixedWeakStrongEvidenceStatus = "not-evaluated"
+    $nr5LowEvidenceWeakInputCount = $nr5LowEvidenceSampleCount
+    $nr5EvidenceQualifiedWeakInputCount = [Math]::Max(0, $nr5WeakInputCount - $nr5LowEvidenceWeakInputCount)
     $nr5LowEvidenceLiftPct = $null
     $nr5LowEvidenceSuppressedPct = $null
     $nr5AudioAlignmentMismatchPct = $null
@@ -3114,6 +3116,9 @@ function Build-Report {
     elseif ($nr5StrongInputCount -le 0) {
         $nr5MixedWeakStrongEvidenceStatus = "missing-strong-input"
     }
+    elseif ($nr5EvidenceQualifiedWeakInputCount -le 0) {
+        $nr5MixedWeakStrongEvidenceStatus = "low-evidence-weak-input"
+    }
     elseif ($null -eq $nr5WeakStrongOutputGapDb -and $null -eq $nr5WeakStrongFinalAudioGapDb) {
         $nr5MixedWeakStrongEvidenceStatus = "missing-output-gap"
     }
@@ -3206,6 +3211,7 @@ function Build-Report {
         "missing-weak-input" { "capture-weaker-or-fading-speech-before-volume-parity-tuning"; break }
         "missing-weak-and-strong-input" { "retune-or-extend-capture-before-using-trace-for-mixed-evidence"; break }
         "missing-output-gap" { "inspect-nr5-output-diagnostics-before-parity-tuning"; break }
+        "low-evidence-weak-input" { "capture-speech-qualified-weak-input-before-accepting-final-audio-parity"; break }
         "ready-final-audio" { "post-leveler-final-audio-parity-ready"; break }
         "ready" {
             if ([string]::Equals($nr5MixedWeakStrongFinalAudioGapDirection, "within-parity", [StringComparison]::OrdinalIgnoreCase)) {
@@ -3228,6 +3234,8 @@ function Build-Report {
         status = $nr5MixedWeakStrongEvidenceStatus
         preferredAction = $nr5MixedWeakStrongPreferredAction
         weakInputSampleCount = $nr5WeakInputCount
+        lowEvidenceWeakInputSampleCount = $nr5LowEvidenceWeakInputCount
+        evidenceQualifiedWeakInputSampleCount = $nr5EvidenceQualifiedWeakInputCount
         strongInputSampleCount = $nr5StrongInputCount
         nearStrongInputSampleCount = $nr5NearStrongInputCount
         outputGapDb = $nr5WeakStrongOutputGapDb
@@ -3615,6 +3623,9 @@ function Build-Report {
     }
     elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "missing-output-gap", [StringComparison]::OrdinalIgnoreCase)) {
         $summaryRecommendations.Add("NR5 trace has weak and strong input samples but no output gap statistic; inspect NR5 output diagnostics before using it as volume-parity evidence.") | Out-Null
+    }
+    elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "low-evidence-weak-input", [StringComparison]::OrdinalIgnoreCase)) {
+        $summaryRecommendations.Add("NR5 mixed weak/strong final-audio parity only used low-evidence weak rows; capture speech-qualified weak input before accepting this as weak-signal parity evidence.") | Out-Null
     }
     if ($nr5WeakDropoutCount -gt 0 -and
         $nr5WeakDropoutCandidateLossCount -eq 0 -and
@@ -4205,6 +4216,8 @@ function Build-Report {
         nr5WeakSignalWatch = [ordered]@{
             weakInputThresholdDbfs = -30.0
             weakInputSampleCount = $nr5WeakInputCount
+            lowEvidenceWeakInputSampleCount = $nr5LowEvidenceWeakInputCount
+            evidenceQualifiedWeakInputSampleCount = $nr5EvidenceQualifiedWeakInputCount
             weakRecoveredSampleCount = $nr5WeakRecoveredCount
             weakNearTargetSampleCount = $nr5WeakNearTargetCount
             weakDropoutSampleCount = $nr5WeakDropoutCount
