@@ -1666,7 +1666,7 @@ public static class ZeusEndpoints
             var condition = scene.SmartNrCondition(
                 dsp.SnapshotNrRuntime(),
                 BuildSmartNrRxChainRuntime(state, radio.GetAdcProtectionStatus()));
-            return Results.Ok(DspLiveDiagnosticsService.Build(condition, dsp.SnapshotLiveRuntimeEvidence()));
+            return Results.Ok(DspLiveDiagnosticsService.Build(condition, dsp.SnapshotLiveRuntimeEvidence(), state));
         });
 
         app.MapGet("/api/dsp/external-engine-candidates", () =>
@@ -1690,7 +1690,7 @@ public static class ZeusEndpoints
             var condition = scene.SmartNrCondition(
                 dsp.SnapshotNrRuntime(),
                 BuildSmartNrRxChainRuntime(state, radio.GetAdcProtectionStatus()));
-            var live = DspLiveDiagnosticsService.Build(condition, dsp.SnapshotLiveRuntimeEvidence());
+            var live = DspLiveDiagnosticsService.Build(condition, dsp.SnapshotLiveRuntimeEvidence(), state);
             return Results.Ok(DspBenchmarkCaptureManifestService.Build(live, DspBenchmarkPlanCatalog.Build()));
         });
 
@@ -1700,7 +1700,7 @@ public static class ZeusEndpoints
             var condition = scene.SmartNrCondition(
                 dsp.SnapshotNrRuntime(),
                 BuildSmartNrRxChainRuntime(state, radio.GetAdcProtectionStatus()));
-            var live = DspLiveDiagnosticsService.Build(condition, dsp.SnapshotLiveRuntimeEvidence());
+            var live = DspLiveDiagnosticsService.Build(condition, dsp.SnapshotLiveRuntimeEvidence(), state);
             var plan = DspBenchmarkPlanCatalog.Build();
             var manifest = DspBenchmarkCaptureManifestService.Build(live, plan);
             return Results.Ok(DspModernizationEvidenceSnapshotService.Build(

@@ -94,6 +94,34 @@ public sealed class DspLiveDiagnosticsServiceTests
     }
 
     [Fact]
+    public void Build_CarriesRadioStateForStableLiveTraceEvidence()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        PublishScene(service, profile: "NR5", held: false, rxScore: 94, rxTone: "neutral", coherent: true);
+        var condition = service.SmartNrCondition(
+            Runtime("Nr5", "Nr5", nr5Available: true, nr5: Nr5(learnedFrames: 80, confidence: 0.72, agcGate: 0.66)),
+            RxChain(score: 94));
+        var state = new StateDto(
+            Status: ConnectionStatus.Connected,
+            Endpoint: "192.168.1.25:1024",
+            VfoHz: 14_260_000,
+            Mode: RxMode.USB,
+            FilterLowHz: 100,
+            FilterHighHz: 3100,
+            SampleRate: 384_000,
+            RadioLoHz: 14_250_000,
+            CtunEnabled: true);
+
+        var diag = DspLiveDiagnosticsService.Build(condition, RuntimeEvidence(), state);
+
+        Assert.Equal(14_260_000, diag.RadioVfoHz);
+        Assert.Equal(14_250_000, diag.RadioLoHz);
+        Assert.Equal("USB", diag.RadioMode);
+        Assert.True(diag.RadioCtunEnabled);
+        Assert.Equal(384_000, diag.RadioSampleRate);
+    }
+
+    [Fact]
     public void Build_MissingFrontendSceneCanStillBeReadyForNr5LiveTuning()
     {
         var service = new FrontendDspSceneDiagnosticsService();

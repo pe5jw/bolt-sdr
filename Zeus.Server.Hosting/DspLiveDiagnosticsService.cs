@@ -11,7 +11,8 @@ public static class DspLiveDiagnosticsService
 {
     public static DspLiveDiagnosticsDto Build(
         SmartNrConditionDto condition,
-        DspLiveRuntimeEvidenceDto? runtimeEvidence = null)
+        DspLiveRuntimeEvidenceDto? runtimeEvidence = null,
+        StateDto? radioState = null)
     {
         ArgumentNullException.ThrowIfNull(condition);
 
@@ -371,6 +372,11 @@ public static class DspLiveDiagnosticsService
             RxChainFilterHighHz: condition.RxChain.FilterHighHz,
             RxChainFilterWidthHz: condition.RxChain.FilterWidthHz,
             RxChainFilterPresetName: condition.RxChain.FilterPresetName,
+            RadioVfoHz: radioState?.VfoHz,
+            RadioLoHz: radioState?.RadioLoHz,
+            RadioMode: radioState?.Mode.ToString(),
+            RadioCtunEnabled: radioState?.CtunEnabled,
+            RadioSampleRate: radioState?.SampleRate,
             Nr5SpnrDiagnostics: nr5,
             Nr5SignalConfidence: nr5?.SignalConfidence,
             Nr5AgcGate: nr5?.AgcGate,

@@ -2469,6 +2469,99 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task WatchLiveDiagnosticsMarksRxStateDriftTraceNotBenchmarkReady()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-rx-state-drift-watch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var jsonlPath = Path.Combine(bundleDir, "rx-state-drift.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                jsonlPath,
+                new[]
+                {
+                    AgcWatchSample(
+                        0,
+                        agcGainDb: 0.0,
+                        audioRmsDbfs: -32.0,
+                        rxChainFilterLowHz: 100,
+                        rxChainFilterHighHz: 3100,
+                        radioVfoHz: 14_260_000,
+                        radioMode: "USB"),
+                    AgcWatchSample(
+                        1,
+                        agcGainDb: 0.0,
+                        audioRmsDbfs: -31.0,
+                        rxChainFilterLowHz: -3100,
+                        rxChainFilterHighHz: -100,
+                        radioVfoHz: 7_200_000,
+                        radioLoHz: 7_200_000,
+                        radioMode: "LSB")
+                });
+
+            var reportPath = Path.Combine(bundleDir, "rx-state-drift.summary.json");
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, watch.ExitCode);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+            Assert.False(root.GetProperty("readyForBenchmarkTrace").GetBoolean());
+            Assert.Equal("rx-state-drift", root.GetProperty("trendStatus").GetString());
+
+            var readiness = root.GetProperty("captureReadinessWatch");
+            Assert.Equal("preflight-review", readiness.GetProperty("status").GetString());
+            Assert.False(readiness.GetProperty("preflightReady").GetBoolean());
+            Assert.False(readiness.GetProperty("strictPreflightPass").GetBoolean());
+            Assert.True(readiness.GetProperty("hardGatePass").GetBoolean());
+            Assert.Contains(
+                readiness.GetProperty("constraints").EnumerateArray(),
+                constraint => string.Equals(
+                    constraint.GetProperty("name").GetString(),
+                    "rx-state-drift",
+                    StringComparison.Ordinal));
+
+            var stateWatch = root.GetProperty("rxStateStabilityWatch");
+            Assert.Equal("rx-state-drift", stateWatch.GetProperty("status").GetString());
+            Assert.False(stateWatch.GetProperty("stable").GetBoolean());
+            Assert.False(stateWatch.GetProperty("benchmarkReady").GetBoolean());
+            Assert.Equal(2, stateWatch.GetProperty("evidenceSampleCount").GetInt32());
+            Assert.True(stateWatch.GetProperty("vfoDrift").GetBoolean());
+            Assert.True(stateWatch.GetProperty("modeDrift").GetBoolean());
+            Assert.True(stateWatch.GetProperty("filterDrift").GetBoolean());
+            Assert.True(stateWatch.GetProperty("vfoHz").GetProperty("movement").GetDouble() > 0);
+            Assert.Contains(
+                stateWatch.GetProperty("modeCounts").EnumerateArray(),
+                item => string.Equals(item.GetProperty("name").GetString(), "USB", StringComparison.Ordinal));
+            Assert.Contains(
+                stateWatch.GetProperty("modeCounts").EnumerateArray(),
+                item => string.Equals(item.GetProperty("name").GetString(), "LSB", StringComparison.Ordinal));
+            Assert.Equal(2, stateWatch.GetProperty("filterCounts").GetArrayLength());
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task WatchLiveDiagnosticsTreatsNr5PostLevelerSpeechAsAligned()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
@@ -2771,14 +2864,19 @@ public sealed class DspModernizationValidationToolTests
             using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
             var root = reportDoc.RootElement;
             var weakWatch = root.GetProperty("nr5WeakSignalWatch");
-            Assert.Equal("weak-strong-output-gap-watch", weakWatch.GetProperty("mixedWeakStrongEvidenceStatus").GetString());
-            Assert.False(weakWatch.GetProperty("mixedWeakStrongEvidenceReady").GetBoolean());
+            Assert.Equal("ready-final-audio", weakWatch.GetProperty("mixedWeakStrongEvidenceStatus").GetString());
+            Assert.True(weakWatch.GetProperty("mixedWeakStrongEvidenceReady").GetBoolean());
+            Assert.False(weakWatch.GetProperty("weakStrongFinalAudioParityReady").GetBoolean());
+            Assert.True(weakWatch.GetProperty("weakStrongOutputGapDb").GetDouble() > 6.0);
             Assert.Equal("ready-final-audio", weakWatch.GetProperty("speechQualifiedMixedWeakStrongEvidenceStatus").GetString());
             Assert.True(weakWatch.GetProperty("speechQualifiedMixedWeakStrongEvidenceReady").GetBoolean());
             Assert.True(weakWatch.GetProperty("speechQualifiedWeakStrongFinalAudioParityReady").GetBoolean());
             Assert.Equal(1, weakWatch.GetProperty("speechQualifiedWeakInputSampleCount").GetInt32());
             Assert.Equal(1, weakWatch.GetProperty("speechQualifiedStrongInputSampleCount").GetInt32());
             Assert.Equal(0.8, weakWatch.GetProperty("speechQualifiedWeakStrongFinalAudioGapDb").GetDouble(), precision: 3);
+            var focus = weakWatch.GetProperty("mixedWeakStrongTuningFocus");
+            Assert.Equal("ready-final-audio", focus.GetProperty("speechQualifiedStatus").GetString());
+            Assert.Equal(0.8, focus.GetProperty("speechQualifiedFinalAudioGapDb").GetDouble(), precision: 3);
 
             Assert.True(weakWatch.GetProperty("speechQualifiedWeakFinalAudioDbfs").GetProperty("count").GetInt32() > 0);
             Assert.True(weakWatch.GetProperty("speechQualifiedStrongFinalAudioDbfs").GetProperty("count").GetInt32() > 0);
@@ -2856,6 +2954,11 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal("ready-final-audio", weakWatch.GetProperty("passbandQualifiedMixedWeakStrongEvidenceStatus").GetString());
             Assert.True(weakWatch.GetProperty("passbandQualifiedMixedWeakStrongEvidenceReady").GetBoolean());
             Assert.True(weakWatch.GetProperty("passbandQualifiedWeakStrongFinalAudioParityReady").GetBoolean());
+            Assert.Equal("ready-final-audio", weakWatch.GetProperty("mixedWeakStrongEvidenceStatus").GetString());
+            Assert.True(weakWatch.GetProperty("mixedWeakStrongEvidenceReady").GetBoolean());
+            var focus = weakWatch.GetProperty("mixedWeakStrongTuningFocus");
+            Assert.Equal("ready-final-audio", focus.GetProperty("passbandQualifiedStatus").GetString());
+            Assert.Equal(0.8, focus.GetProperty("passbandQualifiedFinalAudioGapDb").GetDouble(), precision: 3);
             Assert.Equal(1, weakWatch.GetProperty("passbandQualifiedWeakInputSampleCount").GetInt32());
             Assert.Equal(1, weakWatch.GetProperty("passbandQualifiedStrongInputSampleCount").GetInt32());
             Assert.Equal(0.8, weakWatch.GetProperty("passbandQualifiedWeakStrongFinalAudioGapDb").GetDouble(), precision: 3);
@@ -8557,7 +8660,12 @@ public sealed class DspModernizationValidationToolTests
         double? nr5OutputDbfs = null,
         object[]? frontendTopPeaks = null,
         int rxChainFilterLowHz = 300,
-        int rxChainFilterHighHz = 2600)
+        int rxChainFilterHighHz = 2600,
+        long radioVfoHz = 14_260_000,
+        long? radioLoHz = null,
+        string radioMode = "USB",
+        bool radioCtunEnabled = false,
+        int radioSampleRate = 384_000)
     {
         return new
         {
@@ -8575,6 +8683,11 @@ public sealed class DspModernizationValidationToolTests
                 nr5TuningStatus = includeNr5 ? "ready-for-nr5-live-tuning" : "nr5-diagnostics-missing",
                 nr5TuningConstraints = Array.Empty<string>(),
                 frontendTopPeaks = frontendTopPeaks ?? Array.Empty<object>(),
+                radioVfoHz,
+                radioLoHz = radioLoHz ?? radioVfoHz,
+                radioMode,
+                radioCtunEnabled,
+                radioSampleRate,
                 rxChainFilterLowHz,
                 rxChainFilterHighHz,
                 rxChainFilterWidthHz = Math.Abs(rxChainFilterHighHz - rxChainFilterLowHz),

@@ -818,6 +818,7 @@ function Get-CaptureReadinessAction {
         "wdsp-inactive" { return "Connect the radio or restart the DSP engine so live WDSP telemetry is available." }
         "nr4-sbnr-exports-missing" { return "Rebuild or install WDSP with NR4/SBNR exports before evaluating NR4." }
         "nr5-spnr-exports-missing" { return "Rebuild or install WDSP with NR5/SPNR exports before evaluating NR5 weak-signal behavior." }
+        "rx-state-drift" { return "Keep VFO, LO, mode, filter, CTUN, and sample rate fixed for the capture window; restart the trace after tuning settles." }
         default { return "Inspect liveRecommendedActions and sampleSummaries for affected samples before using this trace as acceptance evidence." }
     }
 }
@@ -1294,6 +1295,11 @@ function New-SampleSummary {
         monitorBacklogSamples = Get-JsonValue $runtime "monitorBacklogSamples"
         requestedNrMode = [string](Get-JsonValue $diagnostics "requestedNrMode")
         effectiveNrMode = [string](Get-JsonValue $diagnostics "effectiveNrMode")
+        radioVfoHz = Get-JsonValue $diagnostics "radioVfoHz"
+        radioLoHz = Get-JsonValue $diagnostics "radioLoHz"
+        radioMode = Get-JsonValue $diagnostics "radioMode"
+        radioCtunEnabled = Get-JsonValue $diagnostics "radioCtunEnabled"
+        radioSampleRate = Get-JsonValue $diagnostics "radioSampleRate"
         rxChainFilterLowHz = Get-JsonValue $diagnostics "rxChainFilterLowHz"
         rxChainFilterHighHz = Get-JsonValue $diagnostics "rxChainFilterHighHz"
         rxChainFilterWidthHz = Get-JsonValue $diagnostics "rxChainFilterWidthHz"
@@ -1687,6 +1693,18 @@ function Build-Report {
     $rxChainFilterHighHz = $null
     $rxChainFilterWidthHz = $null
     $rxChainFilterPresetName = $null
+    $radioVfoHz = $null
+    $radioLoHz = $null
+    $radioMode = $null
+    $radioCtunEnabled = $null
+    $radioSampleRate = $null
+    $rxStateVfoValues = New-Object System.Collections.Generic.List[double]
+    $rxStateLoValues = New-Object System.Collections.Generic.List[double]
+    $rxStateSampleRateValues = New-Object System.Collections.Generic.List[double]
+    $rxStateModeCounts = @{}
+    $rxStateFilterCounts = @{}
+    $rxStateCtunCounts = @{}
+    $rxStateEvidenceSampleCount = 0
 
     foreach ($sample in @($SampleRecords)) {
         if (-not (Test-Truthy (Get-JsonValue $sample "ok"))) {
@@ -1752,6 +1770,53 @@ function Build-Report {
         $sampleFilterLowHz = Get-NumericValue (Get-JsonValue $diagnostics "rxChainFilterLowHz")
         $sampleFilterHighHz = Get-NumericValue (Get-JsonValue $diagnostics "rxChainFilterHighHz")
         $sampleFilterPassbandKnown = ($null -ne $sampleFilterLowHz -and $null -ne $sampleFilterHighHz)
+        $sampleRadioVfoHz = Get-NumericValue (Get-JsonValue $diagnostics "radioVfoHz")
+        $sampleRadioLoHz = Get-NumericValue (Get-JsonValue $diagnostics "radioLoHz")
+        $sampleRadioSampleRate = Get-NumericValue (Get-JsonValue $diagnostics "radioSampleRate")
+        $sampleRadioMode = ([string](Get-JsonValue $diagnostics "radioMode")).Trim()
+        $sampleRadioCtunValue = Get-JsonValue $diagnostics "radioCtunEnabled"
+        $sampleRadioCtunKnown = ($null -ne $sampleRadioCtunValue)
+        $sampleRadioCtunText = ""
+        if ($sampleRadioCtunKnown) {
+            $sampleRadioCtunText = if (Test-Truthy $sampleRadioCtunValue) { "true" } else { "false" }
+        }
+        $sampleHasRxStateEvidence = $false
+        if ($null -ne $sampleRadioVfoHz) {
+            if ($null -eq $radioVfoHz) { $radioVfoHz = [long][Math]::Round([double]$sampleRadioVfoHz) }
+            Add-Number $rxStateVfoValues $sampleRadioVfoHz
+            $sampleHasRxStateEvidence = $true
+        }
+        if ($null -ne $sampleRadioLoHz) {
+            if ($null -eq $radioLoHz) { $radioLoHz = [long][Math]::Round([double]$sampleRadioLoHz) }
+            Add-Number $rxStateLoValues $sampleRadioLoHz
+            $sampleHasRxStateEvidence = $true
+        }
+        if ($null -ne $sampleRadioSampleRate) {
+            if ($null -eq $radioSampleRate) { $radioSampleRate = [int][Math]::Round([double]$sampleRadioSampleRate) }
+            Add-Number $rxStateSampleRateValues $sampleRadioSampleRate
+            $sampleHasRxStateEvidence = $true
+        }
+        if (-not [string]::IsNullOrWhiteSpace($sampleRadioMode)) {
+            if ($null -eq $radioMode) { $radioMode = $sampleRadioMode }
+            Add-Count $rxStateModeCounts $sampleRadioMode
+            $sampleHasRxStateEvidence = $true
+        }
+        if ($sampleRadioCtunKnown) {
+            if ($null -eq $radioCtunEnabled) { $radioCtunEnabled = Test-Truthy $sampleRadioCtunValue }
+            Add-Count $rxStateCtunCounts $sampleRadioCtunText
+            $sampleHasRxStateEvidence = $true
+        }
+        if ($sampleFilterPassbandKnown) {
+            $sampleFilterKey = "{0}..{1}|{2}" -f `
+                [int][Math]::Round([double]$sampleFilterLowHz), `
+                [int][Math]::Round([double]$sampleFilterHighHz), `
+                ([string](Get-JsonValue $diagnostics "rxChainFilterPresetName")).Trim()
+            Add-Count $rxStateFilterCounts $sampleFilterKey
+            $sampleHasRxStateEvidence = $true
+        }
+        if ($sampleHasRxStateEvidence) {
+            $rxStateEvidenceSampleCount++
+        }
         $frontendFilterPassbandTopPeakCount = 0
         $frontendNearestFilterPassbandDistanceHz = $null
         $frontendNearestFilterPassbandPeak = $null
@@ -2832,6 +2897,10 @@ function Build-Report {
     elseif ($null -eq $nr5WeakStrongOutputGapDb -and $null -eq $nr5WeakStrongFinalAudioGapDb) {
         $nr5MixedWeakStrongEvidenceStatus = "missing-output-gap"
     }
+    elseif ($nr5SpeechQualifiedWeakStrongFinalAudioParityReady -or
+        $nr5PassbandQualifiedWeakStrongFinalAudioParityReady) {
+        $nr5MixedWeakStrongEvidenceStatus = "ready-final-audio"
+    }
     elseif ($null -ne $nr5WeakStrongFinalAudioGapDb -and
         [Math]::Abs([double]$nr5WeakStrongFinalAudioGapDb) -le $nr5MixedWeakStrongFinalAudioGapThresholdDb) {
         $nr5MixedWeakStrongEvidenceStatus = "ready-final-audio"
@@ -2951,6 +3020,12 @@ function Build-Report {
         finalAudioGapExcessDb = $nr5MixedWeakStrongFinalAudioGapExcessDb
         weakFinalAudioLiftNeededDb = $nr5WeakFinalAudioLiftNeededDb
         weakFinalAudioTrimNeededDb = $nr5WeakFinalAudioTrimNeededDb
+        speechQualifiedOutputGapDb = $nr5SpeechQualifiedWeakStrongOutputGapDb
+        speechQualifiedFinalAudioGapDb = $nr5SpeechQualifiedWeakStrongFinalAudioGapDb
+        speechQualifiedStatus = $nr5SpeechQualifiedWeakStrongEvidenceStatus
+        passbandQualifiedOutputGapDb = $nr5PassbandQualifiedWeakStrongOutputGapDb
+        passbandQualifiedFinalAudioGapDb = $nr5PassbandQualifiedWeakStrongFinalAudioGapDb
+        passbandQualifiedStatus = $nr5PassbandQualifiedWeakStrongEvidenceStatus
         topWeakInputs = @($nr5WeakInputTopSamples)
         topStrongInputs = @($nr5StrongInputTopSamples)
         topSpeechQualifiedWeakInputs = @($nr5SpeechQualifiedWeakInputTopSamples)
@@ -3049,6 +3124,44 @@ function Build-Report {
     else {
         "stable"
     }
+    $rxStateVfoStats = Get-NumberStats $rxStateVfoValues
+    $rxStateLoStats = Get-NumberStats $rxStateLoValues
+    $rxStateSampleRateStats = Get-NumberStats $rxStateSampleRateValues
+    $rxStateFrequencyDriftToleranceHz = 0.0
+    $rxStateVfoDrift = ([int]$rxStateVfoStats["count"] -gt 1 -and
+        [double]$rxStateVfoStats["movement"] -gt $rxStateFrequencyDriftToleranceHz)
+    $rxStateLoDrift = ([int]$rxStateLoStats["count"] -gt 1 -and
+        [double]$rxStateLoStats["movement"] -gt $rxStateFrequencyDriftToleranceHz)
+    $rxStateSampleRateDrift = ([int]$rxStateSampleRateStats["count"] -gt 1 -and
+        [double]$rxStateSampleRateStats["movement"] -gt 0.0)
+    $rxStateModeDrift = (@($rxStateModeCounts.Keys).Count -gt 1)
+    $rxStateFilterDrift = (@($rxStateFilterCounts.Keys).Count -gt 1)
+    $rxStateCtunDrift = (@($rxStateCtunCounts.Keys).Count -gt 1)
+    $rxStateStable = -not ($rxStateVfoDrift -or
+        $rxStateLoDrift -or
+        $rxStateSampleRateDrift -or
+        $rxStateModeDrift -or
+        $rxStateFilterDrift -or
+        $rxStateCtunDrift)
+    $rxStateBenchmarkReady = ($rxStateEvidenceSampleCount -eq 0 -or $rxStateStable)
+    $rxStateStabilityStatus = if ($rxStateEvidenceSampleCount -eq 0) {
+        "not-observed"
+    }
+    elseif ($rxStateStable) {
+        "stable"
+    }
+    else {
+        "rx-state-drift"
+    }
+    if (-not $rxStateBenchmarkReady) {
+        $rxStateConstraintCount = [Math]::Max(1, $rxStateEvidenceSampleCount)
+        if ($constraintCounts.ContainsKey("rx-state-drift")) {
+            $constraintCounts["rx-state-drift"] = [int]$constraintCounts["rx-state-drift"] + $rxStateConstraintCount
+        }
+        else {
+            $constraintCounts["rx-state-drift"] = $rxStateConstraintCount
+        }
+    }
     $constraintReadiness = @(ConvertTo-ReadinessCountArray -Map $constraintCounts -SampleCount $okCount)
     $hardConstraintReadiness = @(ConvertTo-ReadinessCountArray -Map $hardConstraintCounts -SampleCount $okCount)
     $statusReadiness = @(ConvertTo-ReadinessCountArray -Map $statusCounts -SampleCount $okCount)
@@ -3084,6 +3197,9 @@ function Build-Report {
         else {
             $summaryRecommendations.Add("Resolve hard live diagnostics blockers before using this trace as G2 acceptance evidence.") | Out-Null
         }
+    }
+    if (-not $rxStateBenchmarkReady) {
+        $summaryRecommendations.Add((Get-CaptureReadinessAction "rx-state-drift")) | Out-Null
     }
     if ($null -ne $topConstraint) {
         $constraintName = [string](Get-JsonValue $topConstraint "name")
@@ -3329,6 +3445,9 @@ function Build-Report {
     elseif ($hardBlockerSampleCount -gt 0) {
         $trendStatus = "blocked"
     }
+    elseif (-not $rxStateBenchmarkReady) {
+        $trendStatus = "rx-state-drift"
+    }
     elseif ($runtimeCount -lt $okCount) {
         $trendStatus = "runtime-evidence-missing"
     }
@@ -3384,6 +3503,7 @@ function Build-Report {
         $runtimeCount -eq $okCount -and
         $audioFreshCount -eq $runtimeCount -and
         $rxMetersFreshCount -eq $runtimeCount -and
+        $rxStateBenchmarkReady -and
         ($nr5SampleCount -eq 0 -or ($nr5AgcDiagnosticCount -eq $nr5SampleCount -and
             $nr5ProbabilityDiagnosticCount -eq $nr5SampleCount -and
             $nr5PeakDiagnosticCount -eq $nr5SampleCount)))
@@ -3392,6 +3512,7 @@ function Build-Report {
         $nr5SampleCount -eq $okCount -and
         $nr5AlignedCount -eq $okCount -and
         $nr5TuningReadyCount -eq $okCount -and
+        $rxStateBenchmarkReady -and
         $nr5AgcDiagnosticCount -eq $nr5SampleCount -and
         $nr5ProbabilityDiagnosticCount -eq $nr5SampleCount -and
         $nr5PeakDiagnosticCount -eq $nr5SampleCount)
@@ -3534,6 +3655,11 @@ function Build-Report {
         rxChainFilterHighHz = $rxChainFilterHighHz
         rxChainFilterWidthHz = $rxChainFilterWidthHz
         rxChainFilterPresetName = $rxChainFilterPresetName
+        radioVfoHz = $radioVfoHz
+        radioLoHz = $radioLoHz
+        radioMode = $radioMode
+        radioCtunEnabled = $radioCtunEnabled
+        radioSampleRate = $radioSampleRate
         startedUtc = $StartedUtc
         completedUtc = $CompletedUtc
         durationMs = $durationMs
@@ -3575,6 +3701,26 @@ function Build-Report {
         latencyMs = Get-NumberStats $latencies
         readinessScore = Get-NumberStats $readinessScores
         agcGainDb = $agcStats
+        rxStateStabilityWatch = [ordered]@{
+            status = $rxStateStabilityStatus
+            stable = $rxStateStable
+            benchmarkReady = $rxStateBenchmarkReady
+            evidenceSampleCount = $rxStateEvidenceSampleCount
+            frequencyDriftToleranceHz = $rxStateFrequencyDriftToleranceHz
+            tuneStepHz = $TuneStepHz
+            vfoHz = $rxStateVfoStats
+            radioLoHz = $rxStateLoStats
+            radioSampleRateHz = $rxStateSampleRateStats
+            modeCounts = @(ConvertTo-CountArray $rxStateModeCounts)
+            filterCounts = @(ConvertTo-CountArray $rxStateFilterCounts)
+            ctunCounts = @(ConvertTo-CountArray $rxStateCtunCounts)
+            vfoDrift = $rxStateVfoDrift
+            radioLoDrift = $rxStateLoDrift
+            radioSampleRateDrift = $rxStateSampleRateDrift
+            modeDrift = $rxStateModeDrift
+            filterDrift = $rxStateFilterDrift
+            ctunDrift = $rxStateCtunDrift
+        }
         agcStabilityWatch = [ordered]@{
             status = $agcStabilityStatus
             pumpingRisk = $agcActivePumpingRisk
@@ -4039,6 +4185,7 @@ else {
     Write-Host "Samples: $($report["okSampleCount"]) ok, $($report["failedSampleCount"]) failed, $($report["hardBlockerSampleCount"]) with hard blockers"
     Write-Host "AGC movement dB: $($report["agcGainDb"]["movement"]) ($($report["agcStabilityWatch"]["status"])), audio RMS movement dB: $($report["audioRmsDbfs"]["movement"]), min ADC headroom dB: $($report["adcHeadroomDb"]["min"])"
     Write-Host "NR5 normalization: input movement dB $($report["nr5InputDbfs"]["movement"]), output movement dB $($report["nr5OutputDbfs"]["movement"]), weak/strong output gap dB $($report["nr5WeakSignalWatch"]["weakStrongOutputGapDb"]), weak/strong final-audio gap dB $($report["nr5WeakSignalWatch"]["weakStrongFinalAudioGapDb"]), mixed weak/strong status $($report["nr5WeakSignalWatch"]["mixedWeakStrongEvidenceStatus"])"
+    Write-Host "NR5 qualified parity: speech final gap dB $($report["nr5WeakSignalWatch"]["speechQualifiedWeakStrongFinalAudioGapDb"]) ($($report["nr5WeakSignalWatch"]["speechQualifiedMixedWeakStrongEvidenceStatus"])), passband final gap dB $($report["nr5WeakSignalWatch"]["passbandQualifiedWeakStrongFinalAudioGapDb"]) ($($report["nr5WeakSignalWatch"]["passbandQualifiedMixedWeakStrongEvidenceStatus"]))"
     $tuneCandidates = @($report["frontendTuneCandidates"])
     if ($tuneCandidates.Count -gt 0) {
         $candidateText = @($tuneCandidates | Select-Object -First 5 | ForEach-Object {
@@ -4055,7 +4202,7 @@ else {
         if ($null -ne $mixedFocus) {
             $outputGapExcessText = if ($null -eq $mixedFocus["outputGapExcessDb"]) { "n/a" } else { "$($mixedFocus["outputGapExcessDb"]) dB" }
             $finalAudioGapExcessText = if ($null -eq $mixedFocus["finalAudioGapExcessDb"]) { "n/a" } else { "$($mixedFocus["finalAudioGapExcessDb"]) dB" }
-            Write-Host "NR5 mixed focus: action=$($mixedFocus["preferredAction"]), weak=$($mixedFocus["weakInputSampleCount"]), strong=$($mixedFocus["strongInputSampleCount"]), outputGapExcess=$outputGapExcessText ($($mixedFocus["outputGapDirection"])), finalAudioGapExcess=$finalAudioGapExcessText ($($mixedFocus["finalAudioGapDirection"]))"
+            Write-Host "NR5 mixed focus: action=$($mixedFocus["preferredAction"]), weak=$($mixedFocus["weakInputSampleCount"]), strong=$($mixedFocus["strongInputSampleCount"]), outputGapExcess=$outputGapExcessText ($($mixedFocus["outputGapDirection"])), finalAudioGapExcess=$finalAudioGapExcessText ($($mixedFocus["finalAudioGapDirection"])), speechFinalGap=$($mixedFocus["speechQualifiedFinalAudioGapDb"]) ($($mixedFocus["speechQualifiedStatus"])), passbandFinalGap=$($mixedFocus["passbandQualifiedFinalAudioGapDb"]) ($($mixedFocus["passbandQualifiedStatus"]))"
         }
     }
     $levelerWatch = $report["rxAudioLevelerWatch"]

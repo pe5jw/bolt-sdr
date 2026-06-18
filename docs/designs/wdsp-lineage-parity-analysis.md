@@ -215,6 +215,12 @@ it names the top hard gate, the top overall constraint, the dominant status, and
 for constraints such as stale frontend DSP scene evidence or unmapped Smart NR profile publishing.
 Its status distinguishes hard-blocked traces from `ready-with-advisory` traces that are benchmark
 usable but still have soft capture hygiene issues to clear before acceptance evidence is final.
+The live diagnostics endpoint also publishes read-only radio state (`radioVfoHz`, `radioLoHz`,
+`radioMode`, `radioCtunEnabled`, and `radioSampleRate`) so the watcher can emit
+`rxStateStabilityWatch`. Any VFO, LO, mode, filter, CTUN, or sample-rate drift inside a capture
+window adds the `rx-state-drift` preflight constraint and forces `readyForBenchmarkTrace=false`;
+the samples remain useful for debugging, but the trace is not acceptance evidence until tuning has
+settled and the window is recaptured.
 Use `-Preflight` for a short fail-fast capture gate; it exits nonzero when samples fail, hard gates
 appear, or `readyForBenchmarkTrace=false`. Use `-FailOnHardGate` when an operator wants to continue
 on soft advisories but still stop immediately on failed samples or hard blockers.
