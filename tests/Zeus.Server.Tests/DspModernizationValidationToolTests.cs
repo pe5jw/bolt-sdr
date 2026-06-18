@@ -2480,6 +2480,103 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task WatchLiveDiagnosticsReportsFrontendStrongPassbandSubthresholdNr5Inputs()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-frontend-strong-subthreshold-watch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var jsonlPath = Path.Combine(bundleDir, "frontend-strong-subthreshold.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                jsonlPath,
+                new[]
+                {
+                    AgcWatchSample(
+                        0,
+                        agcGainDb: -42.5,
+                        audioRmsDbfs: -31.0,
+                        includeNr5: true,
+                        nr5InputDbfs: -36.0,
+                        nr5OutputDbfs: -33.0,
+                        frontendTopPeaks: [FrontendTopPeak(14_260_900, 900, 32.0, -70.0)]),
+                    AgcWatchSample(
+                        1,
+                        agcGainDb: -42.5,
+                        audioRmsDbfs: -28.0,
+                        includeNr5: true,
+                        nr5InputDbfs: -27.4,
+                        nr5OutputDbfs: -29.0,
+                        frontendTopPeaks: [FrontendTopPeak(14_261_000, 1_000, 34.0, -65.0)]),
+                    AgcWatchSample(
+                        2,
+                        agcGainDb: -42.5,
+                        audioRmsDbfs: -29.0,
+                        includeNr5: true,
+                        nr5InputDbfs: -28.2,
+                        nr5OutputDbfs: -30.0,
+                        frontendTopPeaks: [FrontendTopPeak(14_261_200, 1_200, 31.0, -72.0)])
+                });
+
+            var reportPath = Path.Combine(bundleDir, "frontend-strong-subthreshold.summary.json");
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, watch.ExitCode);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+            var weakWatch = root.GetProperty("nr5WeakSignalWatch");
+            Assert.Equal("missing-strong-input", weakWatch.GetProperty("mixedWeakStrongEvidenceStatus").GetString());
+            Assert.False(weakWatch.GetProperty("mixedWeakStrongEvidenceReady").GetBoolean());
+            Assert.Equal(0, weakWatch.GetProperty("strongInputSampleCount").GetInt32());
+            Assert.Equal(0, weakWatch.GetProperty("nearStrongInputSampleCount").GetInt32());
+            Assert.Equal(3, weakWatch.GetProperty("frontendStrongPassbandNr5SubthresholdSampleCount").GetInt32());
+            Assert.Equal(20.0, weakWatch.GetProperty("frontendStrongPassbandSnrThresholdDb").GetDouble(), precision: 3);
+            Assert.Equal(-85.0, weakWatch.GetProperty("frontendStrongPassbandDbfsThreshold").GetDouble(), precision: 3);
+            Assert.Equal(5.4, weakWatch.GetProperty("frontendStrongPassbandNr5SubthresholdDistanceToStrongDb").GetProperty("min").GetDouble(), precision: 3);
+
+            var topRows = weakWatch.GetProperty("topFrontendStrongPassbandNr5SubthresholdInputs").EnumerateArray().ToArray();
+            Assert.Equal(3, topRows.Length);
+            Assert.Equal(1, topRows[0].GetProperty("sampleIndex").GetInt32());
+            Assert.Equal("mid-subthreshold", topRows[0].GetProperty("inputClass").GetString());
+            Assert.Equal(-27.4, topRows[0].GetProperty("inputDbfs").GetDouble(), precision: 3);
+            Assert.Equal(5.4, topRows[0].GetProperty("distanceToStrongThresholdDb").GetDouble(), precision: 3);
+            Assert.Equal(34.0, topRows[0].GetProperty("frontendPassbandPeak").GetProperty("snrDb").GetDouble(), precision: 3);
+            Assert.True(topRows[0].GetProperty("passbandEvidencePeak").GetBoolean());
+
+            var focus = weakWatch.GetProperty("mixedWeakStrongTuningFocus");
+            Assert.Equal(3, focus.GetProperty("frontendStrongPassbandNr5SubthresholdSampleCount").GetInt32());
+            Assert.Equal(
+                "inspect-frontend-strong-passband-subthreshold-nr5-inputs-before-changing-dsp",
+                focus.GetProperty("preferredAction").GetString());
+
+            Assert.Contains(
+                root.GetProperty("recommendations").EnumerateArray(),
+                recommendation => (recommendation.GetString() ?? "").Contains("Frontend-strong passband peaks were present", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task WatchLiveDiagnosticsMarksActiveOffPassbandNr5TraceAsEvidenceMissing()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
@@ -3235,6 +3332,8 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(-26.0, weakWatch.GetProperty("nearStrongInputThresholdDbfs").GetDouble(), precision: 3);
             Assert.Equal(0, weakWatch.GetProperty("strongInputSampleCount").GetInt32());
             Assert.Equal(1, weakWatch.GetProperty("nearStrongInputSampleCount").GetInt32());
+            Assert.Equal(1, weakWatch.GetProperty("frontendStrongPassbandNr5SubthresholdSampleCount").GetInt32());
+            Assert.Equal(0.2, weakWatch.GetProperty("frontendStrongPassbandNr5SubthresholdDistanceToStrongDb").GetProperty("min").GetDouble(), precision: 3);
             Assert.Equal(1, weakWatch.GetProperty("speechQualifiedNearStrongInputSampleCount").GetInt32());
             Assert.Equal(1, weakWatch.GetProperty("passbandQualifiedNearStrongInputSampleCount").GetInt32());
 
@@ -3245,9 +3344,22 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(topNearStrong[0].GetProperty("speechQualified").GetBoolean());
             Assert.True(topNearStrong[0].GetProperty("passbandQualified").GetBoolean());
 
+            var topSubthreshold = weakWatch.GetProperty("topFrontendStrongPassbandNr5SubthresholdInputs").EnumerateArray().ToArray();
+            Assert.Single(topSubthreshold);
+            Assert.Equal(9, topSubthreshold[0].GetProperty("sampleIndex").GetInt32());
+            Assert.Equal("near-strong", topSubthreshold[0].GetProperty("inputClass").GetString());
+            Assert.Equal(0.2, topSubthreshold[0].GetProperty("distanceToStrongThresholdDb").GetDouble(), precision: 3);
+            Assert.Equal(29.0, topSubthreshold[0].GetProperty("frontendPassbandPeak").GetProperty("snrDb").GetDouble(), precision: 3);
+
+            var focus = weakWatch.GetProperty("mixedWeakStrongTuningFocus");
+            Assert.Equal(1, focus.GetProperty("frontendStrongPassbandNr5SubthresholdSampleCount").GetInt32());
+            Assert.Equal(
+                "inspect-frontend-strong-passband-subthreshold-nr5-inputs-before-changing-dsp",
+                focus.GetProperty("preferredAction").GetString());
+
             Assert.Contains(
                 root.GetProperty("recommendations").EnumerateArray(),
-                recommendation => (recommendation.GetString() ?? "").Contains("near-strong samples", StringComparison.Ordinal));
+                recommendation => (recommendation.GetString() ?? "").Contains("Frontend-strong passband peaks were present", StringComparison.Ordinal));
         }
         finally
         {
@@ -3683,6 +3795,190 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains(
                 root.GetProperty("recommendations").EnumerateArray(),
                 recommendation => (recommendation.GetString() ?? "").Contains("NR5 RMNoise-style silence gate", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task WatchLiveDiagnosticsReportsStableNr5SpeechContinuity()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-speech-continuity-stable-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var jsonlPath = Path.Combine(bundleDir, "nr5-speech-continuity-stable.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                jsonlPath,
+                new[]
+                {
+                    Nr5LevelerAlignmentWatchSample(
+                        0,
+                        nr5InputDbfs: -42.0,
+                        nr5OutputDbfs: -30.0,
+                        levelerInputRmsDbfs: -41.8,
+                        levelerOutputRmsDbfs: -18.4,
+                        rxAudioLevelerNr5HybridSpeechPrior: 0.72,
+                        rxAudioLevelerNr5NoSignalNoisePrior: 0.02,
+                        rxAudioLevelerNr5NoiseProfilePrior: 0.03,
+                        rxAudioLevelerNr5RmNoiseGateEnabled: true,
+                        rxAudioLevelerNr5RmNoiseGate: false,
+                        rxAudioLevelerNr5RmNoiseGateHoldBlocks: 0),
+                    Nr5LevelerAlignmentWatchSample(
+                        1,
+                        nr5InputDbfs: -41.5,
+                        nr5OutputDbfs: -29.6,
+                        levelerInputRmsDbfs: -41.7,
+                        levelerOutputRmsDbfs: -18.0,
+                        rxAudioLevelerNr5HybridSpeechPrior: 0.68,
+                        rxAudioLevelerNr5NoSignalNoisePrior: 0.03,
+                        rxAudioLevelerNr5NoiseProfilePrior: 0.02,
+                        rxAudioLevelerNr5RmNoiseGateEnabled: true,
+                        rxAudioLevelerNr5RmNoiseGate: false,
+                        rxAudioLevelerNr5RmNoiseGateHoldBlocks: 0),
+                    Nr5LevelerAlignmentWatchSample(
+                        2,
+                        nr5InputDbfs: -42.4,
+                        nr5OutputDbfs: -30.2,
+                        levelerInputRmsDbfs: -42.1,
+                        levelerOutputRmsDbfs: -18.6,
+                        rxAudioLevelerNr5HybridSpeechPrior: 0.75,
+                        rxAudioLevelerNr5NoSignalNoisePrior: 0.01,
+                        rxAudioLevelerNr5NoiseProfilePrior: 0.04,
+                        rxAudioLevelerNr5RmNoiseGateEnabled: true,
+                        rxAudioLevelerNr5RmNoiseGate: false,
+                        rxAudioLevelerNr5RmNoiseGateHoldBlocks: 0)
+                });
+
+            var reportPath = Path.Combine(bundleDir, "nr5-speech-continuity-stable.summary.json");
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, watch.ExitCode);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+            var speechWatch = root.GetProperty("nr5SpeechContinuityWatch");
+
+            Assert.Equal("stable", speechWatch.GetProperty("status").GetString());
+            Assert.False(speechWatch.GetProperty("needsReview").GetBoolean());
+            Assert.Equal(3, speechWatch.GetProperty("sampleCount").GetInt32());
+            Assert.Equal(0, speechWatch.GetProperty("fadeSampleCount").GetInt32());
+            Assert.Equal(0, speechWatch.GetProperty("dropoutSampleCount").GetInt32());
+            Assert.Equal(0, speechWatch.GetProperty("rmNoiseGateOnSpeechSampleCount").GetInt32());
+            Assert.True(speechWatch.GetProperty("outputMovementDb").GetDouble() < 1.0);
+            Assert.True(speechWatch.GetProperty("appliedGainMovementDb").GetDouble() < 1.0);
+            Assert.Equal(3, speechWatch.GetProperty("topSamples").GetArrayLength());
+
+            Assert.Contains(
+                root.GetProperty("recommendations").EnumerateArray(),
+                recommendation => (recommendation.GetString() ?? "").Contains("RMNoise stayed open on speech", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task WatchLiveDiagnosticsFlagsRmNoiseGateOnNr5SpeechContinuity()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-speech-continuity-rmnoise-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var jsonlPath = Path.Combine(bundleDir, "nr5-speech-continuity-rmnoise.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                jsonlPath,
+                new[]
+                {
+                    Nr5LevelerAlignmentWatchSample(
+                        0,
+                        nr5InputDbfs: -42.0,
+                        nr5OutputDbfs: -30.0,
+                        levelerInputRmsDbfs: -41.8,
+                        levelerOutputRmsDbfs: -18.4,
+                        rxAudioLevelerNr5HybridSpeechPrior: 0.72,
+                        rxAudioLevelerNr5NoSignalNoisePrior: 0.02,
+                        rxAudioLevelerNr5NoiseProfilePrior: 0.03,
+                        rxAudioLevelerNr5RmNoiseGateEnabled: true,
+                        rxAudioLevelerNr5RmNoiseGate: false,
+                        rxAudioLevelerNr5RmNoiseGateHoldBlocks: 0),
+                    Nr5LevelerAlignmentWatchSample(
+                        1,
+                        nr5InputDbfs: -43.0,
+                        nr5OutputDbfs: -35.0,
+                        levelerInputRmsDbfs: -46.0,
+                        levelerOutputRmsDbfs: -48.0,
+                        rxAudioLevelerNr5HybridSpeechPrior: 0.65,
+                        rxAudioLevelerNr5NoSignalNoisePrior: 0.02,
+                        rxAudioLevelerNr5NoiseProfilePrior: 0.04,
+                        rxAudioLevelerNr5RmNoiseGateEnabled: true,
+                        rxAudioLevelerNr5RmNoiseGate: true,
+                        rxAudioLevelerNr5RmNoiseGateHoldBlocks: 12,
+                        rxAudioLevelerNr5RmNoiseSuppressionDb: 18.0)
+                });
+
+            var reportPath = Path.Combine(bundleDir, "nr5-speech-continuity-rmnoise.summary.json");
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, watch.ExitCode);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+            var speechWatch = root.GetProperty("nr5SpeechContinuityWatch");
+
+            Assert.Equal("rmnoise-speech-gate-risk", speechWatch.GetProperty("status").GetString());
+            Assert.True(speechWatch.GetProperty("needsReview").GetBoolean());
+            Assert.Equal(2, speechWatch.GetProperty("sampleCount").GetInt32());
+            Assert.Equal(1, speechWatch.GetProperty("dropoutSampleCount").GetInt32());
+            Assert.Equal(1, speechWatch.GetProperty("rmNoiseGateOnSpeechSampleCount").GetInt32());
+            Assert.Equal(50.0, speechWatch.GetProperty("rmNoiseGateOnSpeechPct").GetDouble(), precision: 3);
+
+            var topSamples = speechWatch.GetProperty("topSamples").EnumerateArray().ToArray();
+            Assert.Equal(2, topSamples.Length);
+            Assert.Equal(1, topSamples[0].GetProperty("sampleIndex").GetInt32());
+            Assert.True(topSamples[0].GetProperty("nr5RmNoiseGate").GetBoolean());
+            Assert.True(topSamples[0].GetProperty("belowDropoutThreshold").GetBoolean());
+
+            Assert.Contains(
+                root.GetProperty("recommendations").EnumerateArray(),
+                recommendation => (recommendation.GetString() ?? "").Contains("closed during NR5 speech continuity", StringComparison.Ordinal));
         }
         finally
         {
@@ -11713,6 +12009,16 @@ public sealed class DspModernizationValidationToolTests
 
     private static string FindRepoRoot()
     {
+        var overrideRoot = Environment.GetEnvironmentVariable("ZEUS_REPO_ROOT");
+        if (!string.IsNullOrWhiteSpace(overrideRoot))
+        {
+            var validator = Path.Combine(overrideRoot, "tools", "validate-dsp-modernization-bundle.ps1");
+            if (File.Exists(validator))
+            {
+                return overrideRoot;
+            }
+        }
+
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
              directory is not null;
              directory = directory.Parent)

@@ -1673,6 +1673,8 @@ function Build-Report {
     $frontendFilterPassbandPeakSamples = New-Object System.Collections.Generic.List[object]
     $passbandAudioSamples = New-Object System.Collections.Generic.List[object]
     $offPassbandAudioSamples = New-Object System.Collections.Generic.List[object]
+    $nr5FrontendStrongPassbandSubthresholdSamples = New-Object System.Collections.Generic.List[object]
+    $nr5FrontendStrongPassbandSubthresholdDistanceValues = New-Object System.Collections.Generic.List[double]
     $frontendTopPeakSampleCount = 0
     $frontendNearPassbandPeakSampleCount = 0
     $frontendFilterPassbandPeakSampleCount = 0
@@ -1693,6 +1695,8 @@ function Build-Report {
     $signalEvidenceAgcGateThreshold = 0.30
     $frontendNearPassbandThresholdHz = 3000.0
     $frontendFilterPassbandEdgeToleranceHz = 0.0
+    $frontendStrongPassbandSnrThresholdDb = 20.0
+    $frontendStrongPassbandDbfsThreshold = -85.0
     $nr5StrongInputThresholdDbfs = -22.0
     $nr5NearStrongInputThresholdDbfs = -26.0
     $nr5WeakDropoutFinalAudibleThresholdDbfs = $signalActiveAudioThresholdDbfs
@@ -2286,6 +2290,55 @@ function Build-Report {
                 $nr5InputOutputXValues.Add([double]$nr5InputDbfs) | Out-Null
                 $nr5InputOutputYValues.Add([double]$nr5OutputDbfs) | Out-Null
                 $nr5OutputMinusInputValues.Add([double]($nr5OutputDbfs - $nr5InputDbfs)) | Out-Null
+            }
+            $frontendPassbandEvidencePeak = $null
+            if ($sampleHasFilterPassbandPeak) {
+                $frontendPassbandEvidencePeak = $frontendNearestFilterPassbandPeak
+            }
+            elseif ($sampleHasPassbandEvidencePeak) {
+                $frontendPassbandEvidencePeak = $nearestFrontendPeak
+            }
+            $frontendPassbandPeakSnrDb = Get-NumericValue (Get-JsonValue $frontendPassbandEvidencePeak "snrDb")
+            $frontendPassbandPeakDbfs = Get-NumericValue (Get-JsonValue $frontendPassbandEvidencePeak "dbfs")
+            $frontendPassbandPeakLooksStrong = ($sampleHasPassbandEvidencePeak -and
+                (($null -ne $frontendPassbandPeakSnrDb -and [double]$frontendPassbandPeakSnrDb -ge $frontendStrongPassbandSnrThresholdDb) -or
+                    ($null -ne $frontendPassbandPeakDbfs -and [double]$frontendPassbandPeakDbfs -ge $frontendStrongPassbandDbfsThreshold)))
+            if ($frontendPassbandPeakLooksStrong -and
+                $null -ne $nr5InputDbfs -and
+                [double]$nr5InputDbfs -lt $nr5StrongInputThresholdDbfs) {
+                $distanceToStrongThresholdDb = [Math]::Round([Math]::Max(0.0, [double]$nr5StrongInputThresholdDbfs - [double]$nr5InputDbfs), 3)
+                $distanceToNearStrongThresholdDb = [Math]::Round([Math]::Max(0.0, [double]$nr5NearStrongInputThresholdDbfs - [double]$nr5InputDbfs), 3)
+                $nr5FrontendStrongPassbandSubthresholdDistanceValues.Add([double]$distanceToStrongThresholdDb) | Out-Null
+                $nr5FrontendStrongPassbandSubthresholdSamples.Add([ordered]@{
+                    sampleIndex = [int](Get-JsonValue $sample "sampleIndex")
+                    inputDbfs = $nr5InputDbfs
+                    outputDbfs = $nr5OutputDbfs
+                    finalAudioRmsDbfs = $runtimeFinalAudioRmsDbfsNumber
+                    inputClass = if ([double]$nr5InputDbfs -ge $nr5NearStrongInputThresholdDbfs) {
+                        "near-strong"
+                    }
+                    elseif ([double]$nr5InputDbfs -le $nr5LowEvidenceInputThresholdDbfs) {
+                        "weak"
+                    }
+                    else {
+                        "mid-subthreshold"
+                    }
+                    distanceToStrongThresholdDb = $distanceToStrongThresholdDb
+                    distanceToNearStrongThresholdDb = $distanceToNearStrongThresholdDb
+                    frontendStrongPassbandSnrThresholdDb = $frontendStrongPassbandSnrThresholdDb
+                    frontendStrongPassbandDbfsThreshold = $frontendStrongPassbandDbfsThreshold
+                    frontendPassbandPeak = Convert-FrontendTopPeak $frontendPassbandEvidencePeak
+                    strongest = Convert-FrontendTopPeak $strongestFrontendPeak
+                    nearPassbandPeak = $sampleHasNearPassbandPeak
+                    filterPassbandPeak = $sampleHasFilterPassbandPeak
+                    passbandEvidencePeak = $sampleHasPassbandEvidencePeak
+                    nearestFilterPassbandDistanceHz = $frontendNearestFilterPassbandDistanceHz
+                    signalConfidence = $nr5ConfidenceNumber
+                    agcGate = $nr5AgcGateNumber
+                    signalProbability = $nr5SignalProbabilityNumber
+                    peakEvidence = $nr5PeakEvidenceNumber
+                    audioAlignmentMismatch = $nr5AudioAlignmentMismatch
+                }) | Out-Null
             }
             $isLowEvidenceWeakInput = ($null -ne $nr5InputDbfs -and
                 $nr5InputDbfs -le $nr5LowEvidenceInputThresholdDbfs -and
@@ -2942,6 +2995,7 @@ function Build-Report {
     $frontendNearestTopPeakAbsOffsetStats = Get-NumberStats $frontendNearestTopPeakAbsOffsetValues
     $frontendStrongestTopPeakSnrStats = Get-NumberStats $frontendStrongestTopPeakSnrValues
     $frontendNearestFilterPassbandDistanceStats = Get-NumberStats $frontendNearestFilterPassbandDistanceValues
+    $nr5FrontendStrongPassbandSubthresholdDistanceStats = Get-NumberStats $nr5FrontendStrongPassbandSubthresholdDistanceValues
     $frontendAdjacentNoiseBinStats = Get-NumberStats $frontendAdjacentNoiseBinValues
     $frontendAdjacentNoiseFloorStats = Get-NumberStats $frontendAdjacentNoiseFloorValues
     $frontendAdjacentNoiseP50Stats = Get-NumberStats $frontendAdjacentNoiseP50Values
@@ -3074,6 +3128,10 @@ function Build-Report {
     $nr5HotMakeupTopSamples = @($nr5HotMakeupSamples.ToArray() | Sort-Object makeupGainDb -Descending | Select-Object -First 8)
     $nr5NearStrongInputTopSamples = @($nr5NearStrongInputSamples.ToArray() |
         Sort-Object @{Expression = "distanceToStrongThresholdDb"; Descending = $false }, @{Expression = "inputDbfs"; Descending = $true } |
+        Select-Object -First 8)
+    $nr5FrontendStrongPassbandSubthresholdTopSamples = @($nr5FrontendStrongPassbandSubthresholdSamples.ToArray() |
+        Sort-Object @{Expression = "distanceToStrongThresholdDb"; Descending = $false },
+            @{Expression = { $v = Get-NumericValue (Get-JsonValue (Get-JsonValue $_ "frontendPassbandPeak") "snrDb"); if ($null -eq $v) { [double]::NegativeInfinity } else { [double]$v } }; Descending = $true } |
         Select-Object -First 8)
     $nr5AudioAlignmentMismatchTopSamples = @($nr5AudioAlignmentMismatchSamples.ToArray() |
         Sort-Object @{Expression = { [Math]::Abs([double]$_.deltaDb) }; Descending = $true } |
@@ -3414,6 +3472,10 @@ function Build-Report {
         }
         default { "collect-ready-nr5-mixed-weak-strong-trace"; break }
     }
+    if ([string]::Equals($nr5MixedWeakStrongEvidenceStatus, "missing-strong-input", [StringComparison]::OrdinalIgnoreCase) -and
+        $nr5FrontendStrongPassbandSubthresholdSamples.Count -gt 0) {
+        $nr5MixedWeakStrongPreferredAction = "inspect-frontend-strong-passband-subthreshold-nr5-inputs-before-changing-dsp"
+    }
     $nr5MixedWeakStrongTuningFocus = [ordered]@{
         status = $nr5MixedWeakStrongEvidenceStatus
         preferredAction = $nr5MixedWeakStrongPreferredAction
@@ -3422,6 +3484,7 @@ function Build-Report {
         evidenceQualifiedWeakInputSampleCount = $nr5EvidenceQualifiedWeakInputCount
         strongInputSampleCount = $nr5StrongInputCount
         nearStrongInputSampleCount = $nr5NearStrongInputCount
+        frontendStrongPassbandNr5SubthresholdSampleCount = $nr5FrontendStrongPassbandSubthresholdSamples.Count
         minimumWeakInputSampleCount = $nr5MinimumMixedWeakInputSampleCount
         minimumEvidenceQualifiedWeakInputSampleCount = $nr5MinimumMixedEvidenceQualifiedWeakInputSampleCount
         minimumStrongInputSampleCount = $nr5MinimumMixedStrongInputSampleCount
@@ -3455,6 +3518,7 @@ function Build-Report {
         topSpeechQualifiedStrongInputs = @($nr5SpeechQualifiedStrongInputTopSamples)
         topPassbandQualifiedWeakInputs = @($nr5PassbandQualifiedWeakInputTopSamples)
         topPassbandQualifiedStrongInputs = @($nr5PassbandQualifiedStrongInputTopSamples)
+        topFrontendStrongPassbandNr5SubthresholdInputs = @($nr5FrontendStrongPassbandSubthresholdTopSamples)
     }
     if ($nr5LowEvidenceSampleCount -gt 0) {
         $nr5LowEvidenceLiftPct = [Math]::Round(100.0 * $nr5LowEvidenceLiftCount / $nr5LowEvidenceSampleCount, 1)
@@ -3877,6 +3941,10 @@ function Build-Report {
         $summaryRecommendations.Add("Native NR5 weak/strong output differs, but post-leveler speech audio is within parity; judge volume from nr5WeakSignalWatch weak/strong final-audio fields before changing NR5 makeup.") | Out-Null
     }
     if ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "missing-strong-input", [StringComparison]::OrdinalIgnoreCase) -and
+        $nr5FrontendStrongPassbandSubthresholdSamples.Count -gt 0) {
+        $summaryRecommendations.Add("Frontend-strong passband peaks were present, but native NR5 input stayed below the strict $nr5StrongInputThresholdDbfs dBFS strong threshold; inspect nr5WeakSignalWatch.topFrontendStrongPassbandNr5SubthresholdInputs before treating this as no strong RF or changing DSP defaults.") | Out-Null
+    }
+    elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "missing-strong-input", [StringComparison]::OrdinalIgnoreCase) -and
         $nr5NearStrongInputCount -gt 0) {
         $summaryRecommendations.Add("NR5 trace has near-strong samples between $nr5NearStrongInputThresholdDbfs and $nr5StrongInputThresholdDbfs dBFS but no strict strong-input samples; inspect nr5WeakSignalWatch.topNearStrongInputs and retune/extend dwell around those peaks before rejecting this frequency neighborhood.") | Out-Null
     }
@@ -4558,6 +4626,10 @@ function Build-Report {
             strongInputSampleDeficit = [Math]::Max(0, $nr5MinimumMixedStrongInputSampleCount - $nr5StrongInputCount)
             nearStrongInputThresholdDbfs = $nr5NearStrongInputThresholdDbfs
             nearStrongInputSampleCount = $nr5NearStrongInputCount
+            frontendStrongPassbandSnrThresholdDb = $frontendStrongPassbandSnrThresholdDb
+            frontendStrongPassbandDbfsThreshold = $frontendStrongPassbandDbfsThreshold
+            frontendStrongPassbandNr5SubthresholdSampleCount = $nr5FrontendStrongPassbandSubthresholdSamples.Count
+            frontendStrongPassbandNr5SubthresholdDistanceToStrongDb = $nr5FrontendStrongPassbandSubthresholdDistanceStats
             weakOutputDbfs = $nr5WeakOutputStats
             strongOutputDbfs = $nr5StrongOutputStats
             nearStrongOutputDbfs = $nr5NearStrongOutputStats
@@ -4622,6 +4694,7 @@ function Build-Report {
             topCandidateWeakLosses = @($nr5WeakDropoutCandidateLossTopSamples)
             topHotMakeup = @($nr5HotMakeupTopSamples)
             topNearStrongInputs = @($nr5NearStrongInputTopSamples)
+            topFrontendStrongPassbandNr5SubthresholdInputs = @($nr5FrontendStrongPassbandSubthresholdTopSamples)
         }
         nr5LowEvidenceLiftWatch = [ordered]@{
             weakInputThresholdDbfs = $nr5LowEvidenceInputThresholdDbfs
