@@ -2770,10 +2770,31 @@ public class DspPipelineService : BackgroundService,
                     lowNativeProofContinuityCapDbfs - inputRmsDbfs);
                 desiredDb = Math.Min(desiredDb, lowNativeProofContinuityDesiredDb);
             }
+            bool nr5NativeWeakSpeechOnsetCandidate =
+                desiredDb > 0.0 &&
+                nr5FrontendTopPeakProof <= 0.0 &&
+                !nr5FrontendFarPeakDisagreement &&
+                inputRmsDbfs >= -58.0 &&
+                inputRmsDbfs <= -38.0 &&
+                nr5.InputDbfs >= -62.0 &&
+                nr5.OutputDbfs >= -36.0 &&
+                nr5.OutputDbfs <= -28.0 &&
+                nr5.OutputPeakDbfs >= -42.0 &&
+                nr5.OutputPeakDbfs <= -22.0 &&
+                nr5.SignalConfidence >= 0.235 &&
+                nr5.SignalProbability >= 0.100 &&
+                nr5.AgcGate >= 0.260 &&
+                nr5.LevelDrive <= 0.620 &&
+                (nr5.RecoveryDrive >= 0.105 ||
+                    nr5.WeakSignalMemory >= 0.180 ||
+                    nr5.MaskSmoothing >= 0.240) &&
+                nr5.AdjacentNoiseUsable &&
+                nr5.AdjacentNoiseTrust >= 0.400;
             nr5SpeechLikeFrame =
                 nr5HybridSpeechPrior >= 0.275 ||
                 nr5FrontendTopPeakProof >= 0.18 ||
                 nr5FrontendHeldTailPeakProof >= 0.22 ||
+                nr5NativeWeakSpeechOnsetCandidate ||
                 nr5SpeechHoldEvidence ||
                 nr5FrontendPeakRecoveredSpeechCandidate ||
                 nr5FrontendPeakContinuitySpeechCandidate ||
@@ -2852,6 +2873,7 @@ public class DspPipelineService : BackgroundService,
                 !nr5PassbandWeakAcquisitionCandidate &&
                 !nr5PassbandSuppressedValleyCandidate &&
                 !nr5HeldSuppressedSpeechTailCandidate &&
+                !nr5NativeWeakSpeechOnsetCandidate &&
                 !nr5NativeSuppressedWeakFragmentCandidate)
             {
                 double noSignalTargetDbfs =
@@ -2939,6 +2961,7 @@ public class DspPipelineService : BackgroundService,
                     nr5RmNoiseHeldQuietTailCandidate) &&
                 !nr5SpeechHoldEvidence &&
                 !nr5NativeHotWeakSpeechCandidate &&
+                !nr5NativeWeakSpeechOnsetCandidate &&
                 !nr5FrontendPeakRecoveredSpeechCandidate &&
                 !nr5FrontendPeakContinuitySpeechCandidate &&
                 !nr5HeldContinuityWeakSpeechCandidate &&
@@ -2976,6 +2999,7 @@ public class DspPipelineService : BackgroundService,
                 !nr5SpeechLikeFrame &&
                 !nr5SpeechHoldEvidence &&
                 !nr5NativeHotWeakSpeechCandidate &&
+                !nr5NativeWeakSpeechOnsetCandidate &&
                 !nr5FrontendPeakRecoveredSpeechCandidate &&
                 !nr5FrontendPeakContinuitySpeechCandidate &&
                 !nr5HeldContinuityWeakSpeechCandidate &&
