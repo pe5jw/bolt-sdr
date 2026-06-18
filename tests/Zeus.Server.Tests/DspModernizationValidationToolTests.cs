@@ -7986,6 +7986,7 @@ public sealed class DspModernizationValidationToolTests
             Path.Combine(repoRoot, "tools", "run-dsp-g2-rx-peak-hunt.ps1"),
             "-BaseUrl", "http://127.0.0.1:1",
             "-PlanOnly",
+            "-Mode", "USB",
             "-CandidateMHz", "14.240,14.270,14.277,14.300",
             "-OperatorTrendMaxCandidates", "12",
             "-MaxPeaks", "0");
@@ -7994,6 +7995,7 @@ public sealed class DspModernizationValidationToolTests
 
         using var planDoc = JsonDocument.Parse(plan.StandardOutput);
         var root = planDoc.RootElement;
+        Assert.Equal("USB", root.GetProperty("targetMode").GetString());
         Assert.Equal(12, root.GetProperty("operatorTrendMaxCandidates").GetInt32());
         Assert.Equal(12, root.GetProperty("operatorTrendCandidateCount").GetInt32());
 
@@ -8069,8 +8071,15 @@ public sealed class DspModernizationValidationToolTests
             Assert.False(validationRoot.GetProperty("g2RxPeakHuntSafetyTxEndpointsTouched").GetBoolean());
             Assert.True(validationRoot.GetProperty("g2RxPeakHuntSafetyOriginalVfoRestored").GetBoolean());
             Assert.True(validationRoot.GetProperty("g2RxPeakHuntSafetyOriginalRadioLoRestored").GetBoolean());
+            Assert.Equal("USB", validationRoot.GetProperty("g2RxPeakHuntTargetMode").GetString());
+            Assert.True(validationRoot.GetProperty("g2RxPeakHuntSafetyTemporaryModeRequested").GetBoolean());
+            Assert.Equal("USB", validationRoot.GetProperty("g2RxPeakHuntSafetyTargetMode").GetString());
+            Assert.True(validationRoot.GetProperty("g2RxPeakHuntSafetyOriginalModeRestoreAttempted").GetBoolean());
+            Assert.True(validationRoot.GetProperty("g2RxPeakHuntSafetyOriginalModeRestored").GetBoolean());
             Assert.Equal(14255000L, validationRoot.GetProperty("g2RxPeakHuntHardwareOriginalRadioLoHz").GetInt64());
             Assert.Equal(14255000L, validationRoot.GetProperty("g2RxPeakHuntHardwareRestoredRadioLoHz").GetInt64());
+            Assert.Equal("LSB", validationRoot.GetProperty("g2RxPeakHuntHardwareOriginalMode").GetString());
+            Assert.Equal("LSB", validationRoot.GetProperty("g2RxPeakHuntHardwareRestoredMode").GetString());
             Assert.True(validationRoot.GetProperty("g2RxPeakHuntMixedWeakStrongReady").GetBoolean());
             Assert.Equal(2, validationRoot.GetProperty("g2RxPeakHuntPassCount").GetInt32());
             Assert.Equal(5, validationRoot.GetProperty("g2RxPeakHuntPassDelaySec").GetInt32());
@@ -8170,8 +8179,15 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(2, summaryRoot.GetProperty("g2RxPeakHuntOperatorTrendCandidateCount").GetInt32());
             Assert.Equal(2, summaryRoot.GetProperty("g2RxPeakHuntOperatorTrendCandidates").GetArrayLength());
             Assert.True(summaryRoot.GetProperty("g2RxPeakHuntSafetyOriginalRadioLoRestored").GetBoolean());
+            Assert.Equal("USB", summaryRoot.GetProperty("g2RxPeakHuntTargetMode").GetString());
+            Assert.True(summaryRoot.GetProperty("g2RxPeakHuntSafetyTemporaryModeRequested").GetBoolean());
+            Assert.Equal("USB", summaryRoot.GetProperty("g2RxPeakHuntSafetyTargetMode").GetString());
+            Assert.True(summaryRoot.GetProperty("g2RxPeakHuntSafetyOriginalModeRestoreAttempted").GetBoolean());
+            Assert.True(summaryRoot.GetProperty("g2RxPeakHuntSafetyOriginalModeRestored").GetBoolean());
             Assert.Equal(14255000L, summaryRoot.GetProperty("g2RxPeakHuntHardwareOriginalRadioLoHz").GetInt64());
             Assert.Equal(14255000L, summaryRoot.GetProperty("g2RxPeakHuntHardwareRestoredRadioLoHz").GetInt64());
+            Assert.Equal("LSB", summaryRoot.GetProperty("g2RxPeakHuntHardwareOriginalMode").GetString());
+            Assert.Equal("LSB", summaryRoot.GetProperty("g2RxPeakHuntHardwareRestoredMode").GetString());
             Assert.True(summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneCluster").GetBoolean());
             Assert.Equal(new[] { 14240000L, 14270000L, 14277000L, 14280000L }, summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHz").EnumerateArray().Select(item => item.GetInt64()).ToArray());
             Assert.Equal(4, summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterCandidates").GetArrayLength());
@@ -8198,6 +8214,12 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(peakHuntGate.GetProperty("ready").GetBoolean());
             Assert.False(peakHuntGate.GetProperty("requiredForAcceptance").GetBoolean());
             Assert.Equal("mixed-ready", peakHuntGate.GetProperty("status").GetString());
+            var peakHuntDetail = peakHuntGate.GetProperty("detail").GetString() ?? "";
+            Assert.Contains("targetMode=USB", peakHuntDetail, StringComparison.Ordinal);
+            Assert.Contains("temporaryModeRequested=True", peakHuntDetail, StringComparison.Ordinal);
+            Assert.Contains("modeRestored=True", peakHuntDetail, StringComparison.Ordinal);
+            Assert.Contains("originalMode=LSB", peakHuntDetail, StringComparison.Ordinal);
+            Assert.Contains("restoredMode=LSB", peakHuntDetail, StringComparison.Ordinal);
 
             var markdown = await File.ReadAllTextAsync(summaryMarkdown);
             Assert.Contains("G2 RX Peak-Hunt Evidence", markdown, StringComparison.Ordinal);
@@ -8211,12 +8233,75 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains("Auto phone cluster enabled/candidates/exact/neighbor/lookback/band", markdown, StringComparison.Ordinal);
             Assert.Contains("Auto phone cluster candidate frequencies: 14240000, 14270000, 14277000, 14280000", markdown, StringComparison.Ordinal);
             Assert.Contains("radio LO restored", markdown, StringComparison.Ordinal);
+            Assert.Contains("mode restored", markdown, StringComparison.Ordinal);
+            Assert.Contains("Target/original/restored mode: USB / LSB / LSB", markdown, StringComparison.Ordinal);
             Assert.Contains("14150000-14350000", markdown, StringComparison.Ordinal);
             Assert.Contains("Weak/strong/near-strong samples", markdown, StringComparison.Ordinal);
             Assert.Contains("Speech-qualified weak/strong/near-strong samples", markdown, StringComparison.Ordinal);
             Assert.Contains("Passband-qualified weak/strong/near-strong samples", markdown, StringComparison.Ordinal);
             Assert.Contains("Frontend near-passband samples", markdown, StringComparison.Ordinal);
             Assert.Contains("14250000", markdown, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task G2RxPeakHuntReportRejectsTemporaryModeWithoutRestoreProof()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell G2 peak-hunt validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-g2-rx-peak-hunt-mode-restore-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteG2RxPeakHuntArtifactManifest(bundleDir);
+            WriteG2RxPeakHuntReport(bundleDir, modeRestoreFailed: true);
+
+            var validationReport = Path.Combine(bundleDir, "validation-g2-rx-peak-hunt-mode-restore.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.True(validationRoot.GetProperty("g2RxPeakHuntReportPresent").GetBoolean());
+            Assert.False(validationRoot.GetProperty("g2RxPeakHuntReportReady").GetBoolean());
+            Assert.False(validationRoot.GetProperty("g2RxPeakHuntReportValid").GetBoolean());
+            Assert.Equal("invalid", validationRoot.GetProperty("g2RxPeakHuntReportStatus").GetString());
+            Assert.Equal("USB", validationRoot.GetProperty("g2RxPeakHuntTargetMode").GetString());
+            Assert.True(validationRoot.GetProperty("g2RxPeakHuntSafetyTemporaryModeRequested").GetBoolean());
+            Assert.True(validationRoot.GetProperty("g2RxPeakHuntSafetyOriginalModeRestoreAttempted").GetBoolean());
+            Assert.False(validationRoot.GetProperty("g2RxPeakHuntSafetyOriginalModeRestored").GetBoolean());
+            Assert.Equal("LSB", validationRoot.GetProperty("g2RxPeakHuntHardwareOriginalMode").GetString());
+            Assert.Equal("USB", validationRoot.GetProperty("g2RxPeakHuntHardwareRestoredMode").GetString());
+
+            var issueCodes = validationRoot.GetProperty("warnings")
+                .EnumerateArray()
+                .Concat(validationRoot.GetProperty("errors").EnumerateArray())
+                .Select(issue => issue.GetProperty("code").GetString() ?? "")
+                .ToArray();
+            Assert.Contains("g2-rx-peak-hunt-mode-not-restored", issueCodes);
         }
         finally
         {
@@ -8651,7 +8736,10 @@ public sealed class DspModernizationValidationToolTests
             JsonSerializer.Serialize(manifest, CamelCaseJson));
     }
 
-    private static void WriteG2RxPeakHuntReport(string bundleDir, bool nonPortableWindowPaths = false)
+    private static void WriteG2RxPeakHuntReport(
+        string bundleDir,
+        bool nonPortableWindowPaths = false,
+        bool modeRestoreFailed = false)
     {
         var currentRunReportPath = nonPortableWindowPaths
             ? Path.Combine(Path.GetTempPath(), $"zeus-g2-rx-peak-hunt-outside-{Guid.NewGuid():N}", "current-vfo", "live-diagnostics-watch.json")
@@ -8695,6 +8783,7 @@ public sealed class DspModernizationValidationToolTests
             outputDir = "artifacts/g2-rx-peak-hunt",
             label = "synthetic-ready",
             comparisonId = "nr5-spnr",
+            targetMode = "USB",
             allowRetune = true,
             skipCurrentVfo = false,
             stopOnReady = true,
@@ -8728,10 +8817,14 @@ public sealed class DspModernizationValidationToolTests
                 rxOnly = true,
                 txEndpointsTouched = false,
                 vfoRetuneRequiresAllowRetune = true,
+                temporaryModeRequested = true,
+                targetMode = "USB",
                 originalVfoRestoreAttempted = true,
                 originalVfoRestored = true,
                 originalRadioLoRestoreAttempted = true,
                 originalRadioLoRestored = true,
+                originalModeRestoreAttempted = true,
+                originalModeRestored = !modeRestoreFailed,
                 restoreError = (string?)null
             },
             hardware = new
@@ -8744,6 +8837,8 @@ public sealed class DspModernizationValidationToolTests
                 restoredVfoHz = 14290000,
                 originalRadioLoHz = 14255000,
                 restoredRadioLoHz = 14255000,
+                originalMode = "LSB",
+                restoredMode = modeRestoreFailed ? "USB" : "LSB",
                 mode = "USB",
                 sampleRate = 384000
             },

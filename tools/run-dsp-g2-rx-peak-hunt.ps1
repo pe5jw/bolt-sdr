@@ -53,6 +53,8 @@ param(
 
     [string]$WatchScriptPath = "",
 
+    [string]$Mode = "",
+
     [switch]$AllowRetune,
 
     [switch]$SkipCurrentVfo,
@@ -389,6 +391,7 @@ function Restore-OriginalTuning {
         [Parameter(Mandatory = $true)][string]$BaseUrl,
         [Parameter(Mandatory = $true)][long]$OriginalVfo,
         $OriginalRadioLo = $null,
+        [string]$OriginalMode = "",
         [int]$RequestTimeoutSec = 5,
         [int]$SettleMs = 1000,
         [int]$MaxAttempts = 2,
@@ -398,6 +401,7 @@ function Restore-OriginalTuning {
     $lastState = $null
     $lastError = $null
     $loRequired = ($null -ne $OriginalRadioLo -and [long]$OriginalRadioLo -gt 0)
+    $modeRequired = -not [string]::IsNullOrWhiteSpace($OriginalMode)
     $sleepMs = [Math]::Max(0, $SettleMs)
 
     for ($attempt = 1; $attempt -le [Math]::Max(1, $MaxAttempts); $attempt++) {
@@ -406,15 +410,20 @@ function Restore-OriginalTuning {
                 Invoke-JsonPost -Url "$BaseUrl/api/radio/lo" -Body @{ hz = [long]$OriginalRadioLo } -RequestTimeoutSec $RequestTimeoutSec -SkipCertificate:$SkipCertificate | Out-Null
             }
             Invoke-JsonPost -Url "$BaseUrl/api/vfo" -Body @{ hz = $OriginalVfo } -RequestTimeoutSec $RequestTimeoutSec -SkipCertificate:$SkipCertificate | Out-Null
+            if ($modeRequired) {
+                Invoke-JsonPost -Url "$BaseUrl/api/mode" -Body @{ mode = $OriginalMode; receiver = 0 } -RequestTimeoutSec $RequestTimeoutSec -SkipCertificate:$SkipCertificate | Out-Null
+            }
             Start-Sleep -Milliseconds $sleepMs
 
             $lastState = Invoke-JsonGet -Url "$BaseUrl/api/state" -RequestTimeoutSec $RequestTimeoutSec -SkipCertificate:$SkipCertificate
             $restoredVfoHz = Get-NullableLongValue (Get-JsonValue $lastState "vfoHz")
             $restoredRadioLoHz = Get-NullableLongValue (Get-JsonValue $lastState "radioLoHz")
+            $restoredMode = [string](Get-JsonValue $lastState "mode")
             $vfoRestored = ($null -ne $restoredVfoHz -and [long]$restoredVfoHz -eq $OriginalVfo)
             $radioLoRestored = (-not $loRequired) -or ($null -ne $restoredRadioLoHz -and [long]$restoredRadioLoHz -eq [long]$OriginalRadioLo)
+            $modeRestored = (-not $modeRequired) -or [string]::Equals($restoredMode, $OriginalMode, [StringComparison]::OrdinalIgnoreCase)
 
-            if ($vfoRestored -and $radioLoRestored) {
+            if ($vfoRestored -and $radioLoRestored -and $modeRestored) {
                 return [pscustomobject][ordered]@{
                     ok = $true
                     attempts = $attempt
@@ -1243,6 +1252,7 @@ $baseUrlAutoDiscoverRequested = [bool]$baseResolution.autoDiscoverRequested
 $baseUrlAutoDiscovered = [bool]$baseResolution.autoDiscovered
 $baseUrlAutoDiscoverError = [string]$baseResolution.autoDiscoverError
 $baseUrlProbeResults = @($baseResolution.probeResults)
+$targetMode = $Mode.Trim().ToUpperInvariant()
 if ([string]::IsNullOrWhiteSpace($AutoPhoneClusterSearchRoot)) {
     $AutoPhoneClusterSearchRoot = Join-Path $repoRoot "tmp"
 }
@@ -1296,6 +1306,7 @@ if ($PlanOnly) {
         baseUrlAutoDiscovered = $baseUrlAutoDiscovered
         baseUrlAutoDiscoverError = $baseUrlAutoDiscoverError
         baseUrlProbeResults = @($baseUrlProbeResults)
+        targetMode = if ([string]::IsNullOrWhiteSpace($targetMode)) { $null } else { $targetMode }
         samplesPerWindow = $SamplesPerWindow
         intervalMs = $IntervalMs
         windowsPerPeak = $WindowsPerPeak
@@ -1337,7 +1348,7 @@ if ($PlanOnly) {
         }
         example = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-g2-rx-peak-hunt.ps1 -BaseUrl auto -SamplesPerWindow 24 -IntervalMs 250 -MaxPeaks 6"
         retuneExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-g2-rx-peak-hunt.ps1 -BaseUrl auto -AllowRetune -StopOnReady -SamplesPerWindow 24 -IntervalMs 250 -MaxPeaks 6"
-        operatorFrequencyExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-g2-rx-peak-hunt.ps1 -BaseUrl auto -AllowRetune -StopOnReady -CandidateMHz 14.260,14.243,14.287,14.152,14.227,14.240,14.270,14.277,14.300 -OperatorTrendMaxCandidates 8 -PassCount 2 -PassDelaySec 5"
+        operatorFrequencyExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-g2-rx-peak-hunt.ps1 -BaseUrl auto -Mode USB -AllowRetune -StopOnReady -CandidateMHz 14.260,14.243,14.287,14.152,14.227,14.240,14.270,14.277,14.300 -OperatorTrendMaxCandidates 8 -PassCount 2 -PassDelaySec 5"
         autoPhoneClusterExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-g2-rx-peak-hunt.ps1 -BaseUrl auto -AllowRetune -StopOnReady -AutoPhoneCluster -MaxPeaks 8"
         desktopExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-g2-rx-peak-hunt.ps1 -BaseUrl https://localhost:6443 -SkipCertificateCheck -AllowRetune -StopOnReady"
     } | ConvertTo-Json -Depth 16
@@ -1374,7 +1385,13 @@ try {
     if ($null -eq $originalVfo -or $originalVfo -le 0) {
         throw "Cannot determine original VFO from /api/radio/diagnostics."
     }
+    $originalMode = [string](Get-JsonValue $hardware "mode")
     $originalRadioLo = Get-NullableLongValue (Get-JsonValue $initialState "radioLoHz")
+    if (-not [string]::IsNullOrWhiteSpace($targetMode) -and
+        -not [string]::Equals($targetMode, $originalMode, [StringComparison]::OrdinalIgnoreCase)) {
+        Invoke-JsonPost -Url "$base/api/mode" -Body @{ mode = $targetMode; receiver = 0 } -RequestTimeoutSec $TimeoutSec -SkipCertificate:$SkipCertificateCheck | Out-Null
+        Start-Sleep -Milliseconds ([Math]::Min(1000, [Math]::Max(0, $SettleMs)))
+    }
 }
 catch {
     $initializationError = $_.Exception.Message
@@ -1396,6 +1413,7 @@ catch {
         baseUrlProbeResults = @($baseUrlProbeResults)
         outputDir = ConvertTo-PortableBundlePath -Root $portableBundleRoot -Path $captureDir
         bundleRelativePaths = [bool]$bundleRelativePaths
+        targetMode = if ([string]::IsNullOrWhiteSpace($targetMode)) { $null } else { $targetMode }
         label = $Label
         comparisonId = $ComparisonId
         allowRetune = [bool]$AllowRetune
@@ -1433,8 +1451,12 @@ catch {
             rxOnly = $true
             txEndpointsTouched = $false
             vfoRetuneRequiresAllowRetune = $true
+            temporaryModeRequested = -not [string]::IsNullOrWhiteSpace($targetMode)
+            targetMode = if ([string]::IsNullOrWhiteSpace($targetMode)) { $null } else { $targetMode }
             originalVfoRestoreAttempted = $false
             originalVfoRestored = $false
+            originalModeRestoreAttempted = $false
+            originalModeRestored = $false
             restoreError = "Original VFO unavailable; restore was not attempted."
         }
         hardware = [ordered]@{
@@ -1446,6 +1468,8 @@ catch {
             restoredVfoHz = $null
             originalRadioLoHz = $null
             restoredRadioLoHz = $null
+            originalMode = ""
+            restoredMode = ""
             mode = ""
             sampleRate = 0
         }
@@ -1542,6 +1566,7 @@ $runs = New-Object System.Collections.Generic.List[object]
 $retuneAttempts = New-Object System.Collections.Generic.List[object]
 $restoredVfo = $null
 $restoredRadioLo = $null
+$restoredMode = $null
 $restoreError = $null
 $stoppedEarly = $false
 $completedPassCount = 0
@@ -1561,6 +1586,7 @@ try {
                     -BaseUrl $base `
                     -OriginalVfo $originalVfo `
                     -OriginalRadioLo $originalRadioLo `
+                    -OriginalMode $originalMode `
                     -RequestTimeoutSec $TimeoutSec `
                     -SettleMs ([Math]::Min(1000, [Math]::Max(0, $SettleMs))) `
                     -MaxAttempts 2 `
@@ -1908,6 +1934,7 @@ finally {
             -BaseUrl $base `
             -OriginalVfo $originalVfo `
             -OriginalRadioLo $originalRadioLo `
+            -OriginalMode $originalMode `
             -RequestTimeoutSec $TimeoutSec `
             -SettleMs ([Math]::Min(1000, [Math]::Max(0, $SettleMs))) `
             -MaxAttempts 3 `
@@ -1915,6 +1942,7 @@ finally {
         $afterRestore = $restoreResult.state
         $restoredVfo = Get-NullableLongValue (Get-JsonValue $afterRestore "vfoHz")
         $restoredRadioLo = Get-NullableLongValue (Get-JsonValue $afterRestore "radioLoHz")
+        $restoredMode = [string](Get-JsonValue $afterRestore "mode")
         if (-not (Test-Truthy $restoreResult.ok)) {
             throw "state did not return to original VFO/LO after restore attempts"
         }
@@ -2061,6 +2089,7 @@ $reportObject = [ordered]@{
     bundleRelativePaths = [bool]$bundleRelativePaths
     label = $Label
     comparisonId = $ComparisonId
+    targetMode = if ([string]::IsNullOrWhiteSpace($targetMode)) { $null } else { $targetMode }
     allowRetune = [bool]$AllowRetune
     skipCurrentVfo = [bool]$SkipCurrentVfo
     stopOnReady = [bool]$StopOnReady
@@ -2095,10 +2124,14 @@ $reportObject = [ordered]@{
         rxOnly = $true
         txEndpointsTouched = $false
         vfoRetuneRequiresAllowRetune = $true
+        temporaryModeRequested = -not [string]::IsNullOrWhiteSpace($targetMode)
+        targetMode = if ([string]::IsNullOrWhiteSpace($targetMode)) { $null } else { $targetMode }
         originalVfoRestoreAttempted = $true
         originalVfoRestored = ($null -ne $restoredVfo -and [long]$restoredVfo -eq [long]$originalVfo)
         originalRadioLoRestoreAttempted = ($null -ne $originalRadioLo -and $originalRadioLo -gt 0)
         originalRadioLoRestored = ($null -ne $originalRadioLo -and $originalRadioLo -gt 0 -and $null -ne $restoredRadioLo -and [long]$restoredRadioLo -eq [long]$originalRadioLo)
+        originalModeRestoreAttempted = -not [string]::IsNullOrWhiteSpace($originalMode)
+        originalModeRestored = (-not [string]::IsNullOrWhiteSpace($originalMode) -and [string]::Equals([string]$restoredMode, [string]$originalMode, [StringComparison]::OrdinalIgnoreCase))
         restoreError = $restoreError
     }
     hardware = [ordered]@{
@@ -2110,6 +2143,8 @@ $reportObject = [ordered]@{
         restoredVfoHz = $restoredVfo
         originalRadioLoHz = $originalRadioLo
         restoredRadioLoHz = $restoredRadioLo
+        originalMode = $originalMode
+        restoredMode = $restoredMode
         mode = [string](Get-JsonValue $hardware "mode")
         sampleRate = Get-IntValue (Get-JsonValue $hardware "sampleRate")
     }
@@ -2176,6 +2211,9 @@ else {
     Write-Host "Operator candidates: $($operatorCandidates.Count); operator-trend neighbors: $($operatorTrendCandidates.Count); auto phone candidates: $($autoPhoneClusterCandidates.Count)"
     Write-Host "Original VFO: $originalVfo Hz; restored VFO: $restoredVfo Hz"
     Write-Host "Original radio LO: $originalRadioLo Hz; restored radio LO: $restoredRadioLo Hz"
+    if (-not [string]::IsNullOrWhiteSpace($targetMode)) {
+        Write-Host "Temporary mode: $targetMode; original mode: $originalMode; restored mode: $restoredMode"
+    }
     Write-Host "Runs: $($reportObject.actualRunCount), mixed weak+strong ready: $($reportObject.mixedWeakStrongReady), weak samples: $weakTotal, strong samples: $strongTotal, near-strong samples: $nearStrongTotal"
     if ($null -ne $bestRun) {
         Write-Host "Best run: $($bestRun.frequencyHz) Hz score=$($bestRun.score) status=$($bestRun.mixedWeakStrongEvidenceStatus) report=$($bestRun.reportPath)"

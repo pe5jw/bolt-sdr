@@ -13946,6 +13946,7 @@ else {
                 $baseUrlAutoDiscoverError = [string](Get-JsonValue $artifactJson "baseUrlAutoDiscoverError")
                 $baseUrlProbeResults = @(Get-JsonArray $artifactJson "baseUrlProbeResults")
                 $comparisonId = [string](Get-JsonValue $artifactJson "comparisonId")
+                $targetMode = [string](Get-JsonValue $artifactJson "targetMode")
                 $allowRetune = Test-Truthy (Get-JsonValue $artifactJson "allowRetune")
                 $skipCurrentVfo = Test-Truthy (Get-JsonValue $artifactJson "skipCurrentVfo")
                 $stopOnReady = Test-Truthy (Get-JsonValue $artifactJson "stopOnReady")
@@ -14020,7 +14021,12 @@ else {
                 $safetyOriginalVfoRestored = Test-Truthy (Get-JsonValue $safety "originalVfoRestored")
                 $safetyOriginalRadioLoRestoreAttempted = Test-Truthy (Get-JsonValue $safety "originalRadioLoRestoreAttempted")
                 $safetyOriginalRadioLoRestored = Test-Truthy (Get-JsonValue $safety "originalRadioLoRestored")
+                $safetyTemporaryModeRequested = Test-Truthy (Get-JsonValue $safety "temporaryModeRequested")
+                $safetyTargetMode = [string](Get-JsonValue $safety "targetMode")
+                $safetyOriginalModeRestoreAttempted = Test-Truthy (Get-JsonValue $safety "originalModeRestoreAttempted")
+                $safetyOriginalModeRestored = Test-Truthy (Get-JsonValue $safety "originalModeRestored")
                 $safetyRestoreError = [string](Get-JsonValue $safety "restoreError")
+                $modeRestoreRequired = (-not [string]::IsNullOrWhiteSpace($targetMode)) -or $safetyTemporaryModeRequested
                 $bestFrequencyHz = $null
                 if ($null -ne $bestRun) {
                     $bestFrequencyHzValue = Get-NumericValue (Get-JsonValue $bestRun "frequencyHz")
@@ -14040,6 +14046,7 @@ else {
                 $g2RxPeakHuntEvidence["baseUrlAutoDiscoverError"] = $baseUrlAutoDiscoverError
                 $g2RxPeakHuntEvidence["baseUrlProbeResultCount"] = $baseUrlProbeResults.Count
                 $g2RxPeakHuntEvidence["comparisonId"] = $comparisonId
+                $g2RxPeakHuntEvidence["targetMode"] = $targetMode
                 $g2RxPeakHuntEvidence["allowRetune"] = $allowRetune
                 $g2RxPeakHuntEvidence["skipCurrentVfo"] = $skipCurrentVfo
                 $g2RxPeakHuntEvidence["stopOnReady"] = $stopOnReady
@@ -14105,6 +14112,10 @@ else {
                 $g2RxPeakHuntEvidence["safetyOriginalVfoRestored"] = $safetyOriginalVfoRestored
                 $g2RxPeakHuntEvidence["safetyOriginalRadioLoRestoreAttempted"] = $safetyOriginalRadioLoRestoreAttempted
                 $g2RxPeakHuntEvidence["safetyOriginalRadioLoRestored"] = $safetyOriginalRadioLoRestored
+                $g2RxPeakHuntEvidence["safetyTemporaryModeRequested"] = $safetyTemporaryModeRequested
+                $g2RxPeakHuntEvidence["safetyTargetMode"] = $safetyTargetMode
+                $g2RxPeakHuntEvidence["safetyOriginalModeRestoreAttempted"] = $safetyOriginalModeRestoreAttempted
+                $g2RxPeakHuntEvidence["safetyOriginalModeRestored"] = $safetyOriginalModeRestored
                 $g2RxPeakHuntEvidence["safetyRestoreError"] = $safetyRestoreError
                 $g2RxPeakHuntEvidence["hardwareConnectionStatus"] = [string](Get-JsonValue $hardware "connectionStatus")
                 $g2RxPeakHuntEvidence["hardwareEndpoint"] = [string](Get-JsonValue $hardware "endpoint")
@@ -14114,6 +14125,8 @@ else {
                 $g2RxPeakHuntEvidence["hardwareRestoredVfoHz"] = Get-JsonValue $hardware "restoredVfoHz"
                 $g2RxPeakHuntEvidence["hardwareOriginalRadioLoHz"] = Get-JsonValue $hardware "originalRadioLoHz"
                 $g2RxPeakHuntEvidence["hardwareRestoredRadioLoHz"] = Get-JsonValue $hardware "restoredRadioLoHz"
+                $g2RxPeakHuntEvidence["hardwareOriginalMode"] = [string](Get-JsonValue $hardware "originalMode")
+                $g2RxPeakHuntEvidence["hardwareRestoredMode"] = [string](Get-JsonValue $hardware "restoredMode")
                 $g2RxPeakHuntEvidence["hardwareSampleRate"] = [int](Get-NumericValueOrDefault (Get-JsonValue $hardware "sampleRate"))
                 $g2RxPeakHuntEvidence["liveDiagnosticsStatus"] = [string](Get-JsonValue $liveDiagnostics "status")
                 $g2RxPeakHuntEvidence["liveDiagnosticsReadyForLiveBenchmark"] = Test-Truthy (Get-JsonValue $liveDiagnostics "readyForLiveBenchmark")
@@ -14180,6 +14193,14 @@ else {
                 }
                 if (($allowRetune -or $retuneAttempts.Count -gt 0) -and $safetyOriginalRadioLoRestoreAttempted -and -not $safetyOriginalRadioLoRestored) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-radio-lo-not-restored" "Artifact '$artifactId' retuned or allowed retune but did not prove safety.originalRadioLoRestored=true. restoreError='$safetyRestoreError'."
+                    $artifactValidationOk = $false
+                }
+                if ($modeRestoreRequired -and -not $safetyOriginalModeRestoreAttempted) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-mode-restore-not-attempted" "Artifact '$artifactId' requested temporary mode targetMode='$targetMode' but did not declare safety.originalModeRestoreAttempted=true."
+                    $artifactValidationOk = $false
+                }
+                if ($modeRestoreRequired -and -not $safetyOriginalModeRestored) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-mode-not-restored" "Artifact '$artifactId' requested temporary mode targetMode='$targetMode' but did not prove safety.originalModeRestored=true. restoreError='$safetyRestoreError'."
                     $artifactValidationOk = $false
                 }
                 if ($retuneAttempts.Count -gt 0 -and -not $allowRetune) {
@@ -15906,6 +15927,7 @@ $report = [ordered]@{
     g2RxPeakHuntBaseUrlAutoDiscoverError = $g2RxPeakHuntEvidence.baseUrlAutoDiscoverError
     g2RxPeakHuntBaseUrlProbeResultCount = $g2RxPeakHuntEvidence.baseUrlProbeResultCount
     g2RxPeakHuntComparisonId = $g2RxPeakHuntEvidence.comparisonId
+    g2RxPeakHuntTargetMode = $g2RxPeakHuntEvidence.targetMode
     g2RxPeakHuntAllowRetune = $g2RxPeakHuntEvidence.allowRetune
     g2RxPeakHuntSkipCurrentVfo = $g2RxPeakHuntEvidence.skipCurrentVfo
     g2RxPeakHuntStopOnReady = $g2RxPeakHuntEvidence.stopOnReady
@@ -15962,6 +15984,10 @@ $report = [ordered]@{
     g2RxPeakHuntSafetyOriginalVfoRestored = $g2RxPeakHuntEvidence.safetyOriginalVfoRestored
     g2RxPeakHuntSafetyOriginalRadioLoRestoreAttempted = $g2RxPeakHuntEvidence.safetyOriginalRadioLoRestoreAttempted
     g2RxPeakHuntSafetyOriginalRadioLoRestored = $g2RxPeakHuntEvidence.safetyOriginalRadioLoRestored
+    g2RxPeakHuntSafetyTemporaryModeRequested = $g2RxPeakHuntEvidence.safetyTemporaryModeRequested
+    g2RxPeakHuntSafetyTargetMode = $g2RxPeakHuntEvidence.safetyTargetMode
+    g2RxPeakHuntSafetyOriginalModeRestoreAttempted = $g2RxPeakHuntEvidence.safetyOriginalModeRestoreAttempted
+    g2RxPeakHuntSafetyOriginalModeRestored = $g2RxPeakHuntEvidence.safetyOriginalModeRestored
     g2RxPeakHuntSafetyRestoreError = $g2RxPeakHuntEvidence.safetyRestoreError
     g2RxPeakHuntHardwareConnectionStatus = $g2RxPeakHuntEvidence.hardwareConnectionStatus
     g2RxPeakHuntHardwareEndpoint = $g2RxPeakHuntEvidence.hardwareEndpoint
@@ -15971,6 +15997,8 @@ $report = [ordered]@{
     g2RxPeakHuntHardwareRestoredVfoHz = $g2RxPeakHuntEvidence.hardwareRestoredVfoHz
     g2RxPeakHuntHardwareOriginalRadioLoHz = $g2RxPeakHuntEvidence.hardwareOriginalRadioLoHz
     g2RxPeakHuntHardwareRestoredRadioLoHz = $g2RxPeakHuntEvidence.hardwareRestoredRadioLoHz
+    g2RxPeakHuntHardwareOriginalMode = $g2RxPeakHuntEvidence.hardwareOriginalMode
+    g2RxPeakHuntHardwareRestoredMode = $g2RxPeakHuntEvidence.hardwareRestoredMode
     g2RxPeakHuntHardwareSampleRate = $g2RxPeakHuntEvidence.hardwareSampleRate
     g2RxPeakHuntLiveDiagnosticsStatus = $g2RxPeakHuntEvidence.liveDiagnosticsStatus
     g2RxPeakHuntLiveDiagnosticsReadyForLiveBenchmark = $g2RxPeakHuntEvidence.liveDiagnosticsReadyForLiveBenchmark
