@@ -992,16 +992,20 @@ export function AudioSuiteWindow({
   // in ws-client.ts.
   useEffect(() => {
     if (!embedded && !isOpen) return;
+    if (isRxSuite) {
+      loadRxChainOrderFromServer();
+      loadRxProcessingModeFromServer();
+      return;
+    }
     loadChainOrderFromServer();
-    loadRxChainOrderFromServer();
     loadProcessingModeFromServer();
-    loadRxProcessingModeFromServer();
     loadPreviewState();
     loadMasterBypassFromServer();
     loadProfiles();
   }, [
     embedded,
     isOpen,
+    isRxSuite,
     loadChainOrderFromServer,
     loadRxChainOrderFromServer,
     loadProcessingModeFromServer,

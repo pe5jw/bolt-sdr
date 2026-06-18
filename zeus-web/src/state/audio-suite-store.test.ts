@@ -356,6 +356,39 @@ describe('audio-suite-store profile selection', () => {
     expect(useAudioSuiteStore.getState().rxVstDegradedBlocks).toBe(3);
   });
 
+  it('refreshes RX VST diagnostics after RX chain membership changes', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/rx-audio-suite/plugins/com.openhpsdr.zeus.rxvst.clear/chain-membership') {
+        return response({ pluginIds: ['com.openhpsdr.zeus.rxvst.clear'] });
+      }
+      if (url === '/api/rx-audio-suite/processing-mode') {
+        return response({
+          engineAvailable: true,
+          engineActive: true,
+          activePlugins: 1,
+          degradedBlocks: 2,
+        });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { useAudioSuiteStore } = await import('./audio-suite-store');
+    await useAudioSuiteStore
+      .getState()
+      .setRxChainMembership('com.openhpsdr.zeus.rxvst.clear', true);
+
+    expect(useAudioSuiteStore.getState().rxChainOrder).toEqual([
+      'com.openhpsdr.zeus.rxvst.clear',
+    ]);
+    expect(useAudioSuiteStore.getState().rxVstEngineAvailable).toBe(true);
+    expect(useAudioSuiteStore.getState().rxVstEngineActive).toBe(true);
+    expect(useAudioSuiteStore.getState().rxVstActivePlugins).toBe(1);
+    expect(useAudioSuiteStore.getState().rxVstDegradedBlocks).toBe(2);
+    expect(fetchMock).toHaveBeenCalledWith('/api/rx-audio-suite/processing-mode');
+  });
+
   it('uses RX endpoints for RX chain membership and ordering', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -373,6 +406,14 @@ describe('audio-suite-store profile selection', () => {
             'com.openhpsdr.zeus.rxvst.rnnoise',
             'com.openhpsdr.zeus.rxvst.clear',
           ],
+        });
+      }
+      if (url === '/api/rx-audio-suite/processing-mode') {
+        return response({
+          engineAvailable: true,
+          engineActive: true,
+          activePlugins: 2,
+          degradedBlocks: 0,
         });
       }
       return response({});

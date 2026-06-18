@@ -541,6 +541,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           if (Array.isArray(body.pluginIds)) {
             set({ rxChainOrder: body.pluginIds });
           }
+          await get().loadRxProcessingModeFromServer();
         } catch (err) {
           set({ rxChainOrder: prev });
           // eslint-disable-next-line no-console
@@ -722,6 +723,10 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           if (get().selectedChainId === pluginId) {
             set({ selectedChainId: null });
           }
+          if (get().rxSelectedChainId === pluginId) {
+            set({ rxSelectedChainId: null });
+          }
+          await get().loadRxProcessingModeFromServer();
           return {
             ok: true,
             deferred: result.status === 202,
@@ -822,7 +827,9 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
             console.warn(
               `rx-audio-suite chain-order PUT rejected: ${res.status} ${res.statusText}`,
             );
+            return;
           }
+          await get().loadRxProcessingModeFromServer();
         } catch (err) {
           set({ rxChainOrder: current });
           // eslint-disable-next-line no-console

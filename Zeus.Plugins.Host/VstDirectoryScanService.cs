@@ -160,7 +160,7 @@ public sealed class VstDirectoryScanService
             {
                 var routeName = routeInfo.DisplaySuffix is null ? name : $"{name} {routeInfo.DisplaySuffix}";
                 var slot = ResolveSlot(routeInfo, name, pl.File);
-                var id = StableUniqueId(name, pl.Uid, usedIds, routeInfo.IdPrefix);
+                var id = StableUniqueId(name, pl.Uid, usedIds, ResolveIdPrefix(routeInfo, slot));
                 usedIds.Add(id);
 
                 if (activeIds.Contains(id) || activeKeys.Contains(EngineKey(pl.File, pl.Uid, slot)))
@@ -247,8 +247,8 @@ public sealed class VstDirectoryScanService
                 foreach (var routeInfo in routes)
                 {
                     var routeName = routeInfo.DisplaySuffix is null ? name : $"{name} {routeInfo.DisplaySuffix}";
-                    var id = UniqueId(name, usedIds, routeInfo.IdPrefix);
                     var slot = ResolveSlot(routeInfo, name, vst3Abs);
+                    var id = UniqueId(name, usedIds, ResolveIdPrefix(routeInfo, slot));
                     usedIds.Add(id);
 
                     if (activeIds.Contains(id))
@@ -491,6 +491,11 @@ public sealed class VstDirectoryScanService
         route.Slot == "auto"
             ? RecommendedAudioSlot(name, vst3Path)
             : route.Slot;
+
+    private static string ResolveIdPrefix(AudioRouteRegistration route, string slot) =>
+        route.Slot == "auto" && string.Equals(slot, "rx.post-demod", StringComparison.Ordinal)
+            ? RxIdPrefix
+            : route.IdPrefix;
 
     private static string BuildManifestJson(
         string id,

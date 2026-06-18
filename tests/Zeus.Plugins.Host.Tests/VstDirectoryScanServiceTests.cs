@@ -113,7 +113,7 @@ public class VstDirectoryScanServiceTests : IDisposable
         Assert.Single(result.Registered);
         var reg = result.Registered[0];
         Assert.Equal("RNNoise", reg.Name);
-        Assert.Equal("com.openhpsdr.zeus.vst.rnnoise", reg.Id);
+        Assert.Equal("com.openhpsdr.zeus.rxvst.rnnoise", reg.Id);
 
         var dir = Path.Combine(_root, "plugins", reg.Id);
         using var doc = JsonDocument.Parse(
