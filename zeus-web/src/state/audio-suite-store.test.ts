@@ -384,6 +384,19 @@ describe('audio-suite-store profile selection', () => {
     });
   });
 
+  it('applies RX master bypass broadcasts without touching TX bypass', async () => {
+    const { useAudioSuiteStore } = await import('./audio-suite-store');
+    useAudioSuiteStore.setState({
+      masterBypassed: false,
+      rxMasterBypassed: false,
+    });
+
+    useAudioSuiteStore.getState().setRxMasterBypassedFromServer(true);
+
+    expect(useAudioSuiteStore.getState().masterBypassed).toBe(false);
+    expect(useAudioSuiteStore.getState().rxMasterBypassed).toBe(true);
+  });
+
   it('refreshes RX VST diagnostics after RX chain membership changes', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
       const url = String(input);

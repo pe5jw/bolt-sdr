@@ -197,4 +197,11 @@ public enum MsgType : byte
     // connected browser.
     // Payload: [type:1][csvUtf8…]. See RxAudioChainOrderFrame.cs.
     RxAudioChainOrder = 0x33,
+
+    // Server → client (RX audio suite master bypass). Same wire shape as
+    // AudioMasterBypass, but dedicated to the receive-side insert chain
+    // so RX bypass state never shares the TX Audio Suite's control frame.
+    // Payload: [type:1][bypassed:u8] = 2 bytes total. See
+    // RxAudioMasterBypassFrame.cs.
+    RxAudioMasterBypass = 0x34,
 }

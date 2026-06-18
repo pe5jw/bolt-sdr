@@ -182,6 +182,12 @@ export const MSG_TYPE_RX_AUDIO_CHAIN_ORDER = 0x33;
 export const MSG_TYPE_AUDIO_MASTER_BYPASS = 0x1f;
 const AUDIO_MASTER_BYPASS_BYTES = 2;
 
+// RX Audio Suite master-bypass broadcast. Same payload as TX master bypass,
+// but updates the receive-side VST insert chain state.
+// Contract: Zeus.Contracts/RxAudioMasterBypassFrame.cs.
+export const MSG_TYPE_RX_AUDIO_MASTER_BYPASS = 0x34;
+const RX_AUDIO_MASTER_BYPASS_BYTES = 2;
+
 // CW engine status — broadcast on every state edge of the host-side CW
 // keyer so the macro pad can render in-flight text + queue depth without
 // polling. Variable-length frame: 9-byte header + UTF-8 text. Contract:
@@ -539,6 +545,18 @@ export function startRealtime(path = '/ws'): () => void {
           }
           const bypassed = new DataView(ev.data).getUint8(1) !== 0;
           useAudioSuiteStore.getState().setMasterBypassedFromServer(bypassed);
+          return;
+        }
+        if (peekType === MSG_TYPE_RX_AUDIO_MASTER_BYPASS) {
+          if (ev.data.byteLength < RX_AUDIO_MASTER_BYPASS_BYTES) {
+            warnOnce(
+              'ws-rx-audio-master-bypass-short',
+              `rx audio master-bypass frame too short: ${ev.data.byteLength}`,
+            );
+            return;
+          }
+          const bypassed = new DataView(ev.data).getUint8(1) !== 0;
+          useAudioSuiteStore.getState().setRxMasterBypassedFromServer(bypassed);
           return;
         }
         if (peekType === MSG_TYPE_PA_TEMP) {

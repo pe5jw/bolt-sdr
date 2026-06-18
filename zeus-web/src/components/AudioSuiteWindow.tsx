@@ -967,18 +967,17 @@ export function AudioSuiteWindow({
     () => allPanels.filter((p) => p.slot === RX_CHAIN_SLOT),
     [allPanels],
   );
-  // Native and VST are mutually-exclusive processing routes, so the Audio
-  // Suite only ever surfaces the plugins the active route actually runs:
-  // VST3 plugins (editorBacked) in VST mode, the in-process native plugins
-  // in Native mode. The hidden route's plugins stay in the server's chain
-  // order untouched and reappear when the operator switches back.
-  const vstMode = processingMode === 'vst';
+  // TX Native and TX VST are mutually-exclusive processing routes, so the TX
+  // suite only surfaces the plugins the active route actually runs. RX is a
+  // separate receive-side VST insert chain, so it always shows RX VST panels
+  // regardless of the TX suite's Native/VST selector.
+  const vstRack = isRxSuite || processingMode === 'vst';
   const modePanels = useMemo(
     () =>
       isRxSuite
         ? rxChainSlotPanels
-        : txChainSlotPanels.filter((p) => (p.editorBacked === true) === vstMode),
-    [isRxSuite, rxChainSlotPanels, txChainSlotPanels, vstMode],
+        : txChainSlotPanels.filter((p) => (p.editorBacked === true) === vstRack),
+    [isRxSuite, rxChainSlotPanels, txChainSlotPanels, vstRack],
   );
   const activeOrder = isRxSuite ? rxChainOrder : chainOrder;
   const reorderActiveChain = isRxSuite ? reorderRxChain : reorderChain;
@@ -1775,7 +1774,7 @@ export function AudioSuiteWindow({
           onScanBothDefault={onScanBothDefaultVstDirectory}
           scanning={scanning}
           scanRouteLabel={isRxSuite ? 'RX' : 'TX'}
-          vstMode={vstMode || isRxSuite}
+          vstMode={vstRack}
           embedded={embedded}
         />
 

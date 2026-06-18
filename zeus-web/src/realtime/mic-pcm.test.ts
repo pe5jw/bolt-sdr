@@ -44,7 +44,12 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { _resetFrameConsumerCount, registerFrameConsumer } from '../state/display-store';
-import { MSG_TYPE_DISPLAY_STREAM_REQUEST, MSG_TYPE_MIC_PCM, sendMicPcm } from './ws-client';
+import {
+  MSG_TYPE_DISPLAY_STREAM_REQUEST,
+  MSG_TYPE_MIC_PCM,
+  MSG_TYPE_RX_AUDIO_MASTER_BYPASS,
+  sendMicPcm,
+} from './ws-client';
 
 // sendMicPcm reads a module-scoped `activeWs` that's only set by startRealtime.
 // For tests we stub the WebSocket constructor so we can capture what was sent.
@@ -213,6 +218,33 @@ describe('sendMicPcm', () => {
       view = new DataView(sentBuf);
       expect(view.getUint8(0)).toBe(MSG_TYPE_DISPLAY_STREAM_REQUEST);
       expect(view.getUint8(1)).toBe(0);
+    } finally {
+      stop();
+    }
+  });
+
+  it('applies RX audio-suite master-bypass websocket frames', async () => {
+    const { startRealtime } = await import('./ws-client');
+    const { useAudioSuiteStore } = await import('../state/audio-suite-store');
+    useAudioSuiteStore.setState({
+      masterBypassed: false,
+      rxMasterBypassed: false,
+    });
+
+    const stop = startRealtime('/ws');
+    try {
+      const ws = MockWebSocket.instances[0];
+      expect(ws).toBeDefined();
+      if (ws?.onopen) ws.onopen({} as unknown);
+
+      const frame = new ArrayBuffer(2);
+      const view = new DataView(frame);
+      view.setUint8(0, MSG_TYPE_RX_AUDIO_MASTER_BYPASS);
+      view.setUint8(1, 1);
+      ws?.onmessage?.({ data: frame });
+
+      expect(useAudioSuiteStore.getState().masterBypassed).toBe(false);
+      expect(useAudioSuiteStore.getState().rxMasterBypassed).toBe(true);
     } finally {
       stop();
     }

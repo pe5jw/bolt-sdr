@@ -88,4 +88,17 @@ public class AudioChainOrderFrameTests
         var decoded = RxAudioChainOrderFrame.Deserialize(writer.WrittenSpan);
         Assert.Equal(input.PluginIds, decoded.PluginIds);
     }
+
+    [Fact]
+    public void RxMasterBypassRoundTrip_UsesRxMsgTypeAndPreservesState()
+    {
+        var input = new RxAudioMasterBypassFrame(Bypassed: true);
+        var writer = new ArrayBufferWriter<byte>(RxAudioMasterBypassFrame.ByteLength);
+
+        input.Serialize(writer);
+
+        Assert.Equal((byte)MsgType.RxAudioMasterBypass, writer.WrittenSpan[0]);
+        var decoded = RxAudioMasterBypassFrame.Deserialize(writer.WrittenSpan);
+        Assert.True(decoded.Bypassed);
+    }
 }

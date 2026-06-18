@@ -22,7 +22,9 @@ namespace Zeus.Server;
 /// any audio flows. On every operator toggle, this service updates
 /// in-memory state, persists, writes through to the bridge, and
 /// broadcasts <see cref="AudioMasterBypassFrame"/> (0x1F) so all
-/// connected clients (LAN-share phone, second browser) stay in sync.</para>
+/// connected clients (LAN-share phone, second browser) stay in sync.
+/// RX bypass toggles use <see cref="RxAudioMasterBypassFrame"/> (0x34)
+/// so RX and TX Audio Suite state never share a wire channel.</para>
 ///
 /// <para><b>Independence from CFC:</b> master bypass only touches the
 /// plugin chain in <see cref="AudioChain"/>. WDSP's CFC sits one layer
@@ -160,6 +162,7 @@ public sealed class AudioChainMasterBypassService : IHostedService
     /// <summary>
     /// Set RX master bypass. This gates receive-side inserts independently from
     /// TX so an RX denoiser can be auditioned without changing transmit audio.
+    /// Broadcasts the dedicated RX bypass frame so other clients stay in sync.
     /// </summary>
     public void SetRxMasterBypassed(bool bypassed)
     {
@@ -181,6 +184,16 @@ public sealed class AudioChainMasterBypassService : IHostedService
         }
 
         _bridge.SetRxMasterBypassed(bypassed);
+
+        try
+        {
+            _hub.Broadcast(new RxAudioMasterBypassFrame(bypassed));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "AudioChainMasterBypassService RX broadcast threw");
+        }
+
         RxMasterBypassedChanged?.Invoke(bypassed);
         _log.LogInformation("RX audio suite master bypass set to {Bypassed}", bypassed);
     }

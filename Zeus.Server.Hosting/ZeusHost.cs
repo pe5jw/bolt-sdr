@@ -480,7 +480,8 @@ public static class ZeusHost
         // whole Audio Suite" lever. Default is true (bypassed) on first
         // install so a brand-new operator's chain is inert until they
         // engage it. Persists via AudioChainSettingsStore; broadcasts
-        // AudioMasterBypassFrame (0x1F) on every change. Registered
+        // AudioMasterBypassFrame (0x1F) for TX changes and
+        // RxAudioMasterBypassFrame (0x34) for RX changes. Registered
         // AFTER AudioPluginBridge so its StartAsync runs after the
         // bridge's, and the initial-state write-through finds a
         // constructed chain.

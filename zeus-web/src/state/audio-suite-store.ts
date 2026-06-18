@@ -234,6 +234,7 @@ interface AudioSuiteState {
 
   // Master bypass plumbing.
   setMasterBypassedFromServer(bypassed: boolean): void;
+  setRxMasterBypassedFromServer(bypassed: boolean): void;
   loadMasterBypassFromServer(): Promise<void>;
   setMasterBypassed(bypassed: boolean): Promise<void>;
   loadRxMasterBypassFromServer(): Promise<void>;
@@ -910,6 +911,8 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       },
 
       setMasterBypassedFromServer: (bypassed) => set({ masterBypassed: bypassed }),
+      setRxMasterBypassedFromServer: (bypassed) =>
+        set({ rxMasterBypassed: bypassed }),
 
       loadMasterBypassFromServer: async () => {
         try {
