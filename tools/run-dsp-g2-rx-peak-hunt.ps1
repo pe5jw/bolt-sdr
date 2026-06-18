@@ -39,6 +39,12 @@ param(
 
     [int]$TuneStepHz = 1000,
 
+    [long]$PeakRetuneLowHz = 0,
+
+    [long]$PeakRetuneHighHz = 0,
+
+    [int]$PeakRetunePaddingHz = 3000,
+
     [double]$MinPeakSnrDb = 8.0,
 
     [int]$SettleMs = 3000,
@@ -328,6 +334,77 @@ function Quantize-HzToStep {
 
     $step = Normalize-TuneStepHz $StepHz
     return [long]([Math]::Round($Hz / [double]$step) * [double]$step)
+}
+
+function Normalize-PeakRetunePaddingHz {
+    param($Value)
+
+    $padding = 0
+    if ($null -ne $Value) {
+        [int]::TryParse(([string]$Value), [ref]$padding) | Out-Null
+    }
+
+    if ($padding -lt 0) {
+        return 0
+    }
+
+    if ($padding -gt 100000) {
+        return 100000
+    }
+
+    return $padding
+}
+
+function Get-PeakRetuneSpan {
+    param(
+        [object[]]$SeedCandidates,
+        [long]$ExplicitLowHz,
+        [long]$ExplicitHighHz,
+        [int]$PaddingHz,
+        [long]$FallbackLowHz = 0,
+        [long]$FallbackHighHz = 0,
+        [bool]$UseFallback = $false
+    )
+
+    $padding = Normalize-PeakRetunePaddingHz $PaddingHz
+    $low = $null
+    $high = $null
+    $source = "unrestricted"
+
+    if ($ExplicitLowHz -gt 0 -and $ExplicitHighHz -gt 0) {
+        $low = [Math]::Min([long]$ExplicitLowHz, [long]$ExplicitHighHz)
+        $high = [Math]::Max([long]$ExplicitLowHz, [long]$ExplicitHighHz)
+        $source = "explicit"
+    }
+    else {
+        $frequencies = New-Object System.Collections.Generic.List[long]
+        foreach ($candidate in @($SeedCandidates)) {
+            $frequencyHz = Get-NullableLongValue (Get-JsonValue $candidate "frequencyHz")
+            if ($null -ne $frequencyHz -and $frequencyHz -gt 0) {
+                $frequencies.Add([long]$frequencyHz) | Out-Null
+            }
+        }
+
+        if ($frequencies.Count -gt 0) {
+            $sorted = @($frequencies.ToArray() | Sort-Object)
+            $low = [Math]::Max(1L, [long]$sorted[0] - [long]$padding)
+            $high = [long]$sorted[$sorted.Count - 1] + [long]$padding
+            $source = "candidate-span"
+        }
+        elseif ($UseFallback -and $FallbackLowHz -gt 0 -and $FallbackHighHz -gt 0) {
+            $low = [Math]::Min([long]$FallbackLowHz, [long]$FallbackHighHz)
+            $high = [Math]::Max([long]$FallbackLowHz, [long]$FallbackHighHz)
+            $source = "fallback-band"
+        }
+    }
+
+    return [pscustomobject][ordered]@{
+        bounded = ($null -ne $low -and $null -ne $high)
+        lowHz = $low
+        highHz = $high
+        paddingHz = $padding
+        source = $source
+    }
 }
 
 function Get-TrimmedStringValue {
@@ -675,7 +752,9 @@ function Select-PeakCandidates {
         [int]$MergeHz,
         [double]$MinimumSnrDb,
         [long]$OriginalVfo = 0,
-        [int]$StepHz = 1000
+        [int]$StepHz = 1000,
+        $RetuneLowHz = $null,
+        $RetuneHighHz = $null
     )
 
     $selected = New-Object System.Collections.Generic.List[object]
@@ -688,6 +767,14 @@ function Select-PeakCandidates {
         $rank++
         $candidate = ConvertTo-PeakCandidate -Peak $peak -Rank $rank -Source "frontend-top-peak" -OriginalVfo $OriginalVfo -StepHz $StepHz
         if ($null -eq $candidate) {
+            continue
+        }
+
+        if ($null -ne $RetuneLowHz -and [long]$candidate.frequencyHz -lt [long]$RetuneLowHz) {
+            continue
+        }
+
+        if ($null -ne $RetuneHighHz -and [long]$candidate.frequencyHz -gt [long]$RetuneHighHz) {
             continue
         }
 
@@ -1320,6 +1407,7 @@ $baseUrlAutoDiscoverError = [string]$baseResolution.autoDiscoverError
 $baseUrlProbeResults = @($baseResolution.probeResults)
 $targetMode = $Mode.Trim().ToUpperInvariant()
 $effectiveTuneStepHz = Normalize-TuneStepHz $TuneStepHz
+$effectivePeakRetunePaddingHz = Normalize-PeakRetunePaddingHz $PeakRetunePaddingHz
 if ([string]::IsNullOrWhiteSpace($AutoPhoneClusterSearchRoot)) {
     $AutoPhoneClusterSearchRoot = Join-Path $repoRoot "tmp"
 }
@@ -1356,6 +1444,14 @@ $operatorTrendCandidatesForPlan = @(Get-OperatorTrendNeighborCandidates `
         -BandHighHz $AutoPhoneClusterBandHighHz `
         -MaxCandidates $OperatorTrendMaxCandidates)
 $operatorTrendCandidateFrequencyHzForPlan = @($operatorTrendCandidatesForPlan | ForEach-Object { [long]$_.frequencyHz })
+$peakRetuneSpanForPlan = Get-PeakRetuneSpan `
+    -SeedCandidates @($operatorCandidatesForPlan + $operatorTrendCandidatesForPlan) `
+    -ExplicitLowHz $PeakRetuneLowHz `
+    -ExplicitHighHz $PeakRetuneHighHz `
+    -PaddingHz $effectivePeakRetunePaddingHz `
+    -FallbackLowHz $AutoPhoneClusterBandLowHz `
+    -FallbackHighHz $AutoPhoneClusterBandHighHz `
+    -UseFallback ([bool]$AutoPhoneCluster)
 
 if ([string]::IsNullOrWhiteSpace($WatchScriptPath)) {
     $WatchScriptPath = Join-Path $repoRoot "tools\watch-dsp-live-diagnostics.ps1"
@@ -1380,6 +1476,7 @@ if ($PlanOnly) {
         passCount = $PassCount
         passDelaySec = $PassDelaySec
         tuneStepHz = $effectiveTuneStepHz
+        peakRetuneSpan = $peakRetuneSpanForPlan
         candidateFrequencyHz = @($operatorCandidateFrequencyHzForPlan)
         operatorTrendMaxCandidates = $OperatorTrendMaxCandidates
         operatorTrendCandidateFrequencyHz = @($operatorTrendCandidateFrequencyHzForPlan)
@@ -1412,6 +1509,7 @@ if ($PlanOnly) {
                 "Without -AllowRetune the tool only captures the current VFO and lists candidate frontend peaks/operator frequencies.",
                 "With -AllowRetune the tool posts only RX tuning endpoints, waits for RX settling, delegates evidence capture to watch-dsp-live-diagnostics, then restores the original VFO and radio LO in a verified finally block.",
                 "Frontend peak retunes are snapped to -TuneStepHz; exact FFT-bin targets remain in exactFrequencyHz and tuneSnapDeltaHz fields.",
+                "Frontend peak retunes are bounded by -PeakRetuneLowHz/-PeakRetuneHighHz when supplied, otherwise by the candidate-frequency span plus -PeakRetunePaddingHz when operator/cluster candidates exist.",
                 "The tool does not approve DSP default changes; it only hunts for the missing G2 mixed weak+strong NR5/SPNR evidence window."
             )
         }
@@ -1493,6 +1591,8 @@ catch {
         windowsPerPeak = $WindowsPerPeak
         passCount = $PassCount
         passDelaySec = $PassDelaySec
+        tuneStepHz = $effectiveTuneStepHz
+        peakRetuneSpan = $peakRetuneSpanForPlan
         completedPassCount = 0
         scanPassCount = 0
         candidateFrequencyHz = @($operatorCandidateFrequencyHzForPlan)
@@ -1627,6 +1727,14 @@ if ($AutoPhoneCluster) {
 $autoPhoneClusterCandidateFrequencyHz = @($autoPhoneClusterCandidates | ForEach-Object { [long]$_.frequencyHz })
 $autoPhoneClusterExactCandidateCount = @($autoPhoneClusterCandidates | Where-Object { [string](Get-JsonValue $_ "source") -eq "recent-phone-cluster" }).Count
 $autoPhoneClusterNeighborCandidateCount = @($autoPhoneClusterCandidates | Where-Object { [string](Get-JsonValue $_ "source") -eq "recent-phone-cluster-neighbor" }).Count
+$peakRetuneSpan = Get-PeakRetuneSpan `
+    -SeedCandidates @($operatorCandidates + $autoPhoneClusterCandidates + $operatorTrendCandidates) `
+    -ExplicitLowHz $PeakRetuneLowHz `
+    -ExplicitHighHz $PeakRetuneHighHz `
+    -PaddingHz $effectivePeakRetunePaddingHz `
+    -FallbackLowHz $AutoPhoneClusterBandLowHz `
+    -FallbackHighHz $AutoPhoneClusterBandHighHz `
+    -UseFallback ([bool]$AutoPhoneCluster)
 $latestScene = $null
 $latestLive = $null
 $allPeakCandidates = New-Object System.Collections.Generic.List[object]
@@ -1679,7 +1787,7 @@ try {
         $latestLive = $live
 
         $scenePeaks = @(Get-JsonArray $scene "topPeaks")
-        $passPeakCandidates = @(Select-PeakCandidates -Peaks $scenePeaks -Limit $MaxPeaks -MergeHz $PeakMergeHz -MinimumSnrDb $MinPeakSnrDb -OriginalVfo $originalVfo -StepHz $effectiveTuneStepHz)
+        $passPeakCandidates = @(Select-PeakCandidates -Peaks $scenePeaks -Limit $MaxPeaks -MergeHz $PeakMergeHz -MinimumSnrDb $MinPeakSnrDb -OriginalVfo $originalVfo -StepHz $effectiveTuneStepHz -RetuneLowHz $peakRetuneSpan.lowHz -RetuneHighHz $peakRetuneSpan.highHz)
         $passPeakCandidatesForReport = New-Object System.Collections.Generic.List[object]
         foreach ($candidate in $passPeakCandidates) {
             $candidateForReport = Copy-PeakCandidateForPass -Candidate $candidate -Pass $pass
@@ -1746,6 +1854,7 @@ try {
             operatorTrendCandidateCount = $operatorTrendCandidates.Count
             autoPhoneCluster = [bool]$AutoPhoneCluster
             autoPhoneClusterCandidateCount = $autoPhoneClusterCandidates.Count
+            peakRetuneSpan = $peakRetuneSpan
             peakCandidateCount = $passPeakCandidatesForReport.Count
             candidateCount = $candidates.Count
             plannedRunCount = $plannedForPass
@@ -2105,6 +2214,9 @@ if (-not $AllowRetune -and @($operatorCandidateFrequencyHz).Count -gt 0) {
 if (-not $AllowRetune -and $peakCandidateArray.Count -gt 0) {
     $recommendations.Add("Peak candidates were found but not captured because -AllowRetune was not supplied; rerun with -AllowRetune when RX VFO movement is acceptable.") | Out-Null
 }
+if ($MaxPeaks -gt 0 -and $peakCandidateArray.Count -le 0 -and (Test-Truthy $peakRetuneSpan.bounded)) {
+    $recommendations.Add("Frontend peaks were bounded to $($peakRetuneSpan.lowHz)..$($peakRetuneSpan.highHz) Hz ($($peakRetuneSpan.source)); no in-span frontend peak candidates passed the SNR/merge filters.") | Out-Null
+}
 if ($mixedReadyRunCount -gt 0 -and $null -ne $bestRun) {
     $recommendations.Add("A mixed weak+strong NR5/SPNR run was found; promote '$($bestRun.reportPath)' into live history and compare it against current-Zeus/Thetis-parity windows before tuning defaults.") | Out-Null
 }
@@ -2178,6 +2290,7 @@ $reportObject = [ordered]@{
     passCount = $PassCount
     passDelaySec = $PassDelaySec
     tuneStepHz = $effectiveTuneStepHz
+    peakRetuneSpan = $peakRetuneSpan
     completedPassCount = $completedPassCount
     scanPassCount = $scanPassArray.Count
     candidateFrequencyHz = @($operatorCandidateFrequencyHz)
