@@ -438,7 +438,11 @@ public sealed class SmartNrConditionEndpointTests
             Assert.Equal("off", item.GetProperty("defaultState").GetString());
             Assert.Equal("candidate-only-opt-in-bakeoff", item.GetProperty("rolloutPolicy").GetString());
             Assert.Contains("post-demod", item.GetProperty("integrationPoint").GetString());
-            Assert.Equal("catalog-only-not-integrated", item.GetProperty("evaluationStage").GetString());
+            Assert.Equal(
+                item.GetProperty("id").GetString() == "rnnoise"
+                    ? "rx-vst-plugin-path-supported-not-bundled"
+                    : "catalog-only-not-integrated",
+                item.GetProperty("evaluationStage").GetString());
             Assert.Contains(
                 item.GetProperty("allowedSignalPaths").EnumerateArray().Select(path => path.GetString()),
                 path => path is not null && path.Contains("post-demod", StringComparison.Ordinal));

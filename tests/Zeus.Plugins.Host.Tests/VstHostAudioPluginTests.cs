@@ -12,8 +12,8 @@ public class VstHostAudioPluginTests : IDisposable
     public VstHostAudioPluginTests() => VstHostAudioPlugin.NativeLoadEnabledOverride = true;
     public void Dispose() => VstHostAudioPlugin.NativeLoadEnabledOverride = null;
 
-    private static AudioBlock AudioManifest(string vst3Path = "vst3/Fake.vst3")
-        => new() { Vst3Path = vst3Path, Slot = "tx.post-leveler", Channels = 1, SampleRate = 48000 };
+    private static AudioBlock AudioManifest(string vst3Path = "vst3/Fake.vst3", string slot = "tx.post-leveler")
+        => new() { Vst3Path = vst3Path, Slot = slot, Channels = 1, SampleRate = 48000 };
 
     [Fact]
     public async Task Initialize_HappyPath_CallsLoadVst3()
@@ -26,7 +26,8 @@ public class VstHostAudioPluginTests : IDisposable
         try
         {
             var plugin = new VstHostAudioPlugin(bridge, AudioManifest(), pluginDir, "FakeFx");
-            await plugin.InitializeAudioAsync(new StubHost(), default);
+            Assert.Equal(1024, plugin.Requirements.BlockSize);
+            await plugin.InitializeAudioAsync(new StubHost(currentBlockSize: 1024), default);
 
             Assert.True(bridge.InitCalled);
             // VstHostAudioPlugin builds the absolute path via Path.Combine
@@ -36,6 +37,7 @@ public class VstHostAudioPluginTests : IDisposable
             Assert.Equal(
                 Path.GetFullPath(vst3Abs),
                 Path.GetFullPath(bridge.LastLoadPath!));
+            Assert.Equal(1024, bridge.LastBlockSize);
             await plugin.ShutdownAudioAsync(default);
             Assert.Equal(1, bridge.UnloadCount);
         }
@@ -121,6 +123,7 @@ public class VstHostAudioPluginTests : IDisposable
 
         public bool InitCalled;
         public string? LastLoadPath;
+        public int LastBlockSize;
         public int ProcessCount;
         public int UnloadCount;
 
@@ -133,6 +136,7 @@ public class VstHostAudioPluginTests : IDisposable
         public int LoadVst3(string path, int channels, int sampleRate, int blockSize, out nint handle)
         {
             LastLoadPath = path;
+            LastBlockSize = blockSize;
             handle = LoadStatus == VstBridgeStatus.Ok ? HandleToReturn : 0;
             return LoadStatus;
         }
@@ -164,9 +168,83 @@ public class VstHostAudioPluginTests : IDisposable
 
     private sealed class StubHost : IAudioHost
     {
+        private readonly int _currentBlockSize;
+
+        public StubHost(int currentBlockSize = 256)
+        {
+            _currentBlockSize = currentBlockSize;
+        }
+
         public int CurrentSampleRate => 48000;
         public int CurrentChannels => 1;
-        public int CurrentBlockSize => 256;
+        public int CurrentBlockSize => _currentBlockSize;
         public string Slot => "tx.post-leveler";
+    }
+
+    [Fact]
+    public async Task Initialize_TxNativeLoad_StaysOptInByDefault()
+    {
+        VstHostAudioPlugin.NativeLoadEnabledOverride = null;
+        var previousEnable = Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD");
+        var previousDisable = Environment.GetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD");
+        try
+        {
+            Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", null);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", null);
+
+            var bridge = new FakeBridge();
+            var plugin = new VstHostAudioPlugin(bridge, AudioManifest(), Path.GetTempPath(), "FakeFx");
+
+            await plugin.InitializeAudioAsync(new StubHost(), default);
+
+            Assert.False(bridge.InitCalled);
+            Assert.False(plugin.IsNativelyLoaded);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", previousEnable);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", previousDisable);
+            VstHostAudioPlugin.NativeLoadEnabledOverride = true;
+        }
+    }
+
+    [Fact]
+    public async Task Initialize_RxNativeLoad_IsEnabledByDefault()
+    {
+        VstHostAudioPlugin.NativeLoadEnabledOverride = null;
+        var previousEnable = Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD");
+        var previousDisable = Environment.GetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD");
+        var previousRxDisable = Environment.GetEnvironmentVariable("ZEUS_DISABLE_RX_VST_LOAD");
+        var bridge = new FakeBridge();
+        var pluginDir = Path.GetTempPath();
+        var vst3Abs = Path.Combine(pluginDir, "vst3", "FakeRx.vst3");
+        Directory.CreateDirectory(Path.GetDirectoryName(vst3Abs)!);
+        File.WriteAllText(vst3Abs, "stub");
+        try
+        {
+            Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", null);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", null);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_RX_VST_LOAD", null);
+
+            var plugin = new VstHostAudioPlugin(
+                bridge,
+                AudioManifest("vst3/FakeRx.vst3", "rx.post-demod"),
+                pluginDir,
+                "FakeRx");
+
+            await plugin.InitializeAudioAsync(new StubHost(currentBlockSize: 2048), default);
+
+            Assert.True(bridge.InitCalled);
+            Assert.True(plugin.IsNativelyLoaded);
+            Assert.Equal(2048, bridge.LastBlockSize);
+        }
+        finally
+        {
+            File.Delete(vst3Abs);
+            Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", previousEnable);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", previousDisable);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_RX_VST_LOAD", previousRxDisable);
+            VstHostAudioPlugin.NativeLoadEnabledOverride = true;
+        }
     }
 }

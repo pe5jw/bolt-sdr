@@ -202,4 +202,106 @@ describe('audio-suite-store profile selection', () => {
 
     expect(useAudioSuiteStore.getState().previewEnabled).toBe(false);
   });
+
+  it('passes the requested VST scan route and refreshes TX/RX chain order', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/audio-suite/scan-vst-directory') {
+        return response({
+          directory: 'C:\\VST PLUGINS',
+          registered: [
+            { id: 'com.openhpsdr.zeus.vst.supertoneclear', name: 'Supertone Clear TX' },
+            { id: 'com.openhpsdr.zeus.rxvst.supertoneclear', name: 'Supertone Clear RX' },
+          ],
+          skipped: [],
+          errors: [],
+        });
+      }
+      if (url === '/api/plugins') {
+        return response({ plugins: [] });
+      }
+      if (url === '/api/plugins/chain/order') {
+        return response({ pluginIds: ['com.openhpsdr.zeus.vst.supertoneclear'] });
+      }
+      if (url === '/api/rx-audio-suite/chain/order') {
+        return response({ pluginIds: ['com.openhpsdr.zeus.rxvst.supertoneclear'] });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { useAudioSuiteStore } = await import('./audio-suite-store');
+    const result = await useAudioSuiteStore
+      .getState()
+      .scanVstDirectory('C:\\VST PLUGINS', 'both');
+
+    expect(result.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith('/api/audio-suite/scan-vst-directory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ directory: 'C:\\VST PLUGINS', route: 'both' }),
+    });
+    expect(useAudioSuiteStore.getState().chainOrder).toEqual([
+      'com.openhpsdr.zeus.vst.supertoneclear',
+    ]);
+    expect(useAudioSuiteStore.getState().rxChainOrder).toEqual([
+      'com.openhpsdr.zeus.rxvst.supertoneclear',
+    ]);
+  });
+
+  it('uses RX endpoints for RX chain membership and ordering', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/rx-audio-suite/plugins/com.openhpsdr.zeus.rxvst.clear/chain-membership') {
+        return response({
+          pluginIds: [
+            'com.openhpsdr.zeus.rxvst.clear',
+            'com.openhpsdr.zeus.rxvst.rnnoise',
+          ],
+        });
+      }
+      if (url === '/api/rx-audio-suite/chain/order') {
+        return response({
+          pluginIds: [
+            'com.openhpsdr.zeus.rxvst.rnnoise',
+            'com.openhpsdr.zeus.rxvst.clear',
+          ],
+        });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { useAudioSuiteStore } = await import('./audio-suite-store');
+    useAudioSuiteStore.setState({
+      rxChainOrder: [
+        'com.openhpsdr.zeus.rxvst.clear',
+        'com.openhpsdr.zeus.rxvst.rnnoise',
+      ],
+    });
+
+    await useAudioSuiteStore
+      .getState()
+      .setRxChainMembership('com.openhpsdr.zeus.rxvst.clear', true);
+    await useAudioSuiteStore.getState().reorderRxChain(0, 1);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/rx-audio-suite/plugins/com.openhpsdr.zeus.rxvst.clear/chain-membership',
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: true }),
+      },
+    );
+    expect(fetchMock).toHaveBeenCalledWith('/api/rx-audio-suite/chain/order', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pluginIds: [
+          'com.openhpsdr.zeus.rxvst.rnnoise',
+          'com.openhpsdr.zeus.rxvst.clear',
+        ],
+      }),
+    });
+  });
 });

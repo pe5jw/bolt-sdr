@@ -39,6 +39,7 @@ public sealed class VstDirectoryScanService
     private const string StubResourceName = "Zeus.Plugins.VstHostStub.dll";
     private const string StubAssemblyFile = "Zeus.Plugins.VstHostStub.dll";
     private const string IdPrefix = "com.openhpsdr.zeus.vst.";
+    private const string RxIdPrefix = "com.openhpsdr.zeus.rxvst.";
     private const int MaxScanDepth = 5;
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
@@ -67,22 +68,32 @@ public sealed class VstDirectoryScanService
         IReadOnlyList<ScannedVst> Registered,
         IReadOnlyList<ScannedVst> Skipped,
         IReadOnlyList<ScanError> Errors);
+    private sealed record AudioRouteRegistration(string Slot, string IdPrefix, string? DisplaySuffix);
 
     /// <summary>
     /// Scan <paramref name="directory"/> for VST3 plugins and register
-    /// each. Already-registered VSTs (same generated id) are skipped, not
-    /// re-installed. Throws <see cref="DirectoryNotFoundException"/> if
-    /// the directory doesn't exist.
+    /// each. The value may be either a directory or one exact <c>.vst3</c>
+    /// file/bundle. Already-registered VSTs (same generated id) are skipped,
+    /// not re-installed. Throws <see cref="DirectoryNotFoundException"/> if
+    /// the path doesn't exist.
     /// </summary>
-    public async Task<ScanResult> ScanAsync(string directory, CancellationToken ct)
+    public async Task<ScanResult> ScanAsync(string directory, CancellationToken ct) =>
+        await ScanAsync(directory, route: null, ct).ConfigureAwait(false);
+
+    public async Task<ScanResult> ScanAsync(string directory, string? route, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(directory))
             throw new ArgumentException("directory is required", nameof(directory));
-        if (!Directory.Exists(directory))
-            throw new DirectoryNotFoundException($"directory not found: {directory}");
+        var exactEntry = ResolveExactVst3Entry(directory);
+        if (exactEntry is null && !Directory.Exists(directory))
+            throw new DirectoryNotFoundException($"directory or .vst3 path not found: {directory}");
+        var routes = ResolveRoutes(route);
 
         var root = _pluginRoot;
         Directory.CreateDirectory(root);
+
+        if (exactEntry is not null)
+            return await ScanViaFileWalkAsync(directory, root, routes, ct, [exactEntry]).ConfigureAwait(false);
 
         // Engine-driven enumeration when the out-of-process engine is live: it
         // uses JUCE's scanner, which expands "shell" VST3s (e.g. Waves WaveShell)
@@ -92,13 +103,17 @@ public sealed class VstDirectoryScanService
         // enter the rack. Falls back to a static file walk when the engine is off
         // (Native mode), which can only see whole-file single plugins.
         if (_engine is { IsActive: true })
-            return await ScanViaEngineAsync(directory, root, ct).ConfigureAwait(false);
+            return await ScanViaEngineAsync(directory, root, routes, ct).ConfigureAwait(false);
 
-        return await ScanViaFileWalkAsync(directory, root, ct).ConfigureAwait(false);
+        return await ScanViaFileWalkAsync(directory, root, routes, ct).ConfigureAwait(false);
     }
 
     // ── Engine-driven enumeration (expands Waves-style shells) ───────────────────
-    private async Task<ScanResult> ScanViaEngineAsync(string directory, string root, CancellationToken ct)
+    private async Task<ScanResult> ScanViaEngineAsync(
+        string directory,
+        string root,
+        IReadOnlyList<AudioRouteRegistration> routes,
+        CancellationToken ct)
     {
         var registered = new List<ScannedVst>();
         var skipped = new List<ScannedVst>();
@@ -106,14 +121,14 @@ public sealed class VstDirectoryScanService
         var usedIds = new HashSet<string>(StringComparer.Ordinal);
         var activeIds = new HashSet<string>(
             _manager.Active.Select(p => p.Loaded.Manifest.Id), StringComparer.Ordinal);
-        // Already-registered (file,uid) pairs so a re-scan skips them even if a
-        // future id scheme changes. Keyed by the engine identity, not the Zeus id.
+        // Already-registered (file,uid,slot) tuples so a re-scan skips the same
+        // route while still allowing independent TX and RX instances of one VST.
         var activeKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var p in _manager.Active)
         {
             var a = p.Loaded.Manifest.Audio;
             if (a?.Vst3Path is { Length: > 0 } f)
-                activeKeys.Add(EngineKey(f, a.Vst3Uid));
+                activeKeys.Add(EngineKey(f, a.Vst3Uid, a.Slot));
         }
 
         var plugins = await _engine!.ScanPluginsAsync(
@@ -140,44 +155,56 @@ public sealed class VstDirectoryScanService
 
             var name = string.IsNullOrWhiteSpace(pl.Name)
                 ? Path.GetFileNameWithoutExtension(pl.File) : pl.Name;
-            var id = StableUniqueId(name, pl.Uid, usedIds);
-            usedIds.Add(id);
 
-            if (activeIds.Contains(id) || activeKeys.Contains(EngineKey(pl.File, pl.Uid)))
+            foreach (var routeInfo in routes)
             {
-                skipped.Add(new ScannedVst(id, name, pl.File));
-                continue;
-            }
+                var routeName = routeInfo.DisplaySuffix is null ? name : $"{name} {routeInfo.DisplaySuffix}";
+                var slot = ResolveSlot(routeInfo, name, pl.File);
+                var id = StableUniqueId(name, pl.Uid, usedIds, routeInfo.IdPrefix);
+                usedIds.Add(id);
 
-            try
-            {
-                var pluginDir = Path.Combine(root, id);
-                Directory.CreateDirectory(pluginDir);
-                WriteStubAssembly(Path.Combine(pluginDir, StubAssemblyFile));
-                await File.WriteAllTextAsync(
-                    Path.Combine(pluginDir, "plugin.json"),
-                    BuildManifestJson(id, name, pl.File, pl.Uid), ct).ConfigureAwait(false);
-                await _manager.ActivateAsync(pluginDir, ct).ConfigureAwait(false);
-                registered.Add(new ScannedVst(id, name, pl.File));
-                _log.LogInformation("Registered VST '{Name}' as {Id} (uid={Uid})", name, id, pl.Uid);
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "Failed to register VST {Name} from {File}", name, pl.File);
-                errors.Add(new ScanError(pl.File, ex.Message));
+                if (activeIds.Contains(id) || activeKeys.Contains(EngineKey(pl.File, pl.Uid, slot)))
+                {
+                    skipped.Add(new ScannedVst(id, routeName, pl.File));
+                    continue;
+                }
+
+                try
+                {
+                    var pluginDir = Path.Combine(root, id);
+                    Directory.CreateDirectory(pluginDir);
+                    WriteStubAssembly(Path.Combine(pluginDir, StubAssemblyFile));
+                    await File.WriteAllTextAsync(
+                        Path.Combine(pluginDir, "plugin.json"),
+                        BuildManifestJson(id, routeName, pl.File, pl.Uid, slot),
+                        ct).ConfigureAwait(false);
+                    await _manager.ActivateAsync(pluginDir, ct).ConfigureAwait(false);
+                    registered.Add(new ScannedVst(id, routeName, pl.File));
+                    _log.LogInformation("Registered VST '{Name}' as {Id} (uid={Uid}, route={Route})", routeName, id, pl.Uid, slot);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "Failed to register VST {Name} from {File}", routeName, pl.File);
+                    errors.Add(new ScanError(pl.File, ex.Message));
+                }
             }
         }
 
         return new ScanResult(directory, registered, skipped, errors);
     }
 
-    private static string EngineKey(string file, string? uid) =>
-        Path.GetFullPath(file).TrimEnd('\\', '/') + " " + (uid ?? string.Empty);
+    private static string EngineKey(string file, string? uid, string slot) =>
+        Path.GetFullPath(file).TrimEnd('\\', '/') + " " + (uid ?? string.Empty) + " " + slot;
 
     // ── Static file-walk enumeration (Native mode; whole-file single plugins) ────
-    private async Task<ScanResult> ScanViaFileWalkAsync(string directory, string root, CancellationToken ct)
+    private async Task<ScanResult> ScanViaFileWalkAsync(
+        string directory,
+        string root,
+        IReadOnlyList<AudioRouteRegistration> routes,
+        CancellationToken ct,
+        IReadOnlyList<string>? exactEntries = null)
     {
-        var entries = FindVst3Entries(directory);
+        var entries = exactEntries?.ToList() ?? FindVst3Entries(directory);
 
         var registered = new List<ScannedVst>();
         var skipped = new List<ScannedVst>();
@@ -191,17 +218,8 @@ public sealed class VstDirectoryScanService
             ct.ThrowIfCancellationRequested();
             var name = Path.GetFileNameWithoutExtension(entry.TrimEnd(
                 Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-            var id = UniqueId(name, usedIds);
-            usedIds.Add(id);
-
             try
             {
-                if (activeIds.Contains(id))
-                {
-                    skipped.Add(new ScannedVst(id, name, entry));
-                    continue;
-                }
-
                 // Reject VSTs the engine can't host BEFORE registering them, so
                 // incompatible files never become dead "Bad Image" entries in the
                 // rack. Static check only — no plugin code is executed.
@@ -211,9 +229,6 @@ public sealed class VstDirectoryScanService
                     _log.LogInformation("Skipped incompatible VST '{Name}': {Reason}", name, incompatReason);
                     continue;
                 }
-
-                var pluginDir = Path.Combine(root, id);
-                Directory.CreateDirectory(pluginDir);
 
                 // Reference the VST in place — do NOT copy it. Many plugins ship
                 // as a thin .vst3 stub beside sibling payload DLLs / resources in
@@ -229,14 +244,32 @@ public sealed class VstDirectoryScanService
                 // stub-based plugin.
                 var vst3Abs = Path.GetFullPath(entry);
 
-                WriteStubAssembly(Path.Combine(pluginDir, StubAssemblyFile));
-                await File.WriteAllTextAsync(
-                    Path.Combine(pluginDir, "plugin.json"),
-                    BuildManifestJson(id, name, vst3Abs), ct).ConfigureAwait(false);
+                foreach (var routeInfo in routes)
+                {
+                    var routeName = routeInfo.DisplaySuffix is null ? name : $"{name} {routeInfo.DisplaySuffix}";
+                    var id = UniqueId(name, usedIds, routeInfo.IdPrefix);
+                    var slot = ResolveSlot(routeInfo, name, vst3Abs);
+                    usedIds.Add(id);
 
-                await _manager.ActivateAsync(pluginDir, ct).ConfigureAwait(false);
-                registered.Add(new ScannedVst(id, name, entry));
-                _log.LogInformation("Registered scanned VST '{Name}' as {Id}", name, id);
+                    if (activeIds.Contains(id))
+                    {
+                        skipped.Add(new ScannedVst(id, routeName, entry));
+                        continue;
+                    }
+
+                    var pluginDir = Path.Combine(root, id);
+                    Directory.CreateDirectory(pluginDir);
+
+                    WriteStubAssembly(Path.Combine(pluginDir, StubAssemblyFile));
+                    await File.WriteAllTextAsync(
+                        Path.Combine(pluginDir, "plugin.json"),
+                        BuildManifestJson(id, routeName, vst3Abs, null, slot),
+                        ct).ConfigureAwait(false);
+
+                    await _manager.ActivateAsync(pluginDir, ct).ConfigureAwait(false);
+                    registered.Add(new ScannedVst(id, routeName, entry));
+                    _log.LogInformation("Registered scanned VST '{Name}' as {Id} (route={Route})", routeName, id, slot);
+                }
             }
             catch (Exception ex)
             {
@@ -283,6 +316,13 @@ public sealed class VstDirectoryScanService
         }
         Walk(root, 0);
         return found;
+    }
+
+    private static string? ResolveExactVst3Entry(string path)
+    {
+        if (!path.EndsWith(".vst3", StringComparison.OrdinalIgnoreCase)) return null;
+        if (File.Exists(path) || Directory.Exists(path)) return Path.GetFullPath(path);
+        return null;
     }
 
     /// <summary>
@@ -404,13 +444,68 @@ public sealed class VstDirectoryScanService
         res.CopyTo(file);
     }
 
-    private static string BuildManifestJson(string id, string name, string vst3Path, string? vst3Uid = null)
+    private static string RecommendedAudioSlot(string name, string vst3Path)
+    {
+        static string Normalize(string value)
+        {
+            var sb = new StringBuilder(value.Length);
+            foreach (char ch in value)
+            {
+                if (char.IsLetterOrDigit(ch))
+                    sb.Append(char.ToLowerInvariant(ch));
+            }
+            return sb.ToString();
+        }
+
+        string key = Normalize(name) + " " + Normalize(Path.GetFileNameWithoutExtension(vst3Path));
+        return key.Contains("rnnoise", StringComparison.Ordinal) ||
+            key.Contains("noisesuppressionforvoice", StringComparison.Ordinal) ||
+            key.Contains("wermannoisesuppression", StringComparison.Ordinal)
+                ? "rx.post-demod"
+                : "tx.post-leveler";
+    }
+
+    public static bool IsTxPluginId(string pluginId) =>
+        pluginId.StartsWith(IdPrefix, StringComparison.Ordinal);
+
+    public static bool IsRxPluginId(string pluginId) =>
+        pluginId.StartsWith(RxIdPrefix, StringComparison.Ordinal);
+
+    private static IReadOnlyList<AudioRouteRegistration> ResolveRoutes(string? route)
+    {
+        var normalized = (route ?? "auto").Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "auto" or "" => [new AudioRouteRegistration("auto", IdPrefix, null)],
+            "tx" => [new AudioRouteRegistration("tx.post-leveler", IdPrefix, null)],
+            "rx" => [new AudioRouteRegistration("rx.post-demod", RxIdPrefix, "RX")],
+            "both" => [
+                new AudioRouteRegistration("tx.post-leveler", IdPrefix, "TX"),
+                new AudioRouteRegistration("rx.post-demod", RxIdPrefix, "RX"),
+            ],
+            _ => throw new ArgumentException("route must be 'auto', 'tx', 'rx', or 'both'"),
+        };
+    }
+
+    private static string ResolveSlot(AudioRouteRegistration route, string name, string vst3Path) =>
+        route.Slot == "auto"
+            ? RecommendedAudioSlot(name, vst3Path)
+            : route.Slot;
+
+    private static string BuildManifestJson(
+        string id,
+        string name,
+        string vst3Path,
+        string? vst3Uid = null,
+        string slot = "tx.post-leveler")
     {
         // Anonymous object keyed to the manifest's JsonPropertyName values
-        // (camelCase). slot "tx.post-leveler" routes the VST into the TX
-        // insert chain so it lands in the Audio Suite rack. vst3Path is the
-        // ORIGINAL absolute path to the .vst3 (referenced in place, not copied);
-        // vst3Uid selects one sub-plugin from a shell file (null = single plugin).
+        // (camelCase). Most scanned VSTs route into the TX insert chain so they
+        // land in the Audio Suite rack. Known RNNoise/noise-suppression VSTs are
+        // receive speech denoisers, so route them to rx.post-demod where NR5 can
+        // feed them demodulated 48 kHz audio. vst3Path is the ORIGINAL absolute
+        // path to the .vst3 (referenced in place, not copied); vst3Uid selects
+        // one sub-plugin from a shell file (null = single plugin).
         var manifest = new
         {
             schemaVersion = 1,
@@ -426,7 +521,7 @@ public sealed class VstDirectoryScanService
             {
                 vst3Path,
                 vst3Uid,
-                slot = "tx.post-leveler",
+                slot,
                 channels = 1,
                 sampleRate = 48000,
             },
@@ -440,11 +535,11 @@ public sealed class VstDirectoryScanService
     /// and often have similar names). Same (name, uid) ⇒ same id across rescans,
     /// so chain/parked state keyed by id survives a re-scan.
     /// </summary>
-    private static string StableUniqueId(string name, string uid, HashSet<string> used)
+    private static string StableUniqueId(string name, string uid, HashSet<string> used, string idPrefix)
     {
         var slug = Slugify(name);
         if (slug.Length == 0) slug = "plugin";
-        var baseId = IdPrefix + slug;
+        var baseId = idPrefix + slug;
         if (!used.Contains(baseId)) return baseId;
 
         var suffix = ShortHash(uid.Length > 0 ? uid : name);
@@ -463,15 +558,15 @@ public sealed class VstDirectoryScanService
         return sb.ToString();
     }
 
-    private static string UniqueId(string name, HashSet<string> used)
+    private static string UniqueId(string name, HashSet<string> used, string idPrefix)
     {
         var slug = Slugify(name);
         if (slug.Length == 0) slug = "plugin";
-        var id = IdPrefix + slug;
+        var id = idPrefix + slug;
         if (!used.Contains(id)) return id;
         for (int i = 2; ; i++)
         {
-            var candidate = $"{IdPrefix}{slug}{i}";
+            var candidate = $"{idPrefix}{slug}{i}";
             if (!used.Contains(candidate)) return candidate;
         }
     }

@@ -16,6 +16,7 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
     private readonly IVstBridgeNative _bridge;
     private readonly string _vst3Path;
     private readonly string _pluginRootPath;
+    private readonly string _slot;
     private readonly ILogger? _log;
     private nint _handle;
 
@@ -29,11 +30,12 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
         _bridge = bridge;
         _pluginRootPath = pluginRootPath;
         _log = log;
+        _slot = manifestAudio.Slot;
         DisplayName = displayName;
         Requirements = new AudioPluginRequirements(
             SampleRate: manifestAudio.SampleRate,
             Channels: manifestAudio.Channels,
-            BlockSize: 256);
+            BlockSize: manifestAudio.Slot.StartsWith("rx.", StringComparison.OrdinalIgnoreCase) ? 2048 : 1024);
         _vst3Path = manifestAudio.Vst3Path
             ?? throw new ArgumentException("audio.vst3Path is required for VstHostAudioPlugin");
     }
@@ -42,30 +44,34 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
     public AudioPluginRequirements Requirements { get; }
 
     /// <summary>
-    /// Safety gate: actually loading a real .vst3 through the native
-    /// bridge currently risks a hard crash (the bridge has only ever
-    /// been exercised against non-existent test paths; real plugins can
-    /// segfault on load). Until the native bridge is hardened, the load
-    /// is OFF by default — a hosted VST registers and sits in the chain
-    /// but passes audio through bit-identical (Process short-circuits on
-    /// a zero handle). Set ZEUS_ENABLE_VST_LOAD=1 to opt in (e.g. while
-    /// developing the native side). See native/zeus-vst-bridge.
+    /// Safety gate: TX native VST loading remains opt-in because real plugins
+    /// can crash an in-process bridge. RX VSTs default on so receive-only
+    /// cleanup plugins such as Supertone Clear/RNNoise can be used from the
+    /// dedicated rx.post-demod route; ZEUS_DISABLE_RX_VST_LOAD=1 is the
+    /// receive-side kill switch. Set ZEUS_ENABLE_VST_LOAD=1 to opt TX native
+    /// VSTs in as well. See native/zeus-vst-bridge.
     /// </summary>
     /// <summary>Test override for <see cref="NativeLoadEnabled"/>; null = use the env var.</summary>
     internal static bool? NativeLoadEnabledOverride;
 
-    private static bool NativeLoadEnabled =>
-        NativeLoadEnabledOverride
-        ?? Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD") == "1";
+    private static bool NativeLoadEnabled(string slot)
+    {
+        if (NativeLoadEnabledOverride is { } forced) return forced;
+        if (Environment.GetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD") == "1") return false;
+        if (Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD") == "1") return true;
+        return slot.StartsWith("rx.", StringComparison.OrdinalIgnoreCase)
+            && Environment.GetEnvironmentVariable("ZEUS_DISABLE_RX_VST_LOAD") != "1";
+    }
 
     public Task InitializeAudioAsync(IAudioHost host, CancellationToken ct)
     {
-        if (!NativeLoadEnabled)
+        if (!NativeLoadEnabled(_slot))
         {
             _log?.LogInformation(
                 "VST host '{Name}' registered but native load is disabled "
-                + "(ZEUS_ENABLE_VST_LOAD!=1); passing audio through until the "
-                + "native bridge is hardened.", DisplayName);
+                + "(set ZEUS_ENABLE_VST_LOAD=1 for TX native VSTs, or clear "
+                + "ZEUS_DISABLE_RX_VST_LOAD for RX VSTs); passing audio through.",
+                DisplayName);
             return Task.CompletedTask; // _handle stays 0 → Process passes through
         }
 
@@ -82,11 +88,12 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
         if (!File.Exists(absPath) && !Directory.Exists(absPath))
             throw new PluginLoadException($"VST3 path not found: {absPath}");
 
+        var blockSize = Math.Max(1, host.CurrentBlockSize);
         var status = _bridge.LoadVst3(
             absPath,
             Requirements.Channels,
             Requirements.SampleRate,
-            Requirements.BlockSize,
+            blockSize,
             out _handle);
 
         if (status != VstBridgeStatus.Ok || _handle == 0)
@@ -95,7 +102,7 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
 
         _log?.LogInformation(
             "VST host loaded {Path} (channels={Channels} sr={SampleRate} block={Block})",
-            absPath, Requirements.Channels, Requirements.SampleRate, Requirements.BlockSize);
+            absPath, Requirements.Channels, Requirements.SampleRate, blockSize);
         return Task.CompletedTask;
     }
 
@@ -120,7 +127,7 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
     /// <summary>
     /// True once the VST is natively loaded (the editor can only open
     /// when there's a real plugin instance behind the handle). False when
-    /// native load is gated off (<see cref="NativeLoadEnabled"/>) or the
+    /// native load is gated off (<see cref="NativeLoadEnabled(string)"/>) or the
     /// load failed — in those states the slot passes audio through and
     /// has no GUI to show.
     /// </summary>

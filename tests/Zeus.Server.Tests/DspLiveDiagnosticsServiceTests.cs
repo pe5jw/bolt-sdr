@@ -619,7 +619,11 @@ public sealed class DspLiveDiagnosticsServiceTests
             Assert.Equal("off", c.DefaultState);
             Assert.Equal("candidate-only-opt-in-bakeoff", c.RolloutPolicy);
             Assert.Contains("post-demod", c.IntegrationPoint);
-            Assert.Equal("catalog-only-not-integrated", c.EvaluationStage);
+            Assert.Equal(
+                c.Id == "rnnoise"
+                    ? "rx-vst-plugin-path-supported-not-bundled"
+                    : "catalog-only-not-integrated",
+                c.EvaluationStage);
             Assert.Contains(c.AllowedSignalPaths, path => path.Contains("post-demod", StringComparison.Ordinal));
             Assert.Contains("raw-wdsp-iq", c.ForbiddenSignalPaths);
             Assert.Contains(c.ForbiddenSignalPaths, path => path.Contains("puresignal", StringComparison.Ordinal));

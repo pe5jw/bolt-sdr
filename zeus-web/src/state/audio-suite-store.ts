@@ -79,6 +79,8 @@ export interface VstScanResult {
   errors: Array<{ source: string; message: string }>;
 }
 
+export type VstScanRoute = 'auto' | 'tx' | 'rx' | 'both';
+
 export interface AudioProfileMutationResult {
   ok: boolean;
   error?: string;
@@ -98,6 +100,7 @@ interface AudioSuiteState {
   //   (2) AudioChainOrder WS broadcast (any client's reorder)
   //   (3) reorderChain() local optimistic update before PUT
   chainOrder: string[];
+  rxChainOrder: string[];
 
   // Preview (full TX-monitor path; server reports whether this host can
   // expose it).
@@ -167,6 +170,7 @@ interface AudioSuiteState {
   // slots it back in at its canonical position. Server returns the new
   // active order, which becomes chainOrder.
   setChainMembership(pluginId: string, active: boolean): Promise<void>;
+  setRxChainMembership(pluginId: string, active: boolean): Promise<void>;
 
   // Profile plumbing.
   loadProfiles(): Promise<void>;
@@ -176,7 +180,7 @@ interface AudioSuiteState {
 
   // Scan a directory for VST3 plugins, register each, and refresh the
   // rack. Returns a summary (or an error string on failure).
-  scanVstDirectory(directory: string): Promise<VstScanResult>;
+  scanVstDirectory(directory: string, route?: VstScanRoute): Promise<VstScanResult>;
 
   // Permanently uninstall a plugin (DELETE /api/plugins/{id}) and refresh
   // the Audio Suite so its rack / sidebar panel disappears. Unlike parking
@@ -192,6 +196,9 @@ interface AudioSuiteState {
   setChainOrderFromServer(ids: string[]): void;
   reorderChain(fromIndex: number, toIndex: number): Promise<void>;
   loadChainOrderFromServer(): Promise<void>;
+  setRxChainOrderFromServer(ids: string[]): void;
+  reorderRxChain(fromIndex: number, toIndex: number): Promise<void>;
+  loadRxChainOrderFromServer(): Promise<void>;
 
   // Preview plumbing.
   loadPreviewState(): Promise<void>;
@@ -238,6 +245,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       width: DEFAULT_WIDTH,
       height: DEFAULT_HEIGHT,
       chainOrder: [],
+      rxChainOrder: [],
       previewSupported: false,
       previewEnabled: useTxStore.getState().txMonitorEnabled,
       // Default to true (bypassed) so the UI starts in the inert state
@@ -326,6 +334,39 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           set({ chainOrder: prev });
           // eslint-disable-next-line no-console
           console.warn('audio-suite chain-membership PUT threw', err);
+        }
+      },
+
+      setRxChainMembership: async (pluginId, active) => {
+        const prev = get().rxChainOrder;
+        if (!active) {
+          set({ rxChainOrder: prev.filter((id) => id !== pluginId) });
+        }
+        try {
+          const res = await fetch(
+            `/api/rx-audio-suite/plugins/${encodeURIComponent(pluginId)}/chain-membership`,
+            {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ active }),
+            },
+          );
+          if (!res.ok) {
+            set({ rxChainOrder: prev });
+            // eslint-disable-next-line no-console
+            console.warn(
+              `rx-audio-suite chain-membership PUT rejected: ${res.status} ${res.statusText}`,
+            );
+            return;
+          }
+          const body = (await res.json()) as { pluginIds?: string[] };
+          if (Array.isArray(body.pluginIds)) {
+            set({ rxChainOrder: body.pluginIds });
+          }
+        } catch (err) {
+          set({ rxChainOrder: prev });
+          // eslint-disable-next-line no-console
+          console.warn('rx-audio-suite chain-membership PUT threw', err);
         }
       },
 
@@ -451,7 +492,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         return { ok: true };
       },
 
-      scanVstDirectory: async (directory) => {
+      scanVstDirectory: async (directory, route = 'auto') => {
         const empty: VstScanResult = {
           ok: false,
           registered: [],
@@ -462,16 +503,17 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           const res = await fetch('/api/audio-suite/scan-vst-directory', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ directory }),
+            body: JSON.stringify({ directory, route }),
           });
           const body = await res.json();
           if (!res.ok) {
             return { ...empty, error: body?.error ?? `scan failed (${res.status})` };
           }
-          // New plugins were installed + activated server-side. Re-register
-          // their UI panels and refresh the chain order so the rack updates.
+          // New plugins were installed server-side. Re-register their UI
+          // panels and refresh both chain orders so TX/RX parked racks update.
           await reloadInstalledPluginUis();
           await get().loadChainOrderFromServer();
+          await get().loadRxChainOrderFromServer();
           return {
             ok: true,
             directory: body.directory,
@@ -495,6 +537,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           // order so the rack + sidebar update without a page reload.
           await reloadInstalledPluginUis();
           await get().loadChainOrderFromServer();
+          await get().loadRxChainOrderFromServer();
           // If the detail pane was showing this plugin, drop the selection so
           // it falls back to the first remaining chain plugin.
           if (get().selectedChainId === pluginId) {
@@ -513,6 +556,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       },
 
       setChainOrderFromServer: (ids) => set({ chainOrder: ids }),
+      setRxChainOrderFromServer: (ids) => set({ rxChainOrder: ids }),
 
       reorderChain: async (fromIndex, toIndex) => {
         const current = get().chainOrder;
@@ -568,6 +612,56 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         } catch (err) {
           // eslint-disable-next-line no-console
           console.warn('audio-suite chain-order GET threw', err);
+        }
+      },
+
+      reorderRxChain: async (fromIndex, toIndex) => {
+        const current = get().rxChainOrder;
+        if (
+          fromIndex < 0 ||
+          fromIndex >= current.length ||
+          toIndex < 0 ||
+          toIndex >= current.length ||
+          fromIndex === toIndex
+        ) {
+          return;
+        }
+        const next = current.slice();
+        const moved = next.splice(fromIndex, 1)[0]!;
+        next.splice(toIndex, 0, moved);
+        set({ rxChainOrder: next });
+
+        try {
+          const res = await fetch('/api/rx-audio-suite/chain/order', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pluginIds: next }),
+          });
+          if (!res.ok) {
+            set({ rxChainOrder: current });
+            // eslint-disable-next-line no-console
+            console.warn(
+              `rx-audio-suite chain-order PUT rejected: ${res.status} ${res.statusText}`,
+            );
+          }
+        } catch (err) {
+          set({ rxChainOrder: current });
+          // eslint-disable-next-line no-console
+          console.warn('rx-audio-suite chain-order PUT threw', err);
+        }
+      },
+
+      loadRxChainOrderFromServer: async () => {
+        try {
+          const res = await fetch('/api/rx-audio-suite/chain/order');
+          if (!res.ok) return;
+          const body = (await res.json()) as { pluginIds?: string[] };
+          if (Array.isArray(body.pluginIds)) {
+            set({ rxChainOrder: body.pluginIds });
+          }
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('rx-audio-suite chain-order GET threw', err);
         }
       },
 

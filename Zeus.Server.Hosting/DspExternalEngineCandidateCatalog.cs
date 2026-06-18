@@ -21,7 +21,7 @@ public static class DspExternalEngineCandidateCatalog
             IntegrationPoint: "post-demod-rx-audio-speech-only after NR5/SPNR as NR5-AI Assist",
             DefaultState: "off",
             RolloutPolicy: OptInGate,
-            EvaluationStage: "catalog-only-not-integrated",
+            EvaluationStage: "rx-vst-plugin-path-supported-not-bundled",
             AllowedSignalPaths: ["post-demod-rx-audio-speech", "nr5-ai-assist-post-demod-rx-audio-speech"],
             ForbiddenSignalPaths: ["raw-wdsp-iq", "cw-or-digital-non-speech", "tx-audio", "tx-monitor", "puresignal-feedback"],
             RequiredControls:
@@ -32,7 +32,7 @@ public static class DspExternalEngineCandidateCatalog
                 "rnnoise-vad-confidence-gate",
                 "nr5-ai-assist-mode",
                 "original-filtered-blend-control",
-                "48khz-frame-adapter",
+                "48khz-frame-adapter-or-rx-vst-plugin-host",
                 "official-xiph-runtime-only",
                 "model-license-provenance-gate",
                 "le9endary-training-reference-only",
@@ -42,7 +42,7 @@ public static class DspExternalEngineCandidateCatalog
             ],
             FallbackPolicy: "disabled/unavailable/model-load-failure path must fall back to current Zeus NR5 post-WDSP audio; non-speech/CW/digital/TX/PureSignal paths must bypass the engine",
             License: "BSD-3-Clause for official Xiph RNNoise runtime; le9endary/RNNoise has no repo license and is training-reference-only until provenance is cleared; werman/noise-suppression-for-voice is GPL-3.0 plugin reference only, not core-vendored runtime",
-            PackagingStatus: "official-xiph-native-c-library-not-vendored; le9endary fork not vendorable until license/model provenance is cleared; werman plugin not vendored into core; model packaging and 48 kHz frame adapter required",
+            PackagingStatus: "official-xiph-native-c-library-not-vendored; known RNNoise/noise-suppression VSTs can be operator-scanned into rx.post-demod; le9endary fork not vendorable until license/model provenance is cleared; werman plugin not vendored into core; model packaging and direct 48 kHz frame adapter required for a bundled runtime",
             RuntimeRisk: "medium",
             LatencyRisk: "low-medium",
             RadioSafetyRisk: "medium: speech-trained model may damage weak CW, digital, or non-speech HF content",
@@ -76,7 +76,7 @@ public static class DspExternalEngineCandidateCatalog
             Blockers:
             [
                 "No bundled native package or model artifact.",
-                "No managed/native interop or 48 kHz frame-ring adapter in Zeus.",
+                "No managed/native interop or direct 48 kHz frame-ring adapter in Zeus; audible RNNoise requires an installed RX VST plugin until a bundled runtime is approved.",
                 "le9endary/RNNoise has no repo license in GitHub metadata; do not vendor its code or generated model artifacts until provenance is cleared.",
                 "Speech-only training makes raw HF/IQ replacement unsafe.",
                 "Needs explicit bypass for CW, digital, PureSignal, and TX monitor paths.",

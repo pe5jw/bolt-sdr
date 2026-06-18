@@ -41,6 +41,9 @@ public enum EditorActionResult
 
 public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
 {
+    private const int TxAudioHostBlockSize = 1024;
+    private const int RxAudioHostBlockSize = 2048;
+
     private readonly PluginManager _manager;
     private readonly DspPipelineService _pipeline;
     private readonly IVstBridgeNative _vstBridge;
@@ -49,6 +52,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     private readonly Func<bool> _isTciTxAudioActive;
     private int _remoteBypassLogCount; // for one-time diagnostic log during verification/on-air testing
     private readonly ChainOrderService? _chainOrder;
+    private readonly RxChainOrderService? _rxChainOrder;
     // Out-of-process VST engine route (opt-in "VST" processing mode). Null in
     // tests / when no controller is injected. When its IsActive gate is true the
     // realtime TX path routes through the external engine instead of _chain;
@@ -63,13 +67,17 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     // TX _chain: separate plugin instances, separate IIR state, and a separate
     // realtime runner (ProcessRxBlock, installed on DspPipelineService rather
     // than the WDSP TX seam). ChainOrderService governs only the TX chain; the
-    // RX chain uses simple first-free-slot ordering. The pipeline handler is
-    // installed only while at least one RX plugin is attached, so the RX audio
-    // path stays bit-identical to before this seam when none is loaded.
+    // RX chain uses a separate RX order/membership service. The pipeline handler
+    // is installed only while at least one RX plugin is active, so scanned RX
+    // VSTs can sit parked without changing receive audio.
     private readonly AudioChain _rxChain = new();
     private readonly Dictionary<string, int> _rxIdToSlot = new();
+    private readonly Dictionary<string, IAudioPlugin> _rxIdToPlugin = new();
+    private readonly Dictionary<string, string> _rxIdToSlotName = new();
+    private readonly HashSet<string> _rxInitializedIds = new(StringComparer.Ordinal);
     private readonly object _lock = new();
     private Action<IReadOnlyList<string>>? _orderChangedHandler;
+    private Action<IReadOnlyList<string>>? _rxOrderChangedHandler;
     // Pre-MOX preview gate — true ONLY when a) at least one IAudioPlugin
     // is attached AND b) the live DSP engine is WdspDspEngine (the
     // synthetic engine has no realtime TX path so a preview against it
@@ -98,6 +106,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         TxService tx,
         IPreviewAudioSink preview,
         ChainOrderService chainOrder,
+        RxChainOrderService rxChainOrder,
         ILogger<AudioPluginBridge> log,
         TxAudioIngest txAudioIngest,
         VstEngineController vstEngine)
@@ -106,6 +115,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
                isMonitorOn: () => pipeline.CurrentEngine?.IsTxMonitorOn ?? false,
                preview: preview,
                chainOrder: chainOrder,
+               rxChainOrder: rxChainOrder,
                log,
                isTciTxAudioActive: () => txAudioIngest.IsTciTxAudioActive,
                vstEngine: vstEngine) { }
@@ -121,6 +131,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         Func<bool> isMonitorOn,
         IPreviewAudioSink preview,
         ChainOrderService? chainOrder,
+        RxChainOrderService? rxChainOrder,
         ILogger<AudioPluginBridge> log,
         Func<bool>? isTciTxAudioActive = null,
         VstEngineController? vstEngine = null)
@@ -132,6 +143,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         _isMonitorOn = isMonitorOn;
         _isTciTxAudioActive = isTciTxAudioActive ?? (() => false);
         _chainOrder = chainOrder;
+        _rxChainOrder = rxChainOrder;
         _vstEngine = vstEngine;
         _log = log;
     }
@@ -244,7 +256,11 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     private VstHostAudioPlugin? ResolveVst(string pluginId, out EditorActionResult result)
     {
         IAudioPlugin? plugin;
-        lock (_lock) _idToPlugin.TryGetValue(pluginId, out plugin);
+        lock (_lock)
+        {
+            if (!_idToPlugin.TryGetValue(pluginId, out plugin))
+                _rxIdToPlugin.TryGetValue(pluginId, out plugin);
+        }
         if (plugin is null) { result = EditorActionResult.NotFound; return null; }
         if (plugin is not VstHostAudioPlugin vst) { result = EditorActionResult.NotAVst; return null; }
         result = EditorActionResult.Ok;
@@ -261,6 +277,11 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         {
             _orderChangedHandler = ApplyChainOrder;
             _chainOrder.OrderChanged += _orderChangedHandler;
+        }
+        if (_rxChainOrder is not null)
+        {
+            _rxOrderChangedHandler = ApplyRxChainOrder;
+            _rxChainOrder.OrderChanged += _rxOrderChangedHandler;
         }
 
         // Adopt any plugins already active (PluginManager might have
@@ -284,6 +305,11 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         {
             _chainOrder.OrderChanged -= _orderChangedHandler;
             _orderChangedHandler = null;
+        }
+        if (_rxChainOrder is not null && _rxOrderChangedHandler is not null)
+        {
+            _rxChainOrder.OrderChanged -= _rxOrderChangedHandler;
+            _rxOrderChangedHandler = null;
         }
 
         if (_pipeline.CurrentEngine is WdspDspEngine wdsp)
@@ -330,6 +356,8 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         int channels,
         int sampleRate)
     {
+        int sampleCount = frames * channels;
+
         // VST processing mode (opt-in): when the operator has selected the
         // out-of-process VST engine AND it's live, route the TX block through it
         // instead of the native chain. Mutually exclusive with the native path
@@ -343,7 +371,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         {
             if (_chain.MasterBypassed || _isTciTxAudioActive())
             {
-                input.CopyTo(output);
+                CopySanitizedForWdsp(input, output, sampleCount);
                 return;
             }
             var vstCtx = new AudioBlockContext(sampleRate, channels, frames, sampleTime: 0, mox: true);
@@ -363,14 +391,21 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             {
                 _log.LogInformation("TX audio plugin chain bypassed for remote TCI source (IsBypassedForRemoteTxSource=true). Local mic path unaffected.");
             }
-            input.CopyTo(output);
+            CopySanitizedForWdsp(input, output, sampleCount);
             return;
         }
 
-        int sampleCount = frames * channels;
         var ctx = new AudioBlockContext(sampleRate, channels, frames, sampleTime: 0, mox: true);
         _chain.Process(input, output, ctx);
         DspPipelineService.SanitizeAudioBuffer(output[..sampleCount]);
+    }
+
+    private static void CopySanitizedForWdsp(ReadOnlySpan<float> input, Span<float> output, int sampleCount)
+    {
+        for (int i = 0; i < sampleCount; i++)
+        {
+            output[i] = DspPipelineService.SanitizeAudioSample(input[i]);
+        }
     }
 
     /// <summary>
@@ -617,7 +652,9 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         try
         {
             audioPlugin.InitializeAudioAsync(
-                new AudioHost(slotName: p.Loaded.Manifest.Audio?.Slot ?? "tx.post-leveler"),
+                new AudioHost(
+                    slotName: p.Loaded.Manifest.Audio?.Slot ?? "tx.post-leveler",
+                    blockSize: TxAudioHostBlockSize),
                 CancellationToken.None)
                 .GetAwaiter().GetResult();
         }
@@ -704,49 +741,51 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     /// </summary>
     private void AttachRxPlugin(ActivatedPlugin p, IAudioPlugin audioPlugin, string slotName)
     {
-        int slot;
-        bool firstRx;
+        var id = p.Loaded.Manifest.Id;
         lock (_lock)
         {
-            slot = FindFreeRxSlot();
-            if (slot < 0)
+            _rxIdToPlugin[id] = audioPlugin;
+            _rxIdToSlotName[id] = slotName;
+        }
+
+        if (_rxChainOrder is not null)
+        {
+            _rxChainOrder.OnPluginAttached(id);
+        }
+        else
+        {
+            if (!EnsureRxPluginInitialized(id, audioPlugin, slotName))
             {
-                _log.LogWarning(
-                    "RX audio chain full ({Max} slots); ignoring plugin {Id}",
-                    _rxChain.SlotCount, p.Loaded.Manifest.Id);
+                lock (_lock)
+                {
+                    _rxIdToPlugin.Remove(id);
+                    _rxIdToSlotName.Remove(id);
+                }
                 return;
             }
-            firstRx = _rxIdToSlot.Count == 0;
-            _rxIdToSlot[p.Loaded.Manifest.Id] = slot;
-            _rxChain.SetSlot(slot, audioPlugin);
-        }
 
-        try
-        {
-            audioPlugin.InitializeAudioAsync(new AudioHost(slotName), CancellationToken.None)
-                .GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            _log.LogError(ex,
-                "RX audio plugin {Id} InitializeAudioAsync threw; clearing rx slot {Slot}",
-                p.Loaded.Manifest.Id, slot);
+            bool anyActive;
             lock (_lock)
             {
-                _rxChain.ClearSlot(slot);
-                _rxIdToSlot.Remove(p.Loaded.Manifest.Id);
+                var slot = FindFreeRxSlot();
+                if (slot < 0)
+                {
+                    _log.LogWarning(
+                        "RX audio chain full ({Max} slots); ignoring plugin {Id}",
+                        _rxChain.SlotCount, id);
+                    _rxIdToPlugin.Remove(id);
+                    return;
+                }
+                _rxIdToSlot[id] = slot;
+                _rxChain.SetSlot(slot, audioPlugin);
+                anyActive = _rxIdToSlot.Count > 0;
             }
-            return;
+            if (anyActive) _pipeline.SetRxAudioPluginHandler(ProcessRxBlock);
         }
 
-        // Install the realtime runner on the pipeline only once an RX plugin is
-        // actually present. _pipeline is null only on the realtime-only test
-        // ctor, whose lifecycle methods are never invoked.
-        if (firstRx) _pipeline.SetRxAudioPluginHandler(ProcessRxBlock);
-
         _log.LogInformation(
-            "RX audio plugin {Id} attached to rx slot {Slot} (slot={SlotName})",
-            p.Loaded.Manifest.Id, slot, slotName);
+            "RX audio plugin {Id} attached to RX route (slot={SlotName}, active={Active})",
+            id, slotName, IsRxPluginActive(id));
     }
 
     /// <summary>
@@ -758,25 +797,34 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     private bool DetachRxPlugin(ActivatedPlugin p)
     {
         IAudioPlugin? attached;
-        bool lastRx;
+        bool anyActive;
+        bool wasInitialized;
+        var id = p.Loaded.Manifest.Id;
         lock (_lock)
         {
-            if (!_rxIdToSlot.TryGetValue(p.Loaded.Manifest.Id, out var slot)) return false;
-            _rxIdToSlot.Remove(p.Loaded.Manifest.Id);
-            attached = _rxChain.GetSlot(slot);
-            _rxChain.ClearSlot(slot);
-            lastRx = _rxIdToSlot.Count == 0;
+            if (!_rxIdToPlugin.Remove(id, out attached)) return false;
+            _rxIdToSlotName.Remove(id);
+            wasInitialized = _rxInitializedIds.Remove(id);
+            if (_rxIdToSlot.Remove(id, out var slot))
+                _rxChain.ClearSlot(slot);
+            anyActive = _rxIdToSlot.Count > 0;
         }
 
-        if (lastRx) _pipeline.SetRxAudioPluginHandler(null);
+        if (_rxChainOrder is not null)
+            _rxChainOrder.OnPluginDetached(id);
+        else if (!anyActive)
+            _pipeline.SetRxAudioPluginHandler(null);
 
         if (attached is not null)
         {
-            try { attached.ShutdownAudioAsync(CancellationToken.None).GetAwaiter().GetResult(); }
-            catch (Exception ex)
+            if (wasInitialized)
             {
-                _log.LogWarning(ex,
-                    "RX audio plugin {Id} ShutdownAudioAsync threw", p.Loaded.Manifest.Id);
+                try { attached.ShutdownAudioAsync(CancellationToken.None).GetAwaiter().GetResult(); }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex,
+                        "RX audio plugin {Id} ShutdownAudioAsync threw", id);
+                }
             }
             if (attached is IAsyncDisposable ad)
             {
@@ -784,7 +832,85 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
                 catch { /* best effort */ }
             }
         }
-        _log.LogInformation("RX audio plugin {Id} detached", p.Loaded.Manifest.Id);
+        _log.LogInformation("RX audio plugin {Id} detached", id);
+        return true;
+    }
+
+    private void ApplyRxChainOrder(IReadOnlyList<string> activeOrder)
+    {
+        foreach (var id in activeOrder)
+        {
+            IAudioPlugin? plugin;
+            string? slotName;
+            lock (_lock)
+            {
+                _rxIdToPlugin.TryGetValue(id, out plugin);
+                _rxIdToSlotName.TryGetValue(id, out slotName);
+            }
+            if (plugin is null || string.IsNullOrWhiteSpace(slotName)) continue;
+            EnsureRxPluginInitialized(id, plugin, slotName);
+        }
+
+        bool anyActive;
+        lock (_lock)
+        {
+            anyActive = ReapplyRxSlotsUnderLock(activeOrder);
+        }
+        _pipeline.SetRxAudioPluginHandler(anyActive ? ProcessRxBlock : null);
+        _log.LogInformation("RX audio plugin chain re-slotted ({Count} active)", activeOrder.Count);
+    }
+
+    private bool ReapplyRxSlotsUnderLock(IReadOnlyList<string> activeOrder)
+    {
+        for (int i = 0; i < _rxChain.SlotCount; i++)
+            _rxChain.ClearSlot(i);
+        _rxIdToSlot.Clear();
+
+        var slot = 0;
+        foreach (var id in activeOrder)
+        {
+            if (!_rxIdToPlugin.TryGetValue(id, out var plugin)) continue;
+            if (!_rxInitializedIds.Contains(id)) continue;
+            if (slot >= _rxChain.SlotCount)
+            {
+                _log.LogWarning(
+                    "RX audio chain full ({Max} slots); plugin {Id} is active but not slotted",
+                    _rxChain.SlotCount, id);
+                continue;
+            }
+            _rxIdToSlot[id] = slot;
+            _rxChain.SetSlot(slot, plugin);
+            slot++;
+        }
+        return slot > 0;
+    }
+
+    private bool EnsureRxPluginInitialized(string id, IAudioPlugin audioPlugin, string slotName)
+    {
+        lock (_lock)
+        {
+            if (_rxInitializedIds.Contains(id)) return true;
+        }
+
+        try
+        {
+            audioPlugin.InitializeAudioAsync(
+                    new AudioHost(slotName, blockSize: RxAudioHostBlockSize),
+                    CancellationToken.None)
+                .GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex,
+                "RX audio plugin {Id} InitializeAudioAsync threw; leaving it inactive",
+                id);
+            return false;
+        }
+
+        lock (_lock)
+        {
+            _rxInitializedIds.Add(id);
+        }
         return true;
     }
 
@@ -793,6 +919,11 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         for (int i = 0; i < _rxChain.SlotCount; i++)
             if (_rxChain.GetSlot(i) is null) return i;
         return -1;
+    }
+
+    private bool IsRxPluginActive(string pluginId)
+    {
+        lock (_lock) return _rxIdToSlot.ContainsKey(pluginId);
     }
 
     /// <summary>
@@ -920,10 +1051,15 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
 
     private sealed class AudioHost : IAudioHost
     {
-        public AudioHost(string slotName) { Slot = slotName; }
+        public AudioHost(string slotName, int blockSize)
+        {
+            Slot = slotName;
+            CurrentBlockSize = blockSize;
+        }
+
         public int CurrentSampleRate => 48000;
         public int CurrentChannels => 1;
-        public int CurrentBlockSize => 256;
+        public int CurrentBlockSize { get; }
         public string Slot { get; }
     }
 }

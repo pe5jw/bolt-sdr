@@ -104,6 +104,93 @@ public class VstDirectoryScanServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Scan_Routes_Rnnoise_Vst_To_Rx_Post_Demod()
+    {
+        WriteFakeVst("RNNoise.vst3");
+
+        var result = await _scanner.ScanAsync(_srcDir, default);
+
+        Assert.Single(result.Registered);
+        var reg = result.Registered[0];
+        Assert.Equal("RNNoise", reg.Name);
+        Assert.Equal("com.openhpsdr.zeus.vst.rnnoise", reg.Id);
+
+        var dir = Path.Combine(_root, "plugins", reg.Id);
+        using var doc = JsonDocument.Parse(
+            await File.ReadAllTextAsync(Path.Combine(dir, "plugin.json")));
+        var audio = doc.RootElement.GetProperty("audio");
+        Assert.Equal("rx.post-demod", audio.GetProperty("slot").GetString());
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(_srcDir, "RNNoise.vst3")),
+            audio.GetProperty("vst3Path").GetString());
+    }
+
+    [Fact]
+    public async Task Scan_RxRoute_Can_Register_Any_Vst_To_Rx_Post_Demod()
+    {
+        WriteFakeVst("TDR Nova.vst3");
+
+        var result = await _scanner.ScanAsync(_srcDir, "rx", default);
+
+        Assert.Single(result.Registered);
+        var reg = result.Registered[0];
+        Assert.Equal("TDR Nova RX", reg.Name);
+        Assert.Equal("com.openhpsdr.zeus.rxvst.tdrnova", reg.Id);
+
+        var dir = Path.Combine(_root, "plugins", reg.Id);
+        using var doc = JsonDocument.Parse(
+            await File.ReadAllTextAsync(Path.Combine(dir, "plugin.json")));
+        var audio = doc.RootElement.GetProperty("audio");
+        Assert.Equal("rx.post-demod", audio.GetProperty("slot").GetString());
+    }
+
+    [Fact]
+    public async Task Scan_ExactVst3Path_RegistersOnlyThatPlugin()
+    {
+        WriteFakeVst("Clear.vst3");
+        WriteFakeVst("Other.vst3");
+
+        var clearPath = Path.Combine(_srcDir, "Clear.vst3");
+        var result = await _scanner.ScanAsync(clearPath, "rx", default);
+
+        Assert.Single(result.Registered);
+        var reg = result.Registered[0];
+        Assert.Equal("Clear RX", reg.Name);
+        Assert.Equal("com.openhpsdr.zeus.rxvst.clear", reg.Id);
+
+        Assert.DoesNotContain(_manager.Active, p =>
+            p.Loaded.Manifest.Id == "com.openhpsdr.zeus.rxvst.other");
+
+        var dir = Path.Combine(_root, "plugins", reg.Id);
+        using var doc = JsonDocument.Parse(
+            await File.ReadAllTextAsync(Path.Combine(dir, "plugin.json")));
+        var audio = doc.RootElement.GetProperty("audio");
+        Assert.Equal(Path.GetFullPath(clearPath), audio.GetProperty("vst3Path").GetString());
+        Assert.Equal("rx.post-demod", audio.GetProperty("slot").GetString());
+    }
+
+    [Fact]
+    public async Task Scan_BothRoute_Registers_Independent_Tx_And_Rx_Instances()
+    {
+        WriteFakeVst("Supertone Clear.vst3");
+
+        var result = await _scanner.ScanAsync(_srcDir, "both", default);
+
+        Assert.Equal(2, result.Registered.Count);
+        Assert.Contains(result.Registered, r =>
+            r.Id == "com.openhpsdr.zeus.vst.supertoneclear" && r.Name == "Supertone Clear TX");
+        Assert.Contains(result.Registered, r =>
+            r.Id == "com.openhpsdr.zeus.rxvst.supertoneclear" && r.Name == "Supertone Clear RX");
+
+        using var txDoc = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(
+            _root, "plugins", "com.openhpsdr.zeus.vst.supertoneclear", "plugin.json")));
+        using var rxDoc = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(
+            _root, "plugins", "com.openhpsdr.zeus.rxvst.supertoneclear", "plugin.json")));
+        Assert.Equal("tx.post-leveler", txDoc.RootElement.GetProperty("audio").GetProperty("slot").GetString());
+        Assert.Equal("rx.post-demod", rxDoc.RootElement.GetProperty("audio").GetProperty("slot").GetString());
+    }
+
+    [Fact]
     public async Task Scan_Skips_Already_Registered_On_Second_Pass()
     {
         WriteFakeVst("Comp.vst3");

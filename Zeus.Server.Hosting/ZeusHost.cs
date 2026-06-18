@@ -415,6 +415,8 @@ public static class ZeusHost
         // to OrderChanged and re-slots the runtime chain.
         builder.Services.AddSingleton<ChainOrderStore>();
         builder.Services.AddSingleton<ChainOrderService>();
+        builder.Services.AddSingleton<RxChainOrderStore>();
+        builder.Services.AddSingleton<RxChainOrderService>();
 
         // AudioProfileService — named snapshots of the chain config
         // (active order + parked set + master bypass). Persists to

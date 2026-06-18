@@ -21,11 +21,13 @@ import {
   AUDIO_SUITE_WINDOW_MIN_WIDTH,
   AUDIO_SUITE_WINDOW_MIN_HEIGHT,
   useAudioSuiteStore,
+  type VstScanRoute,
 } from '../state/audio-suite-store';
 import { ConfirmDialog } from '../layout/ConfirmDialog';
 import { TextInputDialog } from '../layout/TextInputDialog';
 
 const CHAIN_SLOT = 'tx-audio-tools.chain';
+const RX_CHAIN_SLOT = 'rx-audio-tools.chain';
 
 // Plugin editors (the built-in EQ graph, gate, etc.) are responsive and
 // stretch to fill whatever width they're given. The embedded host lives
@@ -867,12 +869,15 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   const setPosition = useAudioSuiteStore((s) => s.setPosition);
   const setDragging = useAudioSuiteStore((s) => s.setDragging);
   const chainOrder = useAudioSuiteStore((s) => s.chainOrder);
+  const rxChainOrder = useAudioSuiteStore((s) => s.rxChainOrder);
   const reorderChain = useAudioSuiteStore((s) => s.reorderChain);
+  const reorderRxChain = useAudioSuiteStore((s) => s.reorderRxChain);
   const selectedChainId = useAudioSuiteStore((s) => s.selectedChainId);
   const setSelectedChainId = useAudioSuiteStore((s) => s.setSelectedChainId);
   const sidebarCollapsed = useAudioSuiteStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useAudioSuiteStore((s) => s.toggleSidebar);
   const setChainMembership = useAudioSuiteStore((s) => s.setChainMembership);
+  const setRxChainMembership = useAudioSuiteStore((s) => s.setRxChainMembership);
   const profiles = useAudioSuiteStore((s) => s.profiles);
   const profilesLoaded = useAudioSuiteStore((s) => s.profilesLoaded);
   const selectedProfile = useAudioSuiteStore((s) => s.selectedProfile);
@@ -890,6 +895,9 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   const loadChainOrderFromServer = useAudioSuiteStore(
     (s) => s.loadChainOrderFromServer,
   );
+  const loadRxChainOrderFromServer = useAudioSuiteStore(
+    (s) => s.loadRxChainOrderFromServer,
+  );
   const previewSupported = useAudioSuiteStore((s) => s.previewSupported);
   const previewEnabled = useAudioSuiteStore((s) => s.previewEnabled);
   const setPreviewEnabled = useAudioSuiteStore((s) => s.setPreviewEnabled);
@@ -897,12 +905,18 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   const loadMasterBypassFromServer = useAudioSuiteStore(
     (s) => s.loadMasterBypassFromServer,
   );
+  const [suiteRoute, setSuiteRoute] = useState<'tx' | 'rx'>('tx');
+  const isRxSuite = suiteRoute === 'rx';
 
   const allPanels = usePluginPanels();
-  // Every plugin that targets the TX audio chain — installed, whether
-  // or not it's currently in the active chain.
-  const chainSlotPanels = useMemo(
+  // Every plugin that targets the TX/RX audio chains — installed, whether
+  // or not it's currently active.
+  const txChainSlotPanels = useMemo(
     () => allPanels.filter((p) => p.slot === CHAIN_SLOT),
+    [allPanels],
+  );
+  const rxChainSlotPanels = useMemo(
+    () => allPanels.filter((p) => p.slot === RX_CHAIN_SLOT),
     [allPanels],
   );
   // Native and VST are mutually-exclusive processing routes, so the Audio
@@ -912,20 +926,26 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   // order untouched and reappear when the operator switches back.
   const vstMode = processingMode === 'vst';
   const modePanels = useMemo(
-    () => chainSlotPanels.filter((p) => (p.editorBacked === true) === vstMode),
-    [chainSlotPanels, vstMode],
+    () =>
+      isRxSuite
+        ? rxChainSlotPanels
+        : txChainSlotPanels.filter((p) => (p.editorBacked === true) === vstMode),
+    [isRxSuite, rxChainSlotPanels, txChainSlotPanels, vstMode],
   );
+  const activeOrder = isRxSuite ? rxChainOrder : chainOrder;
+  const reorderActiveChain = isRxSuite ? reorderRxChain : reorderChain;
+  const setActiveChainMembership = isRxSuite ? setRxChainMembership : setChainMembership;
   // Active rack = the panels whose plugin ID is in the server's active
   // order, sorted by it. Parking removes an ID from chainOrder, so a
   // parked plugin simply falls out of here and into the sidebar.
-  const chainOrderSet = useMemo(() => new Set(chainOrder), [chainOrder]);
+  const chainOrderSet = useMemo(() => new Set(activeOrder), [activeOrder]);
   const chainPanels = useMemo(
     () =>
       sortChainPanels(
         modePanels.filter((p) => chainOrderSet.has(p.pluginId)),
-        chainOrder,
+        activeOrder,
       ),
-    [modePanels, chainOrderSet, chainOrder],
+    [modePanels, chainOrderSet, activeOrder],
   );
   // Available (parked) = mode-visible chain-slot plugins NOT in the active
   // order. These show in the sidebar's "Available" group, ready to add back.
@@ -943,6 +963,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   useEffect(() => {
     if (!embedded && !isOpen) return;
     loadChainOrderFromServer();
+    loadRxChainOrderFromServer();
     loadProcessingModeFromServer();
     loadPreviewState();
     loadMasterBypassFromServer();
@@ -951,6 +972,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     embedded,
     isOpen,
     loadChainOrderFromServer,
+    loadRxChainOrderFromServer,
     loadProcessingModeFromServer,
     loadPreviewState,
     loadMasterBypassFromServer,
@@ -1103,10 +1125,10 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     const fromId = chainPanels[from]?.pluginId;
     const toId = chainPanels[idx]?.pluginId;
     if (!fromId || !toId) return;
-    const serverFrom = chainOrder.indexOf(fromId);
-    const serverTo = chainOrder.indexOf(toId);
+    const serverFrom = activeOrder.indexOf(fromId);
+    const serverTo = activeOrder.indexOf(toId);
     if (serverFrom < 0 || serverTo < 0) return;
-    void reorderChain(serverFrom, serverTo);
+    void reorderActiveChain(serverFrom, serverTo);
   };
 
   const onCardDragEnd = () => {
@@ -1192,7 +1214,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   // that don't exist are treated as simply absent (not surfaced as errors)
   // so a one-click sweep of common locations never nags about paths the
   // operator doesn't use.
-  const runScan = async (dirs: string[]) => {
+  const runScan = async (dirs: string[], route: VstScanRoute = 'both') => {
     setScanning(true);
     const scanned: string[] = [];
     const missing: string[] = [];
@@ -1201,7 +1223,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     const errors: string[] = [];
     let hardError: string | null = null;
     for (const dir of dirs) {
-      const result = await scanVstDirectory(dir);
+      const result = await scanVstDirectory(dir, route);
       if (!result.ok) {
         if (/not found|does not exist/i.test(result.error ?? '')) missing.push(dir);
         else hardError = result.error ?? 'unknown error';
@@ -1239,7 +1261,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   };
 
   // One-click sweep of the common VST3 locations.
-  const onScanDefaultVstDirectory = () => void runScan(COMMON_VST3_DIRS);
+  const onScanDefaultVstDirectory = () => void runScan(COMMON_VST3_DIRS, 'both');
   // Prompt for a specific folder, then scan just that one.
   const onScanVstDirectory = async () => {
     setScanFolderOpen(true);
@@ -1317,7 +1339,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     setRackDropActive(false);
     if (!id) return;
     e.preventDefault();
-    void setChainMembership(id, true); // un-park → add to chain
+    void setActiveChainMembership(id, true); // un-park → add to chain
   };
 
   const chainPluginIds = useMemo(
@@ -1431,36 +1453,38 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
 
         {/* Preview toggle. Drives the full TX-monitor path so the operator
             hears the same processed signal that would reach the radio. */}
-        <button
-          type="button"
-          data-no-drag
-          disabled={!previewSupported}
-          onClick={() => setPreviewEnabled(!previewEnabled)}
-          title={
-            previewSupported
-              ? previewEnabled
-                ? 'Preview is ON - processed TX audio is mixed into your RX playback'
-                : 'Preview is OFF - click to hear the full TX chain in your headphones'
-              : 'Preview is unavailable in this host mode'
-          }
-          style={{
-            marginLeft: 'auto',
-            padding: '4px 12px',
-            borderRadius: 4,
-            border: '1px solid ' + (previewEnabled ? 'var(--tx)' : 'var(--line)'),
-            background: previewEnabled ? 'var(--tx)' : 'var(--bg-2)',
-            color: previewEnabled ? 'var(--fg-0)' : 'var(--fg-2)',
-            cursor: previewSupported ? 'pointer' : 'not-allowed',
-            opacity: previewSupported ? 1 : 0.5,
-            fontSize: 11,
-            fontWeight: 600,
-            letterSpacing: 1,
-            textTransform: 'uppercase',
-            fontFamily: 'inherit',
-          }}
-        >
-          Preview {previewEnabled ? 'ON' : 'OFF'}
-        </button>
+        {!isRxSuite && (
+          <button
+            type="button"
+            data-no-drag
+            disabled={!previewSupported}
+            onClick={() => setPreviewEnabled(!previewEnabled)}
+            title={
+              previewSupported
+                ? previewEnabled
+                  ? 'Preview is ON - processed TX audio is mixed into your RX playback'
+                  : 'Preview is OFF - click to hear the full TX chain in your headphones'
+                : 'Preview is unavailable in this host mode'
+            }
+            style={{
+              marginLeft: 'auto',
+              padding: '4px 12px',
+              borderRadius: 4,
+              border: '1px solid ' + (previewEnabled ? 'var(--tx)' : 'var(--line)'),
+              background: previewEnabled ? 'var(--tx)' : 'var(--bg-2)',
+              color: previewEnabled ? 'var(--fg-0)' : 'var(--fg-2)',
+              cursor: previewSupported ? 'pointer' : 'not-allowed',
+              opacity: previewSupported ? 1 : 0.5,
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: 1,
+              textTransform: 'uppercase',
+              fontFamily: 'inherit',
+            }}
+          >
+            Preview {previewEnabled ? 'ON' : 'OFF'}
+          </button>
+        )}
 
         {!embedded && (
           <button
@@ -1470,6 +1494,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
             aria-label="Close Audio Suite window"
             title="Close"
             style={{
+              marginLeft: isRxSuite ? 'auto' : undefined,
               padding: '2px 10px',
               borderRadius: 4,
               border: '1px solid var(--line)',
@@ -1487,18 +1512,58 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
         )}
       </div>
 
-      {/* Profiles bar — named snapshots of the chain config. Choosing
-          one applies it; Save snapshots the current chain. */}
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
           gap: 6,
-          padding: '6px 12px',
+          padding: '7px 12px',
           background: 'var(--bg-1)',
           borderBottom: '1px solid var(--line)',
         }}
       >
+        {(['tx', 'rx'] as const).map((route) => {
+          const active = suiteRoute === route;
+          return (
+            <button
+              key={route}
+              type="button"
+              data-no-drag
+              onClick={() => setSuiteRoute(route)}
+              aria-pressed={active}
+              title={route === 'tx' ? 'Transmit audio chain' : 'Receive audio insert chain'}
+              style={{
+                padding: '4px 12px',
+                borderRadius: 4,
+                border: '1px solid ' + (active ? 'var(--accent)' : 'var(--line)'),
+                background: active ? 'var(--accent-soft)' : 'var(--bg-2)',
+                color: active ? 'var(--fg-0)' : 'var(--fg-2)',
+                cursor: 'pointer',
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: 1,
+                textTransform: 'uppercase',
+                fontFamily: 'inherit',
+              }}
+            >
+              {route.toUpperCase()}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Profiles bar — named snapshots of the chain config. Choosing
+          one applies it; Save snapshots the current chain. */}
+      {!isRxSuite && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '6px 12px',
+            background: 'var(--bg-1)',
+            borderBottom: '1px solid var(--line)',
+          }}
+        >
         <span
           style={{
             color: 'var(--fg-3)',
@@ -1554,7 +1619,8 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
         >
           Delete
         </button>
-      </div>
+        </div>
+      )}
 
       {vstNotice && (
         <div
@@ -1598,8 +1664,8 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           parked={parkedPanels}
           armedUninstallId={armedUninstallId}
           uninstallingPluginId={uninstallingPluginId}
-          onAdd={(id) => void setChainMembership(id, true)}
-          onRemove={(id) => void setChainMembership(id, false)}
+          onAdd={(id) => void setActiveChainMembership(id, true)}
+          onRemove={(id) => void setActiveChainMembership(id, false)}
           onUninstall={(id) => {
             const p = parkedPanels.find((pp) => pp.pluginId === id);
             requestUninstall(id, p?.title ?? id);
@@ -1609,7 +1675,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           onScanDirectory={() => void onScanVstDirectory()}
           onScanDefault={onScanDefaultVstDirectory}
           scanning={scanning}
-          vstMode={vstMode}
+          vstMode={vstMode || isRxSuite}
           embedded={embedded}
         />
 
@@ -1636,8 +1702,12 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
             minHeight: 0,
           }}
         >
-      {/* Chain IN / OUT signal meters (poll while window open). */}
-      <AudioChainMeters />
+      {!isRxSuite && (
+        <>
+          {/* Chain IN / OUT signal meters (poll while window open). */}
+          <AudioChainMeters />
+        </>
+      )}
 
       {/* Chain chips — the signal chain as a compact, reorderable strip.
           Click a chip to load its plugin into the detail pane below; drag
@@ -1670,13 +1740,15 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
             marginRight: 2,
           }}
         >
-          Chain
+          {isRxSuite ? 'RX Chain' : 'TX Chain'}
         </span>
         {chainPanels.length === 0 && (
           <span style={{ color: 'var(--fg-3)', fontSize: 11, fontStyle: 'italic' }}>
             {parkedPanels.length > 0
               ? 'Empty — add a plugin from the Available list, or drag it here.'
-              : 'No audio plugins installed — use Download Audio Suite on the TX Audio Tools panel.'}
+              : isRxSuite
+                ? 'No RX VSTs installed — scan for VSTs, then add one from Available.'
+                : 'No audio plugins installed — use Download Audio Suite on the TX Audio Tools panel.'}
           </span>
         )}
         {chainPanels.map((panel, idx) => (
@@ -1688,7 +1760,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
             isDragTarget={cardDragOver === idx}
             isDragSource={cardDragFrom === idx}
             onSelect={() => setSelectedChainId(panel.pluginId)}
-            onRemove={() => void setChainMembership(panel.pluginId, false)}
+            onRemove={() => void setActiveChainMembership(panel.pluginId, false)}
             onHandleDown={onCardHandleDown}
             onDragStart={onCardDragStart(idx)}
             onDragOver={onCardDragOver(idx)}
@@ -1792,7 +1864,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           onCancel={() => setScanFolderOpen(false)}
           onSubmit={(dir) => {
             setScanFolderOpen(false);
-            void runScan([dir]);
+            void runScan([dir], 'both');
           }}
         >
           <p>Register every VST3 plugin Zeus finds in this folder.</p>

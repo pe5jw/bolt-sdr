@@ -218,6 +218,31 @@ public static class ZeusEndpoints
             return Results.BadRequest(new { error = err });
         });
 
+        // RX Audio Suite order/membership. Same control contract as the TX
+        // Audio Suite, but targets receive-side inserts declared as
+        // audio.slot = rx.post-demod.
+        app.MapGet("/api/rx-audio-suite/chain/order", (RxChainOrderService rxChainOrder) =>
+        {
+            return Results.Ok(new { pluginIds = rxChainOrder.CurrentOrder });
+        });
+        app.MapPut("/api/rx-audio-suite/chain/order", (ChainOrderSetRequest body, RxChainOrderService rxChainOrder) =>
+        {
+            if (body?.PluginIds is null)
+                return Results.BadRequest(new { error = "pluginIds is required" });
+            if (rxChainOrder.TrySetOrder(body.PluginIds, out var err))
+                return Results.Ok(new { pluginIds = rxChainOrder.CurrentOrder });
+            return Results.BadRequest(new { error = err });
+        });
+        app.MapPut("/api/rx-audio-suite/plugins/{id}/chain-membership",
+            (string id, ChainMembershipSetRequest body, RxChainOrderService rxChainOrder) =>
+        {
+            if (body is null)
+                return Results.BadRequest(new { error = "active is required" });
+            if (rxChainOrder.TrySetParked(id, parked: !body.Active, out var err))
+                return Results.Ok(new { pluginIds = rxChainOrder.CurrentOrder });
+            return Results.BadRequest(new { error = err });
+        });
+
         // Audio Suite profiles — named snapshots of the processing route
         // (Native/VST), active plugin order, parked set, master bypass, and
         // VST plugin state blobs. Lets the operator save a whole rack layout
@@ -291,18 +316,25 @@ public static class ZeusEndpoints
         // Returns what was registered / skipped / failed.
         app.MapPost("/api/audio-suite/scan-vst-directory",
             async (ScanVstDirectoryRequest body, VstDirectoryScanService scanner,
-                   ChainOrderService chainOrder, CancellationToken ct) =>
+                   ChainOrderService chainOrder, RxChainOrderService rxChainOrder, CancellationToken ct) =>
         {
             if (body is null || string.IsNullOrWhiteSpace(body.Directory))
                 return Results.BadRequest(new { error = "directory is required" });
             try
             {
-                var result = await scanner.ScanAsync(body.Directory, ct);
+                var result = await scanner.ScanAsync(body.Directory, body.Route, ct);
                 // Scanned VSTs always land in Available, never the active chain: a
                 // scan must not change what's processing audio. Without this, a
                 // freshly-registered id that was previously active would rejoin the
                 // live chain on its own.
-                chainOrder.ParkAll(result.Registered.Select(r => r.Id).ToList());
+                chainOrder.ParkAll(result.Registered
+                    .Where(r => VstDirectoryScanService.IsTxPluginId(r.Id))
+                    .Select(r => r.Id)
+                    .ToList());
+                rxChainOrder.ParkAll(result.Registered
+                    .Where(r => VstDirectoryScanService.IsRxPluginId(r.Id))
+                    .Select(r => r.Id)
+                    .ToList());
                 return Results.Ok(new
                 {
                     directory = result.Directory,
@@ -3264,7 +3296,7 @@ internal sealed record NativeMuteRequest(bool Muted);
 internal sealed record PreviewSetRequest(bool Enabled);
 internal sealed record ChainOrderSetRequest(List<string> PluginIds);
 internal sealed record ChainMembershipSetRequest(bool Active);
-internal sealed record ScanVstDirectoryRequest(string Directory);
+internal sealed record ScanVstDirectoryRequest(string Directory, string? Route = null);
 internal sealed record MasterBypassSetRequest(bool Bypassed);
 internal sealed record ProcessingModeSetRequest(string Mode);
 internal sealed record TxStageDensityDiagnostics(

@@ -10,10 +10,11 @@ import { createElement, type ComponentType } from 'react';
 import { fetchInstalledPlugins, type PluginDto, type PluginPanelDto } from '../api/plugins';
 import { GenericVstPanel } from '../../components/GenericVstPanel';
 
-// UI slot the Audio Suite rack + sidebar render. A plugin that targets
-// the TX audio chain but ships no UI module of its own (a scanned VST)
-// gets a synthetic panel on this slot so it still appears in the rack.
+// UI slots the Audio Suite rack + sidebar render. A plugin that targets
+// an audio chain but ships no UI module of its own (a scanned VST)
+// gets a synthetic panel on the matching slot so it still appears in the rack.
 const CHAIN_UI_SLOT = 'tx-audio-tools.chain';
+const RX_CHAIN_UI_SLOT = 'rx-audio-tools.chain';
 
 export interface ZeusPluginApi {
   registerPanel(spec: { id: string; component: ComponentType }): void;
@@ -68,14 +69,20 @@ function makeApi(plugin: PluginDto, registerPanel: (spec: { id: string; componen
 
 /**
  * Register a synthetic generic panel for an audio plugin that ships no
- * UI module — i.e. a VST registered via "Add VST directory". Only
- * TX-chain audio plugins (audio.slot starting "tx") get a rack panel.
+ * UI module — i.e. a VST registered via "Add VST directory". TX-chain VSTs
+ * get a TX rack panel; RX-chain VSTs get a receive insert rack panel.
  * Idempotent: overwrites any prior synthetic entry for the same id.
  */
 function maybeRegisterGenericAudioPanel(plugin: PluginDto): void {
   const audio = plugin.audio;
   if (!audio) return;
-  if (!(audio.slot ?? '').startsWith('tx')) return; // RX / non-chain → skip
+  const audioSlot = audio.slot ?? '';
+  const slot = audioSlot.startsWith('rx')
+    ? RX_CHAIN_UI_SLOT
+    : audioSlot.startsWith('tx')
+      ? CHAIN_UI_SLOT
+      : null;
+  if (slot === null) return;
   const name = plugin.name;
   const id = plugin.id;
   registered.set(`${id}::generic`, {
@@ -84,7 +91,7 @@ function maybeRegisterGenericAudioPanel(plugin: PluginDto): void {
     title: name,
     icon: '',
     category: 'audio',
-    slot: CHAIN_UI_SLOT,
+    slot,
     component: () => createElement(GenericVstPanel, { pluginId: id, name }),
     editorBacked: true,
   });
