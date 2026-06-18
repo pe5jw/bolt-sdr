@@ -79,6 +79,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$artifactPathSoftLimit = 240
 
 function Get-RepoRoot {
     return (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
@@ -130,6 +131,16 @@ function ConvertTo-SafeName {
         $safe = $safe.Substring(0, 64).Trim("-")
     }
     return $safe
+}
+
+function Test-ArtifactPathTooLong {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $false
+    }
+
+    return $Path.Length -gt $artifactPathSoftLimit
 }
 
 function Get-BundleRootFromArtifactsPath {
@@ -1975,10 +1986,18 @@ try {
 
         $passDir = Join-Path $captureDir ("pass-{0:00}" -f $pass)
         New-Item -ItemType Directory -Force -Path $passDir | Out-Null
+        $candidateOrdinal = 0
         foreach ($candidate in @($candidates.ToArray())) {
+            $candidateOrdinal++
             $frequencyHz = [long]$candidate.frequencyHz
             $candidateSafeName = ConvertTo-SafeName ("{0}-{1}" -f $candidate.source, $frequencyHz)
+            $candidateDirName = $candidateSafeName
             $candidateDir = Join-Path $passDir $candidateSafeName
+            $candidateProbePath = Join-Path (Join-Path $candidateDir "window-01") "live-diagnostics-watch.jsonl"
+            if (Test-ArtifactPathTooLong $candidateProbePath) {
+                $candidateDirName = "c{0:00}-{1}" -f $candidateOrdinal, $frequencyHz
+                $candidateDir = Join-Path $passDir $candidateDirName
+            }
             New-Item -ItemType Directory -Force -Path $candidateDir | Out-Null
 
             if (-not [string]::Equals([string]$candidate.source, "current-vfo", [StringComparison]::OrdinalIgnoreCase)) {
@@ -2016,11 +2035,23 @@ try {
             }
 
             for ($window = 1; $window -le $WindowsPerPeak; $window++) {
-                $windowDir = Join-Path $candidateDir ("window-{0:00}" -f $window)
+                $windowDirName = "window-{0:00}" -f $window
+                $windowDir = Join-Path $candidateDir $windowDirName
+                if (Test-ArtifactPathTooLong (Join-Path $windowDir "live-diagnostics-watch.jsonl")) {
+                    $windowDirName = "w{0:00}" -f $window
+                    $windowDir = Join-Path $candidateDir $windowDirName
+                }
                 New-Item -ItemType Directory -Force -Path $windowDir | Out-Null
 
                 $watchReport = Join-Path $windowDir "live-diagnostics-watch.json"
                 $watchJsonl = Join-Path $windowDir "live-diagnostics-watch.jsonl"
+                if (Test-ArtifactPathTooLong $watchJsonl) {
+                    $watchReport = Join-Path $windowDir "watch.json"
+                    $watchJsonl = Join-Path $windowDir "trace.jsonl"
+                }
+                $artifactPathCompacted = -not [string]::Equals($candidateDirName, $candidateSafeName, [StringComparison]::OrdinalIgnoreCase) -or
+                    -not [string]::Equals($windowDirName, ("window-{0:00}" -f $window), [StringComparison]::OrdinalIgnoreCase) -or
+                    [string]::Equals([System.IO.Path]::GetFileName($watchReport), "watch.json", [StringComparison]::OrdinalIgnoreCase)
                 $portableWatchReport = ConvertTo-PortableBundlePath -Root $portableBundleRoot -Path $watchReport
                 $portableWatchJsonl = ConvertTo-PortableBundlePath -Root $portableBundleRoot -Path $watchJsonl
                 $windowLabel = "{0}-pass-{1:00}-{2}-{3:00}" -f $safeLabel, $pass, $candidateSafeName, $window
@@ -2049,6 +2080,7 @@ try {
                         window = $window
                         reportPath = $portableWatchReport
                         jsonlPath = $portableWatchJsonl
+                        artifactPathCompacted = [bool]$artifactPathCompacted
                         exitCode = $watch.exitCode
                         error = $watch.error
                         score = 0.0
@@ -2124,6 +2156,7 @@ try {
                     window = $window
                     reportPath = $portableWatchReport
                     jsonlPath = $portableWatchJsonl
+                    artifactPathCompacted = [bool]$artifactPathCompacted
                     trendStatus = [string](Get-JsonValue $report "trendStatus")
                     readyForBenchmarkTrace = $readyTrace
                     okSampleCount = Get-IntValue (Get-JsonValue $report "okSampleCount")
