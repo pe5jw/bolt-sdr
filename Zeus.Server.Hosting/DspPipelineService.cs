@@ -147,6 +147,8 @@ public class DspPipelineService : BackgroundService,
         public bool Nr5NoSignalNoiseCap;
         public bool Nr5FarPeakNoiseCap;
         public bool Nr5NoProofNoiseCap;
+        public bool Nr5RmNoiseGate;
+        public double Nr5RmNoiseSuppressionDb;
         public bool BoostSlewLimited;
         public bool PeakLimited;
         public bool OutputLimited;
@@ -227,6 +229,10 @@ public class DspPipelineService : BackgroundService,
     private const double RxLevelerNr5NoiseProfileReleasePerBlock = 0.18;
     private const double RxLevelerNr5NoiseProfileSpeechReleasePerBlock = 0.55;
     private const double RxLevelerNr5NoiseProfileCapGate = 0.145;
+    private const double RxLevelerNr5RmNoiseProfileGate = 0.260;
+    private const double RxLevelerNr5RmNoiseNoSignalGate = 0.300;
+    private const double RxLevelerNr5RmNoiseFloorDbfs = -66.0;
+    private const double RxLevelerNr5RmNoiseMaxFloorDbfs = -54.0;
     private const double RxLevelerSmoothCutDb = 6.0;
     private const int RxLevelerPauseHoldBlocks = 18;
     private const double RxLevelerPauseMemoryDecayDbPerBlock = 4.5;
@@ -301,6 +307,14 @@ public class DspPipelineService : BackgroundService,
 
     private static double ClampUnit(double value) =>
         double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
+
+    private static bool IsNr5RmNoiseGateEnabled()
+    {
+        string? value = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
+        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static double UpdateNr5NoiseProfilePrior(double current, double observed, bool speechLike)
     {
@@ -699,6 +713,8 @@ public class DspPipelineService : BackgroundService,
         bool nr5HeldNativeDisagreementSpeechFloor = false;
         bool nr5FrontendFarPeakNoiseCap = false;
         bool nr5FrontendNoProofNoiseCap = false;
+        bool nr5RmNoiseGate = false;
+        double nr5RmNoiseSuppressionDb = 0.0;
         bool nr5FrontendFarPeakDisagreement = false;
         double nr5HybridSpeechPrior = 0.0;
         double nr5NoSignalNoisePrior = 0.0;
@@ -2593,6 +2609,63 @@ public class DspPipelineService : BackgroundService,
                     nr5StrongFrameParityCap = true;
                 }
             }
+            bool nr5RmNoiseGateEligible =
+                IsNr5RmNoiseGateEnabled() &&
+                desiredDb > RxLevelerMaxCutDb + 1.0e-6 &&
+                inputRmsDbfs >= -72.0 &&
+                inputRmsDbfs <= -34.0 &&
+                nr5NoiseProfilePriorBeforeFrame >= RxLevelerNr5RmNoiseProfileGate &&
+                nr5NoSignalNoisePrior >= RxLevelerNr5RmNoiseNoSignalGate &&
+                nr5HybridSpeechPrior < 0.180 &&
+                nr5SpeechEvidence < 0.180 &&
+                nr5ContinuitySpeechProof < 0.050 &&
+                nr5NativeWeakSpeechProof < 0.020 &&
+                nr5SpeechValleyProof < 0.040 &&
+                nr5ProfiledValleyProof < 0.120 &&
+                nr5FrontendTopPeakProof <= 0.0 &&
+                nr5FrontendHeldTailPeakProof <= 0.080 &&
+                !nr5SpeechHoldWasActive &&
+                !nr5SpeechHoldEvidence &&
+                !nr5NativeHotWeakSpeechCandidate &&
+                !nr5FrontendPeakRecoveredSpeechCandidate &&
+                !nr5FrontendPeakContinuitySpeechCandidate &&
+                !nr5HeldContinuityWeakSpeechCandidate &&
+                !nr5SuppressedWeakOnsetCandidate &&
+                !nr5PassbandWeakAcquisitionCandidate &&
+                !nr5PassbandSuppressedValleyCandidate &&
+                !nr5HeldSuppressedSpeechTailCandidate &&
+                !nr5NativeSuppressedWeakFragmentCandidate &&
+                (nr5FrontendNoProofNoiseCap ||
+                    nr5FrontendFarPeakNoiseCap ||
+                    (nr5.AdjacentNoiseUsable &&
+                        nr5.AdjacentNoiseTrust >= 0.520 &&
+                        nr5.AdjacentNoiseDrive >= 0.520));
+            if (nr5RmNoiseGateEligible)
+            {
+                double residualSpeechBlend = Math.Max(
+                    nr5HybridSpeechPrior,
+                    Math.Max(nr5SpeechEvidence, 0.72 * nr5.SignalProbability));
+                double rmNoiseTargetDbfs =
+                    RxLevelerNr5RmNoiseFloorDbfs
+                    + 12.0 * ClampUnit((residualSpeechBlend - 0.040) / 0.140)
+                    + 4.0 * ClampUnit((nr5.OutputDbfs + 36.0) / 14.0);
+                rmNoiseTargetDbfs = Math.Clamp(
+                    rmNoiseTargetDbfs,
+                    RxLevelerNr5RmNoiseFloorDbfs,
+                    RxLevelerNr5RmNoiseMaxFloorDbfs);
+                double rmNoiseDesiredDb = Math.Clamp(
+                    rmNoiseTargetDbfs - inputRmsDbfs,
+                    RxLevelerMaxCutDb,
+                    0.0);
+                if (rmNoiseDesiredDb < desiredDb - 1.0e-6)
+                {
+                    nr5RmNoiseSuppressionDb = desiredDb - rmNoiseDesiredDb;
+                    desiredDb = rmNoiseDesiredDb;
+                    nr5RmNoiseGate = true;
+                    nr5FrontendNoProofNoiseCap = true;
+                    nr5StrongFrameParityCap = true;
+                }
+            }
             if (desiredDb > 0.0 &&
                 (nr5FrontendTopPeakProof <= 0.0 ||
                     nr5MarginalPassbandComfortCap) &&
@@ -3891,7 +3964,8 @@ public class DspPipelineService : BackgroundService,
         double cutDb = currentDb - nextDb;
         bool peakSafetyCut = cutDb > 0.0 && double.IsFinite(peakHeadroomDb) &&
             currentDb > peakHeadroomDb + 1.0e-6;
-        bool smoothCut = !belowGate && cutDb > 0.0 && cutDb <= RxLevelerSmoothCutDb && !peakSafetyCut;
+        bool smoothCut = !belowGate && cutDb > 0.0 &&
+            (cutDb <= RxLevelerSmoothCutDb || nr5RmNoiseGate) && !peakSafetyCut;
         double startDb = nextDb > currentDb || smoothCut ? currentDb : nextDb;
         double deltaDb = nextDb - startDb;
         int rampSamples = deltaDb != 0.0
@@ -3954,6 +4028,10 @@ public class DspPipelineService : BackgroundService,
         state.Nr5NoSignalNoiseCap = nr5LevelerRun && (nr5FrontendFarPeakNoiseCap || nr5FrontendNoProofNoiseCap);
         state.Nr5FarPeakNoiseCap = nr5LevelerRun && nr5FrontendFarPeakNoiseCap;
         state.Nr5NoProofNoiseCap = nr5LevelerRun && nr5FrontendNoProofNoiseCap;
+        state.Nr5RmNoiseGate = nr5LevelerRun && nr5RmNoiseGate;
+        state.Nr5RmNoiseSuppressionDb = nr5LevelerRun && nr5RmNoiseGate
+            ? Math.Max(0.0, nr5RmNoiseSuppressionDb)
+            : double.NaN;
         state.BoostSlewLimited = boostSlewLimited;
         state.PeakLimited = peakLimited;
         state.OutputLimited = outputLimitSampleCount > 0;
@@ -4468,6 +4546,8 @@ public class DspPipelineService : BackgroundService,
     private bool _diagAudioLevelerNr5NoSignalNoiseCap;
     private bool _diagAudioLevelerNr5FarPeakNoiseCap;
     private bool _diagAudioLevelerNr5NoProofNoiseCap;
+    private bool _diagAudioLevelerNr5RmNoiseGate;
+    private double _diagAudioLevelerNr5RmNoiseSuppressionDb = double.NaN;
     private bool _diagAudioLevelerBoostSlewLimited;
     private bool _diagAudioLevelerPeakLimited;
     private bool _diagAudioLevelerOutputLimited;
@@ -4745,6 +4825,9 @@ public class DspPipelineService : BackgroundService,
             RxAudioLevelerNr5NoSignalNoiseCap: audio.RxAudioLevelerNr5NoSignalNoiseCap,
             RxAudioLevelerNr5FarPeakNoiseCap: audio.RxAudioLevelerNr5FarPeakNoiseCap,
             RxAudioLevelerNr5NoProofNoiseCap: audio.RxAudioLevelerNr5NoProofNoiseCap,
+            RxAudioLevelerNr5RmNoiseGateEnabled: IsNr5RmNoiseGateEnabled(),
+            RxAudioLevelerNr5RmNoiseGate: audio.RxAudioLevelerNr5RmNoiseGate,
+            RxAudioLevelerNr5RmNoiseSuppressionDb: audio.RxAudioLevelerNr5RmNoiseSuppressionDb,
             RxAudioLevelerBoostSlewLimited: audio.RxAudioLevelerBoostSlewLimited,
             RxAudioLevelerPeakLimited: audio.RxAudioLevelerPeakLimited,
             RxAudioLevelerOutputLimited: audio.RxAudioLevelerOutputLimited,
@@ -5183,6 +5266,8 @@ public class DspPipelineService : BackgroundService,
         bool levelerNr5NoSignalNoiseCap;
         bool levelerNr5FarPeakNoiseCap;
         bool levelerNr5NoProofNoiseCap;
+        bool levelerNr5RmNoiseGate;
+        double levelerNr5RmNoiseSuppressionDb;
         bool levelerBoostSlewLimited;
         bool levelerPeakLimited;
         bool levelerOutputLimited;
@@ -5228,6 +5313,8 @@ public class DspPipelineService : BackgroundService,
             levelerNr5NoSignalNoiseCap = _diagAudioLevelerNr5NoSignalNoiseCap;
             levelerNr5FarPeakNoiseCap = _diagAudioLevelerNr5FarPeakNoiseCap;
             levelerNr5NoProofNoiseCap = _diagAudioLevelerNr5NoProofNoiseCap;
+            levelerNr5RmNoiseGate = _diagAudioLevelerNr5RmNoiseGate;
+            levelerNr5RmNoiseSuppressionDb = _diagAudioLevelerNr5RmNoiseSuppressionDb;
             levelerBoostSlewLimited = _diagAudioLevelerBoostSlewLimited;
             levelerPeakLimited = _diagAudioLevelerPeakLimited;
             levelerOutputLimited = _diagAudioLevelerOutputLimited;
@@ -5276,6 +5363,8 @@ public class DspPipelineService : BackgroundService,
             levelerNr5NoSignalNoiseCap,
             levelerNr5FarPeakNoiseCap,
             levelerNr5NoProofNoiseCap,
+            levelerNr5RmNoiseGate,
+            levelerNr5RmNoiseSuppressionDb,
             levelerBoostSlewLimited,
             levelerPeakLimited,
             levelerOutputLimited,
@@ -5350,6 +5439,8 @@ public class DspPipelineService : BackgroundService,
         bool levelerNr5NoSignalNoiseCap = false,
         bool levelerNr5FarPeakNoiseCap = false,
         bool levelerNr5NoProofNoiseCap = false,
+        bool levelerNr5RmNoiseGate = false,
+        double levelerNr5RmNoiseSuppressionDb = double.NaN,
         bool levelerBoostSlewLimited = false,
         bool levelerPeakLimited = false,
         bool levelerOutputLimited = false,
@@ -5455,6 +5546,8 @@ public class DspPipelineService : BackgroundService,
             RxAudioLevelerNr5NoSignalNoiseCap: levelerValid ? levelerNr5NoSignalNoiseCap : null,
             RxAudioLevelerNr5FarPeakNoiseCap: levelerValid ? levelerNr5FarPeakNoiseCap : null,
             RxAudioLevelerNr5NoProofNoiseCap: levelerValid ? levelerNr5NoProofNoiseCap : null,
+            RxAudioLevelerNr5RmNoiseGate: levelerValid ? levelerNr5RmNoiseGate : null,
+            RxAudioLevelerNr5RmNoiseSuppressionDb: RoundLevelerDb(levelerValid, levelerNr5RmNoiseSuppressionDb),
             RxAudioLevelerBoostSlewLimited: levelerValid ? levelerBoostSlewLimited : null,
             RxAudioLevelerPeakLimited: levelerValid ? levelerPeakLimited : null,
             RxAudioLevelerOutputLimited: levelerValid ? levelerOutputLimited : null,
@@ -5560,6 +5653,10 @@ public class DspPipelineService : BackgroundService,
             _diagAudioLevelerNr5NoSignalNoiseCap = levelerValid && leveler.Nr5NoSignalNoiseCap;
             _diagAudioLevelerNr5FarPeakNoiseCap = levelerValid && leveler.Nr5FarPeakNoiseCap;
             _diagAudioLevelerNr5NoProofNoiseCap = levelerValid && leveler.Nr5NoProofNoiseCap;
+            _diagAudioLevelerNr5RmNoiseGate = levelerValid && leveler.Nr5RmNoiseGate;
+            _diagAudioLevelerNr5RmNoiseSuppressionDb = levelerValid && leveler.Nr5RmNoiseGate
+                ? leveler.Nr5RmNoiseSuppressionDb
+                : double.NaN;
             _diagAudioLevelerBoostSlewLimited = levelerValid && leveler.BoostSlewLimited;
             _diagAudioLevelerPeakLimited = levelerValid && leveler.PeakLimited;
             _diagAudioLevelerOutputLimited = levelerValid && leveler.OutputLimited;
@@ -8645,6 +8742,8 @@ internal sealed record AudioPathDiagnosticsDto(
     bool? RxAudioLevelerNr5NoSignalNoiseCap,
     bool? RxAudioLevelerNr5FarPeakNoiseCap,
     bool? RxAudioLevelerNr5NoProofNoiseCap,
+    bool? RxAudioLevelerNr5RmNoiseGate,
+    double? RxAudioLevelerNr5RmNoiseSuppressionDb,
     bool? RxAudioLevelerBoostSlewLimited,
     bool? RxAudioLevelerPeakLimited,
     bool? RxAudioLevelerOutputLimited,

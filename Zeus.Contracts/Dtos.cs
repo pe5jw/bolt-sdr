@@ -376,7 +376,10 @@ public sealed record DspLiveRuntimeEvidenceDto(
     double? RxAudioLevelerNr5NoiseProfilePrior = null,
     bool? RxAudioLevelerNr5NoSignalNoiseCap = null,
     bool? RxAudioLevelerNr5FarPeakNoiseCap = null,
-    bool? RxAudioLevelerNr5NoProofNoiseCap = null);
+    bool? RxAudioLevelerNr5NoProofNoiseCap = null,
+    bool? RxAudioLevelerNr5RmNoiseGateEnabled = null,
+    bool? RxAudioLevelerNr5RmNoiseGate = null,
+    double? RxAudioLevelerNr5RmNoiseSuppressionDb = null);
 
 // Tool-facing live DSP modernization summary. This fuses the Smart NR scene,
 // WDSP runtime capability, RX-chain health, and NR5/SPNR diagnostics into one
