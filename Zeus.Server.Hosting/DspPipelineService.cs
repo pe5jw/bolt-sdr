@@ -723,6 +723,7 @@ public class DspPipelineService : BackgroundService,
         bool nr5FrontendFarPeakNoiseCap = false;
         bool nr5FrontendNoProofNoiseCap = false;
         bool nr5RmNoiseGate = false;
+        bool nr5RmNoiseHeldQuietTailCandidate = false;
         double nr5RmNoiseSuppressionDb = 0.0;
         bool nr5FrontendFarPeakDisagreement = false;
         double nr5HybridSpeechPrior = 0.0;
@@ -2721,6 +2722,35 @@ public class DspPipelineService : BackgroundService,
                 nr5.AdjacentNoiseUsable &&
                 nr5.AdjacentNoiseTrust >= 0.500 &&
                 nr5.AdjacentNoiseDrive >= 0.480;
+            nr5RmNoiseHeldQuietTailCandidate =
+                nr5RmNoiseQuietResidualCandidate &&
+                nr5SpeechHoldWasActive &&
+                state.PauseHoldBlocks > 0 &&
+                state.Nr5SpeechHoldBlocks >= 8 &&
+                inputPeakDbfs <= -58.0 &&
+                nr5.InputDbfs <= -48.0 &&
+                nr5.OutputDbfs <= -66.0 &&
+                nr5.OutputPeakDbfs <= -54.0 &&
+                nr5HybridSpeechPrior < 0.090 &&
+                nr5SpeechEvidence < 0.100 &&
+                nr5ContinuitySpeechProof < 0.060 &&
+                nr5NativeWeakSpeechProof < 0.020 &&
+                nr5SpeechValleyProof < 0.040 &&
+                nr5ProfiledValleyProof < 0.120 &&
+                nr5.SignalProbability <= 0.105 &&
+                nr5.PeakEvidence <= 0.020 &&
+                nr5.AgcGate <= 0.260 &&
+                nr5FrontendTopPeakProof <= 0.0 &&
+                nr5FrontendHeldTailPeakProof <= 0.220 &&
+                !nr5SpeechHoldEvidence &&
+                !nr5FrontendPeakRecoveredSpeechCandidate &&
+                !nr5FrontendPeakContinuitySpeechCandidate &&
+                !nr5HeldContinuityWeakSpeechCandidate &&
+                !nr5SuppressedWeakOnsetCandidate &&
+                !nr5PassbandWeakAcquisitionCandidate &&
+                !nr5PassbandSuppressedValleyCandidate &&
+                !nr5HeldSuppressedSpeechTailCandidate &&
+                !nr5NativeSuppressedWeakFragmentCandidate;
             bool nr5RmNoiseNoSignalPriorEligible = nr5RmNoiseQuietResidualCandidate
                 ? nr5NoSignalNoisePrior >= 0.220
                 : nr5NoSignalNoisePrior >= RxLevelerNr5RmNoiseNoSignalGate;
@@ -2729,8 +2759,9 @@ public class DspPipelineService : BackgroundService,
                 desiredDb > RxLevelerMaxCutDb + 1.0e-6 &&
                 inputRmsDbfs >= (nr5RmNoiseQuietResidualCandidate ? -108.0 : -72.0) &&
                 inputRmsDbfs <= -34.0 &&
-                nr5NoiseProfilePriorBeforeFrame >= RxLevelerNr5RmNoiseProfileGate &&
-                nr5RmNoiseNoSignalPriorEligible &&
+                (nr5NoiseProfilePriorBeforeFrame >= RxLevelerNr5RmNoiseProfileGate ||
+                    (nr5RmNoiseHeldQuietTailCandidate && nr5NoiseProfilePriorBeforeFrame >= 0.015)) &&
+                (nr5RmNoiseNoSignalPriorEligible || nr5RmNoiseHeldQuietTailCandidate) &&
                 nr5HybridSpeechPrior < 0.180 &&
                 nr5SpeechEvidence < 0.180 &&
                 nr5ContinuitySpeechProof < 0.050 &&
@@ -2738,8 +2769,8 @@ public class DspPipelineService : BackgroundService,
                 nr5SpeechValleyProof < 0.040 &&
                 nr5ProfiledValleyProof < 0.120 &&
                 nr5FrontendTopPeakProof <= 0.0 &&
-                nr5FrontendHeldTailPeakProof <= 0.080 &&
-                !nr5SpeechHoldWasActive &&
+                nr5FrontendHeldTailPeakProof <= (nr5RmNoiseHeldQuietTailCandidate ? 0.220 : 0.080) &&
+                (!nr5SpeechHoldWasActive || nr5RmNoiseHeldQuietTailCandidate) &&
                 !nr5SpeechHoldEvidence &&
                 !nr5NativeHotWeakSpeechCandidate &&
                 !nr5FrontendPeakRecoveredSpeechCandidate &&
@@ -2750,7 +2781,8 @@ public class DspPipelineService : BackgroundService,
                 !nr5PassbandSuppressedValleyCandidate &&
                 !nr5HeldSuppressedSpeechTailCandidate &&
                 !nr5NativeSuppressedWeakFragmentCandidate &&
-                (nr5FrontendNoProofNoiseCap ||
+                (nr5RmNoiseHeldQuietTailCandidate ||
+                    nr5FrontendNoProofNoiseCap ||
                     nr5FrontendFarPeakNoiseCap ||
                     nr5RmNoiseQuietResidualCandidate ||
                     (nr5.AdjacentNoiseUsable &&
