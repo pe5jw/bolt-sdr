@@ -457,7 +457,9 @@ interface PluginSidebarProps {
   onParkedDragEnd(): void;
   onScanDirectory(): void;
   onScanDefault(): void;
+  onScanBothDefault(): void;
   scanning: boolean;
+  scanRouteLabel: 'TX' | 'RX';
   /** VST processing route active — gates the VST3 scan controls (they make
    *  no sense in Native mode, where VSTs aren't part of the chain). */
   vstMode: boolean;
@@ -487,7 +489,9 @@ function PluginSidebar({
   onParkedDragEnd,
   onScanDirectory,
   onScanDefault,
+  onScanBothDefault,
   scanning,
+  scanRouteLabel,
   vstMode,
   embedded,
 }: PluginSidebarProps) {
@@ -786,10 +790,19 @@ function PluginSidebar({
             type="button"
             onClick={onScanDefault}
             disabled={scanning}
-            title="Scan the standard Windows VST3 folder and bring in every plugin found"
+            title={`Scan the standard Windows VST3 folders and register plugins for the ${scanRouteLabel} route`}
             style={scanBtnStyle(scanning, true)}
           >
-            {scanning ? 'Scanning…' : 'Scan for VSTs'}
+            {scanning ? 'Scanning...' : `Scan ${scanRouteLabel} VSTs`}
+          </button>
+          <button
+            type="button"
+            onClick={onScanBothDefault}
+            disabled={scanning}
+            title="Scan the standard Windows VST3 folders and register separate TX and RX plugin instances"
+            style={scanBtnStyle(scanning, false)}
+          >
+            Scan TX + RX
           </button>
           <button
             type="button"
@@ -1302,6 +1315,7 @@ export function AudioSuiteWindow({
 
   // One-click sweep of the common VST3 locations.
   const onScanDefaultVstDirectory = () => void runScan(COMMON_VST3_DIRS, route);
+  const onScanBothDefaultVstDirectory = () => void runScan(COMMON_VST3_DIRS, 'both');
   // Prompt for a specific folder, then scan just that one.
   const onScanVstDirectory = async () => {
     setScanFolderOpen(true);
@@ -1722,7 +1736,9 @@ export function AudioSuiteWindow({
           onParkedDragEnd={onParkedDragEnd}
           onScanDirectory={() => void onScanVstDirectory()}
           onScanDefault={onScanDefaultVstDirectory}
+          onScanBothDefault={onScanBothDefaultVstDirectory}
           scanning={scanning}
+          scanRouteLabel={isRxSuite ? 'RX' : 'TX'}
           vstMode={vstMode || isRxSuite}
           embedded={embedded}
         />
