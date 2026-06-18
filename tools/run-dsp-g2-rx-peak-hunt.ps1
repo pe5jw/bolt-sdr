@@ -745,6 +745,48 @@ function ConvertTo-PeakCandidate {
     }
 }
 
+function Copy-RejectedPeakCandidate {
+    param(
+        $Candidate,
+        [string]$Reason,
+        [string]$Detail = "",
+        $MergedWithFrequencyHz = $null,
+        $RetuneLowHz = $null,
+        $RetuneHighHz = $null,
+        [string]$RetuneSpanSource = "",
+        $MinimumSnrDb = $null,
+        $PeakMergeHz = $null
+    )
+
+    if ($null -eq $Candidate) {
+        return $null
+    }
+
+    return [pscustomobject][ordered]@{
+        rank = Get-IntValue (Get-JsonValue $Candidate "rank")
+        source = [string](Get-JsonValue $Candidate "source")
+        frequencyHz = Get-NullableLongValue (Get-JsonValue $Candidate "frequencyHz")
+        exactFrequencyHz = Get-NullableLongValue (Get-JsonValue $Candidate "exactFrequencyHz")
+        offsetHz = Get-NullableLongValue (Get-JsonValue $Candidate "offsetHz")
+        exactOffsetHz = Get-NullableLongValue (Get-JsonValue $Candidate "exactOffsetHz")
+        tuningStepHz = Get-IntValue (Get-JsonValue $Candidate "tuningStepHz")
+        tuneSnapDeltaHz = Get-NullableLongValue (Get-JsonValue $Candidate "tuneSnapDeltaHz")
+        snrDb = Get-NullableDoubleValue (Get-JsonValue $Candidate "snrDb")
+        dbfs = Get-NullableDoubleValue (Get-JsonValue $Candidate "dbfs")
+        confidence = Get-NullableDoubleValue (Get-JsonValue $Candidate "confidence")
+        coherent = Test-Truthy (Get-JsonValue $Candidate "coherent")
+        rejectionReason = $Reason
+        rejectionDetail = $Detail
+        retuneLowHz = Get-NullableLongValue $RetuneLowHz
+        retuneHighHz = Get-NullableLongValue $RetuneHighHz
+        retuneSpanSource = $RetuneSpanSource
+        minimumSnrDb = Get-NullableDoubleValue $MinimumSnrDb
+        peakMergeHz = Get-IntValue $PeakMergeHz
+        mergedWithFrequencyHz = Get-NullableLongValue $MergedWithFrequencyHz
+        mergeDeltaHz = if ($null -ne $MergedWithFrequencyHz) { [Math]::Abs([long](Get-JsonValue $Candidate "frequencyHz") - [long]$MergedWithFrequencyHz) } else { $null }
+    }
+}
+
 function Select-PeakCandidates {
     param(
         [object[]]$Peaks,
@@ -754,7 +796,9 @@ function Select-PeakCandidates {
         [long]$OriginalVfo = 0,
         [int]$StepHz = 1000,
         $RetuneLowHz = $null,
-        $RetuneHighHz = $null
+        $RetuneHighHz = $null,
+        [string]$RetuneSpanSource = "",
+        [System.Collections.Generic.List[object]]$RejectedCandidates = $null
     )
 
     $selected = New-Object System.Collections.Generic.List[object]
@@ -771,34 +815,52 @@ function Select-PeakCandidates {
         }
 
         if ($null -ne $RetuneLowHz -and [long]$candidate.frequencyHz -lt [long]$RetuneLowHz) {
+            if ($null -ne $RejectedCandidates) {
+                $RejectedCandidates.Add((Copy-RejectedPeakCandidate -Candidate $candidate -Reason "outside-retune-span-low" -Detail ("below $RetuneLowHz Hz") -RetuneLowHz $RetuneLowHz -RetuneHighHz $RetuneHighHz -RetuneSpanSource $RetuneSpanSource -MinimumSnrDb $MinimumSnrDb -PeakMergeHz $MergeHz)) | Out-Null
+            }
             continue
         }
 
         if ($null -ne $RetuneHighHz -and [long]$candidate.frequencyHz -gt [long]$RetuneHighHz) {
+            if ($null -ne $RejectedCandidates) {
+                $RejectedCandidates.Add((Copy-RejectedPeakCandidate -Candidate $candidate -Reason "outside-retune-span-high" -Detail ("above $RetuneHighHz Hz") -RetuneLowHz $RetuneLowHz -RetuneHighHz $RetuneHighHz -RetuneSpanSource $RetuneSpanSource -MinimumSnrDb $MinimumSnrDb -PeakMergeHz $MergeHz)) | Out-Null
+            }
             continue
         }
 
         $snr = Get-NullableDoubleValue $candidate.snrDb
         if ($null -ne $snr -and $snr -lt $MinimumSnrDb) {
+            if ($null -ne $RejectedCandidates) {
+                $RejectedCandidates.Add((Copy-RejectedPeakCandidate -Candidate $candidate -Reason "below-min-snr" -Detail ("snr $snr dB below $MinimumSnrDb dB") -RetuneLowHz $RetuneLowHz -RetuneHighHz $RetuneHighHz -RetuneSpanSource $RetuneSpanSource -MinimumSnrDb $MinimumSnrDb -PeakMergeHz $MergeHz)) | Out-Null
+            }
+            continue
+        }
+
+        if ($selected.Count -ge $Limit) {
+            if ($null -ne $RejectedCandidates) {
+                $RejectedCandidates.Add((Copy-RejectedPeakCandidate -Candidate $candidate -Reason "limit-reached" -Detail ("max peaks $Limit already selected") -RetuneLowHz $RetuneLowHz -RetuneHighHz $RetuneHighHz -RetuneSpanSource $RetuneSpanSource -MinimumSnrDb $MinimumSnrDb -PeakMergeHz $MergeHz)) | Out-Null
+            }
             continue
         }
 
         $tooClose = $false
+        $mergedWithFrequencyHz = $null
         foreach ($existing in $selected) {
             if ([Math]::Abs([long]$candidate.frequencyHz - [long]$existing.frequencyHz) -le $MergeHz) {
                 $tooClose = $true
+                $mergedWithFrequencyHz = [long]$existing.frequencyHz
                 break
             }
         }
 
         if ($tooClose) {
+            if ($null -ne $RejectedCandidates) {
+                $RejectedCandidates.Add((Copy-RejectedPeakCandidate -Candidate $candidate -Reason "merged-with-selected-peak" -Detail ("within $MergeHz Hz of $mergedWithFrequencyHz Hz") -MergedWithFrequencyHz $mergedWithFrequencyHz -RetuneLowHz $RetuneLowHz -RetuneHighHz $RetuneHighHz -RetuneSpanSource $RetuneSpanSource -MinimumSnrDb $MinimumSnrDb -PeakMergeHz $MergeHz)) | Out-Null
+            }
             continue
         }
 
         $selected.Add([pscustomobject]$candidate) | Out-Null
-        if ($selected.Count -ge $Limit) {
-            break
-        }
     }
 
     return @($selected.ToArray())
@@ -1297,6 +1359,42 @@ function Copy-PeakCandidateForPass {
     }
 }
 
+function Copy-RejectedPeakCandidateForPass {
+    param(
+        $Candidate,
+        [int]$Pass
+    )
+
+    if ($null -eq $Candidate) {
+        return $null
+    }
+
+    return [pscustomobject][ordered]@{
+        pass = $Pass
+        rank = Get-IntValue (Get-JsonValue $Candidate "rank")
+        source = [string](Get-JsonValue $Candidate "source")
+        frequencyHz = Get-NullableLongValue (Get-JsonValue $Candidate "frequencyHz")
+        exactFrequencyHz = Get-NullableLongValue (Get-JsonValue $Candidate "exactFrequencyHz")
+        offsetHz = Get-NullableLongValue (Get-JsonValue $Candidate "offsetHz")
+        exactOffsetHz = Get-NullableLongValue (Get-JsonValue $Candidate "exactOffsetHz")
+        tuningStepHz = Get-IntValue (Get-JsonValue $Candidate "tuningStepHz")
+        tuneSnapDeltaHz = Get-NullableLongValue (Get-JsonValue $Candidate "tuneSnapDeltaHz")
+        snrDb = Get-NullableDoubleValue (Get-JsonValue $Candidate "snrDb")
+        dbfs = Get-NullableDoubleValue (Get-JsonValue $Candidate "dbfs")
+        confidence = Get-NullableDoubleValue (Get-JsonValue $Candidate "confidence")
+        coherent = Test-Truthy (Get-JsonValue $Candidate "coherent")
+        rejectionReason = [string](Get-JsonValue $Candidate "rejectionReason")
+        rejectionDetail = [string](Get-JsonValue $Candidate "rejectionDetail")
+        retuneLowHz = Get-NullableLongValue (Get-JsonValue $Candidate "retuneLowHz")
+        retuneHighHz = Get-NullableLongValue (Get-JsonValue $Candidate "retuneHighHz")
+        retuneSpanSource = [string](Get-JsonValue $Candidate "retuneSpanSource")
+        minimumSnrDb = Get-NullableDoubleValue (Get-JsonValue $Candidate "minimumSnrDb")
+        peakMergeHz = Get-IntValue (Get-JsonValue $Candidate "peakMergeHz")
+        mergedWithFrequencyHz = Get-NullableLongValue (Get-JsonValue $Candidate "mergedWithFrequencyHz")
+        mergeDeltaHz = Get-NullableLongValue (Get-JsonValue $Candidate "mergeDeltaHz")
+    }
+}
+
 function Get-HuntScore {
     param(
         [int]$WeakInputSampleCount,
@@ -1662,6 +1760,9 @@ catch {
         }
         operatorCandidates = @($operatorCandidatesForPlan)
         peakCandidates = @()
+        rejectedPeakCandidates = @()
+        rejectedPeakCandidateCount = 0
+        rejectedPeakCandidateReasonCounts = [ordered]@{}
         plannedRunCount = 0
         actualRunCount = 0
         failedRunCount = 0
@@ -1738,6 +1839,7 @@ $peakRetuneSpan = Get-PeakRetuneSpan `
 $latestScene = $null
 $latestLive = $null
 $allPeakCandidates = New-Object System.Collections.Generic.List[object]
+$allRejectedPeakCandidates = New-Object System.Collections.Generic.List[object]
 $scanPasses = New-Object System.Collections.Generic.List[object]
 $runs = New-Object System.Collections.Generic.List[object]
 $retuneAttempts = New-Object System.Collections.Generic.List[object]
@@ -1787,13 +1889,22 @@ try {
         $latestLive = $live
 
         $scenePeaks = @(Get-JsonArray $scene "topPeaks")
-        $passPeakCandidates = @(Select-PeakCandidates -Peaks $scenePeaks -Limit $MaxPeaks -MergeHz $PeakMergeHz -MinimumSnrDb $MinPeakSnrDb -OriginalVfo $originalVfo -StepHz $effectiveTuneStepHz -RetuneLowHz $peakRetuneSpan.lowHz -RetuneHighHz $peakRetuneSpan.highHz)
+        $passRejectedPeakCandidates = New-Object System.Collections.Generic.List[object]
+        $passPeakCandidates = @(Select-PeakCandidates -Peaks $scenePeaks -Limit $MaxPeaks -MergeHz $PeakMergeHz -MinimumSnrDb $MinPeakSnrDb -OriginalVfo $originalVfo -StepHz $effectiveTuneStepHz -RetuneLowHz $peakRetuneSpan.lowHz -RetuneHighHz $peakRetuneSpan.highHz -RetuneSpanSource $peakRetuneSpan.source -RejectedCandidates $passRejectedPeakCandidates)
         $passPeakCandidatesForReport = New-Object System.Collections.Generic.List[object]
         foreach ($candidate in $passPeakCandidates) {
             $candidateForReport = Copy-PeakCandidateForPass -Candidate $candidate -Pass $pass
             if ($null -ne $candidateForReport) {
                 $passPeakCandidatesForReport.Add($candidateForReport) | Out-Null
                 $allPeakCandidates.Add($candidateForReport) | Out-Null
+            }
+        }
+        $passRejectedPeakCandidatesForReport = New-Object System.Collections.Generic.List[object]
+        foreach ($candidate in @($passRejectedPeakCandidates.ToArray())) {
+            $candidateForReport = Copy-RejectedPeakCandidateForPass -Candidate $candidate -Pass $pass
+            if ($null -ne $candidateForReport) {
+                $passRejectedPeakCandidatesForReport.Add($candidateForReport) | Out-Null
+                $allRejectedPeakCandidates.Add($candidateForReport) | Out-Null
             }
         }
 
@@ -1856,6 +1967,7 @@ try {
             autoPhoneClusterCandidateCount = $autoPhoneClusterCandidates.Count
             peakRetuneSpan = $peakRetuneSpan
             peakCandidateCount = $passPeakCandidatesForReport.Count
+            rejectedPeakCandidateCount = $passRejectedPeakCandidatesForReport.Count
             candidateCount = $candidates.Count
             plannedRunCount = $plannedForPass
             stoppedEarly = $false
@@ -2196,6 +2308,24 @@ foreach ($run in $runArray) {
 }
 
 $peakCandidateArray = @($allPeakCandidates.ToArray())
+$rejectedPeakCandidateArray = @($allRejectedPeakCandidates.ToArray())
+$rejectedPeakCandidateReasonCounts = [ordered]@{}
+foreach ($candidate in $rejectedPeakCandidateArray) {
+    $reason = Get-TrimmedStringValue (Get-JsonValue $candidate "rejectionReason")
+    if ($null -eq $reason) {
+        $reason = "unknown"
+    }
+    if (-not $rejectedPeakCandidateReasonCounts.Contains($reason)) {
+        $rejectedPeakCandidateReasonCounts[$reason] = 0
+    }
+    $rejectedPeakCandidateReasonCounts[$reason] = [int]$rejectedPeakCandidateReasonCounts[$reason] + 1
+}
+$strongestRejectedPeakCandidate = $null
+if ($rejectedPeakCandidateArray.Count -gt 0) {
+    $strongestRejectedPeakCandidate = $rejectedPeakCandidateArray | Sort-Object `
+            @{ Expression = { -1.0 * [double](Get-NullableDoubleValue (Get-JsonValue $_ "snrDb")) } }, `
+            @{ Expression = { [long](Get-NullableLongValue (Get-JsonValue $_ "frequencyHz")) } } | Select-Object -First 1
+}
 $scanPassArray = @($scanPasses.ToArray())
 if ($null -eq $latestLive) {
     $latestLive = [pscustomobject]@{}
@@ -2216,6 +2346,9 @@ if (-not $AllowRetune -and $peakCandidateArray.Count -gt 0) {
 }
 if ($MaxPeaks -gt 0 -and $peakCandidateArray.Count -le 0 -and (Test-Truthy $peakRetuneSpan.bounded)) {
     $recommendations.Add("Frontend peaks were bounded to $($peakRetuneSpan.lowHz)..$($peakRetuneSpan.highHz) Hz ($($peakRetuneSpan.source)); no in-span frontend peak candidates passed the SNR/merge filters.") | Out-Null
+}
+if ($null -ne $strongestRejectedPeakCandidate) {
+    $recommendations.Add("Strongest rejected frontend peak was $($strongestRejectedPeakCandidate.frequencyHz) Hz exact $($strongestRejectedPeakCandidate.exactFrequencyHz) Hz, reason '$($strongestRejectedPeakCandidate.rejectionReason)' ($($strongestRejectedPeakCandidate.rejectionDetail)); use it for manual review only unless it is inside the intended retune span.") | Out-Null
 }
 if ($mixedReadyRunCount -gt 0 -and $null -ne $bestRun) {
     $recommendations.Add("A mixed weak+strong NR5/SPNR run was found; promote '$($bestRun.reportPath)' into live history and compare it against current-Zeus/Thetis-parity windows before tuning defaults.") | Out-Null
@@ -2363,6 +2496,9 @@ $reportObject = [ordered]@{
     operatorTrendCandidates = @($operatorTrendCandidates)
     autoPhoneClusterCandidates = @($autoPhoneClusterCandidates)
     peakCandidates = @($peakCandidateArray)
+    rejectedPeakCandidateCount = $rejectedPeakCandidateArray.Count
+    rejectedPeakCandidateReasonCounts = $rejectedPeakCandidateReasonCounts
+    rejectedPeakCandidates = @($rejectedPeakCandidateArray)
     plannedRunCount = $plannedRunCount
     actualRunCount = $runArray.Count
     failedRunCount = @($runArray | Where-Object { -not (Test-Truthy $_.ok) }).Count

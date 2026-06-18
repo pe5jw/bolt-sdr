@@ -8384,6 +8384,24 @@ public sealed class DspModernizationValidationToolTests
                             dbfs = -82.0,
                             confidence = 0.81,
                             coherent = true
+                        },
+                        new
+                        {
+                            frequencyHz = 7_175_900L,
+                            offsetHz = -159_100L,
+                            snrDb = 17.0,
+                            dbfs = -83.0,
+                            confidence = 0.77,
+                            coherent = true
+                        },
+                        new
+                        {
+                            frequencyHz = 7_180_125L,
+                            offsetHz = -154_875L,
+                            snrDb = 0.5,
+                            dbfs = -94.0,
+                            confidence = 0.34,
+                            coherent = true
                         }
                     }
                 }, CamelCaseJson),
@@ -8451,6 +8469,37 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(-159_000L, peakCandidate.GetProperty("offsetHz").GetInt64());
             Assert.Equal(-159_187L, peakCandidate.GetProperty("exactOffsetHz").GetInt64());
             Assert.Equal(187L, peakCandidate.GetProperty("tuneSnapDeltaHz").GetInt64());
+
+            Assert.Equal(3, root.GetProperty("rejectedPeakCandidateCount").GetInt32());
+            var reasonCounts = root.GetProperty("rejectedPeakCandidateReasonCounts");
+            Assert.Equal(1, reasonCounts.GetProperty("outside-retune-span-high").GetInt32());
+            Assert.Equal(1, reasonCounts.GetProperty("merged-with-selected-peak").GetInt32());
+            Assert.Equal(1, reasonCounts.GetProperty("below-min-snr").GetInt32());
+
+            var rejectedPeaks = root.GetProperty("rejectedPeakCandidates").EnumerateArray().ToArray();
+            var outOfSpanPeak = Assert.Single(
+                rejectedPeaks,
+                peak => peak.GetProperty("rejectionReason").GetString() == "outside-retune-span-high");
+            Assert.Equal(7_505_000L, outOfSpanPeak.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(7_504_875L, outOfSpanPeak.GetProperty("exactFrequencyHz").GetInt64());
+            Assert.Equal(7_167_000L, outOfSpanPeak.GetProperty("retuneLowHz").GetInt64());
+            Assert.Equal(7_185_000L, outOfSpanPeak.GetProperty("retuneHighHz").GetInt64());
+            Assert.Equal("candidate-span", outOfSpanPeak.GetProperty("retuneSpanSource").GetString());
+
+            var mergedPeak = Assert.Single(
+                rejectedPeaks,
+                peak => peak.GetProperty("rejectionReason").GetString() == "merged-with-selected-peak");
+            Assert.Equal(7_176_000L, mergedPeak.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(7_176_000L, mergedPeak.GetProperty("mergedWithFrequencyHz").GetInt64());
+            Assert.Equal(0L, mergedPeak.GetProperty("mergeDeltaHz").GetInt64());
+            Assert.Equal(1000, mergedPeak.GetProperty("peakMergeHz").GetInt32());
+
+            var lowSnrPeak = Assert.Single(
+                rejectedPeaks,
+                peak => peak.GetProperty("rejectionReason").GetString() == "below-min-snr");
+            Assert.Equal(7_180_000L, lowSnrPeak.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(7_180_125L, lowSnrPeak.GetProperty("exactFrequencyHz").GetInt64());
+            Assert.Equal(1.0, lowSnrPeak.GetProperty("minimumSnrDb").GetDouble());
 
             var retunes = root.GetProperty("retuneAttempts").EnumerateArray().ToArray();
             Assert.DoesNotContain(retunes, retune => retune.GetProperty("frequencyHz").GetInt64() == 7_505_000L);
