@@ -55,10 +55,10 @@ describe('chat-store ingest (0x35 live frames)', () => {
     });
     const r = useChatStore.getState().roster;
     expect(r).toHaveLength(2);
-    expect(r[0].callsign).toBe('N9WAR');
-    expect(r[0].freqHz).toBe(14_200_000);
-    expect(r[1].status).toBe('tx');
-    expect(r[1].grid).toBeNull();
+    expect(r[0]?.callsign).toBe('N9WAR');
+    expect(r[0]?.freqHz).toBe(14_200_000);
+    expect(r[1]?.status).toBe('tx');
+    expect(r[1]?.grid).toBeNull();
   });
 
   it('message frames append, de-dupe by id, and stay time-ordered', () => {
@@ -83,8 +83,8 @@ describe('chat-store ingest (0x35 live frames)', () => {
     useChatStore.getState().ingest({ kind: 'history', messages: many });
     const m = useChatStore.getState().messages;
     expect(m).toHaveLength(500);
-    expect(m[0].id).toBe('m100'); // oldest 100 dropped
-    expect(m[m.length - 1].id).toBe('m599');
+    expect(m[0]?.id).toBe('m100'); // oldest 100 dropped
+    expect(m[m.length - 1]?.id).toBe('m599');
   });
 
   it('ignores malformed or unknown envelopes without throwing', () => {
