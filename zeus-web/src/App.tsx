@@ -73,6 +73,7 @@ import { SignalIntelligenceController } from './components/SignalIntelligenceCon
 import { SmartNrController } from './components/SmartNrController';
 import { DspSceneDiagnosticsPublisher } from './components/DspSceneDiagnosticsPublisher';
 import { AudioPlaybackDiagnosticsPublisher } from './components/AudioPlaybackDiagnosticsPublisher';
+import { useTxAudioProfileDirtyTracker } from './state/tx-audio-profile-tracker';
 import { ThemeApplier } from './components/ThemeApplier';
 import { StartupUpdatePrompt } from './components/StartupUpdatePrompt';
 import { StepFavorites } from './components/toolbar/StepFavorites';
@@ -157,6 +158,9 @@ export default function App() {
   // Clicking Connect on a discovered radio doesn't refresh radio-store on
   // its own (only the manual-connect path does).
   useEffect(() => { radioLoad(); }, [radioLoad, connected]);
+  // Track unsaved TX Audio Profile edits (dirty flag) for the disconnect/close
+  // save prompt. Mounted once here so it spans the whole session.
+  useTxAudioProfileDirtyTracker();
   const brandSub = radioConnected !== 'Unknown'
     ? BOARD_LABELS[radioConnected]
     : 'Not Connected';

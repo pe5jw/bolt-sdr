@@ -652,7 +652,7 @@ type NumberBoxProps = {
 // A single controlled number box. `value` is the live store value; the draft
 // resyncs whenever it changes so a freshly applied profile (or server
 // reconcile) shows the new value instead of stale draft text.
-function NumberBox({ label, ariaLabel, value, min, max, step, parse, disabled, onCommit }: NumberBoxProps) {
+function NumberBox({ label, ariaLabel, value, min, max, parse, disabled, onCommit }: NumberBoxProps) {
   const [draft, setDraft] = useState<string>(String(value));
   useEffect(() => {
     setDraft(String(value));
@@ -674,13 +674,20 @@ function NumberBox({ label, ariaLabel, value, min, max, step, parse, disabled, o
       {label}
       <input
         aria-label={ariaLabel}
-        type="number"
-        step={step}
-        min={min}
-        max={max}
+        // Text + inputMode rather than type="number": a numeric input nukes
+        // partial/intermediate states ("-", "1.", "-2.") to "" mid-typing — the
+        // source of the janky feel, especially for the negative mic-gain range.
+        // We keep the draft as free text, accept only a well-formed signed
+        // decimal, and parse/clamp once on commit (blur / Enter).
+        type="text"
+        inputMode={parse === 'int' && min >= 0 ? 'numeric' : 'decimal'}
+        autoComplete="off"
         value={draft}
         disabled={disabled}
-        onChange={(e) => setDraft(e.currentTarget.value)}
+        onChange={(e) => {
+          const raw = e.currentTarget.value;
+          if (raw === '' || /^-?\d*\.?\d*$/.test(raw)) setDraft(raw);
+        }}
         onBlur={commit}
         onKeyDown={(e) => {
           if (e.key === 'Enter') e.currentTarget.blur();

@@ -36,12 +36,52 @@ export interface TxAudioProfileMutationResult {
   error?: string;
 }
 
+// A stable, comparable snapshot of the live TX-audio settings the operator can
+// touch from the panels: mic/leveler scalars, the CFC config, the leveling
+// config (incl. decay), the TX bandpass, and the Audio Suite chain/mode/bypass.
+// Used for dirty-tracking — if the live snapshot drifts from the snapshot taken
+// when a profile was last applied/saved, the loaded profile is "dirty" and the
+// operator is prompted to save before disconnecting or closing Zeus.
+// (Spectral-density lives in TxFidelityPanel-local state, not a global store, so
+// it is intentionally out of this snapshot; everything the call covered is in.)
+function snapshotTxAudioLive(): string {
+  const tx = useTxStore.getState();
+  const conn = useConnectionStore.getState();
+  const suite = useAudioSuiteStore.getState();
+  return JSON.stringify([
+    tx.micGainDb,
+    tx.levelerMaxGainDb,
+    tx.cfcConfig,
+    conn.txLeveling,
+    conn.txFilterLowHz,
+    conn.txFilterHighHz,
+    suite.processingMode,
+    suite.masterBypassed,
+    suite.chainOrder,
+  ]);
+}
+
 interface TxAudioProfileState {
   profiles: TxAudioProfileDto[];
   loaded: boolean;
   /** The persisted "last loaded" pointer; what the dropdown shows as selected. */
   lastLoadedId: string | null;
   busy: boolean;
+
+  /**
+   * True when the live TX-audio settings have drifted from the loaded profile
+   * (i.e. the operator moved a slider/box or changed the chain without saving).
+   * Drives the "TX Audio Profile '{name}' changed — save?" prompt on disconnect
+   * and the close guard. Null baseline = not yet established (pre-connect).
+   */
+  dirty: boolean;
+  /** Snapshot of the live settings as they were at the last apply/save (clean). */
+  baseline: string | null;
+
+  /** Re-baseline to the current live state (called after apply/save => clean). */
+  markClean(): void;
+  /** Recompute `dirty` against the baseline (called on any watched-store change). */
+  recomputeDirty(): void;
 
   /** Load the profile list + last-loaded pointer (dropdown only — does NOT apply). */
   load(): Promise<void>;
@@ -62,6 +102,19 @@ export const useTxAudioProfileStore = create<TxAudioProfileState>((set, get) => 
   loaded: false,
   lastLoadedId: null,
   busy: false,
+  dirty: false,
+  baseline: null,
+
+  markClean: () => {
+    set({ baseline: snapshotTxAudioLive(), dirty: false });
+  },
+
+  recomputeDirty: () => {
+    const { baseline, dirty } = get();
+    if (baseline == null) return; // no clean reference yet (pre-connect)
+    const next = snapshotTxAudioLive() !== baseline;
+    if (next !== dirty) set({ dirty: next }); // guard re-renders to transitions
+  },
 
   load: async () => {
     try {
@@ -94,6 +147,8 @@ export const useTxAudioProfileStore = create<TxAudioProfileState>((set, get) => 
       if (!get().profiles.some((p) => p.id === saved.id)) {
         set((s) => ({ profiles: [...s.profiles, saved].sort((a, b) => a.id.localeCompare(b.id)) }));
       }
+      // The live state was just persisted: it is now the clean baseline.
+      get().markClean();
       return { ok: true };
     } catch (err) {
       set({ busy: false });
@@ -130,6 +185,8 @@ export const useTxAudioProfileStore = create<TxAudioProfileState>((set, get) => 
       await audio.loadChainOrderFromServer();
 
       set({ lastLoadedId: trimmed, busy: false });
+      // Live state now matches the just-applied profile: that is the clean point.
+      get().markClean();
       return { ok: true };
     } catch (err) {
       set({ busy: false });
