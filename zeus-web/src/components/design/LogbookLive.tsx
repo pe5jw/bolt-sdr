@@ -42,10 +42,12 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Search, X } from 'lucide-react';
 import { useLoggerStore } from '../../state/logger-store';
 import type { LogEntry } from '../../api/log';
 import { formatQsoDateUtc, formatQsoTimeUtc } from './logbook-formatters';
+import { filterLogEntries } from './logbook-search';
 
 function compactList(parts: Array<string | null | undefined>): string {
   return parts.filter((p): p is string => !!p).join(' · ');
@@ -88,11 +90,15 @@ export function LogbookLive() {
   const toggleSelected = useLoggerStore((s) => s.toggleSelected);
   const setSelectedIds = useLoggerStore((s) => s.setSelectedIds);
   const selectAllRef = useRef<HTMLInputElement>(null);
-  const selectedVisibleCount = entries.reduce(
+  const [searchText, setSearchText] = useState('');
+  const query = searchText.trim();
+  const filteredEntries = useMemo(() => filterLogEntries(entries, searchText), [entries, searchText]);
+  const visibleIds = useMemo(() => new Set(filteredEntries.map((entry) => entry.id)), [filteredEntries]);
+  const selectedVisibleCount = filteredEntries.reduce(
     (count, entry) => count + (selectedIds.has(entry.id) ? 1 : 0),
     0,
   );
-  const allVisibleSelected = entries.length > 0 && selectedVisibleCount === entries.length;
+  const allVisibleSelected = filteredEntries.length > 0 && selectedVisibleCount === filteredEntries.length;
   const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
 
   useEffect(() => {
@@ -133,17 +139,44 @@ export function LogbookLive() {
 
   return (
     <div className="logbook">
+      <div className="log-search">
+        <Search size={14} strokeWidth={2} aria-hidden="true" />
+        <input
+          type="search"
+          value={searchText}
+          onChange={(event) => setSearchText(event.target.value)}
+          placeholder="Search logbook"
+          aria-label="Search logbook"
+          spellCheck={false}
+        />
+        {query && (
+          <button
+            type="button"
+            className="log-search-clear"
+            onClick={() => setSearchText('')}
+            aria-label="Clear logbook search"
+            title="Clear search"
+          >
+            <X size={13} strokeWidth={2.2} aria-hidden="true" />
+          </button>
+        )}
+      </div>
       <div className="log-head mono">
         <span className="log-select-cell">
           <input
             ref={selectAllRef}
             type="checkbox"
             checked={allVisibleSelected}
+            disabled={filteredEntries.length === 0}
             onChange={() => {
-              setSelectedIds(allVisibleSelected ? [] : entries.map((entry) => entry.id));
+              setSelectedIds(
+                allVisibleSelected
+                  ? [...selectedIds].filter((id) => !visibleIds.has(id))
+                  : [...selectedIds, ...filteredEntries.map((entry) => entry.id)],
+              );
             }}
-            aria-label={allVisibleSelected ? 'Clear selected log entries' : 'Select all log entries'}
-            title={allVisibleSelected ? 'Clear selected log entries' : 'Select all log entries'}
+            aria-label={allVisibleSelected ? 'Clear selected visible log entries' : 'Select visible log entries'}
+            title={allVisibleSelected ? 'Clear selected visible log entries' : 'Select visible log entries'}
           />
         </span>
         <span title="QSO date in UTC">Date·UTC</span>
@@ -155,7 +188,12 @@ export function LogbookLive() {
         <span>Name · QTH · Notes</span>
       </div>
       <div className="log-rows">
-        {entries.map((entry) => (
+        {filteredEntries.length === 0 && (
+          <div className="log-empty">
+            No log entries match "{query}".
+          </div>
+        )}
+        {filteredEntries.map((entry) => (
           <button
             key={entry.id}
             type="button"
@@ -204,7 +242,11 @@ export function LogbookLive() {
       </div>
       <div className="log-foot">
         <span style={{ flex: 1 }} />
-        <span className="label-xs">{entries.length} of {totalCount}</span>
+        <span className="label-xs">
+          {query
+            ? `${filteredEntries.length} of ${entries.length} visible · ${totalCount} total`
+            : `${entries.length} of ${totalCount}`}
+        </span>
       </div>
     </div>
   );
