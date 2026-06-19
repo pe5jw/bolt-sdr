@@ -36,7 +36,7 @@ public sealed class ChatService : BackgroundService
 {
     /// <summary>Default public relay endpoint. Override with ZEUSCHAT_RELAY_URL.</summary>
     public const string DefaultRelayUrl =
-        "wss://zeuschat-relay.christiantsuarez.workers.dev/chat";
+        "wss://chat.openhpsdrzeus.com/chat";
 
     private const int MessageHistoryCap = 200;
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(30);

@@ -2,6 +2,16 @@ name = "zeuschat-relay"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 
+# Branded custom domain (Cloudflare auto-creates the DNS record on deploy).
+# Requires the openhpsdrzeus.com zone to live on this Cloudflare account.
+# chat.openhpsdrzeus.com is the canonical relay endpoint (Zeus default).
+routes = [
+  { pattern = "chat.openhpsdrzeus.com", custom_domain = true },
+]
+
+# Keep the *.workers.dev URL alive too, as a fallback endpoint.
+workers_dev = true
+
 # QRZ-login enforcement is on by default. For local `wrangler dev`, override
 # with: wrangler dev --var QRZ_VERIFY:off
 [vars]
