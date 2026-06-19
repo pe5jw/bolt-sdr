@@ -214,6 +214,11 @@ function swapDisplacedIntoPreviousSlot(
         candidate,
       ): candidate is { item: LayoutItem; previous: LayoutItem } => {
         if (candidate.previous === undefined) return false;
+        // A locked (static) panel never moves — not even transiently while
+        // another panel is dragged over it. Excluding it here keeps it pinned;
+        // the dragged panel flows around it and resolveAnchorCollisions keeps
+        // it out of the locked footprint on drop.
+        if (candidate.item.static) return false;
         // Live drag: gate engagement through the per-drag hysteresis set so a
         // neighbour holds its swapped slot across the touch boundary instead of
         // flickering. Drop / one-shot compaction (engaged === null) keeps the
