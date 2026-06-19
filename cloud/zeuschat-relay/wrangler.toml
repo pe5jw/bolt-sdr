@@ -1,0 +1,18 @@
+name = "zeuschat-relay"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# Chat room Durable Object (WebSocket Hibernation).
+[[durable_objects.bindings]]
+name = "CHAT_ROOM"
+class_name = "ChatRoom"
+
+# SQLite-backed DO namespace (free-plan compatible).
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChatRoom"]
+
+# RELAY_SHARED_SECRET is NOT set here. Provide it out-of-band so it stays out
+# of source control:
+#   wrangler secret put RELAY_SHARED_SECRET
+# Leave unset for local `wrangler dev` (open, no auth).
