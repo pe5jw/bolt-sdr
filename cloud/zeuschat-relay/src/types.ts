@@ -1,9 +1,13 @@
 import type { ChatRoom } from './chat-room';
+import type { RateLimiter } from './rate-limiter';
 
 /** Worker environment bindings (see wrangler.toml). */
 export interface Env {
   /** Durable Object namespace hosting chat rooms. */
   CHAT_ROOM: DurableObjectNamespace<ChatRoom>;
+
+  /** Per-IP connection rate limiter Durable Object. */
+  RATE_DO: DurableObjectNamespace<RateLimiter>;
   /**
    * Optional shared secret gating connections to the relay. When set (via
    * `wrangler secret put RELAY_SHARED_SECRET`), backends must present it as a

@@ -74,25 +74,31 @@ Requires a Cloudflare account with Workers + Durable Objects.
 ```bash
 npm install
 wrangler login
-wrangler secret put RELAY_SHARED_SECRET   # optional but recommended
 npm run deploy
 ```
 
-`new_sqlite_classes` is used for the DO namespace, which is available on the
-free Workers plan.
+`new_sqlite_classes` is used for the DO namespaces, available on the free
+Workers plan. No secret is required — access is gated by QRZ verification, so
+shipped Zeus builds connect with no baked-in credential.
 
 ## Security notes
 
-- **QRZ-login required.** With `QRZ_VERIFY` on (default), every connection must
-  present a live QRZ session key, which the relay validates against the QRZ XML
-  API before admitting. Only operators logged into QRZ can use chat. Works for
-  any QRZ login tier (subscription not required). Fails closed if QRZ is
-  unreachable.
-- `RELAY_SHARED_SECRET` gates *who can reach the relay at all*; set it in
-  production so the relay is not an open endpoint.
-- **Callsign↔account binding is best-effort.** The QRZ session proves a valid
-  login; QRZ XML does not cleanly prove which callsign owns that session, so a
-  determined modified client could present a valid session under a different
-  callsign. Tightening this is tracked in ZeusChat P4.
-- Messages are capped at `MAX_MESSAGE_LEN` (2000 chars). Rate limiting lands in
-  P3.
+- **QRZ-login required (the access gate).** With `QRZ_VERIFY` on (default),
+  every connection must present a live QRZ session key, which the relay
+  validates against the QRZ XML API before admitting. Only operators logged
+  into QRZ can use chat. Works for any QRZ login tier (subscription not
+  required). Fails closed if QRZ is unreachable. Positive verdicts are cached
+  ~5 min (edge cache) to spare the QRZ API on reconnects.
+- **Rate limiting.** Per-IP connection limit (30 / 60s, via the `RateLimiter`
+  Durable Object) guards the QRZ-verify path from connection-spam; per-connection
+  message limit (6 / 5s, in `ChatRoom`) guards the room from message-spam.
+- `RELAY_SHARED_SECRET` is an *optional* extra gate (Bearer / `?token=`). Unset
+  in production — QRZ verification is the real gate, and requiring a secret
+  would mean shipping a key in every Zeus build.
+- **Callsign↔account binding is best-effort (known limitation).** The QRZ
+  session proves a valid login; QRZ XML does not cleanly expose which callsign
+  owns that session, so a determined *modified* client could present a valid
+  session under a different callsign. The UI discloses that chat broadcasts the
+  operator's callsign + frequency. Cryptographic ownership binding would require
+  QRZ support that doesn't currently exist.
+- Messages are capped at `MAX_MESSAGE_LEN` (2000 chars).

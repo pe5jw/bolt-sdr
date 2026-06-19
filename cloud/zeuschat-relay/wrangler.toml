@@ -22,10 +22,20 @@ QRZ_VERIFY = "on"
 name = "CHAT_ROOM"
 class_name = "ChatRoom"
 
-# SQLite-backed DO namespace (free-plan compatible).
+# Per-IP connection rate limiter Durable Object (protects the QRZ-verify path
+# from connection-spam; 30 attempts / 60s / IP).
+[[durable_objects.bindings]]
+name = "RATE_DO"
+class_name = "RateLimiter"
+
+# SQLite-backed DO namespaces (free-plan compatible).
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ChatRoom"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["RateLimiter"]
 
 # RELAY_SHARED_SECRET is NOT set here. Provide it out-of-band so it stays out
 # of source control:

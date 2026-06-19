@@ -21,7 +21,14 @@ interface Attachment {
   mode?: string;
   status?: PresenceStatus;
   since: number;
+  // Per-connection message rate-limit window (fixed window).
+  rlWindowStart?: number;
+  rlCount?: number;
 }
+
+/** Max messages a single connection may send per RL_WINDOW_MS. */
+const MSG_RATE_LIMIT = 6;
+const RL_WINDOW_MS = 5000;
 
 /**
  * A single chat room. Each connected Zeus backend holds one WebSocket here.
@@ -116,12 +123,27 @@ export class ChatRoom extends DurableObject<Env> {
         }
         const text = (msg.text ?? '').slice(0, MAX_MESSAGE_LEN);
         if (!text.trim()) return;
+
+        // Per-connection fixed-window message rate limit.
+        const now = Date.now();
+        const fresh = now - (att.rlWindowStart ?? 0) > RL_WINDOW_MS;
+        const count = fresh ? 0 : att.rlCount ?? 0;
+        if (count >= MSG_RATE_LIMIT) {
+          this.send(ws, { t: 'error', code: 'rate_limited', message: 'Slow down — too many messages' });
+          return;
+        }
+        ws.serializeAttachment({
+          ...att,
+          rlWindowStart: fresh ? now : att.rlWindowStart,
+          rlCount: count + 1,
+        });
+
         this.broadcast({
           t: 'msg',
           id: crypto.randomUUID(),
           from: att.callsign,
           text,
-          ts: Date.now(),
+          ts: now,
           room: msg.room ?? DEFAULT_ROOM,
         });
         return;
