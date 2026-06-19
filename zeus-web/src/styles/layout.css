@@ -2826,6 +2826,50 @@
 
 /* ===== Logbook ===== */
 .logbook { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg-1); }
+.log-search {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  color: var(--fg-2);
+  background: var(--bg-2);
+  border-bottom: 1px solid rgba(0,0,0,0.35);
+}
+.log-search input {
+  min-width: 0;
+  height: 22px;
+  padding: 2px 6px;
+  color: var(--fg-0);
+  background: var(--bg-0);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xs);
+  font: 600 11px/1.2 var(--font-sans);
+  outline: none;
+}
+.log-search input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-line);
+}
+.log-search-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--fg-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+.log-search-clear:hover {
+  color: var(--fg-0);
+  background: var(--bg-0);
+  border-color: var(--line-strong);
+}
 .log-head {
   display: grid;
   grid-template-columns: 2rem 60px 55px 85px 70px 50px 70px 1fr;
@@ -2849,6 +2893,13 @@
   cursor: pointer;
 }
 .log-rows { flex: 1; overflow-y: auto; min-height: 0; }
+.log-empty {
+  padding: 2rem 1rem;
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
 .log-row {
   display: grid;
   grid-template-columns: 2rem 60px 55px 85px 70px 50px 70px 1fr;

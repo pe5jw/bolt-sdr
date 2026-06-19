@@ -23,6 +23,14 @@ bd close <id>         # Complete work
 bd dolt push          # Push beads data to remote
 ```
 
+## Git Workflow
+
+- For each new feature, bug fix, or similarly scoped development task, create a separate git worktree from `develop`.
+- Use a branch name such as `feature/<short-descriptive-name>` or `fix/<short-descriptive-name>` in that worktree.
+- Keep simultaneous work in separate worktree folders so switching branches for one task does not disturb another.
+- Open pull requests from the worktree branch into `develop` on `OpenHPSDR-Zeus-org/openhpsdr-zeus`.
+- Do not commit development work directly to `develop` or `main`.
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
