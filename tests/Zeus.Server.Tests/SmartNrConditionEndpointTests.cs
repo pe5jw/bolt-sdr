@@ -649,15 +649,7 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Contains("/api/dsp/modernization-snapshot.missingEvidence", telemetry);
     }
 
-    private sealed class Factory : WebApplicationFactory<Program>
+    private sealed class Factory : IsolatedPrefsFactory
     {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            builder.UseEnvironment("Test");
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IHostedService>();
-            });
-        }
     }
 }
