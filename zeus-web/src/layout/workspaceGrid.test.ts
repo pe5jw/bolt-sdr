@@ -208,6 +208,33 @@ describe('workspace grid collision policy', () => {
     expectNoCollisions(boundary);
   });
 
+  it('never moves a locked panel when another panel is dragged onto it', () => {
+    // A locked (static) panel must stay pinned even while another panel is
+    // dragged across it — previously the magnetic swap shoved it aside mid-drag
+    // and it only snapped back on drop.
+    const dragStart = {
+      item: { i: 'dragged', x: 0, y: 0, w: 6, h: 2 },
+      layout: cloneLayout([
+        { i: 'dragged', x: 0, y: 0, w: 6, h: 2 },
+        { i: 'locked', x: 0, y: 2, w: 6, h: 2, static: true },
+      ]),
+    };
+    const compactor = createWorkspaceDragCompactor(() => dragStart);
+    // Live-drag frame: the dragged panel has been moved onto the locked slot.
+    const frame: Layout = cloneLayout([
+      { i: 'dragged', x: 0, y: 2, w: 6, h: 2, moved: true },
+      { i: 'locked', x: 0, y: 2, w: 6, h: 2, static: true },
+    ]);
+
+    const next = compactor.compact(frame, 24);
+
+    expect(next.find((i) => i.i === 'locked')).toMatchObject({
+      x: 0,
+      y: 2,
+      static: true,
+    });
+  });
+
   it('swaps a colliding panel into the dragged panel old slot on drop', () => {
     const layout = cloneLayout(baseLayout);
     const dragged = layout[0]!;
@@ -409,6 +436,30 @@ describe('workspace grid collision policy', () => {
     expect(next.find((item) => item.i === 'hero')).toMatchObject({
       w: 18,
       h: 38,
+    });
+    expectNoCollisions(next);
+  });
+
+  it('never shrinks a repositioned panel to fit around a locked panel', () => {
+    // A dropped panel overlapping a locked (static) panel must keep its full
+    // size and relocate below it — repositioning must never resize the panel.
+    const layout: Layout = cloneLayout([
+      { i: 'locked', x: 0, y: 0, w: 24, h: 4, static: true },
+      { i: 'dragged', x: 0, y: 0, w: 10, h: 6, moved: true },
+    ]);
+    const previous = {
+      item: { i: 'dragged', x: 0, y: 10, w: 10, h: 6 },
+      layout: [] as Layout,
+    };
+
+    const next = autoFitDroppedPanel(layout, 24, previous);
+
+    // Full size preserved (not squeezed into the gap), and the lock is intact.
+    expect(next.find((i) => i.i === 'dragged')).toMatchObject({ w: 10, h: 6 });
+    expect(next.find((i) => i.i === 'locked')).toMatchObject({
+      x: 0,
+      y: 0,
+      static: true,
     });
     expectNoCollisions(next);
   });
