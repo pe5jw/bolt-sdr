@@ -706,6 +706,8 @@ public class DspPipelineService : BackgroundService,
     }
     private double _appliedAgcTopDb;
     private double _appliedAgcOffsetDb;
+    // NaN until the knee is first pushed, so the first non-null threshold always applies.
+    private double _appliedAgcThresholdDbm = double.NaN;
     private double _appliedRxAfGainDb;
     // TX mic gain change-detect cache. NaN sentinel forces the first apply
     // even when the persisted value happens to equal 0 dB (the engine seam
@@ -3054,6 +3056,20 @@ public class DspPipelineService : BackgroundService,
             if (rx2Channel >= 0) engine.SetAgcTop(rx2Channel, effectiveAgc);
             _appliedAgcTopDb = s.AgcTopDb;
             _appliedAgcOffsetDb = s.AgcOffsetDb;
+        }
+        // AGC threshold ("knee", #741). Null = operator never set it → leave
+        // WDSP's per-mode default in place. The operator value is in displayed
+        // dBm; convert to WDSP's scale with the same per-board RX meter offset
+        // the meters use, so the knee lines up with what the operator sees.
+        if (s.AgcThresholdDbm is double threshDisplayedDbm
+            && threshDisplayedDbm != _appliedAgcThresholdDbm)
+        {
+            double calOffset = RadioCalibrations.RxMeterOffsetDb(
+                _radio.EffectiveBoardKind, _radio.EffectiveOrionMkIIVariant);
+            double wdspThresh = threshDisplayedDbm - calOffset;
+            engine.SetAgcThresh(channel, wdspThresh);
+            if (rx2Channel >= 0) engine.SetAgcThresh(rx2Channel, wdspThresh);
+            _appliedAgcThresholdDbm = threshDisplayedDbm;
         }
         if (s.RxAfGainDb != _appliedRxAfGainDb)
         {
