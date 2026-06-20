@@ -721,6 +721,14 @@ public sealed class WdspDspEngine : IDspEngine
         return top;
     }
 
+    public double GetAgcThresh(int channelId)
+    {
+        if (!_channels.TryGetValue(channelId, out var state)) return 0.0;
+        double thresh = 0.0;
+        NativeMethods.GetRXAAGCThresh(channelId, ref thresh, RxaInSize, state.SampleRateHz);
+        return thresh;
+    }
+
     public void SetAgc(int channelId, AgcConfig cfg)
     {
         ArgumentNullException.ThrowIfNull(cfg);

@@ -1197,6 +1197,13 @@ public static class ZeusEndpoints
             return r.SetAgcThreshold(req.ThresholdDbm);
         });
 
+        // Disengage the AGC knee → restore WDSP's per-mode default threshold (#741).
+        app.MapPost("/api/agc/threshold/disengage", (RadioService r) =>
+        {
+            log.LogInformation("api.agc.threshold.disengage");
+            return r.DisengageAgcThreshold();
+        });
+
         app.MapPost("/api/rx/agc", (AgcSetRequest req, RadioService r) =>
         {
             log.LogInformation(

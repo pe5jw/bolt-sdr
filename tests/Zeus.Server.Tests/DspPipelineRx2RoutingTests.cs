@@ -141,6 +141,7 @@ public class DspPipelineRx2RoutingTests
         public void SetAgcTop(int channelId, double topDb) { }
         public void SetAgcThresh(int channelId, double threshDbm) { }
         public double GetAgcTop(int channelId) => 0.0;
+        public double GetAgcThresh(int channelId) => 0.0;
         public void SetAgc(int channelId, AgcConfig cfg) { }
         public void SetSquelch(int channelId, SquelchConfig cfg) { }
         public void SetTxLeveling(int channelId, TxLevelingConfig cfg) { }

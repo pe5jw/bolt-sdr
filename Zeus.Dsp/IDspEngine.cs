@@ -91,6 +91,13 @@ public interface IDspEngine : IDisposable
     /// </summary>
     double GetAgcTop(int channelId);
 
+    /// <summary>
+    /// Read the current AGC threshold ("knee") in dBm (WDSP scale). Used to
+    /// capture WDSP's per-mode default knee before the operator first overrides
+    /// it, so disengaging the knee can restore that default. 0 on Synthetic.
+    /// </summary>
+    double GetAgcThresh(int channelId);
+
     /// <summary>Apply the AGC mode + custom/fixed params (Thetis parity §4).
     /// Drives SetRXAAGCMode/Slope/Hang/Decay/HangThreshold (and SetRXAAGCFixed
     /// in Fixed mode). The AGC max-gain ("top") is NOT touched here — it keeps

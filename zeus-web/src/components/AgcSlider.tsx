@@ -45,6 +45,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  disengageAgcThreshold,
   setAgc,
   setAgcThreshold,
   setAgcTop,
@@ -160,6 +161,7 @@ export function AgcSlider() {
 
   const autoAbort = useRef<AbortController | null>(null);
   const agcAbort = useRef<AbortController | null>(null);
+  const kneeAbort = useRef<AbortController | null>(null);
 
   // Popover holding Custom (slope/decay/hang/thresh) or Fixed (fixed gain)
   // tunables, anchored under the mode dropdown so the toolbar stays compact.
@@ -201,6 +203,26 @@ export function AgcSlider() {
     ),
   });
 
+  // The "Knee" label is a toggle: when engaged (a threshold is set) it
+  // disengages → server restores WDSP's default knee; when disengaged it
+  // engages at the current thumb position. Dragging the slider always engages.
+  const toggleKnee = useCallback(() => {
+    if (!connected) return;
+    kneeAbort.current?.abort();
+    const ac = new AbortController();
+    kneeAbort.current = ac;
+    const req = kneeSet
+      ? disengageAgcThreshold(ac.signal)
+      : setAgcThreshold(kneeSliderValue, ac.signal);
+    req
+      .then((next) => {
+        if (!ac.signal.aborted) applyState(next);
+      })
+      .catch(() => {
+        /* next poll reconciles */
+      });
+  }, [connected, kneeSet, kneeSliderValue, applyState]);
+
   const toggleAuto = useCallback(() => {
     if (!connected) return;
     autoAbort.current?.abort();
@@ -236,6 +258,7 @@ export function AgcSlider() {
     () => () => {
       autoAbort.current?.abort();
       agcAbort.current?.abort();
+      kneeAbort.current?.abort();
     },
     [],
   );
@@ -350,14 +373,22 @@ export function AgcSlider() {
       </label>
 
       <label className="knob-group" style={{ minWidth: 0 }}>
-        <span
-          className="btn sm"
-          aria-hidden
-          title="AGC threshold (knee) — set just above the noise floor for smooth, signal-relative AGC"
-          style={{ whiteSpace: 'nowrap', cursor: 'default' }}
+        <button
+          type="button"
+          onClick={toggleKnee}
+          disabled={!connected}
+          aria-pressed={kneeSet}
+          aria-label={kneeSet ? 'AGC knee engaged (click to disengage)' : 'AGC knee off (click to engage)'}
+          title={
+            kneeSet
+              ? 'AGC knee ENGAGED — click to disengage (restore the default AGC threshold)'
+              : 'AGC knee off — click to engage, or drag the slider. Set it just above the noise floor for smooth, signal-relative AGC.'
+          }
+          className={`btn sm ${kneeSet ? 'active' : ''}`}
+          style={{ whiteSpace: 'nowrap' }}
         >
           Knee
-        </span>
+        </button>
         <input
           type="range"
           min={KNEE_MIN}
@@ -387,8 +418,10 @@ export function AgcSlider() {
           style={{
             flex: 1,
             cursor: kneeDisabled ? 'not-allowed' : 'pointer',
-            accentColor: kneeDisabled ? 'var(--fg-3)' : 'var(--accent)',
-            opacity: kneeDisabled ? 0.55 : 1,
+            // Lit accent only while engaged; muted when disengaged so the
+            // off-state reads at a glance (mirrors the lit "Knee" button).
+            accentColor: kneeDisabled || !kneeSet ? 'var(--fg-3)' : 'var(--accent)',
+            opacity: kneeDisabled ? 0.55 : kneeSet ? 1 : 0.7,
           }}
         />
         <span

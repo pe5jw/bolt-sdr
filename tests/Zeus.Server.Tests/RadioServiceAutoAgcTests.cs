@@ -222,4 +222,31 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
         Assert.True(snap.AutoAgcEnabled);
         Assert.Equal(-90.0, snap.AgcThresholdDbm);
     }
+
+    [Fact]
+    public void DisengageAgcThreshold_ClearsKneeToNull()
+    {
+        using var radio = NewRadio();
+        radio.SetAgcThreshold(-95.0);
+        Assert.Equal(-95.0, radio.Snapshot().AgcThresholdDbm);
+
+        var snap = radio.DisengageAgcThreshold();
+
+        // Disengage returns to null so the DSP pipeline restores WDSP's default.
+        Assert.Null(snap.AgcThresholdDbm);
+    }
+
+    [Fact]
+    public void DisengageAgcThreshold_PersistsClear_AcrossRadioInstances()
+    {
+        using (var radio = NewRadio())
+        {
+            radio.SetAgcThreshold(-95.0);
+            radio.DisengageAgcThreshold();
+        }
+
+        // A fresh RadioService on the same prefs DB must NOT re-engage the knee.
+        using var reopened = NewRadio();
+        Assert.Null(reopened.Snapshot().AgcThresholdDbm);
+    }
 }

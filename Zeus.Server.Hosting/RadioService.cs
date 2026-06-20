@@ -2267,6 +2267,17 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    // Disengage the AGC knee: clear the operator override (→ null) and persist
+    // the cleared state. The DSP pipeline sees AgcThresholdDbm go null and
+    // restores WDSP's captured per-mode default threshold, so AGC returns to its
+    // default behaviour (#741).
+    public StateDto DisengageAgcThreshold()
+    {
+        Mutate(s => s with { AgcThresholdDbm = null });
+        _dspSettingsStore.ClearAgcThresholdDbm();
+        return Snapshot();
+    }
+
     // Master RX AF gain in dB. −50 dB is effectively silent (0.003 linear),
     // 0 dB matches the fresh-open default, +20 dB is a 10× linear boost for
     // quiet signals. Range mirrors Thetis's ptbAF (console.cs:4312-4313:

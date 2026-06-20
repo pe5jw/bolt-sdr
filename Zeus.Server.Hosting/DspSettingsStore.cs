@@ -185,6 +185,17 @@ public sealed class DspSettingsStore : IDisposable
         }
     }
 
+    // Clear the persisted AGC knee (disengage → null) so a fresh connect leaves
+    // WDSP's per-mode default in effect. No-op when no row exists yet (#741).
+    public void ClearAgcThresholdDbm(string profileId = "default")
+    {
+        var existing = _entries.FindOne(x => x.ProfileId == profileId);
+        if (existing is null) return;
+        existing.AgcThresholdDbm = null;
+        existing.UpdatedUtc = DateTime.UtcNow;
+        _entries.Update(existing);
+    }
+
     // AGC mode + custom params (issue: DSP controls Thetis parity §4). Persisted
     // as nullable scalars on the existing DspSettingsEntry — null AgcMode means
     // "never written" so RadioService falls back to the Med default on first run.

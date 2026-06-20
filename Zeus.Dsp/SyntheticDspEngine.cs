@@ -106,6 +106,8 @@ public sealed class SyntheticDspEngine : IDspEngine
 
     public double GetAgcTop(int channelId) => _synthAgcTopDb;
 
+    public double GetAgcThresh(int channelId) => 0.0;
+
     private double _synthAgcTopDb = 80.0;
 
     public void SetAgc(int channelId, AgcConfig cfg)

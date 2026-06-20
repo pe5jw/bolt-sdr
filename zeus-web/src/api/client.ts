@@ -5715,6 +5715,16 @@ export function setAgcThreshold(
   );
 }
 
+// Disengage the AGC knee → server clears the override (agcThresholdDbm = null)
+// and restores WDSP's per-mode default threshold.
+export function disengageAgcThreshold(signal?: AbortSignal): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/agc/threshold/disengage',
+    { method: 'POST', signal },
+    normalizeState,
+  );
+}
+
 export function setRxAfGain(
   db: number,
   signal?: AbortSignal,

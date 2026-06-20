@@ -180,6 +180,13 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void GetRXAAGCTop(int channel, ref double max_agc);
 
+    // Reads the current AGC threshold ("knee"), in dBm (out param). Used to
+    // capture WDSP's per-mode default knee before the operator overrides it, so
+    // "disengage" can restore it. size/rate match SetRXAAGCThresh.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void GetRXAAGCThresh(int channel, ref double thresh, double size, double rate);
+
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXAAGCAttack(int channel, int attack);
