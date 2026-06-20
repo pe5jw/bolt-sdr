@@ -25,10 +25,14 @@ public static class DiagnosticsV2Endpoints
         app.MapGet($"{b}/health", (DiagnosticsSelfCheckCache cache) =>
             Results.Ok(cache.BuildHealth()));
 
-        // Single provider snapshot.
+        // Single provider snapshot, wrapped in a uniform self-describing
+        // envelope so EVERY v2 response carries the same metadata (id, category,
+        // schemaVersion, timestamp) regardless of what the underlying provider
+        // returns. The raw provider payload sits under `snapshot`. Legacy routes
+        // are untouched and still return the bare payload for wire compat.
         app.MapGet($"{b}/{{segment}}", (string segment, DiagnosticsProviderRegistry registry) =>
             registry.TryGetByRoute(segment, out var provider)
-                ? Results.Ok(provider.Snapshot())
+                ? Results.Ok(Envelope(provider))
                 : Results.NotFound(new { error = "unknown-diagnostics-provider", segment }));
 
         // Cached self-check report for one provider.
@@ -45,4 +49,19 @@ public static class DiagnosticsV2Endpoints
 
         return app;
     }
+
+    // Uniform envelope around any provider snapshot. Anonymous object →
+    // reflection-serialised; the nested `snapshot` still resolves to the
+    // provider's runtime type (source-gen for typed DTOs) via the resolver chain.
+    private static object Envelope(IDiagnosticsProvider provider) => new
+    {
+        schemaVersion = 1,
+        id = provider.Id,
+        routeSegment = provider.RouteSegment,
+        category = provider.Category,
+        description = provider.Description,
+        providerSchemaVersion = provider.SchemaVersion,
+        generatedUtc = DateTimeOffset.UtcNow,
+        snapshot = provider.Snapshot(),
+    };
 }

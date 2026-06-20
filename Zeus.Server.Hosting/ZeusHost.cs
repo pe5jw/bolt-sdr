@@ -446,6 +446,13 @@ public static class ZeusHost
         builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.HardwareDiagnosticsProvider>();
         builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.FrontendDspSceneProvider>();
         builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.FrontendAudioPlaybackProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.PlatformDiagnosticsProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.StreamingHubProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.RadioStateProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.RadioCapabilitiesProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.HamClockProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.ExternalPttProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.Protocol2TxIqProvider>();
         builder.Services.AddSingleton<Diagnostics.DiagnosticsProviderRegistry>();
         builder.Services.AddSingleton<Diagnostics.DiagnosticsSelfCheckCache>();
         builder.Services.AddSingleton<Diagnostics.DiagnosticsFramePublisher>();
