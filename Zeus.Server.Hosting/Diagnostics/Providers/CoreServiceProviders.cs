@@ -5,6 +5,7 @@
 // method on the unified diagnostics surface so an operator can read live state
 // for that subsystem (and the conformance harness auto-tests it).
 
+using Zeus.Dsp.Wdsp;
 using Zeus.Protocol2;
 
 namespace Zeus.Server.Diagnostics;
@@ -147,6 +148,34 @@ public sealed class Protocol2TxIqProvider : IDiagnosticsProvider
             _ => _dsp.ActiveP2Client is not null
                 ? new SelfCheckResult(SelfCheckOutcome.Pass, "Protocol-2 client active.", DateTimeOffset.UtcNow)
                 : new SelfCheckResult(SelfCheckOutcome.Warn, "No active Protocol-2 client (idle or P1).", DateTimeOffset.UtcNow)),
+    };
+}
+
+/// <summary>DSP pipeline runtime: WDSP channel lifecycle, wisdom/FFT plan state, engine rates.</summary>
+public sealed class DspPipelineProvider : IDiagnosticsProvider
+{
+    private readonly DspPipelineService _dsp;
+    private readonly WdspWisdomInitializer _wisdom;
+
+    public DspPipelineProvider(DspPipelineService dsp, WdspWisdomInitializer wisdom)
+    {
+        _dsp = dsp ?? throw new ArgumentNullException(nameof(dsp));
+        _wisdom = wisdom ?? throw new ArgumentNullException(nameof(wisdom));
+    }
+
+    public string Id => "dsp.pipeline";
+    public string RouteSegment => "dsp-pipeline";
+    public string Category => "dsp";
+    public int SchemaVersion => 1;
+    public string Description => "DSP pipeline runtime: WDSP channels, wisdom/FFT plan state, engine status.";
+
+    public object Snapshot() => _dsp.SnapshotDiagnostics(_wisdom);
+
+    public IReadOnlyList<DiagnosticsSelfCheck> SelfChecks => new[]
+    {
+        new DiagnosticsSelfCheck("dsp-snapshot-available",
+            "DSP pipeline diagnostics snapshot builds.", DiagnosticsSeverity.Info,
+            _ => DiagnosticsProbe.NonNull(_dsp.SnapshotDiagnostics(_wisdom), "dsp pipeline")),
     };
 }
 
