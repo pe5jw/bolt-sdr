@@ -4261,3 +4261,59 @@
   text-shadow: 0 0 6px var(--accent-soft);
   animation: cwCursorBlink 1s steps(2) infinite;
 }
+
+/* ===== Liquid-metal meter kit (KB2UKA) — glass drift animations =========
+   Compositor-only translateX sweeps for the glass sheen + caustic. Two
+   variants: %-based for the DOM LiquidMetalFrame (.lm-sheen / .lm-caustic),
+   px-var-based for the SVG GlassDome (.meter-sheen-drift / .meter-caustic-
+   drift, driven by --sheen-travel / --caustic-travel). Paused by
+   prefers-reduced-motion. ============================================== */
+@keyframes lmSheenSweep {
+  0%   { transform: translateX(-150%); opacity: 0; }
+  10%  { opacity: 1; }
+  85%  { opacity: 1; }
+  100% { transform: translateX(760%); opacity: 0; }
+}
+@keyframes lmCausticSweep {
+  0%   { transform: translateX(-130%); opacity: 0; }
+  22%  { opacity: 1; }
+  78%  { opacity: 1; }
+  100% { transform: translateX(390%); opacity: 0; }
+}
+.lm-sheen {
+  animation: lmSheenSweep 5.5s linear infinite;
+  will-change: transform, opacity;
+}
+.lm-caustic {
+  animation: lmCausticSweep 9s ease-in-out infinite;
+  animation-delay: -3.2s;
+  will-change: transform, opacity;
+}
+
+/* SVG GlassDome variants — translate by the supplied user-unit travel. */
+@keyframes meterSheenDrift {
+  from { transform: translateX(0); }
+  to   { transform: translateX(var(--sheen-travel, 120px)); }
+}
+@keyframes meterCausticDrift {
+  from { transform: translateX(0); }
+  to   { transform: translateX(var(--caustic-travel, 160px)); }
+}
+.meter-sheen-drift {
+  animation: meterSheenDrift 5.5s linear infinite;
+  will-change: transform;
+}
+.meter-caustic-drift {
+  animation: meterCausticDrift 9s ease-in-out infinite;
+  animation-delay: -3.2s;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-sheen, .lm-caustic,
+  .meter-sheen-drift, .meter-caustic-drift {
+    animation: none;
+  }
+  .lm-sheen, .meter-sheen-drift { opacity: 0.4; }
+  .lm-caustic, .meter-caustic-drift { opacity: 0.5; }
+}
