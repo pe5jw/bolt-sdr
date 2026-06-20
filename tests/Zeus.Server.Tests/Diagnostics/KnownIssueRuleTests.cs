@@ -221,13 +221,62 @@ public sealed class KnownIssueRuleTests
         [
             new PsNotArmedRule(), new IqWriteGateRule(), new RxAuxBypassRule(),
             new Hl2DriveModelRule(), new RxaAudioSilenceRule(), new DisconnectionRule(),
-            new PsStartupArmedRule(),
+            new PsStartupArmedRule(), new AudioUnderrunRule(),
         ];
         foreach (var rule in rules)
         {
             var ex = Record.Exception(() => rule.Evaluate(Ctx(null, []), []));
             Assert.Null(ex);
         }
+    }
+
+    // ---- AudioUnderrunRule ----
+
+    [Fact]
+    public void AudioUnderrun_FiresLikely_OnLargeUnderrunCount()
+    {
+        var rule = new AudioUnderrunRule();
+        var sections = new[]
+        {
+            Section("dsp-audio",
+                ("audio.underrunSamplesTotal", "167520"),
+                ("audio.sampleRateHz", "48000")),
+        };
+        var finding = rule.Evaluate(Ctx("rx-audio-quality", []), sections);
+
+        Assert.NotNull(finding);
+        Assert.Equal(DiagnosticSeverity.Likely, finding!.Severity);
+        Assert.Contains("167,520", finding.Detail); // formatted count surfaced
+    }
+
+    [Fact]
+    public void AudioUnderrun_Silent_WhenUnderrunsAreTrivial()
+    {
+        var rule = new AudioUnderrunRule();
+        var sections = new[]
+        {
+            Section("dsp-audio",
+                ("audio.underrunSamplesTotal", "128"),
+                ("audio.sampleRateHz", "48000")),
+        };
+        Assert.Null(rule.Evaluate(Ctx("rx-audio-quality", []), sections));
+    }
+
+    [Fact]
+    public void AudioUnderrun_Silent_WhenNoDspAudioSection()
+    {
+        var rule = new AudioUnderrunRule();
+        Assert.Null(rule.Evaluate(Ctx("rx-audio-quality", []), []));
+    }
+
+    // ---- RxAuxBypassRule symptom scope (must not fire on crackle) ----
+
+    [Fact]
+    public void RxAuxBypass_ScopedToNoAudioOnly_NotCrackle()
+    {
+        var rule = new RxAuxBypassRule();
+        Assert.Contains("rx-no-audio", rule.Symptoms);
+        Assert.DoesNotContain("rx-audio-quality", rule.Symptoms);
     }
 
     private sealed class EmptyServiceProvider : IServiceProvider

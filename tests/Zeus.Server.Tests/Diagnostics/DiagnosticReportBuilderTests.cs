@@ -80,6 +80,24 @@ public sealed class DiagnosticReportBuilderTests
     }
 
     [Fact]
+    public void Build_RedactsSecretsFromFreeText()
+    {
+        // The free-text box lands in a PUBLIC GitHub issue; an operator may paste
+        // a password/email/IP without realising. It must be scrubbed like logs.
+        var builder = NewBuilder([], [], new DiagnosticLogBuffer());
+        var result = builder.Build(new DiagnosticRequest(
+            "ps-not-working",
+            "PS wont calibrate, password=hunter2, email bob@example.com on 10.70.120.229"));
+
+        foreach (var secret in new[] { "hunter2", "bob@example.com", "10.70.120.229" })
+        {
+            Assert.DoesNotContain(secret, result.Markdown);
+            Assert.DoesNotContain(secret, result.GithubIssueUrl);
+            Assert.DoesNotContain(secret, result.Report.FreeText ?? "");
+        }
+    }
+
+    [Fact]
     public void Build_RunsOnlyRecipeProbes_ForSymptom()
     {
         var env = new FakeProbe("environment", ("OS", "macOS"));

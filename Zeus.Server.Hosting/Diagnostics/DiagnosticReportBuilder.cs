@@ -165,6 +165,9 @@ public sealed class DiagnosticReportBuilder
         var trimmed = freeText.Trim();
         if (trimmed.Length > FreeTextMaxChars)
             trimmed = trimmed[..FreeTextMaxChars];
-        return trimmed;
+        // The operator's prose ends up in a PUBLIC GitHub issue, and they may
+        // paste a password, email, or IP without realising. Scrub it with the
+        // same redaction the log lines get — secrets must never leave the box.
+        return Redaction.Scrub(trimmed);
     }
 }

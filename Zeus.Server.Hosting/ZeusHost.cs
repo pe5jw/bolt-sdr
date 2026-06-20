@@ -381,6 +381,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<IKnownIssueRule, PsNotArmedRule>();
         builder.Services.AddSingleton<IKnownIssueRule, IqWriteGateRule>();
         builder.Services.AddSingleton<IKnownIssueRule, RxAuxBypassRule>();
+        builder.Services.AddSingleton<IKnownIssueRule, AudioUnderrunRule>();
         builder.Services.AddSingleton<IKnownIssueRule, Hl2DriveModelRule>();
         builder.Services.AddSingleton<IKnownIssueRule, RxaAudioSilenceRule>();
         builder.Services.AddSingleton<IKnownIssueRule, DisconnectionRule>();

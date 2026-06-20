@@ -22,6 +22,7 @@
 import { useMemo, useState } from 'react';
 import { useReportProblemStore } from '../../state/report-problem-store';
 import type { Symptom } from '../../api/diagnostics';
+import { openExternalUrl } from './openExternalUrl';
 
 // Shown verbatim so operators can read the page address; it is selectable text,
 // not a working hyperlink (the real link is the result's pre-filled URL button).
@@ -82,7 +83,7 @@ export default function ReportProblemModal() {
 
   const onOpenPage = () => {
     if (!result) return;
-    window.open(result.githubIssueUrl, '_blank', 'noopener');
+    openExternalUrl(result.githubIssueUrl);
   };
 
   const labelStyle: React.CSSProperties = {

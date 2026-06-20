@@ -8,15 +8,16 @@ namespace Zeus.Server.Diagnostics;
 /// routes that band's receive path to an empty/unused antenna jack instead of the
 /// real antenna. The classic signature is exactly one dead band with an unusually
 /// low noise floor while other bands are fine. This is an operator setting, not a
-/// Zeus bug — the fix is to set that band's RX-aux back to "None". Surfaced as a
-/// warning on both no-audio and crackle/distortion receive reports so the operator
-/// rules it out before chasing the DSP path.
+/// Zeus bug — the fix is to set that band's RX-aux back to "None". Surfaced only on
+/// the no-audio report: Bypass causes silence/weak receive, NOT crackle/distortion,
+/// so firing it on a "crackles" report just misdirects the operator (the real
+/// crackle cause is the audio path — see <see cref="AudioUnderrunRule"/>).
 /// </summary>
 public sealed class RxAuxBypassRule : IKnownIssueRule
 {
     public string Id => "rx-aux-bypass";
 
-    public IReadOnlyCollection<string> Symptoms { get; } = ["rx-no-audio", "rx-audio-quality"];
+    public IReadOnlyCollection<string> Symptoms { get; } = ["rx-no-audio"];
 
     public DiagnosticFinding? Evaluate(
         DiagnosticContext ctx, IReadOnlyList<DiagnosticSection> sections)
