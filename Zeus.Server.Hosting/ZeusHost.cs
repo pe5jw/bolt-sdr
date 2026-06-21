@@ -232,6 +232,9 @@ public static class ZeusHost
         builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.WebRtcSpikeService>();
         // Remote-access session password verifier (SPAKE2+, ADR-0008).
         builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.RemotePasswordStore>();
+        // Remote-access WebRTC signaling (Phase 1). Answers offers with a session
+        // gated behind the SPAKE2+ password handshake.
+        builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.RemoteWebRtcService>();
         // RX audio publish seam (Phase 1). DspPipelineService.PublishAudio
         // fans each AudioFrame across every registered IRxAudioSink.
         //

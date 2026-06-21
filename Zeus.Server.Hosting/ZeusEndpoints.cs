@@ -2869,6 +2869,26 @@ public static class ZeusEndpoints
                 return Results.Ok(new { hasPassword = false });
             });
 
+        // WebRTC signaling: answer the browser's offer with a password-gated session
+        // (Phase 1). 403 when no password is set — there is no unauthenticated path.
+        app.MapPost("/api/remote/connect",
+            async (Zeus.Server.Hosting.Remote.RemoteConnectRequest req,
+                   Zeus.Server.Hosting.Remote.RemoteWebRtcService rtc,
+                   CancellationToken ct) =>
+            {
+                if (string.IsNullOrWhiteSpace(req?.Sdp))
+                    return Results.BadRequest(new { error = "sdp required" });
+                try
+                {
+                    var answer = await rtc.ConnectAsync(req.Sdp, ct);
+                    return Results.Ok(new { sdp = answer, type = "answer" });
+                }
+                catch (Zeus.Server.Hosting.Remote.RemoteAccessDisabledException)
+                {
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                }
+            });
+
         // -- WebRTC data-plane spike (Phase 0) --------------------------------
         // Dev-only: inert unless ZEUS_RTC_SPIKE=1. Answers a browser SDP offer
         // and echoes binary DataChannel messages so we can measure real
