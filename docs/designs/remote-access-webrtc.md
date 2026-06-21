@@ -92,12 +92,15 @@ broker yet): one Opus track + one binary DataChannel between `zeus-web` and `Zeu
 on Windows + linux-arm64/Pi. Confirm managed Opus encode (no native FFmpeg). **Exit criteria:** audio
 plays and a DataChannel echoes a `DisplayFrame` end to end.
 
-**Phase 1 — Server transport abstraction.**
+**Phase 1 — Server transport abstraction (deny-by-default from line one).**
 Introduce an `IRemoteTransport` seam so the existing `WireFormat` frames egress over either the
 current `/ws` WebSocket *or* WebRTC channels, with the per-client bounded-queue / drop-oldest
 backpressure (currently `MaxBacklogPerClient=4`) preserved on the WebRTC side. Audio routes to the
 Opus track; display/IQ to the unreliable DataChannel; everything else to the reliable DataChannel.
-No frame-format changes.
+No frame-format changes. **The WebRTC transport is constructed in the LOCKED state** (ADR-0008 hard
+invariant): it holds an `IRemoteAuthGate` and egresses/accepts nothing radio-related until the gate
+reports UNLOCKED. The gate's real password verifier arrives in Phase 4; until then it is a
+deny-everything stub, so "nothing without the password" is structural, never retrofitted.
 
 **Phase 2 — Frontend WebRTC client.**
 Mirror `ws-client.ts` with an `rtc-client.ts` that establishes `RTCPeerConnection`, reuses every

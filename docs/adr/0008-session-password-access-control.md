@@ -6,6 +6,32 @@ public and shareable. The password is the *access control* that decides who may 
 remote session to the radio. Because Zeus drives real HF amplifiers, **remote access cannot be
 enabled without a session password set** — there is no "open to the internet, no password" mode.
 
+## Hard invariant — deny by default, nothing happens without the password
+
+This is a full-stop rule, enforced **server-side** (the client UI prompt is not the gate):
+
+> **A remote session begins LOCKED. While locked, `Zeus.Server` performs exactly one operation —
+> the password proof. It sends no frames (audio/display/IQ/meters), accepts no control of any kind,
+> reveals no radio state, and does not even confirm a radio is present. Every non-auth message on a
+> locked session causes an immediate close. The session transitions to UNLOCKED only on a
+> successful password proof; on failure, timeout, or too many attempts it is dropped with a generic
+> error and nothing leaked.**
+
+Concretely the locked→unlocked state machine lives in the remote transport (Phase 1's
+`IRemoteTransport` starts in the LOCKED state and is wired to an auth gate):
+
+- The WebRTC DTLS/SCTP layer may establish (it is just encrypted transport), but the application
+  session stays LOCKED.
+- The first and only permitted exchange on the control DataChannel is the password proof
+  (PAKE/SPAKE2 target — see below). No data-plane channel egresses and no control verb is dispatched
+  while LOCKED.
+- Unlock arms the radio data paths and control; lock (disconnect / password cleared / idle timeout)
+  disarms them again.
+
+This invariant is independent of identity (ADR-0007): even a correctly QRZ-identified remote is
+LOCKED until the password proves out. The LAN/localhost trusted path is unaffected — it is not a
+remote session and never enters this state machine.
+
 ## Where the password is verified — at the radio, never at the broker
 
 The broker ([0006](./0006-broker-signaling-turn-callsign.md)) is a third party in the signaling
