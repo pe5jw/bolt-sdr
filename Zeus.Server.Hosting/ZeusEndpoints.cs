@@ -2500,6 +2500,28 @@ public static class ZeusEndpoints
             }
         }).DisableAntiforgery();
 
+        // Download an existing profile's .db so the operator can back it up or
+        // move it to another machine. Opens the file shared so the active
+        // database can be exported while it's in use.
+        app.MapGet("/api/prefs/databases/export", (string? relativePath) =>
+        {
+            if (string.IsNullOrWhiteSpace(relativePath))
+                return Results.BadRequest(new { error = "relativePath required" });
+            try
+            {
+                var bytes = PrefsDbPath.ReadProfileBytes(relativePath, out var fileName);
+                return Results.File(bytes, "application/octet-stream", fileName);
+            }
+            catch (FileNotFoundException)
+            {
+                return Results.NotFound(new { error = "Database not found." });
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
         app.MapPost("/api/app/restart", (AppRestartService restart) =>
         {
             restart.RequestRestart();
