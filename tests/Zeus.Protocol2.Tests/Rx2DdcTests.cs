@@ -154,4 +154,43 @@ public class Rx2DdcTests
             Protocol2Client.ComputeAlexWord(14_200_000, 14_200_000, txAnt: 1, board: HpsdrBoardKind.OrionMkII),
             alex1);
     }
+
+    [Fact]
+    public void Alex1FilterWord_Rx2DifferentBand_DuringTx_LpfFollowsTxVfo_NotRx2()
+    {
+        // Dual-RX TUNE/MOX no-carrier regression (live-confirmed on G2): with RX2
+        // parked on a different band than TX, the alex1 word's TX LOW-PASS filter
+        // (LPF) must follow the TX VFO, not RX2. The LPF is a TX-path filter
+        // carried on both alex words during TX (pihpsdr new_protocol.c); if it
+        // selects RX2's band the alex1 filter board rejects the TX carrier and no
+        // RF is emitted. The RX2 receive preselector (BPF) still follows RX2.
+        const uint txHz = 7_200_000;    // TX on 40 m
+        const uint rx2Hz = 14_200_000;  // RX2 on 20 m (different band)
+        const uint txRelay = 0x08000000u;            // ALEX_TX_RELAY
+        const uint gndOnTx = 0x00000100u;            // ALEX1_ANAN7000_RX_GNDonTX
+
+        uint alex1 = Protocol2Client.ComposeAlex1Word(
+            rxFreqHz: txHz,
+            rx2FreqHz: rx2Hz,
+            rx2Enabled: true,
+            moxOn: true,        // transmitting (MOX or TUNE)
+            psEnabled: false,
+            board: HpsdrBoardKind.OrionMkII);
+
+        // BPF follows RX2 (20 m), LPF follows TX (40 m), plus the TX relay and
+        // the keyed RX-ground bit.
+        uint expected = Protocol2Client.ComputeAlexWord(rx2Hz, txHz, txAnt: 1, board: HpsdrBoardKind.OrionMkII)
+            | txRelay | gndOnTx;
+        Assert.Equal(expected, alex1);
+
+        // Regression guard: must NOT be the old buggy word where the LPF also
+        // followed RX2's band — that word rejected the TX carrier.
+        uint buggy = Protocol2Client.ComputeAlexWord(rx2Hz, rx2Hz, txAnt: 1, board: HpsdrBoardKind.OrionMkII)
+            | txRelay | gndOnTx;
+        Assert.NotEqual(buggy, alex1);
+
+        // And the LPF component specifically must be the TX-band LPF.
+        Assert.Equal(Protocol2Client.LpfBits(txHz), alex1 & Protocol2Client.LpfBits(txHz));
+        Assert.NotEqual(Protocol2Client.LpfBits(rx2Hz), Protocol2Client.LpfBits(txHz));
+    }
 }
