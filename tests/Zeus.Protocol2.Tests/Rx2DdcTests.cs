@@ -130,6 +130,7 @@ public class Rx2DdcTests
         uint alex1 = Protocol2Client.ComposeAlex1Word(
             rxFreqHz: 14_200_000,
             rx2FreqHz: 7_200_000,
+            txLpfFreqHz: 14_200_000,
             rx2Enabled: true,
             moxOn: false,
             psEnabled: false,
@@ -146,6 +147,7 @@ public class Rx2DdcTests
         uint alex1 = Protocol2Client.ComposeAlex1Word(
             rxFreqHz: 14_200_000,
             rx2FreqHz: 7_200_000,
+            txLpfFreqHz: 14_200_000,
             rx2Enabled: false,
             moxOn: false,
             psEnabled: false,
@@ -171,8 +173,9 @@ public class Rx2DdcTests
         const uint gndOnTx = 0x00000100u;            // ALEX1_ANAN7000_RX_GNDonTX
 
         uint alex1 = Protocol2Client.ComposeAlex1Word(
-            rxFreqHz: txHz,
-            rx2FreqHz: rx2Hz,
+            rxFreqHz: rx2Hz,    // RX1 receive band (irrelevant here; RX2 is on)
+            rx2FreqHz: rx2Hz,   // RX2 receive preselector → BPF
+            txLpfFreqHz: txHz,  // TX freq (independent DUC) → TX low-pass
             rx2Enabled: true,
             moxOn: true,        // transmitting (MOX or TUNE)
             psEnabled: false,

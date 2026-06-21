@@ -1965,7 +1965,17 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         int alex0AntWire = (xmit || _rxAuxInput != 0)
             ? txAntWire
             : ((_rxAntenna is 1 or 2 or 3) ? _rxAntenna : 1);
-        uint alex0Common = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: txAntWire, board: _boardKind);
+        // TX low-pass filter source. The alex LPF on BOTH words is a TX-path
+        // filter and MUST follow the TX frequency, not RX1. _txDucFreqHz is the
+        // TX-freq source of truth (== _rxFreqHz when not split, == VFO B for
+        // dual-RX split TX). During RX the LPF is inert (TX relay open), so leave
+        // it on _rxFreqHz to keep the non-TX wire byte-identical. WITHOUT this,
+        // dual-RX split TX — where _rxFreqHz stays on VFO A while the DUC moves to
+        // VFO B — left the TX LPF on the RX1 band and the filter board rejected
+        // the VFO-B carrier, so there was NO RF output on a different band.
+        uint txLpfFreqHz = xmit ? _txDucFreqHz : _rxFreqHz;
+        // alex0 BPF follows RX1 (_rxFreqHz); LPF follows the TX freq.
+        uint alex0Common = ComputeAlexWord(_rxFreqHz, txLpfFreqHz, txAnt: txAntWire, board: _boardKind);
         // alex1 keeps the TX antenna from txAntWire; alex0 swaps in the
         // state-correct antenna (clear [26:24], re-OR via the shared encoder).
         uint alex0 = (alex0Common & ~ALEX_TX_ANTENNA_MASK) | EncodeTxAntennaBits(alex0AntWire)
@@ -1973,6 +1983,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         uint alex1 = ComposeAlex1Word(
             _rxFreqHz,
             _rx2FreqHz,
+            txLpfFreqHz,
             rx2Enabled,
             xmit,
             _psFeedbackEnabled,
@@ -2126,6 +2137,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     internal static uint ComposeAlex1Word(
         uint rxFreqHz,
         uint rx2FreqHz,
+        uint txLpfFreqHz,
         bool rx2Enabled,
         bool moxOn,
         bool psEnabled,
@@ -2133,26 +2145,25 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         int txAntWire = 1)
     {
         // The alex1 word carries TWO independent filter selections that must NOT
-        // share a frequency when RX2 is on a different band than TX:
-        //   • BPF (bits set by ComputeAlexWord's 1st arg) = the RX2 RECEIVE
-        //     preselector — follows RX2's band when RX2 is enabled.
+        // share a frequency when RX2 / the TX VFO sit on different bands:
+        //   • BPF (ComputeAlexWord's 1st arg) = the RX2 RECEIVE preselector —
+        //     follows RX2's band when RX2 is enabled, else RX1.
         //   • LPF (2nd arg) = the TX LOW-PASS filter. Per pihpsdr
         //     (new_protocol.c) the LPF is a TX-path filter carried on BOTH alex
-        //     words during TX, so it MUST follow the TX VFO, exactly like alex0.
-        // The original code computed BOTH from RX2's frequency, so with RX2
-        // parked on a different band than TX the alex1 LPF selected RX2's band
-        // and the filter board REJECTED the TX carrier — TUNE/MOX produced no RF
-        // whenever a second receiver was engaged on another band (dual-RX
-        // no-carrier bug). RX2 off → rx2FilterFreqHz fell back to the TX freq, so
-        // the LPF matched and TX worked, which is why disabling RX2 "fixed" it.
+        //     words during TX, so it MUST follow the TX frequency, exactly like
+        //     alex0. <paramref name="txLpfFreqHz"/> is the TX-freq source of truth
+        //     (== RX1 when not split, == VFO B for dual-RX split TX).
+        // History: the original code computed BOTH from RX2's frequency, so with
+        // RX2 on a different band the alex1 LPF rejected the TX carrier (no RF).
+        // The first fix used RX1's freq for the LPF, which is correct ONLY while
+        // the TX shares RX1's LO; for dual-RX split TX (where RX1 stays on VFO A
+        // and the TX DUC moves to VFO B independently) the LPF must follow the TX
+        // freq explicitly — hence the dedicated txLpfFreqHz argument.
         //
-        // Fix: state-multiplex the LPF to the TX VFO during transmit (mirroring
-        // alex0's antenna state-mux at the alex0 site), keeping the BPF on RX2's
-        // band for reception. During RX the LPF is inert (TX relay open) and we
-        // leave it on the RX2 band so the alex1 word stays byte-identical to
-        // before outside of transmit.
+        // During RX the LPF is inert (TX relay open); the caller passes RX1's
+        // freq then so the alex1 word stays byte-identical outside of transmit.
         uint rx2BpfFreqHz = rx2Enabled ? rx2FreqHz : rxFreqHz;
-        uint lpfFreqHz = moxOn ? rxFreqHz : rx2BpfFreqHz;
+        uint lpfFreqHz = moxOn ? txLpfFreqHz : rx2BpfFreqHz;
         // alex1 ALWAYS reflects the TX antenna (external-ports plan — antenna
         // slice, #804) — it never carries the RX antenna, so the TX-antenna
         // selector is threaded straight through here.
