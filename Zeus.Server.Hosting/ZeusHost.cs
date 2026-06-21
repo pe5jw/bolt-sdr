@@ -363,6 +363,10 @@ public static class ZeusHost
         // PTT-IN status lamp tracks the footswitch regardless.
         builder.Services.AddSingleton<PttSettingsStore>();
         builder.Services.AddSingleton<ExternalPttService>();
+        // Per-band external antenna (TX/RX relay + RX-aux) selection (external-
+        // ports plan — antenna slice, #804). RadioService takes it as an
+        // optional ctor param and re-pushes on its Changed event.
+        builder.Services.AddSingleton<AntennaSettingsStore>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<ExternalPttService>());
 
         // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
@@ -458,6 +462,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.ExternalPttProvider>();
         builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.Protocol2TxIqProvider>();
         builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.DspPipelineProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.RxIngestDiagnosticsProvider>();
         builder.Services.AddSingleton<Diagnostics.DiagnosticsProviderRegistry>();
         builder.Services.AddSingleton<Diagnostics.DiagnosticsSelfCheckCache>();
         builder.Services.AddSingleton<Diagnostics.DiagnosticsFramePublisher>();
