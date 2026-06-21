@@ -57,6 +57,15 @@ public sealed class RadioService : IDisposable
 {
     private const int DefaultHpsdrPort = 1024;
     internal const double DefaultAgcTopDb = 80.0;
+    // Operator AGC-T baseline range. Below ~30 dB the RX audio is effectively
+    // muted and above ~80 dB it is the loudest the AGC will drive; the old
+    // -20..120 span (mirroring the raw Thetis slider) exposed a large dead
+    // region the operator never used. The slider is linear across this window.
+    // NOTE: this bounds only the manual baseline (AgcTopDb). Auto-AGC's offset
+    // (AgcOffsetDb) and the effective value it pushes to WDSP are NOT bounded
+    // by this — see AgcMinEffectiveAgcT / AgcMaxEffectiveAgcT.
+    internal const double MinAgcTopDb = 30.0;
+    internal const double MaxAgcTopDb = 80.0;
 
     private readonly object _sync = new();
     private readonly ILoggerFactory _loggerFactory;
@@ -401,8 +410,10 @@ public sealed class RadioService : IDisposable
             // headroom to normalize weak post-demod audio immediately after a
             // fresh start. Operator overrides persist via
             // DspSettingsStore.SetAgcTopDb so deliberate lower AGC-T settings
-            // still stick across restarts.
-            AgcTopDb: _dspSettingsStore.GetAgcTopDb() ?? DefaultAgcTopDb,
+            // still stick across restarts. Clamp the rehydrated value into the
+            // operator range so a legacy out-of-range persisted baseline (from
+            // the old -20..120 slider) can't park the thumb off the rail.
+            AgcTopDb: Math.Clamp(_dspSettingsStore.GetAgcTopDb() ?? DefaultAgcTopDb, MinAgcTopDb, MaxAgcTopDb),
             Agc: persistedAgc,
             Squelch: persistedSquelch,
             TxLeveling: persistedTxLeveling,
@@ -2249,12 +2260,16 @@ public sealed class RadioService : IDisposable
     internal static byte ComputeDriveByte(int drivePct, double paGainDb, int maxWatts)
         => DriveByteMath.ComputeFullByte(drivePct, paGainDb, maxWatts);
 
-    // Thetis "AGC Top" slider — max post-AGC gain in dB. Clamped to the
-    // Thetis UI range (−20..120). DspPipelineService picks this up through the
-    // StateChanged event and forwards it to the active engine.
+    // "AGC Top" slider — max post-AGC gain in dB. Clamped to the operator
+    // baseline range (MinAgcTopDb..MaxAgcTopDb = 30..80); below 30 the audio
+    // is effectively muted and above 80 it's the loudest the AGC drives, so the
+    // wider raw-Thetis span was dead travel. This clamp is authoritative for
+    // BOTH the REST /api/agcGain endpoint and the TCI agc_gain command.
+    // DspPipelineService picks this up through the StateChanged event and
+    // forwards it to the active engine.
     public StateDto SetAgcTop(double topDb)
     {
-        double clamped = Math.Clamp(topDb, -20.0, 120.0);
+        double clamped = Math.Clamp(topDb, MinAgcTopDb, MaxAgcTopDb);
         // Grabbing the AGC-T slider takes MANUAL control. The value pushed to
         // WDSP is the EFFECTIVE AGC-T = AgcTopDb + AgcOffsetDb, where the offset
         // is the Auto-AGC control-loop accumulator. If Auto-AGC kept running,
