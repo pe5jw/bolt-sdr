@@ -555,14 +555,15 @@ function WorkspaceCanvas({
           rowHeight={rowHeight}
           margin={[WORKSPACE_GRID_MARGIN_PX, rowMargin]}
           containerPadding={[0, 0]}
-          // Emit resize handles on every edge and corner, not just the SE
-          // corner (RGL's default handles: ['se']). Every panel is freely
-          // resizable to grid extents now — grab any side or corner to
-          // grow/shrink it. all-panels.css styles each handle per-direction
-          // (the old unqualified override is split so the new handles don't
-          // stack in the SE corner).
+          // Resize handles on the sides and bottom — NOT the top edge.
+          // 'n'/'ne'/'nw' would overlay the tile header and steal the
+          // mousedown that drags the panel (a header-grab would start a resize
+          // instead of a move). 'e'/'w' reach any width, 's' any height, and
+          // the bottom corners cover diagonal — enough for "any size" while the
+          // header stays grabbable. all-panels.css styles each handle
+          // per-direction so they don't stack in the SE corner.
           resizeConfig={{
-            handles: ['s', 'e', 'se', 'sw', 'ne', 'nw', 'n', 'w'],
+            handles: ['s', 'e', 'w', 'se', 'sw'],
           }}
           compactor={workspaceCompactor}
           // Position tiles via top/left rather than transform: translate3d.

@@ -225,11 +225,14 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'vfo',
     tags: ['frequency', 'vfo', 'tuning'],
     component: VfoPanel,
-    // Root is flex:1, which goes inert inside ScaleToFitTile's max-content inner
-    // box (no flex parent), so the VFO digits/strips resolve to their natural
-    // footprint and scale uniformly — the panadapter-style "ratio follows the
-    // tile" the operator asked for, not just a fluid-fill container.
-    scaleToFit: true,
+    // The VFO lane grid uses minmax(0,1fr) for the digit column and fills via
+    // height:100%, so it needs a DEFINITE box — auto-measure's max-content would
+    // collapse the 1fr digit column to zero (blank panel, "4 blank tabs"). An
+    // explicit design size ≈ the default 6×14 tile footprint scales the digits
+    // uniformly as the tile grows while staying ~1:1 at the default layout.
+    // Bench-tune designW/designH if the nominal zoom looks off.
+    designW: 340,
+    designH: 210,
     minW: 4,
     minH: 6,
   },
@@ -291,6 +294,12 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'dsp',
     tags: ['dsp', 'noise', 'filter', 'nr', 'anf'],
     component: DspFlexPanel,
+    // The DSP control grid stacks its NB/NR/ANF/SNB/NBP rows on top of each
+    // other when the tile is shorter than the controls need. A definite design
+    // size scales the whole grid uniformly so the rows shrink-to-fit instead of
+    // overlapping when small (and zoom up when large). Bench-tunable.
+    designW: 340,
+    designH: 200,
     minW: 4,
     minH: 6,
   },
@@ -300,10 +309,11 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['cw', 'morse', 'keyer', 'wpm'],
     component: CwPanel,
-    // Root is flex:1 (inert in the max-content inner box) wrapping the CW keyer
-    // controls, which carry intrinsic sizes — shrink-wraps to a finite footprint
-    // and scales uniformly with the tile.
-    scaleToFit: true,
+    // Root is flex:1 (fills via the parent height), so it needs a DEFINITE box —
+    // explicit design size, not auto-measure (which collapses the fill). Scales
+    // the keyer controls uniformly with the tile. Bench-tunable.
+    designW: 340,
+    designH: 260,
     minW: 6,
     minH: 6,
   },
@@ -389,13 +399,14 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['puresignal', 'ps', 'tx', 'predistortion', 'linearization', 'twotone'],
     component: PsFlexPanel,
-    // Root is content-sized (flex:1 + overflow:auto + padding — flex-grow is
-    // inert inside ScaleToFitTile's max-content box), so it scales to fill its
-    // tile like every other control panel. Presentation-only: this generic
-    // workspace flag touches NO PureSignal logic, arm/disarm, persistence, or
-    // calibration. Added under explicit KB2UKA authorization (PureSignal is a
-    // full-stop subsystem; sign-off on record for this flag-only change).
-    scaleToFit: true,
+    // Root is flex:1 + overflow:auto, so it needs a DEFINITE box — explicit
+    // design size, not auto-measure (which collapses the fill). Scales the PS
+    // controls uniformly with the tile; bench-tunable. Presentation-only: this
+    // generic workspace sizing touches NO PureSignal logic, arm/disarm,
+    // persistence, or calibration. Added under explicit KB2UKA authorization
+    // (PureSignal is a full-stop subsystem; sign-off on record for this change).
+    designW: 340,
+    designH: 240,
     minW: 6,
     minH: 8,
   },
