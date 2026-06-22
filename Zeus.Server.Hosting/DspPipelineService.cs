@@ -784,6 +784,25 @@ public class DspPipelineService : BackgroundService,
     // with the persisted value matching the 8 dB default still re-pushes it.
     private double _appliedTxLevelerMaxGainDb = double.NaN;
     private NrConfig _appliedNr = new();
+    // Diversity-combiner latch. Null seed so the first state push always applies
+    // (mirrors _appliedNr's change-detect). Global, not per-channel.
+    private DiversityConfig? _appliedDiversity;
+    // ---- Diversity combiner (managed, P2-only) ----
+    // Combines RX0 (ADC0) IQ with a second receiver's IQ (the "source", default
+    // RX2/ADC1) using a complex weight (gain·e^{jθ}) before feeding RX0's WDSP
+    // channel: out = rx0 + (wI + j·wQ)·src. Phase-synchronous P2 DDCs make the
+    // two streams sample-aligned; the latest source frame is held and combined
+    // when the matching RX0 frame arrives. Gated by _divEnabled — when off the
+    // P2 ingest is byte-identical. Config-apply and IQ-combine both run on the
+    // single DSP/ingest thread (state changes drain through the DSP command
+    // queue), so the source buffer needs no lock. Diversity never engages on
+    // Protocol 1 (single ADC) — only OnIqFrame (P2) stores source frames.
+    private volatile bool _divEnabled;
+    private int _divSourceRx = 1;
+    private double _divWeightI = 1.0, _divWeightQ;
+    private double[] _divSourceIq = [];
+    private int _divSourceLen;
+    private double[] _divCombineBuf = [];
     // AGC mode + custom params latch (issue: DSP controls Thetis parity §4).
     // Same change-detect pattern as _appliedNr — SetAgc only fires when the
     // config actually moves. Seeded to Med so a connect landing on the Med
@@ -3251,7 +3270,13 @@ public class DspPipelineService : BackgroundService,
         // seam Thetis uses (radio.cs:1419-1420); shifting SetRXABandpassFreqs
         // directly broke SSB demod because the nbp0 stage rejects
         // sign-inverted ranges. See docs/prd/panfall_behavior.md.
-        int ctunShiftHz = (int)(CwOffset.EffectiveLoHz(s.Mode, s.VfoHz) - s.RadioLoHz);
+        // RIT (Receiver Incremental Tuning) folds straight into the shift: the
+        // demod point moves by RitHz while VfoHz (the displayed dial) stays put.
+        // RX1 only, matching Thetis (RIT acts on the active receiver). A change
+        // to RitHz/RitEnabled changes ctunShiftHz, so it re-applies through the
+        // same diff-gate as a retune.
+        int ritHz = s.RitEnabled ? (int)s.RitHz : 0;
+        int ctunShiftHz = (int)(CwOffset.EffectiveLoHz(s.Mode, s.VfoHz) - s.RadioLoHz) + ritHz;
         if (ctunShiftHz != _appliedCtunOffsetHz)
         {
             engine.SetCtunShift(channel, ctunShiftHz);
@@ -3312,6 +3337,15 @@ public class DspPipelineService : BackgroundService,
             engine.SetNoiseReduction(channel, nr);
             if (rx2Channel >= 0) engine.SetNoiseReduction(rx2Channel, nr);
             _appliedNr = nr;
+        }
+        // Diversity combiner — managed complex combine in the P2 ingest (see
+        // ApplyDiversityConfig / OnIqFrame). Applied once (not per-channel) when
+        // the config changes. Default-off makes the ingest byte-identical.
+        var diversity = s.Diversity ?? new DiversityConfig();
+        if (!diversity.Equals(_appliedDiversity))
+        {
+            ApplyDiversityConfig(diversity);
+            _appliedDiversity = diversity;
         }
         var agc = s.Agc ?? new AgcConfig(AgcMode.Med);
         if (!agc.Equals(_appliedAgc))
@@ -3626,8 +3660,10 @@ public class DspPipelineService : BackgroundService,
         // Replay the WDSP shift on fresh-channel open so a connect landing
         // with VfoHz != RadioLoHz (persisted across restart) is demodulating
         // the same dial the operator saw last session.
-        // See docs/prd/panfall_behavior.md.
-        int ctunShiftHz = (int)(CwOffset.EffectiveLoHz(s.Mode, s.VfoHz) - s.RadioLoHz);
+        // See docs/prd/panfall_behavior.md. RIT folds in here too so a
+        // fresh-channel open replays the active RX offset.
+        int ritHz = s.RitEnabled ? (int)s.RitHz : 0;
+        int ctunShiftHz = (int)(CwOffset.EffectiveLoHz(s.Mode, s.VfoHz) - s.RadioLoHz) + ritHz;
         engine.SetCtunShift(channelId, ctunShiftHz);
         double effectiveAgc = s.AgcTopDb + s.AgcOffsetDb;
         engine.SetAgcTop(channelId, effectiveAgc);
@@ -3694,6 +3730,11 @@ public class DspPipelineService : BackgroundService,
         rxIndex == 1
             ? s.Rx2Enabled
             : rxIndex >= 2 && s.Receivers is { } rs && rxIndex < rs.Count && rs[rxIndex].Enabled;
+
+    // Per-RX audio mute (Thetis chkMUT / chkRX2Mute). Reads the projected
+    // Receivers[] array, which RadioService keeps current on every Mutate.
+    private static bool IsReceiverMuted(StateDto s, int rxIndex) =>
+        s.Receivers is { } rs && rxIndex >= 0 && rxIndex < rs.Count && rs[rxIndex].Muted;
 
     // Per-secondary-receiver tuning params. RX2 reads the flat RX2/VFO-B fields
     // (byte-exact); RX3+ read the per-receiver StateDto.Receivers[] entry.
@@ -4530,6 +4571,80 @@ public class DspPipelineService : BackgroundService,
             engine.FeedIq(rx2Channel, interleavedIqSamples);
     }
 
+    // Apply a diversity config change (DSP thread). Precomputes the complex
+    // weight from gain magnitude + phase so the hot path only does a
+    // multiply-add. Dropping the stale source on disable prevents a brief
+    // combine against an old buffer if diversity is re-enabled later.
+    private void ApplyDiversityConfig(DiversityConfig cfg)
+    {
+        double theta = cfg.PhaseDeg * Math.PI / 180.0;
+        _divWeightI = cfg.Gain * Math.Cos(theta);
+        _divWeightQ = cfg.Gain * Math.Sin(theta);
+        _divSourceRx = cfg.SourceRx;
+        if (!cfg.Enabled) _divSourceLen = 0;
+        _divEnabled = cfg.Enabled;
+        _log.LogInformation(
+            "dsp.diversity enabled={En} gain={G:F3} phaseDeg={P:F1} sourceRx={Src} weight=({I:F3},{Q:F3})",
+            cfg.Enabled, cfg.Gain, cfg.PhaseDeg, cfg.SourceRx, _divWeightI, _divWeightQ);
+    }
+
+    // Copy the latest source-antenna IQ for the next RX0 combine. A copy is
+    // required because the producer owns/returns the frame buffer right after
+    // OnIqFrame returns. Single-threaded with the RX0 frame, so no lock.
+    private void StoreDiversitySource(ReadOnlySpan<double> iq)
+    {
+        if (_divSourceIq.Length < iq.Length) _divSourceIq = new double[iq.Length];
+        iq.CopyTo(_divSourceIq);
+        _divSourceLen = iq.Length;
+    }
+
+    // Feed RX0's WDSP channel, combining the stored source IQ when diversity is
+    // active and a source frame is available; otherwise feed the raw RX0 stream
+    // unchanged (the safe fallback — no source yet, or diversity off).
+    private void FeedRx0WithOptionalDiversity(IDspEngine engine, int channel, ReadOnlySpan<double> rx0)
+    {
+        if (!_divEnabled || _divSourceLen == 0)
+        {
+            engine.FeedIq(channel, rx0);
+            return;
+        }
+        if (_divCombineBuf.Length < rx0.Length) _divCombineBuf = new double[rx0.Length];
+        var dest = _divCombineBuf.AsSpan(0, rx0.Length);
+        DiversityCombine(rx0, _divSourceIq.AsSpan(0, _divSourceLen), _divWeightI, _divWeightQ, dest);
+        engine.FeedIq(channel, dest);
+    }
+
+    // Complex diversity combine: dest = rx0 + (wI + j·wQ)·src, per IQ pair.
+    // RX0 is the unrotated reference; the source is scaled+rotated by the weight.
+    // Where the source is shorter than RX0, the RX0 tail passes through unchanged
+    // (better an un-combined sample than a dropped one). Pure/static for testing.
+    internal static void DiversityCombine(
+        ReadOnlySpan<double> rx0, ReadOnlySpan<double> src, double wI, double wQ, Span<double> dest)
+    {
+        int pairs = rx0.Length / 2;
+        int srcPairs = src.Length / 2;
+        for (int p = 0; p < pairs; p++)
+        {
+            double i0 = rx0[2 * p], q0 = rx0[2 * p + 1];
+            if (p < srcPairs)
+            {
+                double si = src[2 * p], sq = src[2 * p + 1];
+                // (wI + j·wQ)·(si + j·sq)
+                double ri = wI * si - wQ * sq;
+                double rq = wI * sq + wQ * si;
+                dest[2 * p] = i0 + ri;
+                dest[2 * p + 1] = q0 + rq;
+            }
+            else
+            {
+                dest[2 * p] = i0;
+                dest[2 * p + 1] = q0;
+            }
+        }
+        // Defensive: copy any odd trailing scalar (IQ frames are even-length).
+        if ((rx0.Length & 1) == 1) dest[rx0.Length - 1] = rx0[rx0.Length - 1];
+    }
+
     // ---- IRxPacketSink (Protocol 1) -----------------------------------------
     // Called synchronously on Protocol1Client.RxLoop's OS thread. The body
     // does, in order:
@@ -4631,12 +4746,16 @@ public class DspPipelineService : BackgroundService,
                         engine.FeedIq(secChan, frame.InterleavedSamples.Span);
                         rx.FedFrames++;
                     }
+                    // Diversity: stash this receiver's IQ when it's the configured
+                    // source antenna, so the next RX0 frame can combine against it.
+                    if (_divEnabled && ri == _divSourceRx)
+                        StoreDiversitySource(frame.InterleavedSamples.Span);
                 }
                 return;
             }
             int channel = Volatile.Read(ref _channelId);
             LogRxIqRms(0, frame.InterleavedSamples.Span, ref _rx1IqRmsLogMs);
-            engine.FeedIq(channel, frame.InterleavedSamples.Span);
+            FeedRx0WithOptionalDiversity(engine, channel, frame.InterleavedSamples.Span);
             RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
         }
         MaybeTickInline();
@@ -5189,6 +5308,12 @@ public class DspPipelineService : BackgroundService,
         // so RX-side plugins keep running even while monitor is on.
         bool txMonitorOn = engine.IsTxMonitorOn;
         int audioSampleCount = engine.ReadAudio(channel, audioBuf);
+        // Per-RX mute (Thetis chkMUT): RX1 stays the audio clock-master so the
+        // mix/output timing is unchanged, but its samples are zeroed so only the
+        // other (unmuted) receivers are heard. TX monitor overrides RX audio
+        // below, so muting an RX never silences the monitor.
+        if (IsReceiverMuted(state, 0) && audioSampleCount > 0)
+            audioBuf.AsSpan(0, audioSampleCount).Clear();
 
         // Secondary-receiver audio. Drain EVERY enabled secondary RX ring this
         // tick so none can back up: RX3+ used to be computed-and-discarded, so
@@ -5222,12 +5347,18 @@ public class DspPipelineService : BackgroundService,
                 // nothing this tick, matching the original RX2 Both behaviour.
                 int want = Math.Min(audioSampleCount, sec.AudioBuf.Length);
                 int n = want > 0 ? engine.ReadAudio(secChan, sec.AudioBuf.AsSpan(0, want)) : 0;
+                // Muted secondary: drained (so its ring can't back up) but zeroed
+                // so it contributes silence to the mix.
+                if (n > 0 && IsReceiverMuted(state, ri))
+                    sec.AudioBuf.AsSpan(0, n).Clear();
                 _mixSlices[mixSliceCount++] = new RxAudioSlice(sec.AudioBuf, n);
             }
             else if (rxAudioMode == Rx2AudioMode.Rx2 && ri == 1)
             {
                 // RX2 is the audio master in RX2-only mode: drain its ring fully.
                 rx2OnlyCount = engine.ReadAudio(secChan, sec.AudioBuf.AsSpan());
+                if (rx2OnlyCount > 0 && IsReceiverMuted(state, ri))
+                    sec.AudioBuf.AsSpan(0, rx2OnlyCount).Clear();
             }
             else
             {
