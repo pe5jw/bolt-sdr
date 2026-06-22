@@ -111,7 +111,7 @@ export function BandOverlay({ receiver = 'A' }: BandOverlayProps = {}) {
   }, [enabled, receiver]);
 
   const laidOut = useMemo(() => {
-    if (!enabled || !width || hzPerPixel <= 0 || segments.length === 0) return null;
+    if (!enabled || !width || hzPerPixel <= 0 || !Array.isArray(segments) || segments.length === 0) return null;
     const spanHz = width * hzPerPixel;
     const center = Number(centerHz);
     const startHz = center - spanHz / 2;
@@ -195,7 +195,10 @@ export function useBandEdgeAlert(): void {
   const prevStatusRef = useRef<'in' | 'out' | 'unknown'>('unknown');
 
   useEffect(() => {
-    if (!enabled || segments.length === 0) {
+    // Defensive: this hook runs inside BandPlanProvider (app-wide), so a
+    // non-array `segments` must not throw here — it would trip AppErrorBoundary
+    // and blank the entire UI. The store coerces to [] too; this is belt+braces.
+    if (!enabled || !Array.isArray(segments) || segments.length === 0) {
       prevStatusRef.current = 'unknown';
       return;
     }
