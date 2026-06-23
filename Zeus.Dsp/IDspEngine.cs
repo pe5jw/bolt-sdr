@@ -238,6 +238,17 @@ public interface IDspEngine : IDisposable
     /// when TXA is not open.</summary>
     void SetTxFilter(int lowHz, int highHz);
 
+    /// <summary>Set the RXA bandpass FFT window (WDSP <c>SetRXABandpassWindow</c>)
+    /// — the "rectangularity" of the SSB filter shoulder (issue #871). No-op on
+    /// Synthetic.</summary>
+    void SetRxBandpassWindow(int channelId, BandpassWindow window);
+
+    /// <summary>Set the TXA bandpass FFT window (WDSP <c>SetTXABandpassWindow</c>)
+    /// — the "rectangularity" of the TX SSB filter shoulder (issue #871).
+    /// Independent of <see cref="SetRxBandpassWindow"/>. No-op on Synthetic and
+    /// when TXA is not open.</summary>
+    void SetTxBandpassWindow(BandpassWindow window);
+
     /// <summary>Process one WDSP-sized block of mic audio through TXA and return
     /// the modulated IQ. <paramref name="micMono"/> must contain exactly
     /// <see cref="TxBlockSamples"/> float samples (48 kHz mono). <paramref name="iqInterleaved"/>

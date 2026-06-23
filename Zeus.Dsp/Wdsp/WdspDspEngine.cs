@@ -2190,6 +2190,32 @@ public sealed class WdspDspEngine : IDspEngine
         _log.LogInformation("wdsp.setTxFilter low={Low} high={High}", lowHz, highHz);
     }
 
+    // SSB filter rectangularity (issue #871). WDSP's fir.c exposes two FIR
+    // window shapes via fir_bandpass's wintype parameter: Soft = 0
+    // (Blackman-Harris 4-term, gentler shoulder), Sharp = 1 (BH 7-term, the
+    // current hardcoded RX/TX default at OpenChannel/OpenTxChannel). The
+    // setters below rebuild the bandpass FIR impulse response in-place — WDSP
+    // takes the criticalsection around the swap so it's safe to call during
+    // live audio.
+    public void SetRxBandpassWindow(int channelId, BandpassWindow window)
+    {
+        if (_disposed != 0) return;
+        if (!_channels.TryGetValue(channelId, out _)) return;
+        NativeMethods.SetRXABandpassWindow(channelId, (int)window);
+        _log.LogInformation("wdsp.setRxBandpassWindow ch={Ch} win={Win}", channelId, window);
+    }
+
+    public void SetTxBandpassWindow(BandpassWindow window)
+    {
+        if (_disposed != 0) return;
+        lock (_txaLock)
+        {
+            if (_txaChannelId is not int txa) return;
+            NativeMethods.SetTXABandpassWindow(txa, (int)window);
+        }
+        _log.LogInformation("wdsp.setTxBandpassWindow win={Win}", window);
+    }
+
     /// <summary>Operator-facing TX-monitor toggle. When true, the engine opens
     /// (or reuses) a private RXA channel and feeds it the post-CFIR/RSMPOUT TX
     /// IQ produced inside <see cref="ProcessTxBlock"/>; the demodulated mono
