@@ -508,10 +508,18 @@
   display: inline-flex;
   flex: 0 0 24px;
   width: 24px;
-  height: 28px;
-  min-height: 28px;
+  /* Match the strip buttons (.btn.sm = 27px min-height) so the arrows are
+     the same height as the MODE / BAND / STEP buttons they scroll. */
+  height: 27px;
+  min-height: 27px;
   padding: 0;
   align-self: center;
+  /* The strip buttons live inside a .ctrl-group whose 9px label + 3px gap
+     sit ABOVE the button row, pushing the buttons ~6px below the bar's
+     vertical centre. The arrows have no label, so an asymmetric top margin
+     equal to (label + gap) shifts their centred margin-box down by half that
+     — landing the arrow centre exactly on the strip button row. */
+  margin-top: calc(9px + 3px);
 }
 .topbar .topbar-scroll-btn[hidden] {
   display: none;
