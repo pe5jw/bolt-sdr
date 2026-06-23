@@ -21,13 +21,12 @@ interface PeakState {
   holdUntil: number;
 }
 
-/** Pure-function variant — useful for SSR / tests. */
-export function advancePeakHold(
+function advancePeakHold(
   state: PeakState,
   currentFrac: number,
   nowMs: number,
-  holdMs: number = HOLD_MS_DEFAULT,
-  decayFracPerSec: number = DECAY_FRAC_PER_SEC_DEFAULT,
+  holdMs: number,
+  decayFracPerSec: number,
 ): PeakState {
   if (currentFrac > state.peak) {
     return { peak: currentFrac, ts: nowMs, holdUntil: nowMs + holdMs };

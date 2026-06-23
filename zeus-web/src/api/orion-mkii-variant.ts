@@ -29,15 +29,9 @@ export const ORION_MKII_VARIANT_LABELS: Record<OrionMkIIVariant, string> = {
   RedPitaya: 'Red Pitaya (OpenHPSDR)',
 };
 
-const ALL_VARIANTS: ReadonlyArray<OrionMkIIVariant> = [
-  'G2',
-  'G2_1K',
-  'Anan7000DLE',
-  'Anan8000DLE',
-  'OrionMkII',
-  'AnvelinaPro3',
-  'RedPitaya',
-];
+const ALL_VARIANTS = Object.keys(
+  ORION_MKII_VARIANT_LABELS,
+) as ReadonlyArray<OrionMkIIVariant>;
 
 export function isOrionMkIIVariant(v: unknown): v is OrionMkIIVariant {
   return typeof v === 'string' && ALL_VARIANTS.includes(v as OrionMkIIVariant);

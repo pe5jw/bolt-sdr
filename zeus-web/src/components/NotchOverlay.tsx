@@ -106,7 +106,8 @@ export function NotchOverlay({ interactive = false, resizable = false, container
             key={n.id}
             className="pointer-events-none absolute inset-y-0 z-[6]"
             style={{
-              ...bandStyle(n.centerHz, n.widthHz),
+              left: `${left}%`,
+              width: `${w}%`,
               // Indicator band: a soft scrim + TX-red edges marking where WDSP
               // is notching. The audio (and post-notch trace) are already cut by
               // the real filter; this just shows the operator where.

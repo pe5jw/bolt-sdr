@@ -61,16 +61,12 @@ export function MoxButton() {
 
   const click = useCallback(() => {
     const next = !moxOn;
-    void (async () => {
-      // PERF_PASS_3_DEBUG: t0 — operator-initiated MOX edge wall-clock. Uncommitted.
-      console.log('mox.client.release', performance.now(), 'next=', next);
-      setMoxOn(next);
-      setLocalMicArmed(next);
-      setMox(next).catch(() => {
-        setMoxOn(!next);
-        setLocalMicArmed(!next);
-      });
-    })();
+    setMoxOn(next);
+    setLocalMicArmed(next);
+    setMox(next).catch(() => {
+      setMoxOn(!next);
+      setLocalMicArmed(!next);
+    });
   }, [moxOn, setMoxOn, setLocalMicArmed]);
 
   return (
