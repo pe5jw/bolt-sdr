@@ -67,6 +67,10 @@ public sealed class RotctldService : BackgroundService
     // StateChanged tick — only when the TX VFO actually crosses a band edge.
     private string? _lastRoutedBand;
 
+    // Set first in Dispose() so the radio's StateChanged callback stops
+    // spawning auto-route work while we're tearing down.
+    private volatile bool _disposed;
+
     public RotctldService(ILogger<RotctldService> log, RotctldConfigStore store, RadioService? radio = null)
     {
         _log = log;
@@ -231,7 +235,12 @@ public sealed class RotctldService : BackgroundService
                 // Short-form: P <az> <el>. Zero elevation — we don't model a dual-axis rotator yet.
                 await _writer.WriteAsync($"P {normalized.ToString("F2", CultureInfo.InvariantCulture)} 0\n");
                 await _writer.FlushAsync(ct);
-                var reply = await _reader.ReadLineAsync(ct);
+                // Bound the reply read — a rotctld that accepts the command but
+                // never answers must not hang here holding _io. On timeout the
+                // catch below drops the connection and the loop reconnects.
+                using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                readCts.CancelAfter(TimeSpan.FromSeconds(3));
+                var reply = await _reader.ReadLineAsync(readCts.Token);
                 if (reply == null) throw new IOException("rotctld closed connection");
                 // rotctld answers "RPRT 0" on success, "RPRT -<n>" otherwise.
                 if (!reply.StartsWith("RPRT 0", StringComparison.Ordinal))
@@ -267,8 +276,21 @@ public sealed class RotctldService : BackgroundService
             {
                 await _writer.WriteAsync("S\n");
                 await _writer.FlushAsync(ct);
-                _ = await _reader.ReadLineAsync(ct);
-                lock (_state) { _targetAz = null; }
+                using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                readCts.CancelAfter(TimeSpan.FromSeconds(3));
+                var reply = await _reader.ReadLineAsync(readCts.Token);
+                if (reply == null) throw new IOException("rotctld closed connection");
+                // "Stop the tower" must not silently report success on failure:
+                // rotctld answers "RPRT 0" on success, "RPRT -<n>" otherwise.
+                if (!reply.StartsWith("RPRT 0", StringComparison.Ordinal))
+                {
+                    _lastError = $"rotctld S command: {reply}";
+                }
+                else
+                {
+                    _lastError = null;
+                    lock (_state) { _targetAz = null; }
+                }
             }
             catch (Exception ex)
             {
@@ -336,10 +358,19 @@ public sealed class RotctldService : BackgroundService
 
                 if (!_connected)
                 {
-                    // Back off; wake early on config change.
-                    var delayTask = Task.Delay(ReconnectBackoff, stoppingToken);
-                    var configTask = _configChanged.WaitAsync(stoppingToken);
+                    // Back off; wake early on config change. Link both waits to
+                    // one CTS and cancel it after WhenAny so the losing wait is
+                    // de-queued rather than left as a live FIFO waiter that
+                    // could steal the next config-change permit. Observe both
+                    // tasks (read .Exception) so a cancelled loser doesn't
+                    // surface as an unobserved-exception.
+                    using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                    var delayTask = Task.Delay(ReconnectBackoff, waitCts.Token);
+                    var configTask = _configChanged.WaitAsync(waitCts.Token);
                     await Task.WhenAny(delayTask, configTask);
+                    waitCts.Cancel();
+                    _ = delayTask.ContinueWith(static t => t.Exception, TaskScheduler.Default);
+                    _ = configTask.ContinueWith(static t => t.Exception, TaskScheduler.Default);
                     continue;
                 }
             }
@@ -354,14 +385,39 @@ public sealed class RotctldService : BackgroundService
                     {
                         await _writer.WriteAsync("p\n");
                         await _writer.FlushAsync(stoppingToken);
-                        var az = await _reader.ReadLineAsync(stoppingToken);
-                        var el = await _reader.ReadLineAsync(stoppingToken);
-                        if (az == null || el == null) throw new IOException("rotctld closed connection");
-                        if (double.TryParse(az.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var azd))
+                        // Bound the read: a TCP-connected-but-silent rotctld
+                        // (wedged hamlib backend, half-open socket, controller
+                        // that stopped answering) must not hang here — we hold
+                        // _io across this read, so a stall would freeze every
+                        // config / point / stop / slot-switch call queued
+                        // behind it. On timeout the catch drops the connection
+                        // and the outer loop reconnects.
+                        using var readCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                        readCts.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(2000, active.PollingIntervalMs * 2)));
+                        var az = await _reader.ReadLineAsync(readCts.Token);
+                        if (az == null) throw new IOException("rotctld closed connection");
+                        // rotctld answers 'p' with TWO lines (az\nel) on success
+                        // but a SINGLE "RPRT -n" line on error. Reading a second
+                        // line unconditionally would block until the next reply
+                        // and desync the stream — so branch on the first line.
+                        if (az.StartsWith("RPRT", StringComparison.Ordinal))
                         {
-                            lock (_state) { _currentAz = azd; }
-                            _lastError = null;
+                            _lastError = $"rotctld p command: {az}";
                         }
+                        else
+                        {
+                            var el = await _reader.ReadLineAsync(readCts.Token);
+                            if (el == null) throw new IOException("rotctld closed connection");
+                            if (double.TryParse(az.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var azd))
+                            {
+                                lock (_state) { _currentAz = azd; }
+                                _lastError = null;
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                    {
+                        return;
                     }
                     catch (Exception ex)
                     {
@@ -437,24 +493,67 @@ public sealed class RotctldService : BackgroundService
 
     private void OnRadioStateChanged(StateDto state)
     {
+        if (_disposed) return;
+        var target = RouteForState(state);
+        if (target == null) return;
+        // Fire-and-forget — we're on the radio's state-change callback and
+        // mustn't block it. AutoRouteAsync bounds its own token (so a wedged
+        // _io can never strand it forever) and observes faults.
+        _ = AutoRouteAsync(target.Value.SlotId, target.Value.Band, target.Value.Label);
+    }
+
+    /// <summary>
+    /// Pure routing decision: given a radio state, which slot (if any) should
+    /// become active? Returns null for a no-op — auto-route off, VFO out of
+    /// band, same band as last routed (dedupe), no <em>enabled</em> slot owns
+    /// the band, or the owning slot is already active. Mutates
+    /// <see cref="_lastRoutedBand"/> exactly as the live handler does so the
+    /// dedupe semantics are preserved. Extracted from
+    /// <see cref="OnRadioStateChanged"/> so the routing truth table is unit
+    /// testable without a radio or a socket.
+    /// </summary>
+    internal (int SlotId, string Band, string Label)? RouteForState(StateDto state)
+    {
         var cfg = _config;
-        if (!cfg.AutoRoute) { _lastRoutedBand = null; return; }
+        if (!cfg.AutoRoute) { _lastRoutedBand = null; return null; }
         var txHz = RadioService.TxFrequencyHz(state);
         var band = BandUtils.FreqToBand(txHz);
-        if (band == null) return;
-        if (string.Equals(band, _lastRoutedBand, StringComparison.OrdinalIgnoreCase)) return;
+        if (band == null) return null;
+        if (string.Equals(band, _lastRoutedBand, StringComparison.OrdinalIgnoreCase)) return null;
         _lastRoutedBand = band;
 
+        // Only route onto an ENABLED slot. Auto-switching onto a disabled slot
+        // would disconnect the working rotator and silently park (ExecuteAsync
+        // idles a !Enabled active slot) — a footgun for a blind ship. When no
+        // enabled slot owns the new band, leave the currently-active slot
+        // alone and surface a one-line note.
         var match = cfg.Slots.FirstOrDefault(s =>
+            s.Enabled &&
             s.Bands.Any(b => string.Equals(b, band, StringComparison.OrdinalIgnoreCase)));
-        if (match == null) return;
-        if (match.Id == cfg.ActiveSlotId) return;
+        if (match == null)
+        {
+            _lastError = $"no enabled rotator for {band}";
+            return null;
+        }
+        if (match.Id == cfg.ActiveSlotId) return null;
+        return (match.Id, band, match.Label);
+    }
 
-        // Fire-and-forget — we're on the radio's state-change callback and
-        // mustn't block it. SetActiveSlotAsync takes _io itself.
-        _ = SetActiveSlotAsync(match.Id, CancellationToken.None);
-        _log.LogInformation("rotctld auto-route band={Band} -> slot {SlotId} ({Label})",
-            band, match.Id, match.Label);
+    private async Task AutoRouteAsync(int slotId, string band, string label)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await SetActiveSlotAsync(slotId, cts.Token);
+            _log.LogInformation("rotctld auto-route band={Band} -> slot {SlotId} ({Label})",
+                band, slotId, label);
+        }
+        catch (ObjectDisposedException) { /* service shutting down */ }
+        catch (OperationCanceledException) { /* shutdown or the 5 s safety cap */ }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "rotctld auto-route to slot {SlotId} failed", slotId);
+        }
     }
 
     private static RotctldSlot ActiveSlotOrFirst(RotctldMultiConfig cfg)
@@ -475,7 +574,7 @@ public sealed class RotctldService : BackgroundService
     {
         var slots = new List<RotctldSlot>();
         var seenIds = new HashSet<int>();
-        foreach (var s in cfg.Slots)
+        foreach (var s in cfg.Slots ?? (IReadOnlyList<RotctldSlot>)Array.Empty<RotctldSlot>())
         {
             if (slots.Count >= RotctldConfigStore.MaxSlots) break;
             var id = s.Id <= 0 ? NextFreeId(seenIds) : s.Id;
@@ -512,6 +611,7 @@ public sealed class RotctldService : BackgroundService
 
     public override void Dispose()
     {
+        _disposed = true;
         if (_radio != null) _radio.StateChanged -= OnRadioStateChanged;
         DisposeConnectionLocked();
         _io.Dispose();

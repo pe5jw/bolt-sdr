@@ -179,7 +179,13 @@ if (typeof window !== 'undefined') {
   void useRotatorStore.getState().refreshMultiConfig();
   void useRotatorStore.getState().refreshStatus();
   window.setInterval(() => {
-    if (!useRotatorStore.getState().config.enabled) return;
+    // Poll while ANY slot is enabled — not just the active one. In a
+    // multi-rotator setup the active slot can be disabled (e.g. auto-route
+    // hasn't switched yet) while another slot is live; gating on the active
+    // slot alone would freeze the status readout exactly in the case this
+    // feature exists for.
+    const st = useRotatorStore.getState();
+    if (!st.config.enabled && !st.multi.slots.some((s) => s.enabled)) return;
     void useRotatorStore.getState().refreshStatus();
   }, 1000);
 }

@@ -6,6 +6,7 @@
 //
 // Issue #917 — multi-rotator persistence round-trip + sanitization rules.
 
+using LiteDB;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Contracts;
 using Zeus.Server;
@@ -109,5 +110,108 @@ public class RotctldMultiConfigTests : IDisposable
         Assert.True(sanitized.Slots[0].PollingIntervalMs >= 100);
         // Bands deduped case-insensitively (20m == 20M).
         Assert.Single(sanitized.Slots[0].Bands);
+    }
+
+    [Fact]
+    public void Sanitize_NullSlots_SeedsSingleDefaultSlot_NoThrow()
+    {
+        // POST /api/rotator/multi-config with a body of {} or {"slots":null}
+        // deserializes Slots as null. Sanitize must not NRE — it seeds the
+        // default single slot instead (the endpoint then returns 200).
+        var sanitized = RotctldService.Sanitize(new RotctldMultiConfig(0, false, null!));
+        Assert.Single(sanitized.Slots);
+        Assert.Equal(1, sanitized.Slots[0].Id);
+        Assert.Equal(1, sanitized.ActiveSlotId);
+        Assert.False(sanitized.Slots[0].Enabled);
+    }
+
+    [Fact]
+    public void Sanitize_DuplicateIds_AreReassignedUnique()
+    {
+        var slots = new[]
+        {
+            new RotctldSlot(1, "A", false, "h", 4533, Array.Empty<string>(), 500),
+            new RotctldSlot(1, "B", false, "h", 4533, Array.Empty<string>(), 500),
+            new RotctldSlot(1, "C", false, "h", 4533, Array.Empty<string>(), 500),
+        };
+        var sanitized = RotctldService.Sanitize(new RotctldMultiConfig(1, false, slots));
+        Assert.Equal(3, sanitized.Slots.Count);
+        Assert.Equal(3, sanitized.Slots.Select(s => s.Id).Distinct().Count());
+    }
+
+    [Fact]
+    public void Get_MigratesLegacyEnabledRow_CarryingHostPortPollAndEnabled()
+    {
+        // Seed the pre-#917 single-slot schema directly.
+        using (var db = new LiteDatabase($"Filename={_dbPath};Connection=shared"))
+        {
+            db.GetCollection("rotctld_config").Insert(new BsonDocument
+            {
+                ["_id"] = 1,
+                ["Enabled"] = true,
+                ["Host"] = "10.0.0.9",
+                ["Port"] = 4999,
+                ["PollingIntervalMs"] = 750,
+            });
+        }
+
+        using var store = NewStore();
+        var cfg = store.Get();
+
+        Assert.Single(cfg.Slots);
+        Assert.Equal(1, cfg.Slots[0].Id);
+        Assert.Equal(1, cfg.ActiveSlotId);
+        Assert.False(cfg.AutoRoute);
+        // The operator's saved single rotator is preserved verbatim — including
+        // Enabled=true. This is intentional (the rotator was already on); the
+        // test pins it so a future change is a deliberate decision.
+        Assert.True(cfg.Slots[0].Enabled);
+        Assert.Equal("10.0.0.9", cfg.Slots[0].Host);
+        Assert.Equal(4999, cfg.Slots[0].Port);
+        Assert.Equal(750, cfg.Slots[0].PollingIntervalMs);
+        Assert.Equal(BandUtils.HfBands, cfg.Slots[0].Bands);
+    }
+
+    [Fact]
+    public void Get_MigrationIsIdempotent_SecondReadIsStable()
+    {
+        using (var db = new LiteDatabase($"Filename={_dbPath};Connection=shared"))
+        {
+            db.GetCollection("rotctld_config").Insert(new BsonDocument
+            {
+                ["_id"] = 1,
+                ["Enabled"] = false,
+                ["Host"] = "192.168.1.5",
+                ["Port"] = 4533,
+                ["PollingIntervalMs"] = 500,
+            });
+        }
+
+        using var store = NewStore();
+        var first = store.Get();
+        var second = store.Get();
+        Assert.Single(second.Slots);
+        Assert.Equal(first.Slots[0].Host, second.Slots[0].Host);
+        Assert.Equal(first.ActiveSlotId, second.ActiveSlotId);
+    }
+
+    [Fact]
+    public void Get_RepairsCorruptMultiRow_DedupsAndCaps_OnRead()
+    {
+        // Hand-corrupt the multi collection: duplicate ids, >MaxSlots slots,
+        // and an active id that points nowhere. Get() must self-heal on read.
+        var slots = Enumerable.Range(0, RotctldConfigStore.MaxSlots + 2)
+            .Select(_ => new RotctldSlot(1, "dup", false, "127.0.0.1", 4533, Array.Empty<string>(), 500))
+            .ToArray();
+        using (var store = NewStore())
+        {
+            store.Set(new RotctldMultiConfig(99, false, slots));
+        }
+
+        using var reopened = NewStore();
+        var cfg = reopened.Get();
+        Assert.True(cfg.Slots.Count <= RotctldConfigStore.MaxSlots);
+        Assert.Equal(cfg.Slots.Count, cfg.Slots.Select(s => s.Id).Distinct().Count());
+        Assert.Contains(cfg.Slots, s => s.Id == cfg.ActiveSlotId);
     }
 }

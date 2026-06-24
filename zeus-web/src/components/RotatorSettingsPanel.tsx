@@ -54,13 +54,25 @@ export function RotatorSettingsPanel() {
   const [autoRoute, setAutoRoute] = useState<boolean>(multi.autoRoute);
   const [saving, setSaving] = useState(false);
   const [testingSlotId, setTestingSlotId] = useState<number | null>(null);
+  // Result display is keyed to the slot we last *finished* testing, not the
+  // in-flight one (which is cleared in onTest's finally before the result
+  // lands) — otherwise the ✓/✗ feedback never renders.
+  const [lastTestedSlotId, setLastTestedSlotId] = useState<number | null>(null);
+  // True once the operator edits any field. While dirty we suppress the
+  // [multi] rehydrate so an active-slot switch (this panel's ACTIVE radio or
+  // the Compass/Dial selector, both of which refresh `multi`) can't silently
+  // wipe unsaved edits. Cleared on save.
+  const [dirty, setDirty] = useState(false);
 
   // Rehydrate the form when the backend snapshot changes (other tab, restart).
+  // Skip while the form has unsaved edits so a live active-slot switch doesn't
+  // clobber them.
   useEffect(() => {
+    if (dirty) return;
     setSlots(multi.slots.map(slotToEditable));
     setActiveSlotIdLocal(multi.activeSlotId);
     setAutoRoute(multi.autoRoute);
-  }, [multi]);
+  }, [multi, dirty]);
 
   const activeRuntimeAz = status?.currentAz;
   const activeRuntimeTarget = status?.targetAz;
@@ -71,10 +83,12 @@ export function RotatorSettingsPanel() {
   const canAdd = slots.length < MAX_SLOTS;
 
   function updateSlot(id: number, patch: Partial<EditableSlot>) {
+    setDirty(true);
     setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
   }
 
   function toggleBand(id: number, band: string) {
+    setDirty(true);
     setSlots((prev) =>
       prev.map((s) => {
         if (s.id !== id) return s;
@@ -86,6 +100,7 @@ export function RotatorSettingsPanel() {
 
   function addSlot() {
     if (slots.length >= MAX_SLOTS) return;
+    setDirty(true);
     const used = new Set(slots.map((s) => s.id));
     let nextId = 1;
     while (used.has(nextId)) nextId++;
@@ -104,6 +119,7 @@ export function RotatorSettingsPanel() {
   }
 
   function removeSlot(id: number) {
+    setDirty(true);
     setSlots((prev) => {
       const next = prev.filter((s) => s.id !== id);
       if (next.length === 0) return prev; // keep at least one
@@ -131,11 +147,17 @@ export function RotatorSettingsPanel() {
           pollingIntervalMs: s.pollingIntervalMs,
         };
       });
-      await saveMultiConfig({
+      const saved = await saveMultiConfig({
         activeSlotId,
         autoRoute,
         slots: sanitizedSlots,
       });
+      // Adopt the server's sanitized snapshot as the new clean baseline, then
+      // clear dirty so external snapshot changes rehydrate normally again.
+      setSlots(saved.slots.map(slotToEditable));
+      setActiveSlotIdLocal(saved.activeSlotId);
+      setAutoRoute(saved.autoRoute);
+      setDirty(false);
     } finally {
       setSaving(false);
     }
@@ -147,6 +169,7 @@ export function RotatorSettingsPanel() {
     setTestingSlotId(slot.id);
     try {
       await test(slot.host.trim() || '127.0.0.1', portNum);
+      setLastTestedSlotId(slot.id);
     } finally {
       setTestingSlotId(null);
     }
@@ -177,7 +200,10 @@ export function RotatorSettingsPanel() {
           <input
             type="checkbox"
             checked={autoRoute}
-            onChange={(e) => setAutoRoute(e.target.checked)}
+            onChange={(e) => {
+              setDirty(true);
+              setAutoRoute(e.target.checked);
+            }}
             style={{ accentColor: 'var(--accent)' }}
           />
           <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg-1)' }}>
@@ -391,7 +417,7 @@ export function RotatorSettingsPanel() {
                     STOP
                   </button>
                 )}
-                {testingSlotId === slot.id && lastTestResult && (
+                {lastTestedSlotId === slot.id && testingSlotId === null && lastTestResult && (
                   <span
                     style={{
                       alignSelf: 'center',

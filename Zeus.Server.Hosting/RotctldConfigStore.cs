@@ -49,7 +49,11 @@ public sealed class RotctldConfigStore : IDisposable
         lock (_sync)
         {
             var multi = _multi.FindById(SingletonId);
-            if (multi != null) return FromEntry(multi);
+            // Read-repair: a hand-corrupted or rolled-back DB (duplicate slot
+            // ids, >MaxSlots slots, active id pointing at a removed slot) must
+            // never break the app. FromEntry only coerces per-field ranges;
+            // Sanitize additionally dedups ids and caps the count. Idempotent.
+            if (multi != null) return RotctldService.Sanitize(FromEntry(multi));
 
             // First load on a server upgraded from the single-slot schema:
             // promote the legacy entry to slot 1 with all HF bands assigned.
