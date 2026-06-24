@@ -186,10 +186,6 @@ function sliceFromFrame(f: DecodedFrame): ReceiverDisplaySlice {
   };
 }
 
-export function receiverFromRxId(rxId: number): SpectrumReceiver {
-  return rxId === 1 ? 'B' : 'A';
-}
-
 export function selectDisplaySlice(
   state: DisplayState,
   receiver: SpectrumReceiver = 'A',

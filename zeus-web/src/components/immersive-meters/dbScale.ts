@@ -23,10 +23,6 @@ export function dbToFrac(db: number): number {
   return clamp01((db - DB_MIN) / (DB_MAX - DB_MIN));
 }
 
-export function fracToDb(f: number): number {
-  return DB_MIN + clamp01(f) * (DB_MAX - DB_MIN);
-}
-
 export function fmtDb(db: number): string {
   if (!isFinite(db) || db <= DB_MIN + 0.05) return '−∞';
   const abs = Math.abs(db).toFixed(1);
