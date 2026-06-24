@@ -147,6 +147,18 @@ interface LayoutState {
   removeTile: (uid: string) => void;
   /** Remove a tile from a specific layout without making it active. */
   removeTileFromLayout: (layoutId: string, uid: string) => void;
+  /** One-time cleanup: close every tile whose top-left origin lies outside the
+   *  given bounds (x >= maxCols or y >= maxRows) — i.e. fully off-screen. Bounds
+   *  are measured against the MONITOR, not the window, so a panel that merely
+   *  falls outside a small/un-maximized window is kept (it reappears when the
+   *  window is maximized); only panels beyond the physical screen, unreachable
+   *  even maximized, are removed. Batched into a single persist. Returns the
+   *  number of tiles closed. */
+  pruneOffscreenTilesFromLayout: (
+    layoutId: string,
+    maxCols: number,
+    maxRows: number,
+  ) => number;
   /** Replace a tile's grid placement (x/y/w/h). */
   updateTilePlacement: (
     uid: string,
@@ -520,6 +532,29 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       tiles: workspace.tiles.filter((t) => t.uid !== uid),
     };
     applyWorkspaceMutationForLayout(set, get, layoutId, next);
+  },
+
+  pruneOffscreenTilesFromLayout: (layoutId, maxCols, maxRows) => {
+    if (!(maxCols > 0) || !(maxRows > 0)) return 0;
+    const target = findActive(get().layouts, layoutId);
+    if (!target && layoutId !== get().activeLayoutId) return 0;
+    const workspace =
+      layoutId === get().activeLayoutId
+        ? get().workspace
+        : parseLayoutOrDefault(target!.layoutJson);
+    // A tile is off-screen only when its top-left origin lies outside the field
+    // (x >= maxCols or y >= maxRows): no part of it can be seen. A tile that
+    // merely straddles an edge keeps its origin inside and is left alone.
+    const kept = workspace.tiles.filter(
+      (t) => t.x < maxCols && t.y < maxRows,
+    );
+    const removed = workspace.tiles.length - kept.length;
+    if (removed === 0) return 0;
+    applyWorkspaceMutationForLayout(set, get, layoutId, {
+      ...workspace,
+      tiles: kept,
+    });
+    return removed;
   },
 
   updateTilePlacement: (uid, layout) => {

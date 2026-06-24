@@ -51,6 +51,7 @@ import {
   WORKSPACE_ROW_HEIGHT_PX,
   WORKSPACE_TILE_MIN_H,
   WORKSPACE_TILE_MIN_W,
+  placeTileInPage,
   type WorkspaceTile,
 } from './workspace';
 import { AddPanelModal } from './AddPanelModal';
@@ -113,10 +114,17 @@ export function FlexWorkspace({
   // store says open.
   const addPanelOpen = useLayoutStore((s) => s.addPanelOpen);
   const setAddPanelOpen = useLayoutStore((s) => s.setAddPanelOpen);
+  // Live field-of-view size (grid cells) reported by the primary canvas. Used
+  // to decide whether a new panel still fits before adding it.
+  const viewportCols = useLayoutStore((s) => s.viewportCols);
+  const viewportRows = useLayoutStore((s) => s.viewportRows);
   const [pendingRemoveTile, setPendingRemoveTile] = useState<{
     uid: string;
     title: string;
   } | null>(null);
+  // Set when an add was attempted but the field is full — drives the
+  // "make room or use a new layout" guidance popup.
+  const [pendingFullPanel, setPendingFullPanel] = useState<string | null>(null);
 
   // Best-effort persist on page-unload (sendBeacon → fetch keepalive fallback).
   useEffect(() => {
@@ -151,12 +159,45 @@ export function FlexWorkspace({
     [targetLayoutId, updateTilePlacementsInLayout, workspaceLocked],
   );
 
+  // Panels are bounded to the field (the monitor), so a new panel can only be
+  // added if it still fits somewhere on that field. We check first-fit against
+  // the reported field size; if it fits we add it in place. If not — the field
+  // is full — we do NOT silently spill onto a new layout (the old behaviour).
+  // Instead we surface the guidance popup so the operator can make room (resize
+  // or close a panel) or deliberately choose a new layout.
+  //
+  // The fit guard only applies to the primary docked workspace, whose size is
+  // what viewportCols/Rows report. Detached windows keep the simple add path.
+  const isPrimary = !layoutId;
   const onAddPanel = useCallback(
     (panelId: string) => {
+      if (
+        isPrimary &&
+        placeTileInPage(panelId, workspace.tiles, viewportCols, viewportRows) ===
+          null
+      ) {
+        setPendingFullPanel(panelId);
+        return;
+      }
       addTileToLayout(targetLayoutId, panelId);
     },
-    [addTileToLayout, targetLayoutId],
+    [
+      addTileToLayout,
+      isPrimary,
+      targetLayoutId,
+      viewportCols,
+      viewportRows,
+      workspace.tiles,
+    ],
   );
+
+  // Operator chose "Add to new layout" from the full-field popup. addTileToLayout
+  // still sees a full page, so it mints the next layout, switches to it, and
+  // places the panel there.
+  const onConfirmAddToNewLayout = useCallback(() => {
+    if (pendingFullPanel) addTileToLayout(targetLayoutId, pendingFullPanel);
+    setPendingFullPanel(null);
+  }, [addTileToLayout, pendingFullPanel, targetLayoutId]);
 
   // Brief loading state while the server fetch resolves. We render the
   // empty container so it has measurable width when the tiles arrive.
@@ -167,7 +208,7 @@ export function FlexWorkspace({
         workspaceLocked={workspaceLocked}
         isLoaded={isLoaded}
         layoutId={targetLayoutId}
-        isPrimary={!layoutId}
+        isPrimary={isPrimary}
         onLayoutChange={onLayoutChange}
         onRequestRemoveTile={(uid, title) => setPendingRemoveTile({ uid, title })}
         onToggleTileLock={(uid, locked, lockedHeightPx) =>
@@ -209,6 +250,24 @@ export function FlexWorkspace({
           </p>
           <p>
             The panel can be added back later from Add Panel.
+          </p>
+        </ConfirmDialog>
+      )}
+      {pendingFullPanel && (
+        <ConfirmDialog
+          title="No room for another panel"
+          confirmLabel="Add to New Layout"
+          cancelLabel="Not Now"
+          onCancel={() => setPendingFullPanel(null)}
+          onConfirm={onConfirmAddToNewLayout}
+        >
+          <p>
+            This layout is full — there's no space for another panel in the
+            current view.
+          </p>
+          <p>
+            Try resizing or closing a panel to make room, then add it again — or
+            add it to a new layout.
           </p>
         </ConfirmDialog>
       )}
@@ -311,6 +370,44 @@ function WorkspaceCanvas({
       ? (frozenWidth - WORKSPACE_GRID_MARGIN_PX * (WORKSPACE_GRID_COLS - 1)) /
         WORKSPACE_GRID_COLS
       : 0;
+  // The MONITOR's capacity in grid cells — the MAXIMUM field. The workspace
+  // canvas is bounded to this (not to the live window), so a panel can never be
+  // dragged or sized past the physical screen and there is no infinite void to
+  // scroll into. The window is then free to be smaller (scroll to reach panels)
+  // or maximized (everything fits, no scrollbars) — the maximized window is the
+  // north star. Derived from screen.avail* at the constant row pitch and the
+  // latched column pitch. 0 when unknown (screen unavailable / pitch not yet
+  // latched): no monitor bound is applied and behaviour falls back to the live
+  // window, so headless/SSR/early-mount never break or prune against a bogus
+  // field.
+  const screenAvailW =
+    typeof screen !== 'undefined' && screen.availWidth > 0
+      ? screen.availWidth
+      : 0;
+  const screenAvailH =
+    typeof screen !== 'undefined' && screen.availHeight > 0
+      ? screen.availHeight
+      : 0;
+  const monitorRows =
+    screenAvailH > 0
+      ? Math.max(
+          1,
+          Math.floor(
+            (screenAvailH + WORKSPACE_GRID_MARGIN_PX) /
+              (WORKSPACE_ROW_HEIGHT_PX + WORKSPACE_GRID_MARGIN_PX),
+          ),
+        )
+      : 0;
+  const monitorCols =
+    screenAvailW > 0 && baseColWidth > 0
+      ? Math.max(
+          WORKSPACE_GRID_COLS,
+          Math.floor(
+            (screenAvailW + WORKSPACE_GRID_MARGIN_PX) /
+              (baseColWidth + WORKSPACE_GRID_MARGIN_PX),
+          ),
+        )
+      : 0;
   // Never drop below the base count or below the rightmost tile already placed,
   // so a window-shrink never clamps an existing tile inward (RGL would otherwise
   // shove any tile whose x+w exceeds cols). When the window is narrower than the
@@ -319,7 +416,7 @@ function WorkspaceCanvas({
     () => tiles.reduce((m, t) => Math.max(m, t.x + t.w), WORKSPACE_GRID_COLS),
     [tiles],
   );
-  const cols =
+  const colsForWidth =
     baseColWidth > 0
       ? Math.max(
           occupiedCols,
@@ -329,6 +426,11 @@ function WorkspaceCanvas({
           ),
         )
       : occupiedCols;
+  // Cap the canvas at the monitor width: it is never wider than the physical
+  // screen, so horizontal drag is bounded to the monitor and scroll only ever
+  // spans real content. No cap until the monitor size is known.
+  const cols =
+    monitorCols > 0 ? Math.min(monitorCols, colsForWidth) : colsForWidth;
   // Exact width for `cols` columns at the fixed pitch, so RGL's derived column
   // width is exactly baseColWidth (no sub-pixel rescale as the window resizes).
   const gridWidth =
@@ -368,22 +470,56 @@ function WorkspaceCanvas({
   // persistence is a straight passthrough to the store (no reconcile pass).
   const persist = onLayoutChange;
 
-  // Report this workspace's live page size (in grid cells) to the store so the
-  // add-panel flow knows when a panel no longer fits the visible page and must
-  // spill onto a new workspace tab. Only the primary (docked) workspace reports;
-  // detached windows do not drive pagination. The page height is the LIVE
-  // viewport height (the workspace scrolls): a new panel is auto-placed within
-  // the rows currently visible, while manually expanding a panel past the fold
-  // just scrolls instead of squashing or paginating.
+  // Rows that fit the live window height — used only as a fallback when the
+  // monitor size is unknown.
+  const visibleRows =
+    rowHeight > 0 && containerHeight > 0
+      ? Math.max(
+          1,
+          Math.floor((containerHeight + rowMargin) / (rowHeight + rowMargin)),
+        )
+      : 0;
+
+  // Report the PLACEABLE field size (grid cells) to the store so the add-panel
+  // flow knows when there is no more room. The placeable field is the MONITOR,
+  // not the window: even when the window is small, a panel may be placed
+  // anywhere on the monitor (scroll to it). Only the primary (docked) workspace
+  // reports; detached windows do not drive the "field is full" guard. When the
+  // monitor really is full, the add flow prompts the operator to make room or
+  // use a new layout instead of silently spilling.
+  const pageCols = monitorCols > 0 ? monitorCols : cols;
+  const pageRows = monitorRows > 0 ? monitorRows : visibleRows;
   const setViewportPage = useLayoutStore((s) => s.setViewportPage);
   useEffect(() => {
-    if (!isPrimary || !(rowHeight > 0) || !(containerHeight > 0)) return;
-    const visibleRows = Math.max(
-      1,
-      Math.floor((containerHeight + rowMargin) / (rowHeight + rowMargin)),
-    );
-    setViewportPage(cols, visibleRows);
-  }, [isPrimary, cols, containerHeight, rowHeight, rowMargin, setViewportPage]);
+    if (!isPrimary || pageRows <= 0 || pageCols <= 0) return;
+    setViewportPage(pageCols, pageRows);
+  }, [isPrimary, pageCols, pageRows, setViewportPage]);
+
+  // One-time cleanup: close panels saved BEYOND the monitor (unreachable even
+  // when maximized — e.g. dragged off-screen before the canvas was bounded).
+  // Runs once per layout, and only after the column pitch has latched
+  // (frozenWidth > 0) and the monitor size is known, so a transient narrow
+  // mount can never prune against a bogus field. Panels merely outside a small
+  // window are WITHIN the monitor and are left untouched — they reappear when
+  // the window is maximized or scrolled to.
+  const pruneOffscreenTilesFromLayout = useLayoutStore(
+    (s) => s.pruneOffscreenTilesFromLayout,
+  );
+  const prunedLayoutsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!isPrimary) return;
+    if (frozenWidth <= 0 || monitorCols <= 0 || monitorRows <= 0) return;
+    if (prunedLayoutsRef.current.has(layoutId)) return;
+    prunedLayoutsRef.current.add(layoutId);
+    pruneOffscreenTilesFromLayout(layoutId, monitorCols, monitorRows);
+  }, [
+    isPrimary,
+    frozenWidth,
+    monitorCols,
+    monitorRows,
+    layoutId,
+    pruneOffscreenTilesFromLayout,
+  ]);
 
   // Locking just pins the tile (static). With a constant cell size there is no
   // pixel height to capture — the tile keeps its size automatically.
@@ -566,6 +702,17 @@ function WorkspaceCanvas({
           width={gridWidth}
           breakpoints={{ lg: 0 }}
           cols={{ lg: cols }}
+          // Hard vertical bound of the field — the MONITOR height in rows. RGL's
+          // default gridBounds constraint clamps every drag/resize to
+          // 0..maxRows-h, so a panel can move or grow anywhere within the
+          // monitor but never past the physical screen (no infinite void).
+          // Width is bounded the same way by `cols` (0..cols-w), also capped to
+          // the monitor. Left unset (Infinity) until the monitor size is known
+          // so nothing is clamped against a bogus early-mount field. The window
+          // itself may be smaller (the workspace scrolls) or maximized
+          // (everything fits) — the bound is the monitor, the scroll is the
+          // window.
+          {...(monitorRows > 0 ? { maxRows: monitorRows } : {})}
           rowHeight={rowHeight}
           margin={[WORKSPACE_GRID_MARGIN_PX, rowMargin]}
           containerPadding={[0, 0]}

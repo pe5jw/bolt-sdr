@@ -512,3 +512,72 @@ describe('parseWorkspaceLayout', () => {
     expect(cur).toEqual(DEFAULT_WORKSPACE_LAYOUT);
   });
 });
+
+describe('layout-store / pruneOffscreenTilesFromLayout', () => {
+  beforeEach(() => {
+    useLayoutStore.setState({
+      radioKey: '',
+      layouts: [],
+      activeLayoutId: 'default',
+      workspace: DEFAULT_WORKSPACE_LAYOUT,
+      isLoaded: true,
+    });
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+  });
+
+  // Field for these cases: 24 cols × 48 rows (the monitor capacity the canvas
+  // would pass in). A tile is "off-screen" only when its top-left origin is
+  // outside that field.
+  const seed = (tiles: WorkspaceLayout['tiles']) =>
+    useLayoutStore.setState({
+      workspace: { ...EMPTY_WORKSPACE_LAYOUT, tiles },
+    });
+
+  it('closes tiles whose origin is past the right edge or below the bottom', () => {
+    seed([
+      { uid: 'in', panelId: 'cw', x: 0, y: 0, w: 8, h: 8 },
+      { uid: 'below', panelId: 'cw', x: 0, y: 48, w: 8, h: 8 }, // y >= rows
+      { uid: 'right', panelId: 'cw', x: 24, y: 0, w: 8, h: 8 }, // x >= cols
+    ]);
+    const removed = useLayoutStore
+      .getState()
+      .pruneOffscreenTilesFromLayout('default', 24, 48);
+    expect(removed).toBe(2);
+    const uids = useLayoutStore.getState().workspace.tiles.map((t) => t.uid);
+    expect(uids).toEqual(['in']);
+  });
+
+  it('keeps a tile that merely straddles an edge (origin still inside)', () => {
+    seed([
+      // Origin inside the field but extends past the bottom — visible, kept.
+      { uid: 'straddle', panelId: 'cw', x: 20, y: 44, w: 8, h: 8 },
+    ]);
+    const removed = useLayoutStore
+      .getState()
+      .pruneOffscreenTilesFromLayout('default', 24, 48);
+    expect(removed).toBe(0);
+    expect(useLayoutStore.getState().workspace.tiles.length).toBe(1);
+  });
+
+  it('is a no-op (returns 0, leaves the layout reference) when nothing is off-screen', () => {
+    seed([{ uid: 'a', panelId: 'cw', x: 0, y: 0, w: 8, h: 8 }]);
+    const before = useLayoutStore.getState().workspace;
+    const removed = useLayoutStore
+      .getState()
+      .pruneOffscreenTilesFromLayout('default', 24, 48);
+    expect(removed).toBe(0);
+    expect(useLayoutStore.getState().workspace).toBe(before);
+  });
+
+  it('refuses to prune against a bogus (non-positive) field', () => {
+    seed([{ uid: 'a', panelId: 'cw', x: 100, y: 100, w: 8, h: 8 }]);
+    expect(
+      useLayoutStore.getState().pruneOffscreenTilesFromLayout('default', 0, 0),
+    ).toBe(0);
+    // The far-off tile survives because the field was invalid — never delete on
+    // a measurement we don't trust.
+    expect(useLayoutStore.getState().workspace.tiles.length).toBe(1);
+  });
+});
