@@ -32,6 +32,13 @@ public enum FreeDvSubmode : byte
     Mode1600 = 3,
     /// <summary>800XA — 4FSK 2 kHz, narrowband (legacy interop).</summary>
     Mode800XA = 4,
+    /// <summary>
+    /// RADE V1 — neural "Radio Autoencoder" (FreeDV's flagship ML mode). NOT a
+    /// codec2/freedv_open submode: it's a separate native modem (librade + FARGAN
+    /// vocoder, complex IO, 16 kHz speech). Selectable but gated until the native
+    /// RADE library is integrated — see the rade-v1-integration design.
+    /// </summary>
+    RadeV1 = 5,
 }
 
 /// <summary>
@@ -51,11 +58,117 @@ public sealed record FreeDvStatusDto(
     int ModemSampleRateHz,
     string? RxText,
     string? TxText,
-    string? LibraryVersion);
+    string? LibraryVersion,
+    // True when auto submode detection is engaged: while unsynced the modem
+    // cycles submodes until one locks. Submode reflects the live (possibly
+    // scanner-chosen) mode.
+    bool AutoDetect = false,
+    // True when the native RADE (Radio Autoencoder) modem is available. False
+    // until librade is integrated — selecting RadeV1 then runs no decoder
+    // (passthrough), and the panel shows a "RADE not installed" state.
+    bool RadeAvailable = false);
 
 /// <summary>Operator config for the FreeDV modem. Null fields leave the current value unchanged.</summary>
 public sealed record FreeDvConfigRequest(
     FreeDvSubmode? Submode = null,
     bool? SquelchEnabled = null,
     double? SnrSquelchThreshDb = null,
-    string? TxText = null);
+    string? TxText = null,
+    bool? AutoDetect = null);
+
+/// <summary>
+/// One live station from the FreeDV Reporter network (qso.freedv.org). The
+/// reporter aggregates stations running FreeDV-GUI / Zeus that opted into
+/// spotting; Zeus mirrors the feed read-only ("view" role) for a click-to-tune
+/// stations panel. <see cref="Sid"/> is the reporter's per-connection session id
+/// (the dictionary key, stable for the life of a station's connection).
+/// </summary>
+public sealed record FreeDvStationDto(
+    string Sid,
+    string Callsign,
+    string? GridSquare,
+    long FreqHz,
+    string Mode,
+    bool Transmitting,
+    bool RxOnly,
+    string? Message,
+    string? Version,
+    double? LastRxSnr,
+    string? LastRxCallsign,
+    string? LastRxMode,
+    string LastUpdate,     // ISO-8601 UTC, e.g. DateTime.UtcNow.ToString("o")
+    string? ConnectTime);  // ISO-8601 UTC or null
+
+/// <summary>
+/// Snapshot of the FreeDV Reporter stations channel for the Stations panel.
+/// <see cref="ConnectionState"/> mirrors the upstream Socket.IO link state
+/// ("Disconnected" | "Connecting" | "Connected" | "Reconnecting") so the panel
+/// can show a live/stale indicator; <see cref="Stations"/> is sorted by
+/// frequency ascending. <see cref="Reporting"/> is true when the operator is
+/// connected in the "report" role (on the public map); <see cref="MySid"/> is
+/// the operator's own per-connection session id while reporting (null otherwise),
+/// so the panel can highlight the operator's own row.
+/// </summary>
+public sealed record FreeDvStationsResponseDto(
+    string ConnectionState,
+    bool Enabled,
+    IReadOnlyList<FreeDvStationDto> Stations,
+    bool Reporting = false,
+    string? MySid = null);
+
+/// <summary>
+/// Operator config for FreeDV Reporter "report" mode. Strictly opt-in: when
+/// <see cref="ReportEnabled"/> is false (the default), or callsign / grid are
+/// blank, Zeus stays a read-only "view" observer and broadcasts nothing. When
+/// enabled with a callsign + Maidenhead grid, Zeus connects in the "report" role
+/// and publishes the operator's callsign, grid, frequency and TX activity to the
+/// public qso.freedv.org map. <see cref="Message"/> is an optional status text.
+/// </summary>
+public sealed record FreeDvReporterSettings(
+    bool ReportEnabled = false,
+    string Callsign = "",
+    string GridSquare = "",
+    string Message = "")
+{
+    public const int MaxGridLength = 6;
+    public const int MaxMessageLength = 80;
+
+    /// <summary>
+    /// Trim/normalize so a hand-crafted POST or stale persisted row can't push
+    /// junk to the public reporter: callsign upper-cased, grid trimmed/capped to
+    /// a Maidenhead-shaped prefix, message trimmed/capped. Reporting still only
+    /// engages when ReportEnabled is true AND both callsign and grid are present.
+    /// </summary>
+    public FreeDvReporterSettings Normalized() => this with
+    {
+        Callsign = (Callsign ?? "").Trim().ToUpperInvariant(),
+        GridSquare = NormalizeGrid(GridSquare),
+        Message = NormalizeMessage(Message),
+    };
+
+    /// <summary>True when the settings are sufficient to connect in report role.</summary>
+    public bool CanReport =>
+        ReportEnabled
+        && !string.IsNullOrWhiteSpace(Callsign)
+        && !string.IsNullOrWhiteSpace(GridSquare);
+
+    private static string NormalizeGrid(string? grid)
+    {
+        var g = (grid ?? "").Trim();
+        if (g.Length == 0) return "";
+        // A Maidenhead locator is field/square[/subsquare]: two letters, two
+        // digits, optionally two more letters. Keep only that leading run, cap
+        // at six chars, and upper-case the field/subsquare so it round-trips
+        // consistently. Anything that doesn't even start letter-letter is
+        // dropped (so a typo can't broadcast a bogus location).
+        if (g.Length > MaxGridLength) g = g[..MaxGridLength];
+        if (g.Length < 2 || !char.IsLetter(g[0]) || !char.IsLetter(g[1])) return "";
+        return g.ToUpperInvariant();
+    }
+
+    private static string NormalizeMessage(string? message)
+    {
+        var m = (message ?? "").Trim();
+        return m.Length > MaxMessageLength ? m[..MaxMessageLength] : m;
+    }
+}

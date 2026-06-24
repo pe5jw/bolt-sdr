@@ -6864,19 +6864,26 @@ export function setMicGain(
 // config that drive the native FreeDV panel — they are NOT part of StateDto.
 
 export type FreeDvSubmode =
+  | 'RadeV1'
   | 'Mode700D'
   | 'Mode700E'
   | 'Mode700C'
   | 'Mode1600'
   | 'Mode800XA';
 
-// Panel-facing submode order + short labels (matches freedv-gui's selector).
-export const FREEDV_SUBMODES: ReadonlyArray<{ value: FreeDvSubmode; label: string }> = [
+// Panel-facing submode order + short labels, matching freedv-gui 2.1.0's
+// selector (RADEV1, 700D, 700E, 1600). 700C/800XA remain valid on the backend
+// and in auto-detect's scan set, but freedv-gui retired them from its UI so we
+// mirror that here. `rade` marks the submode that needs the native RADE library.
+export const FREEDV_SUBMODES: ReadonlyArray<{
+  value: FreeDvSubmode;
+  label: string;
+  rade?: boolean;
+}> = [
+  { value: 'RadeV1', label: 'RADEV1', rade: true },
   { value: 'Mode700D', label: '700D' },
   { value: 'Mode700E', label: '700E' },
-  { value: 'Mode700C', label: '700C' },
   { value: 'Mode1600', label: '1600' },
-  { value: 'Mode800XA', label: '800XA' },
 ];
 
 // Mirrors the server-side FreeDvStatusDto (GET /api/freedv/status).
@@ -6893,6 +6900,12 @@ export type FreeDvStatusDto = {
   rxText: string | null;
   txText: string | null;
   libraryVersion: string | null;
+  // Auto submode detection: while unsynced the modem cycles submodes until one
+  // locks. `submode` reflects the live (possibly scanner-chosen) mode.
+  autoDetect: boolean;
+  // True when the native RADE modem is available. False until librade is
+  // integrated — RADEV1 then runs no decoder and the panel shows a gated state.
+  radeAvailable: boolean;
 };
 
 // PUT /api/freedv/config body — all fields optional, null = leave unchanged.
@@ -6901,18 +6914,38 @@ export type FreeDvConfigRequest = {
   squelchEnabled?: boolean;
   snrSquelchThreshDb?: number;
   txText?: string;
+  autoDetect?: boolean;
 };
 
-const FREEDV_SUBMODE_ORDER: readonly FreeDvSubmode[] = FREEDV_SUBMODES.map(
-  (s) => s.value,
-);
+// Every valid submode name — a SUPERSET of the panel list. The backend can
+// report 700C/800XA (auto-detect still scans them) even though they're not shown
+// as buttons, so the normalizer must accept them or it would mislabel them.
+const FREEDV_SUBMODE_NAMES: readonly FreeDvSubmode[] = [
+  'Mode700D',
+  'Mode700E',
+  'Mode700C',
+  'Mode1600',
+  'Mode800XA',
+  'RadeV1',
+];
+
+// Indexed by the C# FreeDvSubmode byte value (700D=0 … 800XA=4, RadeV1=5) for the
+// defensive numeric path. Order here is the wire byte order, NOT the panel order.
+const FREEDV_SUBMODE_BY_BYTE: readonly FreeDvSubmode[] = [
+  'Mode700D',
+  'Mode700E',
+  'Mode700C',
+  'Mode1600',
+  'Mode800XA',
+  'RadeV1',
+];
 
 function normalizeFreeDvSubmode(v: unknown): FreeDvSubmode {
-  if (typeof v === 'string' && (FREEDV_SUBMODE_ORDER as readonly string[]).includes(v)) {
+  if (typeof v === 'string' && (FREEDV_SUBMODE_NAMES as readonly string[]).includes(v)) {
     return v as FreeDvSubmode;
   }
   if (typeof v === 'number' && Number.isInteger(v)) {
-    return FREEDV_SUBMODE_ORDER[v] ?? 'Mode700D';
+    return FREEDV_SUBMODE_BY_BYTE[v] ?? 'Mode700D';
   }
   return 'Mode700D';
 }
@@ -6938,6 +6971,8 @@ function normalizeFreeDvStatus(raw: unknown): FreeDvStatusDto {
     rxText: str(r.rxText),
     txText: str(r.txText),
     libraryVersion: str(r.libraryVersion),
+    autoDetect: bool(r.autoDetect),
+    radeAvailable: bool(r.radeAvailable),
   };
 }
 
@@ -7012,4 +7047,131 @@ export function getFreeDvInstallStatus(signal?: AbortSignal): Promise<FreeDvInst
 
 export function startFreeDvInstall(signal?: AbortSignal): Promise<FreeDvInstallStatusDto> {
   return jsonFetch('/api/freedv/install', { method: 'POST', signal }, normalizeFreeDvInstallStatus);
+}
+
+// ---- FreeDV Reporter — live station list (GET /api/freedv/stations) ----
+// Mirrors the server-side FreeDvStationDto / FreeDvStationsResponseDto records
+// (System.Text.Json camelCase serialisation).
+
+export type FreeDvStationDto = {
+  sid: string;
+  callsign: string;
+  gridSquare: string | null;
+  freqHz: number;
+  mode: string;          // FreeDV submode as advertised, e.g. "1600","700D","700E","RADEV1"
+  transmitting: boolean;
+  rxOnly: boolean;
+  message: string | null;
+  version: string | null;
+  lastRxSnr: number | null;
+  lastRxCallsign: string | null;
+  lastRxMode: string | null;
+  lastUpdate: string;    // ISO-8601 UTC
+  connectTime: string | null;
+};
+
+export type FreeDvStationsResponseDto = {
+  connectionState: string; // "Disconnected"|"Connecting"|"Connected"|"Reconnecting"
+  enabled: boolean;
+  stations: FreeDvStationDto[];
+  reporting: boolean;      // true when on the public map ("report" role)
+  mySid: string | null;    // operator's own session id while reporting
+};
+
+// ---- FreeDV Reporter "report mode" settings (GET/POST /api/freedv/reporter/settings) ----
+// Mirrors the server-side FreeDvReporterSettings record. Strictly opt-in:
+// reportEnabled defaults false and the backend only joins the public map in
+// "report" role when enabled AND callsign + grid are present.
+export type FreeDvReporterSettings = {
+  reportEnabled: boolean;
+  callsign: string;
+  gridSquare: string;
+  message: string;
+};
+
+function normalizeFreeDvReporterSettings(raw: unknown): FreeDvReporterSettings {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    reportEnabled: r.reportEnabled === true,
+    callsign: typeof r.callsign === 'string' ? r.callsign : '',
+    gridSquare: typeof r.gridSquare === 'string' ? r.gridSquare : '',
+    message: typeof r.message === 'string' ? r.message : '',
+  };
+}
+
+function normalizeFreeDvStation(raw: unknown): FreeDvStationDto {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+  const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  return {
+    sid: typeof r.sid === 'string' ? r.sid : '',
+    callsign: typeof r.callsign === 'string' ? r.callsign : '',
+    gridSquare: str(r.gridSquare),
+    freqHz: typeof r.freqHz === 'number' ? r.freqHz : 0,
+    mode: typeof r.mode === 'string' ? r.mode : '',
+    transmitting: r.transmitting === true,
+    rxOnly: r.rxOnly === true,
+    message: str(r.message),
+    version: str(r.version),
+    lastRxSnr: num(r.lastRxSnr),
+    lastRxCallsign: str(r.lastRxCallsign),
+    lastRxMode: str(r.lastRxMode),
+    lastUpdate: typeof r.lastUpdate === 'string' ? r.lastUpdate : '',
+    connectTime: str(r.connectTime),
+  };
+}
+
+function normalizeFreeDvStationsResponse(raw: unknown): FreeDvStationsResponseDto {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    connectionState: typeof r.connectionState === 'string' ? r.connectionState : 'Disconnected',
+    enabled: r.enabled === true,
+    stations: Array.isArray(r.stations) ? (r.stations as unknown[]).map(normalizeFreeDvStation) : [],
+    reporting: r.reporting === true,
+    mySid: typeof r.mySid === 'string' ? r.mySid : null,
+  };
+}
+
+// GET /api/freedv/stations — live FreeDV Reporter station list.
+export function fetchFreeDvStations(signal?: AbortSignal): Promise<FreeDvStationsResponseDto> {
+  return jsonFetch('/api/freedv/stations', { signal }, normalizeFreeDvStationsResponse);
+}
+
+// GET /api/freedv/reporter/settings — current report-mode opt-in settings.
+export function getFreeDvReporterSettings(signal?: AbortSignal): Promise<FreeDvReporterSettings> {
+  return jsonFetch('/api/freedv/reporter/settings', { signal }, normalizeFreeDvReporterSettings);
+}
+
+// POST /api/freedv/reporter/settings — save report-mode settings (the backend
+// normalizes, persists, and reconnects in the new role). Returns what was saved.
+export function setFreeDvReporterSettings(
+  settings: FreeDvReporterSettings,
+  signal?: AbortSignal,
+): Promise<FreeDvReporterSettings> {
+  return jsonFetch(
+    '/api/freedv/reporter/settings',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        reportEnabled: settings.reportEnabled,
+        callsign: settings.callsign,
+        gridSquare: settings.gridSquare,
+        message: settings.message,
+      }),
+      signal,
+    },
+    normalizeFreeDvReporterSettings,
+  );
+}
+
+// POST /api/freedv/stations/{sid}/qsy — ask that station to QSY to my current
+// VFO frequency. Resolves on success; rejects (jsonFetch throws on non-2xx) when
+// not reporting or the sid is unknown.
+export function freeDvStationQsy(sid: string, signal?: AbortSignal): Promise<void> {
+  return jsonFetch(
+    `/api/freedv/stations/${encodeURIComponent(sid)}/qsy`,
+    { method: 'POST', signal },
+    () => undefined,
+  );
 }

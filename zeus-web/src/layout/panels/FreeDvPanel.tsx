@@ -18,8 +18,9 @@
 // submode selector, SYNC lamp + SNR readout, SNR squelch, and the RX/TX text
 // sidechannel — driven by GET /api/freedv/status (polled ~4 Hz) and
 // PUT /api/freedv/config. FreeDV is a normal RxMode ('FREEDV'); selecting it
-// from the mode row engages the modem (backend forces USB underneath). This
-// panel is telemetry/config only — it does NOT select the mode itself.
+// from the mode row engages the modem (backend runs the SSB demod underneath on
+// the FreeDV band-convention sideband — LSB < 10 MHz, USB ≥). This panel is
+// telemetry/config only — it does NOT select the mode itself.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -35,13 +36,26 @@ import {
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
 import { useQrzStore } from '../../state/qrz-store';
+import { freqHzToBand } from '../../state/spots-store';
 
 const POLL_MS = 250; // ~4 Hz, matches the brief.
 const SNR_SQUELCH_MIN = -2;
 const SNR_SQUELCH_MAX = 10;
 
+// FreeDV community sideband convention: LSB below 10 MHz, USB at/above 10 MHz —
+// FreeDV adopted the SSB voice-mode convention so every station on a band shares
+// one spectral orientation. Zeus runs the FreeDV modem on this sideband
+// underneath; a mismatch would invert the OFDM carriers in RF and nothing would
+// decode. This mirrors freedv-gui's "current mode" readout (which shows the rig
+// sideband, red when it's unexpected for the band).
+const FREEDV_USB_THRESHOLD_HZ = 10_000_000;
+function freedvSidebandForFreq(hz: number): 'LSB' | 'USB' {
+  return hz < FREEDV_USB_THRESHOLD_HZ ? 'LSB' : 'USB';
+}
+
 export function FreeDvPanel() {
   const mode = useConnectionStore((s) => s.mode);
+  const vfoHz = useConnectionStore((s) => s.vfoHz);
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const inFreeDvMode = mode === 'FREEDV';
 
@@ -175,12 +189,24 @@ export function FreeDvPanel() {
     );
   }
 
-  const ctrlsDisabled = !connected || !reachable;
+  // This panel is entirely REST-driven (getFreeDvStatus / setFreeDvConfig), so
+  // the controls only need the backend to be reachable — NOT a live SignalR hub
+  // connection to a radio. Gating on the hub status locked AUTO/submode/squelch
+  // whenever the hub wasn't 'Connected' (e.g. just after a backend restart) even
+  // though the modem service was fully reachable. The FreeDV modem config is
+  // independent of the radio link, so reachability is the correct gate.
+  const ctrlsDisabled = !reachable;
   const snrThreshDisabled = ctrlsDisabled || !status.squelchEnabled;
 
   return (
     <div className="dsp-cfg" style={{ gap: 8, padding: '10px 12px', overflowY: 'auto' }}>
       <FreeDvHeader status={status} reachable={reachable} inFreeDvMode={inFreeDvMode} />
+
+      <FreeDvBandModeIndicator
+        connected={connected}
+        inFreeDvMode={inFreeDvMode}
+        vfoHz={vfoHz}
+      />
 
       {/* SYNC lamp + SNR readout. */}
       <div className="dsp-cfg-row">
@@ -222,26 +248,92 @@ export function FreeDvPanel() {
         </span>
       </div>
 
-      {/* Submode selector. */}
+      {/* Submode selector + auto-detect. AUTO scans submodes until one locks;
+          picking a specific mode asserts it and turns AUTO off (backend does the
+          same implicitly). While scanning, the active button is the mode the
+          scanner is currently trying. */}
       <div className="dsp-cfg-row">
-        <span className="dsp-cfg-label">Submode</span>
+        <span className="dsp-cfg-label">
+          Submode
+          {status.autoDetect && (
+            <span className="dsp-cfg-hint">
+              {' '}
+              {status.synced ? 'auto · locked' : 'auto · scanning…'}
+            </span>
+          )}
+        </span>
         <div className="dsp-cfg-btns">
-          {FREEDV_SUBMODES.map((m) => (
-            <button
-              key={m.value}
-              type="button"
-              disabled={ctrlsDisabled}
-              onClick={() =>
-                m.value !== status.submode && sendConfig({ submode: m.value as FreeDvSubmode })
-              }
-              className={`btn sm ${status.submode === m.value ? 'active' : ''}`}
-              title={`FreeDV ${m.label}`}
-            >
-              {m.label}
-            </button>
-          ))}
+          <button
+            type="button"
+            disabled={ctrlsDisabled}
+            aria-pressed={status.autoDetect}
+            onClick={() => sendConfig({ autoDetect: !status.autoDetect })}
+            className={`btn sm ${status.autoDetect ? 'active' : ''}`}
+            title="Auto-detect: cycle submodes until the modem locks onto the received signal"
+          >
+            AUTO
+          </button>
+          {FREEDV_SUBMODES.map((m) => {
+            const isCurrent = status.submode === m.value;
+            // RADEV1 needs the native RADE library, which isn't integrated yet —
+            // mark it as not-ready but still selectable so the operator sees the
+            // explanatory notice rather than a silently dead button.
+            const radeUnavailable = m.rade === true && !status.radeAvailable;
+            // When scanning, dim the 'active' look on the tried mode so AUTO is
+            // visually the engaged control, not the transient submode.
+            const cls =
+              isCurrent && (!status.autoDetect || status.synced) ? 'active' : '';
+            return (
+              <button
+                key={m.value}
+                type="button"
+                disabled={ctrlsDisabled}
+                onClick={() =>
+                  sendConfig({ submode: m.value as FreeDvSubmode, autoDetect: false })
+                }
+                className={`btn sm ${cls}`}
+                title={
+                  radeUnavailable
+                    ? 'RADEV1 — neural Radio Autoencoder (decoder not installed yet)'
+                    : `FreeDV ${m.label}${isCurrent && status.autoDetect && !status.synced ? ' (scanning)' : ''}`
+                }
+                style={
+                  isCurrent && status.autoDetect && !status.synced
+                    ? { outline: '1px dashed var(--accent)', outlineOffset: -1 }
+                    : radeUnavailable
+                      ? { opacity: 0.7 }
+                      : undefined
+                }
+              >
+                {m.label}
+                {radeUnavailable ? ' •' : ''}
+              </button>
+            );
+          })}
         </div>
       </div>
+
+      {/* RADEV1 selected but the native RADE library isn't integrated yet — be
+          explicit so the operator understands why it won't decode, instead of
+          chasing a "silent" mode the way a missing codec2 would look. */}
+      {status.submode === 'RadeV1' && !status.radeAvailable && (
+        <div
+          className="label-xs"
+          style={{
+            padding: '8px 10px',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--r-sm)',
+            background: 'var(--bg-1)',
+            color: 'var(--fg-2)',
+            lineHeight: 1.45,
+          }}
+        >
+          <strong>RADEV1</strong> is FreeDV's neural (Radio Autoencoder) mode. Its
+          decoder isn't built into Zeus yet, so this mode won't produce audio.
+          Use <strong>700D / 700E / 1600</strong> for now — RADE support is in
+          progress.
+        </div>
+      )}
 
       {/* SNR squelch toggle. */}
       <div className="dsp-cfg-row">
@@ -357,7 +449,8 @@ export function FreeDvPanel() {
         style={{ color: 'var(--fg-3)', lineHeight: 1.4, marginTop: 2 }}
       >
         FreeDV requires the radio in <strong>FreeDV</strong> mode — pick it from
-        the mode row. The modem runs USB underneath automatically.
+        the mode row. The modem rides the band-convention sideband automatically
+        (LSB below 10&nbsp;MHz, USB at/above).
       </div>
     </div>
   );
@@ -407,6 +500,66 @@ function FreeDvHeader({
               ? 'engaging…'
               : 'idle'}
         {status?.libraryVersion ? ` · ${status.libraryVersion}` : ''}
+      </span>
+    </div>
+  );
+}
+
+// Band / sideband readout — Zeus's analogue of freedv-gui's "current mode"
+// indicator. FreeDV follows the SSB convention (LSB < 10 MHz, USB ≥ 10 MHz), so
+// the operator wants to see, at a glance, which sideband the modem is riding for
+// the current dial. When the radio isn't connected (no dial to read) we show a
+// grayed "unk", exactly like freedv-gui does when CAT can't report the mode.
+function FreeDvBandModeIndicator({
+  connected,
+  inFreeDvMode,
+  vfoHz,
+}: {
+  connected: boolean;
+  inFreeDvMode: boolean;
+  vfoHz: number;
+}) {
+  const haveDial = connected && vfoHz > 0;
+  const band = haveDial ? freqHzToBand(vfoHz) : null;
+  const sideband = haveDial ? freedvSidebandForFreq(vfoHz) : null;
+  const freqMhz = haveDial ? (vfoHz / 1e6).toFixed(3) : null;
+
+  // freedv-gui semantics: gray "unk" when the mode can't be determined (no CAT /
+  // here: no radio). When we do know the dial, the convention sideband is what
+  // Zeus rides underneath — show it confidently in the accent colour while
+  // FreeDV is the active mode, muted otherwise (advisory of what it *would* use).
+  const valueColor = !haveDial
+    ? 'var(--fg-3)'
+    : inFreeDvMode
+      ? 'var(--accent)'
+      : 'var(--fg-2)';
+
+  return (
+    <div className="dsp-cfg-row">
+      <span className="dsp-cfg-label">
+        Band
+        <span className="dsp-cfg-hint"> FreeDV sideband</span>
+      </span>
+      <span
+        className="mono dsp-cfg-unit"
+        title={
+          haveDial
+            ? `FreeDV uses ${sideband} ${
+                sideband === 'LSB' ? 'below' : 'at/above'
+              } 10 MHz — Zeus rides this sideband so its carriers line up with other FreeDV stations on the band.`
+            : 'Connect a radio so the dial frequency can be read (freedv-gui shows "unk" here without CAT).'
+        }
+        style={{ color: valueColor, display: 'flex', alignItems: 'center', gap: 6 }}
+      >
+        {haveDial ? (
+          <>
+            <span>{freqMhz} MHz</span>
+            {band && <span style={{ color: 'var(--fg-3)' }}>{band}</span>}
+            <span style={{ fontWeight: 600 }}>{sideband}</span>
+          </>
+        ) : (
+          'unk'
+        )}
       </span>
     </div>
   );
