@@ -51,7 +51,6 @@ import {
   WORKSPACE_ROW_HEIGHT_PX,
   WORKSPACE_TILE_MIN_H,
   WORKSPACE_TILE_MIN_W,
-  placeTileInPage,
   type WorkspaceTile,
 } from './workspace';
 import { AddPanelModal } from './AddPanelModal';
@@ -114,17 +113,10 @@ export function FlexWorkspace({
   // store says open.
   const addPanelOpen = useLayoutStore((s) => s.addPanelOpen);
   const setAddPanelOpen = useLayoutStore((s) => s.setAddPanelOpen);
-  // Live field-of-view size (grid cells) reported by the primary canvas. Used
-  // to decide whether a new panel still fits before adding it.
-  const viewportCols = useLayoutStore((s) => s.viewportCols);
-  const viewportRows = useLayoutStore((s) => s.viewportRows);
   const [pendingRemoveTile, setPendingRemoveTile] = useState<{
     uid: string;
     title: string;
   } | null>(null);
-  // Set when an add was attempted but the field is full — drives the
-  // "make room or use a new layout" guidance popup.
-  const [pendingFullPanel, setPendingFullPanel] = useState<string | null>(null);
 
   // Best-effort persist on page-unload (sendBeacon → fetch keepalive fallback).
   useEffect(() => {
@@ -159,45 +151,17 @@ export function FlexWorkspace({
     [targetLayoutId, updateTilePlacementsInLayout, workspaceLocked],
   );
 
-  // Panels are bounded to the field (the monitor), so a new panel can only be
-  // added if it still fits somewhere on that field. We check first-fit against
-  // the reported field size; if it fits we add it in place. If not — the field
-  // is full — we do NOT silently spill onto a new layout (the old behaviour).
-  // Instead we surface the guidance popup so the operator can make room (resize
-  // or close a panel) or deliberately choose a new layout.
-  //
-  // The fit guard only applies to the primary docked workspace, whose size is
-  // what viewportCols/Rows report. Detached windows keep the simple add path.
   const isPrimary = !layoutId;
+  // Add a panel: it drops into the first free slot on the field, and when the
+  // field is full it simply OVERLAPS (the store places it at the origin) for the
+  // operator to resize / move. No "field is full" popup, no spill to a new
+  // layout — the workspace is overlap-friendly and bounded to the view.
   const onAddPanel = useCallback(
     (panelId: string) => {
-      if (
-        isPrimary &&
-        placeTileInPage(panelId, workspace.tiles, viewportCols, viewportRows) ===
-          null
-      ) {
-        setPendingFullPanel(panelId);
-        return;
-      }
       addTileToLayout(targetLayoutId, panelId);
     },
-    [
-      addTileToLayout,
-      isPrimary,
-      targetLayoutId,
-      viewportCols,
-      viewportRows,
-      workspace.tiles,
-    ],
+    [addTileToLayout, targetLayoutId],
   );
-
-  // Operator chose "Add to new layout" from the full-field popup. addTileToLayout
-  // still sees a full page, so it mints the next layout, switches to it, and
-  // places the panel there.
-  const onConfirmAddToNewLayout = useCallback(() => {
-    if (pendingFullPanel) addTileToLayout(targetLayoutId, pendingFullPanel);
-    setPendingFullPanel(null);
-  }, [addTileToLayout, pendingFullPanel, targetLayoutId]);
 
   // Brief loading state while the server fetch resolves. We render the
   // empty container so it has measurable width when the tiles arrive.
@@ -250,24 +214,6 @@ export function FlexWorkspace({
           </p>
           <p>
             The panel can be added back later from Add Panel.
-          </p>
-        </ConfirmDialog>
-      )}
-      {pendingFullPanel && (
-        <ConfirmDialog
-          title="No room for another panel"
-          confirmLabel="Add to New Layout"
-          cancelLabel="Not Now"
-          onCancel={() => setPendingFullPanel(null)}
-          onConfirm={onConfirmAddToNewLayout}
-        >
-          <p>
-            This layout is full — there's no space for another panel in the
-            current view.
-          </p>
-          <p>
-            Try resizing or closing a panel to make room, then add it again — or
-            add it to a new layout.
           </p>
         </ConfirmDialog>
       )}
@@ -470,8 +416,15 @@ function WorkspaceCanvas({
   // persistence is a straight passthrough to the store (no reconcile pass).
   const persist = onLayoutChange;
 
-  // Rows that fit the live window height — used only as a fallback when the
-  // monitor size is unknown.
+  // Rows that fit the live workspace area (the measured container, which sits
+  // ABOVE the footer). This is the vertical FIELD OF VIEW: the hard drag/resize
+  // bound (RGL maxRows) and the height the add-panel flow places into. Bounding
+  // to the window — not the monitor — is what keeps horizontal and vertical
+  // symmetric: a panel can't be dragged below the visible area (past the footer)
+  // any more than it can be dragged past the right edge, so dragging never
+  // creates scroll. The window may still be smaller than a layout authored when
+  // maximized — that legitimately scrolls — but nothing the operator does in the
+  // current view pushes content out of it.
   const visibleRows =
     rowHeight > 0 && containerHeight > 0
       ? Math.max(
@@ -480,15 +433,11 @@ function WorkspaceCanvas({
         )
       : 0;
 
-  // Report the PLACEABLE field size (grid cells) to the store so the add-panel
-  // flow knows when there is no more room. The placeable field is the MONITOR,
-  // not the window: even when the window is small, a panel may be placed
-  // anywhere on the monitor (scroll to it). Only the primary (docked) workspace
-  // reports; detached windows do not drive the "field is full" guard. When the
-  // monitor really is full, the add flow prompts the operator to make room or
-  // use a new layout instead of silently spilling.
-  const pageCols = monitorCols > 0 ? monitorCols : cols;
-  const pageRows = monitorRows > 0 ? monitorRows : visibleRows;
+  // Report the visible field size (grid cells) to the store so the add-panel
+  // flow places a new panel within the current view (and overlaps at the origin
+  // when the view is full). Only the primary (docked) workspace reports.
+  const pageCols = cols;
+  const pageRows = visibleRows;
   const setViewportPage = useLayoutStore((s) => s.setViewportPage);
   useEffect(() => {
     if (!isPrimary || pageRows <= 0 || pageCols <= 0) return;
@@ -702,17 +651,16 @@ function WorkspaceCanvas({
           width={gridWidth}
           breakpoints={{ lg: 0 }}
           cols={{ lg: cols }}
-          // Hard vertical bound of the field — the MONITOR height in rows. RGL's
-          // default gridBounds constraint clamps every drag/resize to
-          // 0..maxRows-h, so a panel can move or grow anywhere within the
-          // monitor but never past the physical screen (no infinite void).
-          // Width is bounded the same way by `cols` (0..cols-w), also capped to
-          // the monitor. Left unset (Infinity) until the monitor size is known
-          // so nothing is clamped against a bogus early-mount field. The window
-          // itself may be smaller (the workspace scrolls) or maximized
-          // (everything fits) — the bound is the monitor, the scroll is the
-          // window.
-          {...(monitorRows > 0 ? { maxRows: monitorRows } : {})}
+          // Hard vertical bound of the field — the VISIBLE workspace height in
+          // rows (above the footer). RGL's default gridBounds constraint clamps
+          // every drag/resize to 0..maxRows-h, so a panel can move or grow
+          // anywhere within the current view but never below it — dragging never
+          // pushes content past the footer into scroll. Width is bounded the
+          // same way by `cols` (0..cols-w). Left unset (Infinity) until the
+          // height is measured so nothing is clamped against a bogus early-mount
+          // field. Maximize and the bound grows with the window; shrink it and a
+          // layout authored larger simply scrolls to reach the rest.
+          {...(visibleRows > 0 ? { maxRows: visibleRows } : {})}
           rowHeight={rowHeight}
           margin={[WORKSPACE_GRID_MARGIN_PX, rowMargin]}
           containerPadding={[0, 0]}

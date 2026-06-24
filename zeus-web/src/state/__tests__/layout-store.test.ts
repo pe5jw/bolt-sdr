@@ -59,19 +59,27 @@ describe('layout-store / workspace tile mutators', () => {
     expect(tile?.h).toBe(8);
   });
 
-  it('addTile spills onto a new workspace when the current page is full', () => {
-    // DEFAULT_WORKSPACE_LAYOUT fills the 24×48 page (no free 8×8 slot), so the
-    // workspace never scrolls — instead the panel paginates: a new workspace tab
-    // is created, switched to, and the panel lands at the origin of the fresh
-    // page.
+  it('addTile overlaps at the origin on the SAME layout when the page is full', () => {
+    // Fill the page so there is no free slot for a new tile, then add one. The
+    // workspace is overlap-friendly and bounded to the view: instead of spilling
+    // to a new layout (or warning), the panel drops in at the origin, overlapping
+    // — the operator then resizes / moves it. No new layout, no tab switch.
+    useLayoutStore.setState({
+      viewportCols: 6,
+      viewportRows: 6,
+      workspace: {
+        ...EMPTY_WORKSPACE_LAYOUT,
+        tiles: [{ uid: 'full', panelId: 'hero', x: 0, y: 0, w: 6, h: 6 }],
+      },
+    });
     const layoutsBefore = useLayoutStore.getState().layouts.length;
     const activeBefore = useLayoutStore.getState().activeLayoutId;
     const uid = useLayoutStore.getState().addTile('cw');
     const state = useLayoutStore.getState();
-    expect(state.layouts.length).toBe(layoutsBefore + 1);
-    expect(state.activeLayoutId).not.toBe(activeBefore);
+    expect(state.layouts.length).toBe(layoutsBefore); // no new layout
+    expect(state.activeLayoutId).toBe(activeBefore); // no tab switch
     const tiles = state.workspace.tiles;
-    expect(tiles.length).toBe(1);
+    expect(tiles.length).toBe(2); // landed on the same layout, overlapping
     const tile = tiles.find((t) => t.uid === uid);
     expect(tile?.panelId).toBe('cw');
     expect(tile?.x).toBe(0);
