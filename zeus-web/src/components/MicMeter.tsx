@@ -117,6 +117,29 @@ export function MicMeter() {
   const clipping = effectiveDbfs >= CLIP_WARN_DBFS;
 
   if (err) {
+    // Browsers refuse getUserMedia on a non-secure context (anything other
+    // than https:// or http://localhost). A plain http:// LAN IP like
+    // http://192.168.1.50:6060 is treated as insecure and the mic call is
+    // rejected silently no matter how many permission prompts the operator
+    // accepts. Surface that distinction so they know to switch to the
+    // https://… address Zeus prints at startup instead of staring at a
+    // generic "mic unavailable" chip.
+    const insecure =
+      typeof window !== 'undefined' && window.isSecureContext === false;
+    if (insecure) {
+      const tip =
+        'Browsers require HTTPS for microphone access. Open Zeus at the ' +
+        'https://… URL printed in the Zeus.Server startup log (port 6443) ' +
+        'and accept the self-signed certificate warning once.';
+      return (
+        <div className="knob-group" title={tip} style={{ minWidth: 180 }}>
+          <span className="label-xs">MIC</span>
+          <span className="chip tx">
+            <span className="v">needs HTTPS</span>
+          </span>
+        </div>
+      );
+    }
     return (
       <div className="knob-group" title={err} style={{ minWidth: 140 }}>
         <span className="label-xs">MIC</span>
