@@ -55,12 +55,17 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
     public AudioPluginRequirements Requirements { get; }
 
     /// <summary>
-    /// Safety gate: TX native VST loading remains opt-in because real plugins
-    /// can crash an in-process bridge. RX VSTs default on so receive-only
-    /// cleanup plugins such as Supertone Clear/RNNoise can be used from the
-    /// dedicated rx.post-demod route; ZEUS_DISABLE_RX_VST_LOAD=1 is the
-    /// receive-side kill switch. Set ZEUS_ENABLE_VST_LOAD=1 to opt TX native
-    /// VSTs in as well. See native/zeus-vst-bridge.
+    /// Load gate for in-process native plugin hosting (VST3 + Audio Unit). Both
+    /// RX and TX native load default ON — TX was enabled by KB2UKA after
+    /// bench-verifying AU TX hosting (audio confirmed changing under the editor)
+    /// on 2026-06-26; it had previously been opt-in.
+    ///
+    /// Kill switches fall back to the crash-isolated out-of-process engine:
+    /// <c>ZEUS_DISABLE_VST_LOAD=1</c> (all slots), <c>ZEUS_DISABLE_RX_VST_LOAD=1</c>
+    /// (RX only), <c>ZEUS_DISABLE_TX_VST_LOAD=1</c> (TX only).
+    /// <c>ZEUS_ENABLE_VST_LOAD=1</c> force-enables everything even if a per-side
+    /// disable is set. Precedence: global disable &gt; force-enable &gt; per-side
+    /// disable. See native/zeus-vst-bridge.
     /// </summary>
     /// <summary>Test override for <see cref="NativeLoadEnabled"/>; null = use the env var.</summary>
     internal static bool? NativeLoadEnabledOverride;
@@ -70,18 +75,35 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
         if (NativeLoadEnabledOverride is { } forced) return forced;
         if (Environment.GetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD") == "1") return false;
         if (Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD") == "1") return true;
-        return slot.StartsWith("rx.", StringComparison.OrdinalIgnoreCase)
-            && Environment.GetEnvironmentVariable("ZEUS_DISABLE_RX_VST_LOAD") != "1";
+        if (slot.StartsWith("rx.", StringComparison.OrdinalIgnoreCase))
+            return Environment.GetEnvironmentVariable("ZEUS_DISABLE_RX_VST_LOAD") != "1";
+        // TX native load now defaults on (KB2UKA-approved 2026-06-26);
+        // ZEUS_DISABLE_TX_VST_LOAD=1 is the TX-side kill switch.
+        return Environment.GetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD") != "1";
     }
 
     /// <summary>
-    /// Whether the in-process bridge will natively host a TX-slot VST. Stays
-    /// opt-in (a crashing in-process TX VST can hard-crash the radio backend),
-    /// so this is false for a normal operator and true only when the developer
-    /// escape hatch <c>ZEUS_ENABLE_VST_LOAD=1</c> is set. When false, the
-    /// supported way to run TX VSTs is the crash-isolated out-of-process engine.
+    /// Editor-guard signal ONLY — whether the TX editor-open fallback should
+    /// treat TX as in-process-hostable when a plugin is <em>not</em> already
+    /// natively loaded. Deliberately <b>decoupled</b> from the TX <em>load</em>
+    /// default (<see cref="NativeLoadEnabled"/>, which now defaults TX on as of
+    /// 2026-06-26): it stays pinned to the pre-flip explicit <c>ZEUS_ENABLE_VST_LOAD</c>
+    /// opt-in so flipping the load default does not move the cross-platform
+    /// editor engine-redirect UX (Windows in-process TX editor hosting is
+    /// unverified). A TX plugin that actually loaded in-process is detected via
+    /// <c>AudioPluginBridge.HostsPlugin</c> upstream and bypasses the guard
+    /// regardless; this governs only the not-hosted fallback message. Mirrors the
+    /// pre-flip <c>TxNativeLoadEnabled</c> semantics exactly.
     /// </summary>
-    public static bool TxNativeLoadEnabled => NativeLoadEnabled("tx.post-leveler");
+    public static bool TxNativeEditorOptIn
+    {
+        get
+        {
+            if (NativeLoadEnabledOverride is { } forced) return forced;
+            if (Environment.GetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD") == "1") return false;
+            return Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD") == "1";
+        }
+    }
 
     public Task InitializeAudioAsync(IAudioHost host, CancellationToken ct)
     {
@@ -89,8 +111,8 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
         {
             _log?.LogInformation(
                 "VST host '{Name}' registered but native load is disabled "
-                + "(set ZEUS_ENABLE_VST_LOAD=1 for TX native VSTs, or clear "
-                + "ZEUS_DISABLE_RX_VST_LOAD for RX VSTs); passing audio through.",
+                + "(clear ZEUS_DISABLE_VST_LOAD / ZEUS_DISABLE_TX_VST_LOAD / "
+                + "ZEUS_DISABLE_RX_VST_LOAD to re-enable); passing audio through.",
                 DisplayName);
             return Task.CompletedTask; // _handle stays 0 → Process passes through
         }
