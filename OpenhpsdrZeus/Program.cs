@@ -175,6 +175,9 @@ public partial class Program
 
         if (args.Contains("--verify-vst-bridge"))
         {
+            // WinExe has no console by default — reattach so Console.WriteLine
+            // output reaches the caller (PowerShell verify script reads stdout).
+            AttachParentConsoleOnWindows();
             return VerifyVstBridge();
         }
 
