@@ -187,6 +187,8 @@ public sealed class RadioStateEntry
     public int TunePct { get; set; } = 10;
     // TX pre-key (MOX) delay ms (0..500). Default 0 = no delay. Issue #630.
     public int TxMoxPreKeyDelayMs { get; set; }
+    // TX tail (MOX hang) delay ms (0..500). Default 0 = no delay. Issue #1294.
+    public int TxMoxTailDelayMs { get; set; }
     // Old-school end-of-over roger beep. Default false preserves existing
     // transmit behaviour for legacy rows.
     public bool RogerBeepEnabled { get; set; }

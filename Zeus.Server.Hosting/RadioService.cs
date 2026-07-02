@@ -162,6 +162,10 @@ public sealed class RadioService : IDisposable
     // never calibrates on muted RF — see SetTxMoxPreKeyDelayMs / ClampPreKeyToPs.
     // Issue #630.
     private int _txMoxPreKeyDelayMs;
+    // TX tail (MOX hang) delay ms (0..500). Held after a UI PTT release so
+    // audio in flight through the browser→WDSP→IQ pipeline finishes clocking
+    // out before the wire MOX bit drops. Issue #1294.
+    private int _txMoxTailDelayMs;
     // TX timeout seconds. Authoritative copy read by TxMetersService on every
     // tick to evaluate the FR-6 protection trip; the StateDto mirror is for
     // the frontend + persistence. Issue #1270.
@@ -583,6 +587,7 @@ public sealed class RadioService : IDisposable
             _txMoxPreKeyDelayMs = ClampPreKeyToPs(
                 Math.Clamp(rsSnap.TxMoxPreKeyDelayMs, 0, MaxPreKeyDelayMs),
                 ps?.MoxDelaySec ?? 0.2);
+            _txMoxTailDelayMs = Math.Clamp(rsSnap.TxMoxTailDelayMs, 0, MaxTailDelayMs);
             _txTimeoutSec = ClampTxTimeoutSec(rsSnap.TxTimeoutSec);
         }
 
@@ -674,6 +679,7 @@ public sealed class RadioService : IDisposable
             DrivePct: Volatile.Read(ref _drivePct),
             TunePct: Volatile.Read(ref _tunePct),
             TxMoxPreKeyDelayMs: Volatile.Read(ref _txMoxPreKeyDelayMs),
+            TxMoxTailDelayMs: Volatile.Read(ref _txMoxTailDelayMs),
             TxTimeoutSec: Volatile.Read(ref _txTimeoutSec),
             // Hardware NCO — persisted in RadioStateStore so a restart resumes
             // on the same physical centre. RadioLoHz snaps to VfoHz on legacy
@@ -2838,6 +2844,31 @@ public sealed class RadioService : IDisposable
     /// rising edge. Already PS-clamped.</summary>
     public int TxMoxPreKeyDelayMs => Volatile.Read(ref _txMoxPreKeyDelayMs);
 
+    // ---- TX tail (MOX hang) delay (issue #1294) --------------------------
+    // Range matches the pre-key delay so both TX-sequencing knobs share one
+    // upper bound; a 500 ms tail is well past the ~50–200 ms starting point
+    // typical for a browser-mic path but leaves the operator headroom for
+    // slower captures.
+    internal const int MaxTailDelayMs = 500;
+
+    /// <summary>
+    /// Set the TX tail (MOX hang) delay in milliseconds. Clamped to
+    /// [0, <see cref="MaxTailDelayMs"/>]. Returns the updated snapshot so the
+    /// caller can surface the actually-applied value.
+    /// </summary>
+    public StateDto SetTxMoxTailDelayMs(int ms)
+    {
+        int clamped = Math.Clamp(ms, 0, MaxTailDelayMs);
+        Interlocked.Exchange(ref _txMoxTailDelayMs, clamped);
+        Mutate(s => s with { TxMoxTailDelayMs = clamped });
+        return Snapshot();
+    }
+
+    /// <summary>Authoritative tail delay (ms) read by TxService on the MOX
+    /// falling edge to hold the wire MOX bit asserted while audio in flight
+    /// finishes draining.</summary>
+    public int TxMoxTailDelayMs => Volatile.Read(ref _txMoxTailDelayMs);
+
     // ---- TX timeout (issue #1270) ---------------------------------------
     // 0 = disabled (the operator turned the guard off entirely — the reporter
     // and KB2UKA both asked for this). Otherwise minimum 30 s so an operator
@@ -4354,6 +4385,7 @@ public sealed class RadioService : IDisposable
                 DrivePct = snap.DrivePct,
                 TunePct = snap.TunePct,
                 TxMoxPreKeyDelayMs = snap.TxMoxPreKeyDelayMs,
+                TxMoxTailDelayMs = snap.TxMoxTailDelayMs,
                 RogerBeepEnabled = snap.RogerBeepEnabled,
                 TxTimeoutSec = snap.TxTimeoutSec,
                 RadioLoHz = snap.RadioLoHz,

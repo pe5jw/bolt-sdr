@@ -1193,6 +1193,18 @@ public sealed record StateDto(
     // calibrate on muted RF — see RadioService.SetTxMoxPreKeyDelayMs.
     int TxMoxPreKeyDelayMs = 0,
 
+    // ---- TX tail (MOX hang) delay ----
+    // Milliseconds to hold the wire MOX bit asserted AFTER a UI PTT release so
+    // the last mic frames in the browser→WS→WDSP→IQ pipeline finish draining to
+    // the radio before it drops off the air (issue #1294). Zeus keys only via
+    // the software MOX bit, and the browser mic path carries measurable
+    // buffering, so without a tail the end of the last word is cut on release.
+    // 0..500, default 0 = no behaviour change. Voice modes only — CW is
+    // excluded so a blanket hold cannot key dead carrier past the last dit.
+    // Only UI-sourced releases arm the tail; hardware / MIDI / plugin drops
+    // release immediately. Persisted to LiteDB, same pattern as DrivePct.
+    int TxMoxTailDelayMs = 0,
+
     // ---- TX timeout (PA protection) ----
     // Maximum length of a single MOX or TUN transmission in seconds. When
     // exceeded, TxMetersService trips MOX/TUN and emits an AlertFrame — the
@@ -1703,6 +1715,10 @@ public sealed record DriveSetRequest(int Percent);
 /// <summary>TX pre-key (MOX) delay in milliseconds, 0..500. See
 /// <see cref="StateDto.TxMoxPreKeyDelayMs"/>.</summary>
 public sealed record TxPreKeyDelaySetRequest(int DelayMs);
+
+/// <summary>TX tail (MOX hang) delay in milliseconds, 0..500. See
+/// <see cref="StateDto.TxMoxTailDelayMs"/>.</summary>
+public sealed record TxTailDelaySetRequest(int DelayMs);
 
 /// <summary>Body of <c>POST /api/tx/roger-beep</c>.</summary>
 public sealed record RogerBeepSetRequest(bool Enabled);

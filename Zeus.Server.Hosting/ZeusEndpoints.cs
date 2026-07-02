@@ -2254,6 +2254,19 @@ public static class ZeusEndpoints
             return Results.Ok(new { txMoxPreKeyDelayMs = state.TxMoxPreKeyDelayMs });
         });
 
+        // TX tail (MOX hang) delay (issue #1294). Holds the wire MOX bit
+        // asserted for N ms after a UI PTT release so audio still in the
+        // browser→WDSP→IQ pipeline finishes clocking out before the radio
+        // drops off the air. Voice modes only; ignored on CW.
+        app.MapPost("/api/tx/tail-delay", (TxTailDelaySetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.tx.tailDelay ms={Ms}", req.DelayMs);
+            if (req.DelayMs < 0 || req.DelayMs > 500)
+                return Results.BadRequest(new { error = "delayMs must be 0..500" });
+            var state = r.SetTxMoxTailDelayMs(req.DelayMs);
+            return Results.Ok(new { txMoxTailDelayMs = state.TxMoxTailDelayMs });
+        });
+
         app.MapPost("/api/tx/roger-beep", (RogerBeepSetRequest req, RadioService r) =>
         {
             log.LogInformation("api.tx.rogerBeep enabled={Enabled}", req.Enabled);

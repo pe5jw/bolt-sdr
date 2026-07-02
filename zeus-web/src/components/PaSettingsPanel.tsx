@@ -25,7 +25,7 @@ import { HF_BANDS, usePaStore } from '../state/pa-store';
 import { useRadioStore } from '../state/radio-store';
 import { useTxStore } from '../state/tx-store';
 import { BOARD_LABELS } from '../api/radio';
-import { setTxTimeout } from '../api/client';
+import { setTxTailDelay, setTxTimeout } from '../api/client';
 import type { PaBandSettings } from '../api/pa';
 import anvelinaLogo from '../assets/anvelina-logo.png';
 
@@ -33,6 +33,9 @@ import anvelinaLogo from '../assets/anvelina-logo.png';
 // Issue #1270.
 const TX_TIMEOUT_MIN_S = 30;
 const TX_TIMEOUT_MAX_S = 600;
+
+// TX tail (MOX hang) delay clamp — matches RadioService.MaxTailDelayMs. Issue #1294.
+const TX_TAIL_MAX_MS = 500;
 
 const OC_PINS = [1, 2, 3, 4, 5, 6, 7] as const;
 
@@ -305,6 +308,8 @@ export function PaSettingsPanel() {
   const capabilities = useRadioStore((s) => s.capabilities);
   const txTimeoutSec = useTxStore((s) => s.txTimeoutSec);
   const setTxTimeoutSecLocal = useTxStore((s) => s.setTxTimeoutSec);
+  const txMoxTailDelayMs = useTxStore((s) => s.txMoxTailDelayMs);
+  const setTxMoxTailDelayMsLocal = useTxStore((s) => s.setTxMoxTailDelayMs);
 
   // Active inner tab — TX / RX / AUTO (HL2 only). Persisted in
   // localStorage so reload doesn't pop the operator back to TX on every
@@ -496,6 +501,28 @@ export function PaSettingsPanel() {
               />
               Off
             </label>
+          </div>
+
+          <div
+            className="pa-field flex items-center gap-2 text-xs"
+            title="Hold the wire MOX bit for a short moment after you release PTT so the last words don't get cut off. Zeus keys through the browser and the microphone audio takes a few ms to reach the radio; a small tail (50–200 ms is typical) lets that audio finish before PTT drops. Voice modes only (SSB / AM / FM) — CW is unaffected. 0 = off. Issue #1294."
+          >
+            <span>TX Tail Delay (ms)</span>
+            <input
+              type="number"
+              min={0}
+              max={TX_TAIL_MAX_MS}
+              step={10}
+              value={txMoxTailDelayMs}
+              onChange={(e) => {
+                const v = clamp(Number(e.target.value) || 0, 0, TX_TAIL_MAX_MS);
+                setTxMoxTailDelayMsLocal(v);
+                setTxTailDelay(v)
+                  .then((r) => setTxMoxTailDelayMsLocal(r.txMoxTailDelayMs))
+                  .catch(() => {});
+              }}
+              className="pa-num-input w-20 rounded px-2 py-0.5 text-right text-xs"
+            />
           </div>
         </div>
       </section>

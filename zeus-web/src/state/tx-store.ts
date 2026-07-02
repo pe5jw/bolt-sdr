@@ -240,6 +240,12 @@ export type TxState = {
   // input doesn't flicker on reload.
   txMoxPreKeyDelayMs: number;
   setTxMoxPreKeyDelayMs: (ms: number) => void;
+  // TX tail (MOX hang) delay in ms (issue #1294) — after a UI PTT release,
+  // holds the wire MOX bit asserted so audio still in the browser→WDSP→IQ
+  // pipeline finishes clocking out before the radio drops off the air. Server
+  // is authoritative; mirrored here so the input doesn't flicker on reload.
+  txMoxTailDelayMs: number;
+  setTxMoxTailDelayMs: (ms: number) => void;
   rogerBeepEnabled: boolean;
   setRogerBeepEnabled: (on: boolean) => void;
   // TX timeout in seconds (issue #1270). Server-authoritative (persisted via
@@ -429,6 +435,8 @@ export const useTxStore = create<TxState>()(
       setPsAutoAttenuate: (on) => set({ psAutoAttenuate: on }),
       txMoxPreKeyDelayMs: 0,
       setTxMoxPreKeyDelayMs: (ms) => set({ txMoxPreKeyDelayMs: ms }),
+      txMoxTailDelayMs: 0,
+      setTxMoxTailDelayMs: (ms) => set({ txMoxTailDelayMs: ms }),
       rogerBeepEnabled: false,
       setRogerBeepEnabled: (on) => set({ rogerBeepEnabled: on }),
       txTimeoutSec: 120,
@@ -504,6 +512,7 @@ export const useTxStore = create<TxState>()(
           micGainDb: s.micGainDb,
           levelerMaxGainDb: s.levelerMaxGainDb,
           txMoxPreKeyDelayMs: s.txMoxPreKeyDelayMs,
+          txMoxTailDelayMs: s.txMoxTailDelayMs,
           txTimeoutSec: s.txTimeoutSec,
           psEnabled: s.psEnabled,
           psAuto: s.psAuto,
@@ -556,6 +565,7 @@ export const useTxStore = create<TxState>()(
         // PS tuning is persisted server-side too, but we mirror it here so
         // the slider seeks don't flicker on first paint after a reload.
         txMoxPreKeyDelayMs: s.txMoxPreKeyDelayMs,
+        txMoxTailDelayMs: s.txMoxTailDelayMs,
         txTimeoutSec: s.txTimeoutSec,
         psAuto: s.psAuto,
         psPtol: s.psPtol,

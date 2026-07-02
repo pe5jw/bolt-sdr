@@ -1359,6 +1359,11 @@ public class DspPipelineService : BackgroundService,
     /// </summary>
     public void DrainFreeDvTxTail() => ResolveTxIngest()?.DrainFreeDvTxTail();
 
+    /// <summary>True while FreeDV is the active TX modem. Used by
+    /// <see cref="TxService"/> to skip the plain voice-mode TX tail delay
+    /// (issue #1294) — FreeDV runs its own bounded end-of-over drain instead.</summary>
+    public bool IsFreeDvActive => _freeDv?.Active ?? false;
+
     /// <summary>
     /// Old-school roger beep tone. Called by TxService after an accepted local
     /// MOX key-down, once the wire MOX bit is asserted.

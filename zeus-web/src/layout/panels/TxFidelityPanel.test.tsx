@@ -184,6 +184,7 @@ function makeRadioState(): RadioStateDto {
     drivePercent: tx.drivePercent,
     tunePercent: tx.tunePercent,
     txMoxPreKeyDelayMs: tx.txMoxPreKeyDelayMs,
+    txMoxTailDelayMs: tx.txMoxTailDelayMs,
     txTimeoutSec: tx.txTimeoutSec,
     twoToneFreq1: tx.twoToneFreq1,
     twoToneFreq2: tx.twoToneFreq2,

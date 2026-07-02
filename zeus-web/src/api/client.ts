@@ -420,6 +420,11 @@ export type RadioStateDto = {
   // key-down so an external amp's T/R relay settles before RF. Server-clamped
   // below the PS MOX hold-off; hydrated on connect like the drive sliders.
   txMoxPreKeyDelayMs: number;
+  // TX tail (MOX hang) delay in ms (issue #1294). After a UI PTT release, holds
+  // the wire MOX bit asserted so audio still in the browser→WDSP→IQ pipeline
+  // finishes clocking out before the radio drops off the air. Legacy servers
+  // without this field fall back to 0 in normalizeState.
+  txMoxTailDelayMs: number;
   // Old-school end-of-over roger beep. Default off on older servers.
   rogerBeepEnabled: boolean;
   // TX timeout in seconds (issue #1270). Maximum single-transmission length
@@ -2551,6 +2556,8 @@ export function normalizeState(raw: unknown): RadioStateDto {
     tunePercent: typeof r.tunePct === 'number' ? r.tunePct : 10,
     txMoxPreKeyDelayMs:
       typeof r.txMoxPreKeyDelayMs === 'number' ? r.txMoxPreKeyDelayMs : 0,
+    txMoxTailDelayMs:
+      typeof r.txMoxTailDelayMs === 'number' ? r.txMoxTailDelayMs : 0,
     rogerBeepEnabled:
       typeof r.rogerBeepEnabled === 'boolean' ? r.rogerBeepEnabled : false,
     // 0 = disabled must be preserved (>=0), not coerced back to the 120 default.
@@ -6583,6 +6590,27 @@ export function setTxPreKeyDelay(
     (raw) => {
       const v = (raw as { txMoxPreKeyDelayMs?: unknown }).txMoxPreKeyDelayMs;
       return { txMoxPreKeyDelayMs: typeof v === 'number' ? v : 0 };
+    },
+  );
+}
+
+// TX tail (MOX hang) delay: POST /api/tx/tail-delay { delayMs }. Returns the
+// server-applied value (clamped 0..500). Issue #1294.
+export function setTxTailDelay(
+  delayMs: number,
+  signal?: AbortSignal,
+): Promise<{ txMoxTailDelayMs: number }> {
+  return jsonFetch(
+    '/api/tx/tail-delay',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ delayMs: Math.round(delayMs) }),
+      signal,
+    },
+    (raw) => {
+      const v = (raw as { txMoxTailDelayMs?: unknown }).txMoxTailDelayMs;
+      return { txMoxTailDelayMs: typeof v === 'number' ? v : 0 };
     },
   );
 }

@@ -246,6 +246,23 @@ public sealed class TxService
         if (stateBeforeDrop is not null)
         {
             _pipeline.DrainFreeDvTxTail();
+
+            // Voice-mode TX tail (issue #1294). Hold the wire MOX bit
+            // asserted a while longer so mic frames still crossing the
+            // browser→WS→WDSP→IQ pipeline finish clocking out to the radio
+            // before it drops off the air. Only UI-sourced releases arm this
+            // — hardware / MIDI / plugin drops have already been decided by
+            // physical timing. CW is excluded (a hold would key dead carrier
+            // past the last dit); FreeDV is exempt because DrainFreeDvTxTail
+            // already ran its own bounded, backlog-derived drain above.
+            int tailMs = _radio.TxMoxTailDelayMs;
+            if (tailMs > 0
+                && source == MoxSource.UI
+                && !IsCwMode(stateBeforeDrop.Mode)
+                && !(_pipeline.IsFreeDvActive))
+            {
+                Thread.Sleep(tailMs);
+            }
         }
 
         bool wasTunOn;
