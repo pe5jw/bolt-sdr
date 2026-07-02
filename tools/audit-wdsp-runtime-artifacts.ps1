@@ -70,7 +70,7 @@ function Get-ExpectedNativeName {
 function Get-ExpectedSideBySideDependencies {
     param([string]$Rid)
     if ($Rid.Equals("win-x64", [StringComparison]::OrdinalIgnoreCase)) {
-        return @("libfftw3-3.dll", "libfftw3f-3.dll")
+        return @("fftw3.dll", "fftw3f.dll")
     }
     if ($Rid.StartsWith("linux-", [StringComparison]::OrdinalIgnoreCase)) {
         return @("libfftw3.so.3", "libfftw3f.so.3")
@@ -86,6 +86,7 @@ if (-not (Test-Path -LiteralPath $runtimeRootPath -PathType Container)) {
     throw "Runtime root not found: $RuntimeRoot"
 }
 
+$nr3Symbols = @("SetRXARNNRRun", "SetRXARNNRPosition", "RNNRloadModel", "RNNRmodelLoaded")
 $nr4Symbols = @("SetRXASBNRRun")
 
 $artifacts = New-Object System.Collections.Generic.List[object]
@@ -97,6 +98,11 @@ foreach ($ridDir in (Get-ChildItem -LiteralPath $runtimeRootPath -Directory | So
     $nativePresent = Test-Path -LiteralPath $nativePath -PathType Leaf
     $nativeLength = if ($nativePresent) { (Get-Item -LiteralPath $nativePath).Length } else { 0 }
     $nativeSha256 = if ($nativePresent) { Get-FileSha256 $nativePath } else { "" }
+
+    $nr3Present = @{}
+    foreach ($symbol in $nr3Symbols) {
+        $nr3Present[$symbol] = if ($nativePresent) { Test-BinaryContainsAscii $nativePath $symbol } else { $false }
+    }
 
     $nr4Present = @{}
     foreach ($symbol in $nr4Symbols) {
@@ -121,10 +127,13 @@ foreach ($ridDir in (Get-ChildItem -LiteralPath $runtimeRootPath -Directory | So
         }) | Out-Null
     }
 
+    $nr3Ready = -not ($nr3Present.Values -contains $false)
     $nr4Ready = -not ($nr4Present.Values -contains $false)
     $depsReady = $missingDeps.Count -eq 0
     $status = if (-not $nativePresent) {
         "missing-native-artifact"
+    } elseif (-not $nr3Ready) {
+        "missing-nr3-symbols"
     } elseif (-not $nr4Ready) {
         "missing-nr4-symbols"
     } elseif (-not $depsReady) {
@@ -139,9 +148,11 @@ foreach ($ridDir in (Get-ChildItem -LiteralPath $runtimeRootPath -Directory | So
         nativePresent = $nativePresent
         nativeLength = $nativeLength
         nativeSha256 = $nativeSha256
+        nr3Ready = $nr3Ready
         nr4Ready = $nr4Ready
         sideBySideDependenciesReady = $depsReady
         status = $status
+        nr3Symbols = $nr3Present
         nr4Symbols = $nr4Present
         sideBySideDependencies = @($dependencyFiles.ToArray())
         missingSideBySideDependencies = @($missingDeps.ToArray())
@@ -155,8 +166,9 @@ $report = [ordered]@{
     tool = "audit-wdsp-runtime-artifacts"
     generatedUtc = (Get-Date).ToUniversalTime().ToString("o")
     runtimeRoot = ConvertTo-RelativePath $runtimeRootPath
+    requiredNr3Symbols = $nr3Symbols
     requiredNr4Symbols = $nr4Symbols
-    readyForWinX64Package = ($winX64.Count -gt 0 -and [bool]$winX64[0].nativePresent -and [bool]$winX64[0].nr4Ready -and [bool]$winX64[0].sideBySideDependenciesReady)
+    readyForWinX64Package = ($winX64.Count -gt 0 -and [bool]$winX64[0].nativePresent -and [bool]$winX64[0].nr3Ready -and [bool]$winX64[0].nr4Ready -and [bool]$winX64[0].sideBySideDependenciesReady)
     winX64NativePath = if ($winX64.Count -gt 0) { [string]$winX64[0].nativePath } else { "" }
     winX64NativeLength = if ($winX64.Count -gt 0) { [long]$winX64[0].nativeLength } else { 0 }
     winX64NativeSha256 = if ($winX64.Count -gt 0) { [string]$winX64[0].nativeSha256 } else { "" }
@@ -165,7 +177,7 @@ $report = [ordered]@{
     artifacts = @($artifacts.ToArray())
     recommendations = @(
         "Run tools/audit-wdsp-native-symbols.ps1 -BinaryPath Zeus.Dsp/runtimes/win-x64/native/wdsp.dll -RequireBinaryExports for PE export-table verification.",
-        "Rebuild pending RIDs through the normal native artifact workflow before advertising current WDSP noise-reduction support on those platforms.",
+        "Rebuild pending RIDs through the normal native artifact workflow before advertising current WDSP NR3/NR4 noise-reduction support on those platforms.",
         "Keep FFTW side-by-side runtime libraries in each packaged native directory when WDSP is dynamically linked."
     )
 }
