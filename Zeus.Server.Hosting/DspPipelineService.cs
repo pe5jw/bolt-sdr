@@ -4138,6 +4138,12 @@ public class DspPipelineService : BackgroundService,
             // Mark applied only when we actually armed or disarmed. A deferred
             // (keyed) arm leaves _appliedPsEnabled stale on purpose so the
             // MOX-off re-apply re-enters this block and arms.
+            // Known benign divergence: this latches at SCHEDULING time — if
+            // the async transition later fails (logged at ERROR by the
+            // worker) the DTO and wire disagree until the next resync/
+            // reconnect replays the state. Accepted; a failed transition
+            // means the session is already tearing down or the radio is
+            // unreachable, and the reconnect path re-seeds from Snapshot().
             if (!(s.PsEnabled && _keyed))
                 _appliedPsEnabled = s.PsEnabled;
         }

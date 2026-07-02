@@ -196,6 +196,14 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _txPaused;              // 1 = TxLoop drops pacing ticks (transition window)
     private int _rxDiscard;             // 1 = RxLoop discards datagrams (transition window)
     private int _startHandshakeActive;  // 1 = RxLoop must not give up on RX timeouts
+    // F3 watchdog lifetime: a stale watchdog re-sending `start` inside a
+    // later transition's stop/drain window would restart the radio with the
+    // OLD receiver count — the exact condemned live flip. Every transition
+    // (and StopAsync) cancels the current watchdog before sending stop; the
+    // generation counter keeps a superseded watchdog's exit from clearing
+    // _startHandshakeActive under a newer one (last-writer-wins hazard).
+    private CancellationTokenSource? _handshakeCts;
+    private int _handshakeGeneration;
     private long _ep2SendSeq;           // shared EP2 sequence: TxLoop + pre-announce frames
     // Start-handshake (F3): after start, if no VALID parsed EP6 packet within
     // the timeout, re-send start, up to Attempts total. Internal knobs so
@@ -206,6 +214,13 @@ public sealed class Protocol1Client : IProtocol1Client
     // PS feedback watchdog (F4): while PS is armed on C10, zero successfully
     // parsed 4-DDC packets for this long — while datagrams ARE arriving —
     // fires PsFeedbackStalled so RadioService can auto-disarm.
+    // INVARIANT: in production PsStallTimeoutMs MUST stay > the datagram
+    // window below. Both watchdog ticks are seeded together at (re)start, so
+    // with a FULLY dead radio they age in lockstep and the pair of
+    // conditions can never both hold — that is what routes "radio dead" to
+    // the RX-timeout teardown instead of a misleading stall auto-disarm.
+    // Tests that shrink PsStallTimeoutMs below 1000 must keep datagrams
+    // flowing (the misframed-stream scenario) or they will false-fire.
     internal int PsStallTimeoutMs = 2000;
     private const int PsStallDatagramWindowMs = 1000;
     // 4-DDC parse observability (F5). Totals are Interlocked (read from any
@@ -690,9 +705,17 @@ public sealed class Protocol1Client : IProtocol1Client
         return true;
     }
 
-    public Task StartAsync(StreamConfig config, CancellationToken ct)
+    public async Task StartAsync(StreamConfig config, CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        // Serialize with SetPsEnabledAsync / StopAsync (#1302): RadioService
+        // publishes ActiveClient before StartAsync completes, so a PS state
+        // change arriving during the connect handshake must queue behind the
+        // gate instead of interleaving a restart transition with our own
+        // pre-announce/start (orderings exist that re-create the live flip).
+        await _psTransitionGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
         if (_socket is null || _remote is null) throw new InvalidOperationException("Call ConnectAsync first.");
         if (_loopCts is not null) throw new InvalidOperationException("Already started.");
 
@@ -721,7 +744,22 @@ public sealed class Protocol1Client : IProtocol1Client
         // connect-while-armed starts DIRECTLY in 4-DDC with no transition.
         // C10-gated: every other board's connect wire traffic is unchanged.
         if (BoardKind == HpsdrBoardKind.HermesC10)
+        {
+            // Connect hygiene (#1302): if a previous host session crashed or
+            // vanished while armed, the radio can STILL be streaming (run=1,
+            // its host-side ICMP never reached it). With run=1 the Tx_MAC
+            // keeps draining, no overflow-clear ever fires, and the
+            // pre-announce below would flip the count on a LIVE stream —
+            // permanent EP6 sync shift from packet one. Send stop ×3 first
+            // (idempotent, run <= 0), drain so the free-running builder
+            // overflows and Tx_fifo_clr realigns the FIFO at a frame
+            // boundary, and flush any stale queued datagrams so they cannot
+            // satisfy the F3 start handshake with old-format packets.
+            SendStartStop(start: false);
+            await Task.Delay(PsTransitionDrainMs, ct).ConfigureAwait(false);
+            FlushReceiveBuffer();
             SendPreAnnounceConfigFrames();
+        }
 
         // Send Metis start. We send 3× on macOS to work around first-UDP-drop
         // (doc 02 §3).
@@ -742,39 +780,66 @@ public sealed class Protocol1Client : IProtocol1Client
         // (old_protocol.c:2894-2918). After the final failed attempt the
         // existing consecutive-timeout teardown takes over unchanged.
         BeginStartHandshakeWatchdog(_loopCts.Token);
-        return Task.CompletedTask;
+        }
+        finally
+        {
+            _psTransitionGate.Release();
+        }
     }
 
     public async Task StopAsync(CancellationToken ct)
     {
-        if (_loopCts is null) return;
+        var loopCts = _loopCts;
+        if (loopCts is null) return;
 
+        // Cancel FIRST so an in-flight PS transition parked in its drain
+        // delay aborts promptly (RestartWithPsModeAsync links its delay to
+        // this token and re-checks liveness before sending start), and kill
+        // any F3 handshake watchdog so a queued re-send can't restart the
+        // radio after the stop below (#1302 audit: teardown vs transition
+        // race left the radio streaming at an abandoned port).
         try
         {
-            _loopCts.Cancel();
+            loopCts.Cancel();
         }
         catch (ObjectDisposedException) { }
+        CancelStartHandshakeWatchdog();
 
-        Interlocked.Exchange(ref _mox, 0);
-        Interlocked.Exchange(ref _tune, 0);
-        SendStartStop(start: false);
-
-        if (_txTask is not null)
+        // Serialize with any in-flight transition: it holds the gate for a
+        // bounded window (stop + drain + pre-announce, and the cancel above
+        // short-circuits the drain), so wait unconditionally — the stop MUST
+        // go out even if the caller's ct is already cancelled.
+        await _psTransitionGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
         {
-            try { await _txTask.WaitAsync(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false); }
-            catch (OperationCanceledException) { }
-            catch (TimeoutException) { _log.LogWarning("TX loop did not exit within 2s."); }
+            // A concurrent StopAsync may have completed while we waited.
+            if (!ReferenceEquals(_loopCts, loopCts)) return;
+
+            Interlocked.Exchange(ref _mox, 0);
+            Interlocked.Exchange(ref _tune, 0);
+            SendStartStop(start: false);
+
+            if (_txTask is not null)
+            {
+                try { await _txTask.WaitAsync(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+                catch (TimeoutException) { _log.LogWarning("TX loop did not exit within 2s."); }
+            }
+
+            _rxThread?.Join(TimeSpan.FromSeconds(2));
+
+            loopCts.Dispose();
+            _loopCts = null;
+            _rxThread = null;
+            _txTask = null;
+
+            // Drain stale RX packets for ~100 ms per doc 02 §3.
+            await DrainSocketAsync(TimeSpan.FromMilliseconds(100)).ConfigureAwait(false);
         }
-
-        _rxThread?.Join(TimeSpan.FromSeconds(2));
-
-        _loopCts.Dispose();
-        _loopCts = null;
-        _rxThread = null;
-        _txTask = null;
-
-        // Drain stale RX packets for ~100 ms per doc 02 §3.
-        await DrainSocketAsync(TimeSpan.FromMilliseconds(100)).ConfigureAwait(false);
+        finally
+        {
+            _psTransitionGate.Release();
+        }
     }
 
     public Task DisconnectAsync(CancellationToken ct)
@@ -987,6 +1052,19 @@ public sealed class Protocol1Client : IProtocol1Client
     private async Task RestartWithPsModeAsync(bool enable, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
+        // Liveness anchor: the drain delay below is linked to THIS loop's
+        // token so a concurrent StopAsync/Dispose (which cancels _loopCts
+        // before waiting on the gate) aborts the transition mid-drain instead
+        // of letting it send `start` into a session that is being torn down —
+        // that would leave the radio streaming ~5 k pkt/s at an abandoned
+        // port, recreating the #1302 reconnect failure.
+        var loopCts = _loopCts;
+        if (loopCts is null) return;
+        // A still-running F3 start-handshake watchdog belongs to the OLD
+        // stream; if it re-sent `start` inside our stop/drain window the
+        // radio would resume with the old receiver count and our
+        // pre-announce would land on a live stream — the condemned flip.
+        CancelStartHandshakeWatchdog();
         _log.LogInformation(
             "p1.ps.transition begin target={On} board=HermesC10 — stop/drain/reconfigure/restart (#1302)",
             enable);
@@ -1000,7 +1078,8 @@ public sealed class Protocol1Client : IProtocol1Client
             SendStartStop(start: false); // stop is sent 3× on ALL platforms
             // Drain ≥100 ms: let in-flight EP6 land (discarded above) and the
             // radio's Tx FIFO overflow-clear settle at a frame boundary.
-            await Task.Delay(PsTransitionDrainMs, ct).ConfigureAwait(false);
+            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, loopCts.Token))
+                await Task.Delay(PsTransitionDrainMs, linked.Token).ConfigureAwait(false);
 
             // Atomically reconfigure while the stream is stopped: the numRx
             // Config byte (SnapshotState) and the 4-DDC parser gate (RxLoop)
@@ -1010,6 +1089,17 @@ public sealed class Protocol1Client : IProtocol1Client
             Interlocked.Exchange(ref _psEnabled, enable ? 1 : 0);
             ResetRxParserState();
 
+            // Re-check liveness before restarting the stream: if teardown
+            // began during the drain, leave the radio STOPPED (the flag flip
+            // above is harmless — the next StartAsync announces it cleanly).
+            if (_disposed || loopCts.IsCancellationRequested || !ReferenceEquals(_loopCts, loopCts))
+            {
+                _log.LogInformation(
+                    "p1.ps.transition target={On} aborted before restart — session stopping; radio left stopped",
+                    enable);
+                return;
+            }
+
             // Pre-announce the new receiver count while run=0 (see
             // StartAsync for the gateware evidence), then resume parsing
             // BEFORE start so the first EP6 packet of the new format counts
@@ -1018,7 +1108,15 @@ public sealed class Protocol1Client : IProtocol1Client
             Volatile.Write(ref _rxDiscard, 0);
 
             SendStartStop(start: true);
-            BeginStartHandshakeWatchdog(_loopCts?.Token ?? CancellationToken.None);
+            BeginStartHandshakeWatchdog(loopCts.Token);
+        }
+        catch (OperationCanceledException) when (loopCts.IsCancellationRequested)
+        {
+            // StopAsync/Dispose cancelled the session mid-drain. The stop
+            // already went out; the radio is left stopped, which is exactly
+            // the state teardown wants.
+            _log.LogInformation(
+                "p1.ps.transition target={On} aborted by teardown during drain; radio left stopped", enable);
         }
         finally
         {
@@ -1070,17 +1168,49 @@ public sealed class Protocol1Client : IProtocol1Client
     /// </summary>
     private void SendPreAnnounceConfigFrames()
     {
-        if (_socket is null || _remote is null) return;
+        // Snapshot: DisconnectAsync can null/dispose the socket concurrently
+        // (e.g. the F3 watchdog raced a teardown) — never fault on that.
+        var sock = _socket;
+        var remote = _remote;
+        if (sock is null || remote is null) return;
         var state = SnapshotState();
         var buf = new byte[ControlFrame.PacketLength];
+        // The two 20 ms spacings are LOAD-BEARING, do not shrink: after the
+        // Config frame flips IF_last_chan the radio's free-running EP6
+        // builder must complete an overflow → Tx_fifo_clr cycle (~5.3 ms
+        // worst case at 48 k / 1-DDC, TX_FIFO 1024 words) so the FIFO
+        // realigns at a frame boundary before the start command lands.
+        // 2×20 ms also mirrors piHPSDR's usleep(20000) pre-start doubles
+        // (old_protocol.c:2896-2905).
         ControlFrame.BuildDataPacket(buf, NextEp2Seq(), ControlFrame.CcRegister.Config, ControlFrame.CcRegister.TxFreq, in state);
-        try { _socket.SendTo(buf, _remote); }
+        try { sock.SendTo(buf, remote); }
         catch (SocketException ex) { _log.LogWarning(ex, "p1.ps.preannounce send 1/2 failed"); }
+        catch (ObjectDisposedException) { return; }
         Thread.Sleep(20);
         ControlFrame.BuildDataPacket(buf, NextEp2Seq(), ControlFrame.CcRegister.Config, ControlFrame.CcRegister.RxFreq, in state);
-        try { _socket.SendTo(buf, _remote); }
+        try { sock.SendTo(buf, remote); }
         catch (SocketException ex) { _log.LogWarning(ex, "p1.ps.preannounce send 2/2 failed"); }
+        catch (ObjectDisposedException) { return; }
         Thread.Sleep(20);
+    }
+
+    /// <summary>Drop everything queued in the RX socket buffer (best-effort,
+    /// non-blocking). Used before (re)starting a HermesC10 stream so stale
+    /// datagrams from a previous run can't satisfy the F3 start handshake
+    /// or feed the parser old-format packets.</summary>
+    private void FlushReceiveBuffer()
+    {
+        var sock = _socket;
+        if (sock is null) return;
+        var scratch = new byte[PacketParser.PacketLength];
+        EndPoint any = new IPEndPoint(IPAddress.Any, 0);
+        try
+        {
+            while (sock.Available > 0)
+                sock.ReceiveFrom(scratch, ref any);
+        }
+        catch (SocketException) { }
+        catch (ObjectDisposedException) { }
     }
 
     /// <summary>
@@ -1093,6 +1223,18 @@ public sealed class Protocol1Client : IProtocol1Client
     /// </summary>
     private void BeginStartHandshakeWatchdog(CancellationToken ct)
     {
+        // Supersede any prior watchdog (see the _handshakeCts field comment):
+        // exactly one watchdog may own start re-sends at a time. Capture the
+        // token BEFORE publishing the CTS — a concurrent StopAsync could
+        // cancel+dispose it the instant it is visible, and .Token on a
+        // disposed CTS throws (a cancel-before-dispose token stays usable).
+        var mine = new CancellationTokenSource();
+        var mineToken = mine.Token;
+        var prev = Interlocked.Exchange(ref _handshakeCts, mine);
+        SafeCancelDispose(prev);
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, mineToken);
+        var token = linked.Token;
+        int gen = Interlocked.Increment(ref _handshakeGeneration);
         Volatile.Write(ref _startHandshakeActive, 1);
         long baseline = Interlocked.Read(ref _totalFrames);
         _ = Task.Run(async () =>
@@ -1104,17 +1246,23 @@ public sealed class Protocol1Client : IProtocol1Client
                     long deadline = Environment.TickCount64 + StartHandshakeTimeoutMs;
                     while (Environment.TickCount64 < deadline)
                     {
-                        if (ct.IsCancellationRequested) return;
+                        if (token.IsCancellationRequested) return;
                         if (Interlocked.Read(ref _totalFrames) > baseline)
                         {
                             if (attempt > 1)
                                 _log.LogInformation("p1.start.handshake ok on attempt {Attempt}", attempt);
                             return;
                         }
-                        await Task.Delay(50, ct).ConfigureAwait(false);
+                        await Task.Delay(50, token).ConfigureAwait(false);
                     }
                     if (attempt < StartHandshakeAttempts)
                     {
+                        // Belt-and-braces: a PS transition cancels this
+                        // watchdog before its stop, but never re-send start
+                        // inside a transition window regardless — a start
+                        // there resumes the OLD receiver count mid-window.
+                        if (Volatile.Read(ref _txPaused) == 1 || Volatile.Read(ref _rxDiscard) == 1)
+                            continue;
                         _log.LogWarning(
                             "p1.start.handshake no valid EP6 within {Timeout}ms — re-sending start (attempt {Next}/{Max})",
                             StartHandshakeTimeoutMs, attempt + 1, StartHandshakeAttempts);
@@ -1125,12 +1273,30 @@ public sealed class Protocol1Client : IProtocol1Client
                     "p1.start.handshake no valid EP6 after {Max} attempts — RX-timeout teardown takes over",
                     StartHandshakeAttempts);
             }
-            catch (OperationCanceledException) { /* stop/dispose */ }
+            catch (OperationCanceledException) { /* stop/dispose/superseded */ }
             finally
             {
-                Volatile.Write(ref _startHandshakeActive, 0);
+                // Generation guard: only the CURRENT watchdog may clear the
+                // RX give-up suppression — a superseded one exiting late
+                // must not strip it from its successor mid-retry.
+                if (Volatile.Read(ref _handshakeGeneration) == gen)
+                    Volatile.Write(ref _startHandshakeActive, 0);
+                linked.Dispose();
             }
         }, CancellationToken.None);
+    }
+
+    /// <summary>Cancel the current F3 start-handshake watchdog (if any) so it
+    /// cannot re-send a start command into a stop/drain window. Called by
+    /// <see cref="StopAsync"/> and at the top of the PS transition.</summary>
+    private void CancelStartHandshakeWatchdog() =>
+        SafeCancelDispose(Interlocked.Exchange(ref _handshakeCts, null));
+
+    private static void SafeCancelDispose(CancellationTokenSource? cts)
+    {
+        if (cts is null) return;
+        try { cts.Cancel(); } catch (ObjectDisposedException) { }
+        try { cts.Dispose(); } catch (ObjectDisposedException) { }
     }
 
     public bool PsEnabled => Volatile.Read(ref _psEnabled) != 0;
@@ -1441,7 +1607,13 @@ public sealed class Protocol1Client : IProtocol1Client
                 }
                 consecutiveTimeouts = 0;
                 Volatile.Write(ref _lastDatagramTicks, Environment.TickCount64);
-                Ps4DdcHousekeeping();
+                // NOTE: Ps4DdcHousekeeping (stall watchdog + 1 Hz stats) runs
+                // AFTER the parse outcome below, never here. Running it
+                // between the datagram-freshness write above and the parse
+                // would false-fire the stall watchdog on the first datagram
+                // after a ≥PsStallTimeoutMs gap that then resumes VALID — a
+                // network hiccup or a slow start-handshake would auto-disarm
+                // a healthy arm (#1302 audit).
 
                 // PS safe-transition window (#1302): the stream is stopped and
                 // being reconfigured — discard anything still in flight so a
@@ -1449,7 +1621,14 @@ public sealed class Protocol1Client : IProtocol1Client
                 // configured for the NEW one.
                 if (Volatile.Read(ref _rxDiscard) == 1) continue;
 
-                if (n != PacketParser.PacketLength) continue;
+                if (n != PacketParser.PacketLength)
+                {
+                    // Wrong-length datagrams still tick the armed-period
+                    // stats/watchdog — they can't refresh _lastPs4OkTicks, so
+                    // a flood of them while armed is correctly a stall.
+                    Ps4DdcHousekeeping();
+                    continue;
+                }
 
                 // PS-armed 4-DDC layout (HL2 + HermesC10). The radio emits
                 // the 26-byte-per-slot 4-DDC packet shape only when the last
@@ -1504,6 +1683,13 @@ public sealed class Protocol1Client : IProtocol1Client
                         if (parsedOk) _ps4WinOk++;
                         else _ps4WinFail++;
                     }
+                    // Stall watchdog + 1 Hz stats — strictly AFTER the parse
+                    // outcome above, so a valid packet ending a long silent
+                    // gap refreshes _lastPs4OkTicks before the stall check
+                    // ever sees the fresh datagram timestamp (no false
+                    // auto-disarm on recovery; see the NOTE at the top of
+                    // the receive path).
+                    Ps4DdcHousekeeping();
                     // Pace the TX loop off the same RX clock so EP2 (C&C at
                     // rest, TX IQ during MOX) continues to fire while PS is
                     // armed.
@@ -1664,7 +1850,11 @@ public sealed class Protocol1Client : IProtocol1Client
 
     /// <summary>
     /// Armed-period observability + stall watchdog (#1302 F4/F5). Called once
-    /// per RxLoop iteration (packet or timeout) — RX thread only.
+    /// per RxLoop iteration — RX thread only. Call sites: the RX-timeout
+    /// branch, the wrong-length-datagram branch, and the 4-DDC branch AFTER
+    /// the parse outcome is recorded (ordering is load-bearing — a valid
+    /// packet ending a silent gap must refresh _lastPs4OkTicks before the
+    /// stall check runs, or recovery itself would trip the auto-disarm).
     /// While PS is armed on a HermesC10:
     ///  - emits a 1 Hz INFO line `p1.rx.ps4ddc pkts=… ok=… fail=… dropped=…`;
     ///  - WARNs once (latched until parses recover) on a sustained window of
@@ -1953,7 +2143,13 @@ public sealed class Protocol1Client : IProtocol1Client
 
     private void SendStartStop(bool start)
     {
-        if (_socket is null || _remote is null) return;
+        // Snapshot: called from the F3 watchdog / transition tasks, which can
+        // race DisconnectAsync nulling+disposing the socket. An
+        // ObjectDisposedException escaping the watchdog's Task.Run would be
+        // an unobserved-task fault that silently kills the retry loop.
+        var sock = _socket;
+        var remote = _remote;
+        if (sock is null || remote is null) return;
         Span<byte> buf = stackalloc byte[64];
         ControlFrame.BuildStartStop(buf, start);
         byte[] heap = buf.ToArray();
@@ -1969,8 +2165,9 @@ public sealed class Protocol1Client : IProtocol1Client
         int sends = (!start || OperatingSystem.IsMacOS()) ? 3 : 1;
         for (int i = 0; i < sends; i++)
         {
-            try { _socket.SendTo(heap, _remote); }
+            try { sock.SendTo(heap, remote); }
             catch (SocketException ex) { _log.LogWarning(ex, "Start/stop send {I}/{N} failed", i + 1, sends); }
+            catch (ObjectDisposedException) { return; }
             if (sends > 1 && i < sends - 1) Thread.Sleep(30);
         }
     }
