@@ -46,7 +46,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { GripVertical, Sliders, Volume2, VolumeX, X } from 'lucide-react';
-import { Panadapter } from '../../components/Panadapter';
+import { PanadapterSurface } from '../../components/PanadapterSurface';
 import { WaterfallSurface } from '../../components/WaterfallSurface';
 import { WfDbScale } from '../../components/WfDbScale';
 import { ZoomControl } from '../../components/ZoomControl';
@@ -599,7 +599,7 @@ export function HeroPanel({
                     if (focusedRxIndex !== p.index) setFocusedRxIndex(p.index);
                   }}
                 >
-                  <Panadapter
+                  <PanadapterSurface
                     receiver={p.index}
                     stitched={multiRxSpectrum && p.index <= 1}
                     foreground={focusedRxIndex === p.index}
