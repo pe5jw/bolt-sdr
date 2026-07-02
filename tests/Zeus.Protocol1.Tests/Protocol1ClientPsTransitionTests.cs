@@ -181,6 +181,9 @@ public class Protocol1ClientPsTransitionTests
         client.SetBoardKind(HpsdrBoardKind.HermesC10);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
 
+        int stalls = 0;
+        client.PsFeedbackStalled += () => Interlocked.Increment(ref stalls);
+
         var (_, clientEp) = await ConnectAndStartAsync(radio, client, cts.Token);
 
         // Feed valid 1-DDC packets so the start handshake completes and the
@@ -235,6 +238,9 @@ public class Protocol1ClientPsTransitionTests
             radio.Socket.SendTo(BuildValid4DdcEp6(s), clientEp);
         await WaitUntilAsync(() => client.PsPairedPacketCount >= 3, TimeSpan.FromSeconds(5), "post-arm 4-DDC parsed");
         Assert.Equal(0, client.DroppedFrames);
+        // The transition window itself (drain, discard, tick re-seed) must
+        // never trip the F4 stall watchdog.
+        Assert.Equal(0, Volatile.Read(ref stalls));
 
         await client.StopAsync(CancellationToken.None);
         await client.DisconnectAsync(CancellationToken.None);
@@ -252,6 +258,9 @@ public class Protocol1ClientPsTransitionTests
         client.SetPsEnabled(true); // seeded before start — connect-while-armed
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
 
+        int stalls = 0;
+        client.PsFeedbackStalled += () => Interlocked.Increment(ref stalls);
+
         var (_, clientEp) = await ConnectAndStartAsync(radio, client, cts.Token);
         radio.Socket.SendTo(BuildValid4DdcEp6(1), clientEp);
         await WaitUntilAsync(() => client.TotalFrames > 0, TimeSpan.FromSeconds(5), "armed EP6 parsed");
@@ -266,11 +275,26 @@ public class Protocol1ClientPsTransitionTests
 
         var window = radio.Snapshot().Skip(mark).ToList();
         Assert.True(window.Count(p => p.Kind == PacketKind.Stop) >= 3);
+        int firstStop = window.FindIndex(p => p.Kind == PacketKind.Stop);
         int preAnnounce = window.FindIndex(p =>
             p.Kind == PacketKind.Ep2Data && ConfigNumRxMinusOne(p.Raw).Contains(0));
         int firstStart = window.FindIndex(p => p.Kind == PacketKind.Start);
+        Assert.True(firstStop >= 0, "no stop observed");
         Assert.True(preAnnounce >= 0, "no numRx=0 pre-announce observed");
+        // The 4→1 direction is the same mid-frame length change (num_loops
+        // 18→62) as the arm direction — announcing the new count on a still-
+        // running stream would sync-shift EP6 just the same. The stop MUST
+        // precede the pre-announce.
+        Assert.True(preAnnounce > firstStop,
+            $"numRx=0 pre-announce must follow the stop (stop@{firstStop}, preannounce@{preAnnounce})");
         Assert.True(firstStart > preAnnounce, "start must follow the numRx=0 pre-announce");
+        // And nothing may re-announce the OLD (4-DDC) count between the
+        // pre-announce and start — mirror of the arm-direction check.
+        Assert.DoesNotContain(
+            window.Skip(preAnnounce).Take(firstStart - preAnnounce).Where(p => p.Kind == PacketKind.Ep2Data),
+            p => ConfigNumRxMinusOne(p.Raw).Contains(3));
+        // The transition window itself must never trip the F4 stall watchdog.
+        Assert.Equal(0, Volatile.Read(ref stalls));
 
         await client.StopAsync(CancellationToken.None);
         await client.DisconnectAsync(CancellationToken.None);
@@ -337,14 +361,15 @@ public class Protocol1ClientPsTransitionTests
 
     // ------------------------------------------------------------------
     // F2: connect-with-PS-already-armed starts DIRECTLY in 4-DDC — the
-    // Config numRx=3 pre-announce precedes the very first start command and
-    // no stop (i.e. no transition) ever happens.
+    // connect-hygiene stop (stale-run guard) and the Config numRx=3
+    // pre-announce both precede the very first start command, and no
+    // restart transition (stop AFTER start) ever happens.
     // ------------------------------------------------------------------
     [Fact]
     public async Task ConnectWhileArmed_C10_PreannouncesFourDdcBeforeStart_NoTransition()
     {
         using var radio = new FakeRadio();
-        using var client = new Protocol1Client();
+        using var client = new Protocol1Client { PsTransitionDrainMs = 50 };
         client.SetBoardKind(HpsdrBoardKind.HermesC10);
         client.SetPsEnabled(true); // RadioService seeds this before StartAsync
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -358,13 +383,23 @@ public class Protocol1ClientPsTransitionTests
             "4-DDC packets parsed from the first packet");
 
         var all = radio.Snapshot();
+        int hygieneStop = all.FindIndex(p => p.Kind == PacketKind.Stop);
         int preAnnounce = all.FindIndex(p =>
             p.Kind == PacketKind.Ep2Data && ConfigNumRxMinusOne(p.Raw).Contains(3));
         int firstStart = all.FindIndex(p => p.Kind == PacketKind.Start);
         Assert.True(preAnnounce >= 0, "no numRx=3 pre-announce before start");
+        // Stale-run guard: the connect-hygiene stop must precede the
+        // pre-announce so a radio left streaming by a crashed host is never
+        // count-flipped live.
+        Assert.True(hygieneStop >= 0 && hygieneStop < preAnnounce,
+            $"connect-hygiene stop must precede the pre-announce (stop@{hygieneStop}, preannounce@{preAnnounce})");
         Assert.True(firstStart > preAnnounce,
             $"pre-announce must precede the first start (preannounce@{preAnnounce}, start@{firstStart})");
-        Assert.DoesNotContain(all, p => p.Kind == PacketKind.Stop);
+        // No restart transition on a connect-while-armed: never a stop after
+        // the stream started.
+        int lastStop = all.FindLastIndex(p => p.Kind == PacketKind.Stop);
+        Assert.True(lastStop < firstStart,
+            $"no stop may follow the start — that would be a live transition (start@{firstStart}, stop@{lastStop})");
 
         await client.StopAsync(CancellationToken.None);
         await client.DisconnectAsync(CancellationToken.None);
@@ -387,8 +422,219 @@ public class Protocol1ClientPsTransitionTests
         int firstStart = radio.Snapshot().FindIndex(p => p.Kind == PacketKind.Start);
         Assert.True(firstStart >= 0);
         Assert.DoesNotContain(radio.Snapshot().Take(firstStart), p => p.Kind == PacketKind.Ep2Data);
+        // HL2 byte-identity: no C10-style connect-hygiene stop either.
+        Assert.DoesNotContain(radio.Snapshot().Take(firstStart), p => p.Kind == PacketKind.Stop);
 
         await client.StopAsync(CancellationToken.None);
+        await client.DisconnectAsync(CancellationToken.None);
+    }
+
+    // ------------------------------------------------------------------
+    // Connect hygiene (stale-run guard): every C10 connect sends stop ×3 and
+    // drains BEFORE the pre-announce and start, so a radio left streaming by
+    // a crashed host (run=1, stale IF_last_chan) is realigned instead of
+    // live-flipped by our first Config frame.
+    // ------------------------------------------------------------------
+    [Fact]
+    public async Task Connect_C10_HygieneStopPrecedesPreannounceAndStart()
+    {
+        using var radio = new FakeRadio();
+        using var client = new Protocol1Client { PsTransitionDrainMs = 50 };
+        client.SetBoardKind(HpsdrBoardKind.HermesC10);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var (_, clientEp) = await ConnectAndStartAsync(radio, client, cts.Token);
+        radio.Socket.SendTo(BuildValid1DdcEp6(1), clientEp);
+        await WaitUntilAsync(() => client.TotalFrames > 0, TimeSpan.FromSeconds(5), "EP6 parsed");
+
+        var all = radio.Snapshot();
+        int firstStop = all.FindIndex(p => p.Kind == PacketKind.Stop);
+        int preAnnounce = all.FindIndex(p =>
+            p.Kind == PacketKind.Ep2Data && ConfigNumRxMinusOne(p.Raw).Contains(0));
+        int firstStart = all.FindIndex(p => p.Kind == PacketKind.Start);
+        Assert.True(firstStop >= 0, "no connect-hygiene stop observed");
+        Assert.True(firstStart >= 0, "no start observed");
+        Assert.True(all.Take(firstStart).Count(p => p.Kind == PacketKind.Stop) >= 3,
+            "connect-hygiene stop must be sent 3× before start");
+        Assert.True(preAnnounce > firstStop,
+            $"pre-announce must follow the hygiene stop (stop@{firstStop}, preannounce@{preAnnounce})");
+        Assert.True(firstStart > preAnnounce,
+            $"start must follow the pre-announce (preannounce@{preAnnounce}, start@{firstStart})");
+
+        await client.StopAsync(CancellationToken.None);
+        await client.DisconnectAsync(CancellationToken.None);
+    }
+
+    // ------------------------------------------------------------------
+    // F4 negative: a FULLY dead radio (zero datagrams) is the RX-timeout
+    // teardown's job — the stall watchdog must stay silent. Pins the
+    // datagram-freshness term of the stall condition AND the production
+    // invariant PsStallTimeoutMs > datagram window.
+    // ------------------------------------------------------------------
+    [Fact]
+    public async Task Watchdog_QuietOnDeadRadio_TimeoutTeardownOwnsFailure()
+    {
+        using var radio = new FakeRadio();
+        using var client = new Protocol1Client
+        {
+            PsTransitionDrainMs = 50,
+            StartHandshakeTimeoutMs = 100,
+            StartHandshakeAttempts = 3,
+            // PsStallTimeoutMs deliberately stays at its production default:
+            // with zero datagrams both watchdog ticks age together, so the
+            // stall condition (ok-age ≥ 2000 && datagram-age ≤ 1000) can
+            // never be true — that relationship is what this test pins.
+        };
+        client.SetBoardKind(HpsdrBoardKind.HermesC10);
+        client.SetPsEnabled(true);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        int stalls = 0;
+        client.PsFeedbackStalled += () => Interlocked.Increment(ref stalls);
+        var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.Disconnected += () => disconnected.TrySetResult();
+
+        await ConnectAndStartAsync(radio, client, cts.Token);
+        // Radio sends NOTHING. Existing teardown must fire, watchdog must not.
+        await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(10), cts.Token);
+        Assert.Equal(0, Volatile.Read(ref stalls));
+
+        await client.StopAsync(CancellationToken.None);
+        await client.DisconnectAsync(CancellationToken.None);
+    }
+
+    // ------------------------------------------------------------------
+    // F4: after a stall trip + disarm/re-arm (the production auto-disarm →
+    // operator-re-arm cycle), the latch must have reset so a SECOND
+    // misframed period fires again — a latch surviving the transition would
+    // silently disable the guard for the rest of the session.
+    // ------------------------------------------------------------------
+    [Fact]
+    public async Task Watchdog_FiresAgainAfterDisarmRearm()
+    {
+        using var radio = new FakeRadio();
+        using var client = new Protocol1Client
+        {
+            PsTransitionDrainMs = 50,
+            PsStallTimeoutMs = 300,
+            StartHandshakeTimeoutMs = 100,
+        };
+        client.SetBoardKind(HpsdrBoardKind.HermesC10);
+        client.SetPsEnabled(true);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        int stalls = 0;
+        client.PsFeedbackStalled += () => Interlocked.Increment(ref stalls);
+
+        var (_, clientEp) = await ConnectAndStartAsync(radio, client, cts.Token);
+
+        using var feeder = new CancellationTokenSource();
+        var feedTask = Task.Run(async () =>
+        {
+            while (!feeder.IsCancellationRequested)
+            {
+                radio.Socket.SendTo(BuildGarbageDatagram(), clientEp);
+                await Task.Delay(20);
+            }
+        });
+
+        await WaitUntilAsync(() => Volatile.Read(ref stalls) >= 1, TimeSpan.FromSeconds(5), "first stall");
+
+        await client.SetPsEnabledAsync(false, cts.Token);
+        await client.SetPsEnabledAsync(true, cts.Token);
+
+        await WaitUntilAsync(() => Volatile.Read(ref stalls) >= 2, TimeSpan.FromSeconds(5),
+            "second stall after disarm/re-arm");
+
+        feeder.Cancel();
+        await feedTask;
+        await client.StopAsync(CancellationToken.None);
+        await client.DisconnectAsync(CancellationToken.None);
+    }
+
+    // ------------------------------------------------------------------
+    // Post-transition liveness: EP2 must RESUME after the arm transition
+    // (un-paused TX loop, RX-paced), carrying the NEW count in its rotation
+    // Config frames. A bug leaving _txPaused latched would starve the radio
+    // of Config/freq frames and pass every ordering-only assertion.
+    // ------------------------------------------------------------------
+    [Fact]
+    public async Task ArmTransition_Ep2ResumesCarryingNewCount()
+    {
+        using var radio = new FakeRadio();
+        using var client = new Protocol1Client { PsTransitionDrainMs = 50 };
+        client.SetBoardKind(HpsdrBoardKind.HermesC10);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var (_, clientEp) = await ConnectAndStartAsync(radio, client, cts.Token);
+        radio.Socket.SendTo(BuildValid1DdcEp6(1), clientEp);
+        await WaitUntilAsync(() => client.TotalFrames > 0, TimeSpan.FromSeconds(5), "pre-arm EP6 parsed");
+
+        int mark = radio.Count;
+        await client.SetPsEnabledAsync(true, cts.Token);
+
+        // Stream 4-DDC EP6 — RX pacing releases the TX loop, which must have
+        // been un-paused by the transition.
+        using var feeder = new CancellationTokenSource();
+        uint seq = 0;
+        var feedTask = Task.Run(async () =>
+        {
+            while (!feeder.IsCancellationRequested)
+            {
+                radio.Socket.SendTo(BuildValid4DdcEp6(seq++), clientEp);
+                await Task.Delay(5);
+            }
+        });
+
+        await WaitUntilAsync(() =>
+        {
+            var snap = radio.Snapshot();
+            int firstStart = snap.FindIndex(mark, p => p.Kind == PacketKind.Start);
+            if (firstStart < 0) return false;
+            return snap.Skip(firstStart + 1).Any(p =>
+                p.Kind == PacketKind.Ep2Data && ConfigNumRxMinusOne(p.Raw).Contains(3));
+        }, TimeSpan.FromSeconds(10), "EP2 resumed with numRx=3 after the transition");
+
+        feeder.Cancel();
+        await feedTask;
+        await client.StopAsync(CancellationToken.None);
+        await client.DisconnectAsync(CancellationToken.None);
+    }
+
+    // ------------------------------------------------------------------
+    // Teardown vs transition race (#1302 audit): StopAsync during an
+    // in-flight transition must leave the radio STOPPED — the transition may
+    // not send start into a session being torn down (that orphans a ~5 k
+    // pkt/s stream at an abandoned port and poisons the next connect).
+    // ------------------------------------------------------------------
+    [Fact]
+    public async Task StopDuringTransition_RadioIsLeftStopped()
+    {
+        using var radio = new FakeRadio();
+        using var client = new Protocol1Client { PsTransitionDrainMs = 400 };
+        client.SetBoardKind(HpsdrBoardKind.HermesC10);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var (_, clientEp) = await ConnectAndStartAsync(radio, client, cts.Token);
+        radio.Socket.SendTo(BuildValid1DdcEp6(1), clientEp);
+        await WaitUntilAsync(() => client.TotalFrames > 0, TimeSpan.FromSeconds(5), "EP6 parsed");
+
+        // Kick the arm transition and tear the session down mid-drain.
+        var transition = client.SetPsEnabledAsync(true);
+        await Task.Delay(120, cts.Token); // inside stop ×3 (~60 ms) + 400 ms drain
+        await client.StopAsync(CancellationToken.None);
+        await transition; // must complete without faulting
+
+        // Let any stray async sender flush, then require the wire to END
+        // stopped: no start after the final stop.
+        await Task.Delay(300, cts.Token);
+        var all = radio.Snapshot();
+        int lastStop = all.FindLastIndex(p => p.Kind == PacketKind.Stop);
+        int lastStart = all.FindLastIndex(p => p.Kind == PacketKind.Start);
+        Assert.True(lastStop >= 0, "no stop observed");
+        Assert.True(lastStart < lastStop,
+            $"radio must be left stopped — start@{lastStart} after stop@{lastStop} would orphan the stream (#1302)");
+
         await client.DisconnectAsync(CancellationToken.None);
     }
 
