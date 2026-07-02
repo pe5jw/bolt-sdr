@@ -32,7 +32,7 @@ public sealed class TxServiceUnkeyOrderingTests : IDisposable
         try { if (File.Exists(_dbPath + ".pa")) File.Delete(_dbPath + ".pa"); } catch { }
     }
 
-    private (TxService Tx, List<string> Order) BuildConnectedTx()
+    private (RadioService Radio, TxService Tx, List<string> Order) BuildConnectedTx()
     {
         var order = new List<string>();
         var loggerFactory = NullLoggerFactory.Instance;
@@ -46,13 +46,13 @@ public sealed class TxServiceUnkeyOrderingTests : IDisposable
         var hub = new StreamingHub(new NullLogger<StreamingHub>());
         var pipeline = new RecordingPipeline(order, radio, hub, loggerFactory);
         var tx = new TxService(radio, pipeline, hub, NullBandPlanService.Instance, new NullLogger<TxService>());
-        return (tx, order);
+        return (radio, tx, order);
     }
 
     [Fact]
     public void TrySetMox_Off_DropsWireBitBeforeWdspTeardown()
     {
-        var (tx, order) = BuildConnectedTx();
+        var (_, tx, order) = BuildConnectedTx();
         Assert.True(tx.TrySetMox(true, out var onErr), onErr);
         order.Clear();
 
@@ -66,13 +66,37 @@ public sealed class TxServiceUnkeyOrderingTests : IDisposable
     [Fact]
     public void TrySetMox_On_RaisesWdspChainBeforeWireKey()
     {
-        var (tx, order) = BuildConnectedTx();
+        var (_, tx, order) = BuildConnectedTx();
 
         Assert.True(tx.TrySetMox(true, out var onErr), onErr);
 
         // On the key-down edge the order is unchanged: the WDSP TX chain comes up
         // before the wire MOX bit, so the first TX frame can't carry stale RX IQ.
         Assert.Equal(new[] { "dsp:True", "wire:True" }, order);
+    }
+
+    [Fact]
+    public void TrySetMox_On_EmitsRogerBeepAfterWireKey_WhenEnabled()
+    {
+        var (radio, tx, order) = BuildConnectedTx();
+        radio.SetRogerBeepEnabled(true);
+
+        Assert.True(tx.TrySetMox(true, out var onErr), onErr);
+
+        Assert.Equal(new[] { "dsp:True", "wire:True", "roger" }, order);
+    }
+
+    [Fact]
+    public void TrySetMox_Off_DoesNotEmitRogerBeep_WhenEnabled()
+    {
+        var (radio, tx, order) = BuildConnectedTx();
+        radio.SetRogerBeepEnabled(true);
+        Assert.True(tx.TrySetMox(true, out var onErr), onErr);
+        order.Clear();
+
+        Assert.True(tx.TrySetMox(false, out var offErr), offErr);
+
+        Assert.Equal(new[] { "wire:False", "dsp:False" }, order);
     }
 
     private sealed class RecordingPipeline(
@@ -82,5 +106,10 @@ public sealed class TxServiceUnkeyOrderingTests : IDisposable
         ILoggerFactory logs) : DspPipelineService(radio, hub, Array.Empty<IRxAudioSink>(), logs)
     {
         public override void SetMox(bool on) => order.Add($"dsp:{on}");
+        public override bool TransmitRogerBeepTone()
+        {
+            order.Add("roger");
+            return true;
+        }
     }
 }

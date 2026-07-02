@@ -87,14 +87,8 @@ public sealed class TxService
     private static bool IsRogerBeepMode(RxMode mode) =>
         mode is RxMode.LSB or RxMode.USB or RxMode.AM or RxMode.SAM or RxMode.DSB or RxMode.FM;
 
-    private static bool IsRogerBeepRelease(MoxSource source, MoxSource? owner) =>
-        source switch
-        {
-            MoxSource.UI => owner is null or MoxSource.UI,
-            MoxSource.Hardware => owner == MoxSource.Hardware,
-            MoxSource.Midi => owner == MoxSource.Midi,
-            _ => false,
-        };
+    private static bool IsRogerBeepKeyDownSource(MoxSource source) =>
+        source is MoxSource.UI or MoxSource.Hardware or MoxSource.Midi;
 
     public TxService(RadioService radio, DspPipelineService pipeline, StreamingHub hub, IBandPlanService bandPlan, ILogger<TxService> log)
     {
@@ -234,12 +228,16 @@ public sealed class TxService
             ? (long)(preKeyMs / 1000.0 * System.Diagnostics.Stopwatch.Frequency)
             : 0;
 
-        // End-of-over TX tails. On a genuine, accepted mic un-key, clock any tail
-        // out while the wire MOX bit is STILL asserted and _moxOn is still true.
-        // This runs before the state lock so the audio thread never performs its
-        // falling-edge ring-clear mid-tail. The acceptance test mirrors the lock
-        // below (only the owner / UI may drop), so a rejected drop never emits a
-        // tail.
+        var rogerBeepKeyDownState = on && IsRogerBeepKeyDownSource(source)
+            ? _radio.Snapshot()
+            : null;
+
+        // FreeDV end-of-over TX tail. On a genuine, accepted mic un-key, clock
+        // the modem tail out while the wire MOX bit is STILL asserted and
+        // _moxOn is still true. This runs before the state lock so the audio
+        // thread never performs its falling-edge ring-clear mid-tail. The
+        // acceptance test mirrors the lock below (only the owner / UI may drop),
+        // so a rejected drop never emits a tail.
         MoxSource? ownerBeforeDrop = MoxOwner;
         var stateBeforeDrop = !on && IsMoxOn
             && (source == MoxSource.UI || ownerBeforeDrop is null || ownerBeforeDrop == source)
@@ -248,15 +246,10 @@ public sealed class TxService
         if (stateBeforeDrop is not null)
         {
             _pipeline.DrainFreeDvTxTail();
-            if (stateBeforeDrop.RogerBeepEnabled
-                && IsRogerBeepMode(stateBeforeDrop.Mode)
-                && IsRogerBeepRelease(source, ownerBeforeDrop))
-            {
-                _pipeline.DrainRogerBeepTail();
-            }
         }
 
         bool wasTunOn;
+        bool emitRogerBeepOnKeyDown = false;
         bool? txActiveCaptured;
         lock (_sync)
         {
@@ -284,6 +277,8 @@ public sealed class TxService
                 _tunStartedAt = null;
                 _moxStartedAt = DateTime.UtcNow;
                 _moxOwner = source;
+                emitRogerBeepOnKeyDown = rogerBeepKeyDownState?.RogerBeepEnabled == true
+                    && IsRogerBeepMode(rogerBeepKeyDownState.Mode);
                 // Anchor the mute deadline at the same instant we stamp MOX-on.
                 Interlocked.Exchange(ref _preKeyOpenAtTicks,
                     armPreKey ? System.Diagnostics.Stopwatch.GetTimestamp() + preKeyDelayTicks : 0);
@@ -338,6 +333,8 @@ public sealed class TxService
             _log.LogInformation("tx.mox.on.recv ts={Ts}",
                 System.Diagnostics.Stopwatch.GetTimestamp());
             _radio.SetMox(true);
+            if (emitRogerBeepOnKeyDown)
+                _pipeline.TransmitRogerBeepTone();
         }
         else
         {

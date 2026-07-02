@@ -1360,10 +1360,10 @@ public class DspPipelineService : BackgroundService,
     public void DrainFreeDvTxTail() => ResolveTxIngest()?.DrainFreeDvTxTail();
 
     /// <summary>
-    /// Old-school roger beep tail. Called by TxService on an accepted local
-    /// MOX release, before the wire MOX bit drops.
+    /// Old-school roger beep tone. Called by TxService after an accepted local
+    /// MOX key-down, once the wire MOX bit is asserted.
     /// </summary>
-    public bool DrainRogerBeepTail() => ResolveTxIngest()?.DrainRogerBeepTail() ?? false;
+    public virtual bool TransmitRogerBeepTone() => ResolveTxIngest()?.TransmitRogerBeepTone() ?? false;
 
     // Persisted TX display analyzer config (live TX waterfall feature). Optional
     // so test constructions of DspPipelineService keep working; when null the
