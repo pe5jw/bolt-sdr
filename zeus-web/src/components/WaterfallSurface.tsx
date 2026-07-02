@@ -25,6 +25,7 @@ import { useState, type ComponentProps } from 'react';
 import { Waterfall } from './Waterfall';
 import { WaterfallHeightfield } from './WaterfallHeightfield';
 import { isWebGpuWaterfallEnabled } from '../gl/webgpu/flag';
+import { useConnectionStore } from '../state/connection-store';
 
 // Waterfall's props default to {}, so ComponentProps is `Props | undefined`;
 // NonNullable narrows it back to the object so field access is clean.
@@ -34,10 +35,16 @@ export function WaterfallSurface(props: WaterfallProps) {
   // Latches when the heightfield reports it can't run (no WebGPU / init failure),
   // so we render the WebGL waterfall instead of a broken/blank surface.
   const [heightfieldUnavailable, setHeightfieldUnavailable] = useState(false);
+  const connectedProtocol = useConnectionStore((s) => s.connectedProtocol);
 
   // Cheap localStorage/URL check; this wrapper re-renders only on layout changes,
   // never per frame.
-  const useHeightfield = isWebGpuWaterfallEnabled() && !heightfieldUnavailable;
+  // P3 sessions run through the sidecar-backed wide-DDC path; keep them on the
+  // hardened WebGL waterfall until the WebGPU heightfield is stable there.
+  const useHeightfield =
+    connectedProtocol !== 'P3' &&
+    isWebGpuWaterfallEnabled() &&
+    !heightfieldUnavailable;
 
   if (useHeightfield) {
     return (
