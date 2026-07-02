@@ -438,9 +438,18 @@ if [ -n "${CODESIGN_IDENTITY:-}" ]; then
         #     that ships next to the main app binary. Apple notarization
         #     requires every Mach-O inside the bundle to be signed with a
         #     valid Developer ID cert, hardened runtime, and secure timestamp.
+        #     It MUST carry the same entitlements as the main apphost: it is an
+        #     independent .NET apphost that JITs on startup, and hardened-runtime
+        #     entitlements do NOT propagate from the bundle/apphost to a
+        #     separately-signed nested Mach-O at runtime. Without allow-jit /
+        #     allow-unsigned-executable-memory on its OWN signature the sidecar is
+        #     SIGKILLed at first JIT, so on notarized builds the support sidecar
+        #     never runs — no presence heartbeat (operator invisible in /admin),
+        #     no crash auto-share.
         if [ -f "${bundle}/Contents/Resources/app/Zeus.SupportAgent" ]; then
-            echo "      sign Zeus.SupportAgent"
-            sign_one "${bundle}/Contents/Resources/app/Zeus.SupportAgent"
+            echo "      sign Zeus.SupportAgent (entitlements)"
+            sign_one "${bundle}/Contents/Resources/app/Zeus.SupportAgent" \
+                --entitlements "${ENTITLEMENTS_PATH}"
         fi
 
         # 2. The apphost carries the entitlements (hardened runtime + mic).
