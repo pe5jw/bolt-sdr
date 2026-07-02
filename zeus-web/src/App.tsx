@@ -80,6 +80,7 @@ import { PsToggleButton } from './components/PsToggleButton';
 import { PaTempChip } from './components/PaTempChip';
 import { WorkspaceZoomControls } from './components/WorkspaceZoomControls';
 import { QrzStatusPill } from './components/QrzStatusPill';
+import { RogerBeepButton } from './components/RogerBeepButton';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
 import ReportProblemButton from './components/report-problem/ReportProblemButton';
 import ReportProblemModal from './components/report-problem/ReportProblemModal';
@@ -1195,6 +1196,11 @@ export default function App() {
             <div className="ctrl-group topbar-control topbar-control--af">
               <div className="label-xs ctrl-lbl">AF</div>
               <AfGainSlider />
+            </div>
+            <span className="strip-divider" aria-hidden />
+            <div className="ctrl-group topbar-control topbar-control--roger">
+              <div className="label-xs ctrl-lbl">ROGER</div>
+              <RogerBeepButton />
             </div>
           </div>
           <button

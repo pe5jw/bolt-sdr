@@ -710,6 +710,7 @@
 .topbar-control--agc { flex-basis: 260px; }
 .topbar-control--sql,
 .topbar-control--af { flex-basis: 150px; }
+.topbar-control--roger { flex-basis: 72px; }
 .topbar-control--agc .agc-control {
   flex-direction: row;
   align-items: center;

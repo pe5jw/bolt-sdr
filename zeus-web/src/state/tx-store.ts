@@ -235,6 +235,8 @@ export type TxState = {
   // input doesn't flicker on reload.
   txMoxPreKeyDelayMs: number;
   setTxMoxPreKeyDelayMs: (ms: number) => void;
+  rogerBeepEnabled: boolean;
+  setRogerBeepEnabled: (on: boolean) => void;
   psMoxDelaySec: number;
   setPsMoxDelaySec: (s: number) => void;
   psLoopDelaySec: number;
@@ -416,6 +418,8 @@ export const useTxStore = create<TxState>()(
       setPsAutoAttenuate: (on) => set({ psAutoAttenuate: on }),
       txMoxPreKeyDelayMs: 0,
       setTxMoxPreKeyDelayMs: (ms) => set({ txMoxPreKeyDelayMs: ms }),
+      rogerBeepEnabled: false,
+      setRogerBeepEnabled: (on) => set({ rogerBeepEnabled: on }),
       psMoxDelaySec: 0.2,
       setPsMoxDelaySec: (s) => set({ psMoxDelaySec: s }),
       psLoopDelaySec: 0,
@@ -504,6 +508,7 @@ export const useTxStore = create<TxState>()(
           twoToneFreq2: s.twoToneFreq2,
           twoToneMag: s.twoToneMag,
           cfcConfig: s.cfc,
+          rogerBeepEnabled: s.rogerBeepEnabled,
         }),
     }),
     {

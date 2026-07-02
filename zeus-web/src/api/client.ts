@@ -420,6 +420,8 @@ export type RadioStateDto = {
   // key-down so an external amp's T/R relay settles before RF. Server-clamped
   // below the PS MOX hold-off; hydrated on connect like the drive sliders.
   txMoxPreKeyDelayMs: number;
+  // Old-school end-of-over roger beep. Default off on older servers.
+  rogerBeepEnabled: boolean;
   twoToneFreq1: number;
   twoToneFreq2: number;
   twoToneMag: number;
@@ -2544,6 +2546,8 @@ export function normalizeState(raw: unknown): RadioStateDto {
     tunePercent: typeof r.tunePct === 'number' ? r.tunePct : 10,
     txMoxPreKeyDelayMs:
       typeof r.txMoxPreKeyDelayMs === 'number' ? r.txMoxPreKeyDelayMs : 0,
+    rogerBeepEnabled:
+      typeof r.rogerBeepEnabled === 'boolean' ? r.rogerBeepEnabled : false,
     twoToneFreq1: typeof r.twoToneFreq1 === 'number' ? r.twoToneFreq1 : 700,
     twoToneFreq2: typeof r.twoToneFreq2 === 'number' ? r.twoToneFreq2 : 1900,
     twoToneMag: typeof r.twoToneMag === 'number' ? r.twoToneMag : 0.49,
@@ -6570,6 +6574,24 @@ export function setTxPreKeyDelay(
       const v = (raw as { txMoxPreKeyDelayMs?: unknown }).txMoxPreKeyDelayMs;
       return { txMoxPreKeyDelayMs: typeof v === 'number' ? v : 0 };
     },
+  );
+}
+
+export function setRogerBeep(
+  enabled: boolean,
+  signal?: AbortSignal,
+): Promise<{ rogerBeepEnabled: boolean }> {
+  return jsonFetch(
+    '/api/tx/roger-beep',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+      signal,
+    },
+    (raw) => ({
+      rogerBeepEnabled: Boolean((raw as { rogerBeepEnabled?: unknown }).rogerBeepEnabled),
+    }),
   );
 }
 

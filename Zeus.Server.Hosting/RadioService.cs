@@ -682,7 +682,8 @@ public sealed class RadioService : IDisposable
             TxVfo: rsSnap?.TxVfo ?? TxVfo.A,
             CwPitchHz: CwOffset.CwPitchHz,
             CtunEnabled: rsSnap?.CtunEnabled ?? false,
-            PreampOn: rsSnap?.PreampOn ?? false);
+            PreampOn: rsSnap?.PreampOn ?? false,
+            RogerBeepEnabled: rsSnap?.RogerBeepEnabled ?? false);
 
         _state = _state with { TxPhaseRotator = persistedTxPhaseRotator };
 
@@ -2809,6 +2810,21 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    /// <summary>
+    /// Enable/disable the old-school end-of-over roger beep. Persisted with the
+    /// radio-state snapshot; default OFF preserves existing TX behaviour.
+    /// </summary>
+    public StateDto SetRogerBeepEnabled(bool enabled)
+    {
+        Mutate(s => s with { RogerBeepEnabled = enabled });
+        return Snapshot();
+    }
+
+    public bool RogerBeepEnabled
+    {
+        get { lock (_sync) return _state.RogerBeepEnabled; }
+    }
+
     /// <summary>Authoritative pre-key delay (ms) read by TxService on the MOX
     /// rising edge. Already PS-clamped.</summary>
     public int TxMoxPreKeyDelayMs => Volatile.Read(ref _txMoxPreKeyDelayMs);
@@ -4249,6 +4265,7 @@ public sealed class RadioService : IDisposable
                 DrivePct = snap.DrivePct,
                 TunePct = snap.TunePct,
                 TxMoxPreKeyDelayMs = snap.TxMoxPreKeyDelayMs,
+                RogerBeepEnabled = snap.RogerBeepEnabled,
                 RadioLoHz = snap.RadioLoHz,
                 // RX2 tuning persists from the canonical Receivers[1] entry (the
                 // flat VFO-B StateDto fields are gone); the RadioStateEntry schema

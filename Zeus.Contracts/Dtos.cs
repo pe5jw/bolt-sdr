@@ -1339,7 +1339,12 @@ public sealed record StateDto(
     // TX phase rotator. Appended to the positional record to avoid shifting
     // older constructor call sites; null means "use disabled defaults" at the
     // engine seam and "missing from older server" for clients.
-    TxPhaseRotatorConfig? TxPhaseRotator = null);
+    TxPhaseRotatorConfig? TxPhaseRotator = null,
+
+    // Old-school end-of-over roger beep. Appended to avoid shifting older
+    // positional StateDto construction sites. Default OFF preserves existing
+    // transmit behaviour until the operator explicitly enables it.
+    bool RogerBeepEnabled = false);
 
 /// <summary>Canonical CW constants shared between backend and wire DTOs.
 /// Single source of truth — CwOffset (server-side) and StateDto both
@@ -1687,6 +1692,9 @@ public sealed record DriveSetRequest(int Percent);
 /// <summary>TX pre-key (MOX) delay in milliseconds, 0..500. See
 /// <see cref="StateDto.TxMoxPreKeyDelayMs"/>.</summary>
 public sealed record TxPreKeyDelaySetRequest(int DelayMs);
+
+/// <summary>Body of <c>POST /api/tx/roger-beep</c>.</summary>
+public sealed record RogerBeepSetRequest(bool Enabled);
 
 // TUN has its own drive % so the operator can pre-set a lower tune level
 // without touching the MOX drive. Same per-band PA gain compensates both,

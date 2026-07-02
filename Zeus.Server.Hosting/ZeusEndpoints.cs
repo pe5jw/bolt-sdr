@@ -2254,6 +2254,13 @@ public static class ZeusEndpoints
             return Results.Ok(new { txMoxPreKeyDelayMs = state.TxMoxPreKeyDelayMs });
         });
 
+        app.MapPost("/api/tx/roger-beep", (RogerBeepSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.tx.rogerBeep enabled={Enabled}", req.Enabled);
+            var state = r.SetRogerBeepEnabled(req.Enabled);
+            return Results.Ok(new { rogerBeepEnabled = state.RogerBeepEnabled });
+        });
+
         // TUN drive %. Symmetric with /api/tx/drive; the same PA-gain math applies,
         // so equal slider positions emit equal watts. Backend selects between the
         // two sources based on whether TUN is keyed (TxService.TrySetTun →

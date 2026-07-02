@@ -542,4 +542,24 @@ public class TxAudioIngestTests
         Assert.NotNull(lastP2);
         Assert.Contains(lastP2!, v => v == 0.5f);   // not muted
     }
+
+    [Fact]
+    public void RogerBeepTail_EmitsToneThroughTxChain()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        var p2Blocks = new List<float[]>();
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>(),
+            forwardP2: iq => p2Blocks.Add(iq.ToArray()));
+
+        bool emitted = ingest.DrainRogerBeepTail();
+
+        Assert.True(emitted);
+        Assert.Equal(6, engine.ProcessedBlocks);
+        Assert.Equal(6, p2Blocks.Count);
+        Assert.All(p2Blocks, block => Assert.Equal(2048, block.Length));
+        Assert.Contains(p2Blocks.SelectMany(block => block), v => Math.Abs(v) > 0.05f);
+    }
 }

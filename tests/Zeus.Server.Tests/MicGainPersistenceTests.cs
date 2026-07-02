@@ -54,7 +54,7 @@ public class MicGainPersistenceTests : IDisposable
     private (RadioService radio, RadioStateStore store) BuildRadioWithStore()
     {
         var loggerFactory = NullLoggerFactory.Instance;
-        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
+        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath);
         var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath);
         var stateStore = new RadioStateStore(NullLogger<RadioStateStore>.Instance, _dbPath);
         var radio = new RadioService(
@@ -126,6 +126,24 @@ public class MicGainPersistenceTests : IDisposable
         try
         {
             Assert.Equal(3.5, radio2.Snapshot().LevelerMaxGainDb);
+        }
+        finally
+        {
+            radio2.Dispose();
+        }
+    }
+
+    [Fact]
+    public void RogerBeep_SurvivesRadioServiceReconstruction()
+    {
+        var (radio1, _) = BuildRadioWithStore();
+        radio1.SetRogerBeepEnabled(true);
+        radio1.Dispose();
+
+        var (radio2, _) = BuildRadioWithStore();
+        try
+        {
+            Assert.True(radio2.Snapshot().RogerBeepEnabled);
         }
         finally
         {
