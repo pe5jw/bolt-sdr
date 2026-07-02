@@ -116,6 +116,7 @@ export function PassbandOverlay({
 
   const rectRef = useRef<HTMLDivElement | null>(null);
   const drag = useRef<EdgeDrag | null>(null);
+  const vc = viewCenter.viewCenterFor(receiver);
 
   // Map a client X to a filter offset (Hz relative to the dial/VFO) against the
   // container's live width — the same settled geometry FilterCursorOverlay and
@@ -128,12 +129,12 @@ export function PassbandOverlay({
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0) return null;
     const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
-    const len = s.panDb?.length ?? s.width;
+    const len = s.width;
     if (!len || s.hzPerPixel <= 0) return null;
     const span = len * s.hzPerPixel;
     const frac = (clientX - rect.left) / rect.width;
     const c = useConnectionStore.getState();
-    const visualCenter = Number(s.centerHz);
+    const visualCenter = vc.isInitialized() ? vc.getViewCenterHz() : Number(s.centerHz);
     const absHz = visualCenter - span / 2 + frac * span;
     return absHz - getReceiverVfoHz(c, receiver);
   };
@@ -213,7 +214,6 @@ export function PassbandOverlay({
   // so during a glide it eases with the spectrum instead of teleporting at
   // 30 Hz frame arrival.
   useEffect(() => {
-    const vc = viewCenter.viewCenterFor(receiver);
     const update = () => {
       const rect = rectRef.current;
       if (!rect) return;
@@ -287,13 +287,15 @@ export function PassbandOverlay({
       unsubFrame();
       cancelDrawBusFrame(update);
     };
-  }, [receiver]);
+  }, [receiver, vc]);
 
   if (!width || hzPerPixel <= 0) return null;
 
   const spanHz = width * hzPerPixel;
-  const center = Number(centerHz);
-  const startHz = center - spanHz / 2;
+  const frameCenter = Number(centerHz);
+  const initialView = vc.isInitialized() ? vc.getViewCenterHz() : frameCenter;
+  const initialTarget = vc.isInitialized() ? vc.getTargetCenterHz() : frameCenter;
+  const startHz = initialView - spanHz / 2;
 
   // Initial (pre-draw-bus) geometry; the callback refines it next frame.
   const cwOffset = mode === 'CWU' ? -cwPitchHz : mode === 'CWL' ? cwPitchHz : 0;
@@ -305,8 +307,9 @@ export function PassbandOverlay({
     filterLowHz,
     filterHighHz,
   );
-  const passLowHz = selectedVfoHz + cwOffset + dispLowHz;
-  const passHighHz = selectedVfoHz + cwOffset + dispHighHz;
+  const initialPassCenter = initialView + (selectedVfoHz - initialTarget) + cwOffset;
+  const passLowHz = initialPassCenter + dispLowHz;
+  const passHighHz = initialPassCenter + dispHighHz;
   const leftPct = ((passLowHz - startHz) / spanHz) * 100;
   const rightPct = ((passHighHz - startHz) / spanHz) * 100;
   const widthPct = rightPct - leftPct;

@@ -27,7 +27,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { probeWebGpu, resetWebGpuProbe } from '../gl/webgpu/caps';
-import { createHeightfieldRenderer, type HeightfieldRenderer } from '../gl/webgpu/heightfield';
+import { createHeightfieldRenderer, type HeightfieldRenderer, type HeightfieldRowDomain } from '../gl/webgpu/heightfield';
 import { registerFrameConsumer, selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { enhanceInto, registerEstimatorConsumer, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { estimateRowFloorDb, forgetReceiverFloor, reportReceiverFloorDb } from '../dsp/floor-normalization';
@@ -119,6 +119,12 @@ export function WaterfallHeightfield({
       return useSignalEnhanceStore.getState().popEnabled ? 'pop' : 'rx-db';
     };
 
+    const shouldClearForDomainChange = (prev: string, next: string): boolean => {
+      if (!prev || prev === next) return false;
+      if (prev === 'tx-db' || next === 'tx-db') return false;
+      return true;
+    };
+
     // Upload one row. On a value-domain change first clears the history so stale
     // rows don't render as a clipped band. When Pop is on, the row is replaced by
     // the CFAR floor-subtracted 0..1 field (signal-estimator) — a flat baseline
@@ -137,10 +143,12 @@ export function WaterfallHeightfield({
         if (floorDb != null) reportReceiverFloorDb(rxIndex, floorDb);
       }
       if (dom !== valueDomain) {
+        const shouldClear = shouldClearForDomainChange(valueDomain, dom);
         valueDomain = dom;
-        renderer.clearHistory();
+        if (shouldClear) renderer.clearHistory();
       }
       let row = wfDb;
+      let rowDomain: HeightfieldRowDomain = dom === 'tx-db' ? 'tx' : dom === 'pop' ? 'pop' : 'rx';
       if (dom === 'pop') {
         if (!enhBuf || !terrainScratch || enhBuf.length !== row.length) {
           enhBuf = new Float32Array(row.length);
@@ -148,8 +156,9 @@ export function WaterfallHeightfield({
         }
         enhanceInto(row, enhBuf, terrainScratch);
         row = enhBuf;
+        rowDomain = 'pop';
       }
-      renderer.pushRow(row, Number(centerHz), hzPerPixel);
+      renderer.pushRow(row, Number(centerHz), hzPerPixel, rowDomain);
     };
 
     const releaseFrameConsumer = registerFrameConsumer();
@@ -212,6 +221,7 @@ export function WaterfallHeightfield({
       // operator override, so each band's noise floor lands at the same colour and
       // the single dB slider evens them all out. Keyed/Pop are absolute.
       const rxWin = dom === 'rx-db' ? effectiveRxWfWindow(rxIndex) : null;
+      const rxWindowForRows = rxWin ?? effectiveRxWfWindow(rxIndex);
       const dbMin = dom === 'pop' ? 0 : dom === 'tx-db' ? wfTxDbMin : rxWin!.wfDbMin;
       const dbMax = dom === 'pop' ? 1 : dom === 'tx-db' ? wfTxDbMax : rxWin!.wfDbMax;
       renderer.setScrollSpeed(waterfallScrollSpeed);
@@ -240,7 +250,12 @@ export function WaterfallHeightfield({
             ? viewZoom.getDisplayedHzPerPixel()
             : null;
       const t0 = performance.now();
-      renderer.draw(dbMin, dbMax, visualCenterHz(), viewHzPerPixel);
+      renderer.draw(dbMin, dbMax, visualCenterHz(), viewHzPerPixel, {
+        rxDbMin: rxWindowForRows.wfDbMin,
+        rxDbMax: rxWindowForRows.wfDbMax,
+        txDbMin: wfTxDbMin,
+        txDbMax: wfTxDbMax,
+      });
       const dt = performance.now() - t0;
       if (showStats) {
         frameAccum += dt;
@@ -359,8 +374,9 @@ export function WaterfallHeightfield({
         if (!renderer || lost) return;
         const dom = domainNow();
         if (dom !== valueDomain) {
+          const shouldClear = shouldClearForDomainChange(valueDomain, dom);
           valueDomain = dom;
-          renderer.clearHistory();
+          if (shouldClear) renderer.clearHistory();
         }
         requestRedraw();
       };
@@ -406,7 +422,7 @@ export function WaterfallHeightfield({
       forgetReceiverFloor(rxIndex);
       renderer?.dispose();
     };
-  }, [receiver, showStats, stitched]);
+  }, [receiver, rxIndex, showStats, stitched]);
 
   // Dial-position cursor (the vertical tuning crosshair). Mirrors Waterfall.tsx:
   // outside CTUN the dial sits at the view centre (50%); under CTUN it slides to

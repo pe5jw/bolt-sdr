@@ -19,16 +19,31 @@ const HISTORY_ROWS = 512;
 const MAX_TEXTURE_COLUMNS = 1024;
 const MESH_COLUMNS = 640;
 const VISIBLE_ROWS = 160;
-const UNIFORM_FLOATS = 24;
+const UNIFORM_FLOATS = 28;
 const LARGE_CENTER_SHIFT_HZ = 25_000_000;
 
+export type PanSurfaceRowDomain = 'rx' | 'pop' | 'tx';
+
+export type PanSurfaceDbWindows = {
+  rxDbMin: number;
+  rxDbMax: number;
+  txDbMin: number;
+  txDbMax: number;
+};
+
 export type PanSurfaceRenderer = {
-  pushRow: (rowDb: Float32Array, centerHz: number, hzPerPixel: number) => void;
+  pushRow: (
+    rowDb: Float32Array,
+    centerHz: number,
+    hzPerPixel: number,
+    domain?: PanSurfaceRowDomain,
+  ) => void;
   draw: (
     dbMin: number,
     dbMax: number,
     viewCenterHz?: number | null,
     viewHzPerPixel?: number | null,
+    windows?: PanSurfaceDbWindows,
   ) => void;
   resize: (w: number, h: number) => void;
   setColormap: (id: RenderColormapId) => void;
@@ -94,20 +109,56 @@ function resamplePeakPreserving(source: Float32Array, target: Float32Array): Flo
   return target;
 }
 
+function rowDomainCode(domain: PanSurfaceRowDomain | undefined): number {
+  switch (domain) {
+    case 'pop':
+      return 1;
+    case 'tx':
+      return 2;
+    default:
+      return 0;
+  }
+}
+
+export function panSurfaceViewSpanHzForTest(
+  viewHzPerPixel: number,
+  sourceWidth: number,
+  textureWidth: number,
+): number {
+  return viewHzPerPixel * Math.max(1, sourceWidth || textureWidth);
+}
+
+export function panSurfaceSourceUForTest(
+  freqU: number,
+  viewCenterOffsetHz: number,
+  viewSpanHz: number,
+  rowCenterOffsetHz: number,
+  rowHzPerPixel: number,
+  textureWidth: number,
+): number {
+  const rowSpanHz = rowHzPerPixel * textureWidth;
+  return (
+    0.5 +
+    (viewCenterOffsetHz - rowCenterOffsetHz) / rowSpanHz +
+    (freqU - 0.5) * (viewSpanHz / rowSpanHz)
+  );
+}
+
 const SHADER = /* wgsl */ `
 struct Uniforms {
   p0 : vec4<f32>, // writeRow, historyRows, texW, validRows
-  p1 : vec4<f32>, // dbMin, dbMax, meshCols, drawRows
-  p2 : vec4<f32>, // viewCenterOffsetHz, viewHzPerPixel, frontY, backY
-  p3 : vec4<f32>, // backWidth, heightGain, zCurve, reliefDepth
+  p1 : vec4<f32>, // rxDbMin, rxDbMax, meshCols, drawRows
+  p2 : vec4<f32>, // viewCenterOffsetHz, viewSpanHz, frontY, backY
+  p3 : vec4<f32>, // reserved, heightGain, zCurve, reliefDepth
   p4 : vec4<f32>, // traceColor.rgb, popGlow
   p5 : vec4<f32>, // canvasW, canvasH, lineAlpha, _
+  p6 : vec4<f32>, // txDbMin, txDbMax, popDbMin, popDbMax
 };
 @group(0) @binding(0) var<uniform> u : Uniforms;
 @group(0) @binding(1) var historyTex : texture_2d<f32>;
 @group(0) @binding(2) var lutTex : texture_2d<f32>;
 @group(0) @binding(3) var lutSampler : sampler;
-@group(0) @binding(4) var<storage, read> rowGeom : array<vec2<f32>>;
+@group(0) @binding(4) var<storage, read> rowGeom : array<vec4<f32>>;
 
 fn ringRow(age : f32) -> i32 {
   let h = u.p0.y;
@@ -121,11 +172,27 @@ fn rawLevel(freqU : f32, age : f32) -> f32 {
   let g = rowGeom[row];
   if (g.y <= 0.0) { return 0.0; }
   let texW = u.p0.z;
-  let srcX = 0.5 + (u.p2.x - g.x) / (g.y * texW) + (freqU - 0.5) * (u.p2.y / g.y);
+  let rowSpanHz = g.y * texW;
+  let srcX = 0.5 + (u.p2.x - g.x) / rowSpanHz + (freqU - 0.5) * (u.p2.y / rowSpanHz);
   if (srcX < 0.0 || srcX > 1.0) { return 0.0; }
   let texX = clamp(i32(round(srcX * (texW - 1.0))), 0, i32(texW) - 1);
   let db = textureLoad(historyTex, vec2<i32>(texX, row), 0).r;
-  return clamp((db - u.p1.x) / max(0.0001, u.p1.y - u.p1.x), 0.0, 1.0);
+  var dbMin = u.p1.x;
+  var dbMax = u.p1.y;
+  if (g.z > 1.5) {
+    dbMin = u.p6.x;
+    dbMax = u.p6.y;
+  } else if (g.z > 0.5) {
+    dbMin = u.p6.z;
+    dbMax = u.p6.w;
+  }
+  return clamp((db - dbMin) / max(0.0001, dbMax - dbMin), 0.0, 1.0);
+}
+
+fn rowDomain(age : f32) -> f32 {
+  if (age < 0.0 || age > u.p0.w - 1.0) { return 0.0; }
+  let row = ringRow(age);
+  return rowGeom[row].z;
 }
 
 struct Sample {
@@ -156,8 +223,11 @@ fn project(freqU : f32, age : f32, level : f32) -> vec4<f32> {
   let drawRows = max(1.0, u.p1.w);
   let depth = clamp(age / max(1.0, drawRows - 1.0), 0.0, 1.0);
   let curveDepth = pow(depth, 0.82);
-  let widthScale = mix(1.0, u.p3.x, curveDepth);
-  let x = (freqU - 0.5) * 2.0 * widthScale;
+  // X is deliberately frequency-linear at every depth. Perspective width
+  // compression looks dramatic, but it makes older rows drift inward and breaks
+  // registration with the waterfall below. Depth comes from Y, relief, haze,
+  // and ridge lighting; frequency stays exact for RX and TX rows.
+  let x = (freqU - 0.5) * 2.0;
   let baseY = mix(u.p2.z, u.p2.w, curveDepth);
   let gain = u.p3.y * mix(1.0, 0.55, curveDepth);
   let y = baseY + pow(level, u.p3.z) * gain;
@@ -170,6 +240,7 @@ struct VsOut {
   @location(1) depth : f32,
   @location(2) light : f32,
   @location(3) crest : f32,
+  @location(4) domain : f32,
 };
 
 @vertex
@@ -199,6 +270,7 @@ fn vsFill(@builtin(vertex_index) vi : u32) -> VsOut {
   out.depth = clamp(age / max(1.0, u.p1.w - 1.0), 0.0, 1.0);
   out.light = s.light;
   out.crest = s.crest;
+  out.domain = rowDomain(age);
   return out;
 }
 
@@ -218,6 +290,7 @@ fn vsLine(@builtin(vertex_index) vi : u32) -> VsOut {
   out.depth = clamp(age / max(1.0, u.p1.w - 1.0), 0.0, 1.0);
   out.light = s.light;
   out.crest = s.crest;
+  out.domain = rowDomain(age);
   return out;
 }
 
@@ -225,6 +298,8 @@ fn vsLine(@builtin(vertex_index) vi : u32) -> VsOut {
 fn fsFill(in : VsOut) -> @location(0) vec4<f32> {
   let lvl = clamp(in.level * 0.98 + in.crest * 0.55 * u.p4.w, 0.0, 1.0);
   var col = textureSample(lutTex, lutSampler, vec2<f32>(lvl, 0.5)).rgb * in.light;
+  let txRow = smoothstep(1.5, 2.0, in.domain);
+  col = mix(col, col * vec3<f32>(1.22, 0.78, 0.70) + vec3<f32>(0.12, 0.02, 0.01), txRow * smoothstep(0.10, 0.85, in.level));
   let horizon = vec3<f32>(0.015, 0.045, 0.09);
   col = mix(col, horizon, in.depth * 0.42);
   let glow = smoothstep(0.42, 0.95, in.level) * (0.18 + u.p4.w * 0.28) + in.crest * u.p4.w * 0.75;
@@ -236,7 +311,9 @@ fn fsFill(in : VsOut) -> @location(0) vec4<f32> {
 @fragment
 fn fsLine(in : VsOut) -> @location(0) vec4<f32> {
   let whiteLift = smoothstep(0.74, 1.0, in.level) * 0.55;
-  let col = mix(u.p4.rgb, vec3<f32>(1.0), whiteLift);
+  let txRow = smoothstep(1.5, 2.0, in.domain);
+  let trace = mix(u.p4.rgb, vec3<f32>(1.0, 0.22, 0.16), txRow);
+  let col = mix(trace, vec3<f32>(1.0), whiteLift);
   let alpha = (0.10 + smoothstep(0.02, 0.90, in.level) * 0.88) * (1.0 - in.depth * 0.32) * u.p5.z;
   return vec4<f32>(col, alpha);
 }
@@ -305,11 +382,11 @@ export function createPanSurfaceRenderer(
   uploadLut('blue');
 
   const rowGeomBuffer = device.createBuffer({
-    size: HISTORY_ROWS * 2 * 4,
+    size: HISTORY_ROWS * 4 * 4,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
-  const rowGeomScratch = new Float32Array(2);
-  const rowGeomZero = new Float32Array(HISTORY_ROWS * 2);
+  const rowGeomScratch = new Float32Array(4);
+  const rowGeomZero = new Float32Array(HISTORY_ROWS * 4);
 
   let texWidth = 0;
   let writeRow = HISTORY_ROWS - 1;
@@ -324,6 +401,7 @@ export function createPanSurfaceRenderer(
   let baseCenterHz: number | null = null;
   let anchorCenterHz = 0;
   let anchorHzPerPixel = 0;
+  let anchorSourceWidth = 0;
   let uploadScratch = new Float32Array(MAX_TEXTURE_COLUMNS);
   let historyTexture: GPUTexture | null = null;
   let bindGroup: GPUBindGroup | null = null;
@@ -354,6 +432,7 @@ export function createPanSurfaceRenderer(
     writeRow = HISTORY_ROWS - 1;
     validRows = 0;
     baseCenterHz = null;
+    anchorSourceWidth = 0;
     rebuildBindGroup();
   };
 
@@ -361,19 +440,20 @@ export function createPanSurfaceRenderer(
     writeRow = HISTORY_ROWS - 1;
     validRows = 0;
     baseCenterHz = null;
+    anchorSourceWidth = 0;
     device.queue.writeBuffer(rowGeomBuffer, 0, gpuSrc(rowGeomZero));
   };
 
   const writeUniforms = (
-    dbMin: number,
-    dbMax: number,
     viewCenterHz: number,
     viewHzPerPixel: number,
     drawRows: number,
     meshCols: number,
+    windows: PanSurfaceDbWindows,
   ) => {
     const base = baseCenterHz ?? viewCenterHz;
     const centerOffset = viewCenterHz - base;
+    const viewSpanHz = panSurfaceViewSpanHzForTest(viewHzPerPixel, anchorSourceWidth, texWidth);
     const usableHeight = Math.max(80, canvasH);
     const frontY = -0.88;
     const backY = Math.max(-0.08, Math.min(0.34, -0.02 + usableHeight / 900));
@@ -383,15 +463,15 @@ export function createPanSurfaceRenderer(
     uniformData[1] = HISTORY_ROWS;
     uniformData[2] = texWidth;
     uniformData[3] = validRows;
-    uniformData[4] = dbMin;
-    uniformData[5] = dbMax;
+    uniformData[4] = windows.rxDbMin;
+    uniformData[5] = windows.rxDbMax;
     uniformData[6] = meshCols;
     uniformData[7] = drawRows;
     uniformData[8] = centerOffset;
-    uniformData[9] = viewHzPerPixel;
+    uniformData[9] = viewSpanHz;
     uniformData[10] = frontY;
     uniformData[11] = backY;
-    uniformData[12] = 0.56;
+    uniformData[12] = 0;
     uniformData[13] = heightGain;
     uniformData[14] = 0.66;
     uniformData[15] = reliefDepth;
@@ -403,11 +483,15 @@ export function createPanSurfaceRenderer(
     uniformData[21] = canvasH;
     uniformData[22] = 0.86;
     uniformData[23] = 0;
+    uniformData[24] = windows.txDbMin;
+    uniformData[25] = windows.txDbMax;
+    uniformData[26] = 0;
+    uniformData[27] = 1;
     device.queue.writeBuffer(uniformBuffer, 0, gpuSrc(uniformData));
   };
 
   return {
-    pushRow(rowDb, centerHz, hzPerPixel) {
+    pushRow(rowDb, centerHz, hzPerPixel, domain = 'rx') {
       if (rowDb.length === 0) return;
       const targetWidth = chooseTextureWidth(rowDb.length);
       if (texWidth !== targetWidth) allocHistory(targetWidth);
@@ -432,7 +516,8 @@ export function createPanSurfaceRenderer(
           : 0;
 
       anchorCenterHz = Number.isFinite(centerHz) ? centerHz : anchorCenterHz;
-      if (rowHzPerPixel > 0) anchorHzPerPixel = rowHzPerPixel;
+      anchorSourceWidth = rowDb.length;
+      if (Number.isFinite(hzPerPixel) && hzPerPixel > 0) anchorHzPerPixel = hzPerPixel;
       writeRow = (writeRow + 1) % HISTORY_ROWS;
       device.queue.writeTexture(
         { texture: historyTexture, origin: { x: 0, y: writeRow, z: 0 } },
@@ -443,10 +528,18 @@ export function createPanSurfaceRenderer(
       rowGeomScratch[0] =
         baseCenterHz !== null && Number.isFinite(centerHz) ? centerHz - baseCenterHz : 0;
       rowGeomScratch[1] = rowHzPerPixel;
-      device.queue.writeBuffer(rowGeomBuffer, writeRow * 2 * 4, gpuSrc(rowGeomScratch));
+      rowGeomScratch[2] = rowDomainCode(domain);
+      rowGeomScratch[3] = 0;
+      device.queue.writeBuffer(rowGeomBuffer, writeRow * 4 * 4, gpuSrc(rowGeomScratch));
       validRows = Math.min(HISTORY_ROWS, validRows + 1);
     },
-    draw(dbMin, dbMax, viewCenterHz = null, viewHzPerPixel = null) {
+    draw(
+      dbMin,
+      dbMax,
+      viewCenterHz = null,
+      viewHzPerPixel = null,
+      windows?: PanSurfaceDbWindows,
+    ) {
       if (!bindGroup || !historyTexture || texWidth <= 0 || validRows <= 0) return;
       const vCenter =
         viewCenterHz !== null && Number.isFinite(viewCenterHz) ? viewCenterHz : anchorCenterHz;
@@ -460,7 +553,12 @@ export function createPanSurfaceRenderer(
       const adaptiveCols = Math.max(256, Math.min(MESH_COLUMNS, Math.floor(canvasW * 0.72)));
       const drawRows = Math.max(1, Math.min(adaptiveRows, validRows));
       const meshCols = Math.max(2, Math.min(adaptiveCols, texWidth));
-      writeUniforms(dbMin, dbMax, vCenter, vHz, drawRows, meshCols);
+      writeUniforms(vCenter, vHz, drawRows, meshCols, windows ?? {
+        rxDbMin: dbMin,
+        rxDbMax: dbMax,
+        txDbMin: dbMin,
+        txDbMax: dbMax,
+      });
 
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginRenderPass({

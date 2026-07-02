@@ -27,6 +27,7 @@ import {
   type ReceiverKey,
 } from '../state/receiver-state';
 import { resolvePanTuneTarget } from '../util/use-pan-tune-gesture';
+import * as viewCenter from '../state/view-center';
 
 // Thetis-style click-tune cursor: a vertical guide line tracks the mouse
 // across the spectrum surface and a translucent grey rectangle previews where
@@ -65,6 +66,7 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    const vc = viewCenter.viewCenterFor(receiver);
 
     let mouseX = 0;
     let mouseY = 0;
@@ -101,11 +103,12 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
       if (hzPerPixel > 0 && len > 0 && rectW > 0) {
         const spanHz = len * hzPerPixel;
         const frac = mouseX / rectW;
-        const rawHz = Number(slice.centerHz) + (frac - 0.5) * spanHz;
+        const centerHz = vc.isInitialized() ? vc.getViewCenterHz() : Number(slice.centerHz);
+        const rawHz = centerHz + (frac - 0.5) * spanHz;
         const target = resolvePanTuneTarget(rawHz, true, receiver);
         tuneHz = target.tuneHz;
         if (target.snappedToSignal && spanHz > 0) {
-          const startHz = Number(slice.centerHz) - spanHz / 2;
+          const startHz = centerHz - spanHz / 2;
           cursorX = ((target.tuneHz - startHz) / spanHz) * rectW;
           cursorX = Math.max(0, Math.min(rectW, cursorX));
         }
@@ -224,12 +227,14 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
       }
     });
     const unsubDisplay = useDisplayStore.subscribe((s, prev) => {
+      const slice = selectDisplaySlice(s, receiver);
+      const prevSlice = selectDisplaySlice(prev, receiver);
       if (
         visible &&
-        (s.centerHz !== prev.centerHz ||
-          s.hzPerPixel !== prev.hzPerPixel ||
-          s.width !== prev.width ||
-          s.lastSeq !== prev.lastSeq)
+        (slice.centerHz !== prevSlice.centerHz ||
+          slice.hzPerPixel !== prevSlice.hzPerPixel ||
+          slice.width !== prevSlice.width ||
+          slice.lastSeq !== prevSlice.lastSeq)
       ) {
         schedule();
       }
@@ -244,6 +249,9 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
         schedule();
       }
     });
+    const unsubVc = vc.subscribe(() => {
+      if (visible) schedule();
+    });
 
     return () => {
       if (raf !== 0) cancelAnimationFrame(raf);
@@ -252,6 +260,7 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
       unsubConn();
       unsubDisplay();
       unsubEnhance();
+      unsubVc();
     };
   }, [containerRef, receiver]);
 

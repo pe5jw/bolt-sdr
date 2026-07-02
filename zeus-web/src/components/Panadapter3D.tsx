@@ -13,7 +13,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { planForFrame } from '../gl/frame-plan';
 import { hexToRgbFloats } from '../gl/panadapter';
 import { probeWebGpu, resetWebGpuProbe } from '../gl/webgpu/caps';
-import { createPanSurfaceRenderer, type PanSurfaceRenderer } from '../gl/webgpu/pan-surface';
+import { createPanSurfaceRenderer, type PanSurfaceRenderer, type PanSurfaceRowDomain } from '../gl/webgpu/pan-surface';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { registerFrameConsumer, selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore, shouldTxAutoRange } from '../state/display-settings-store';
@@ -139,19 +139,28 @@ export function Panadapter3D({
       lastPalette = id;
     };
 
+    const shouldClearForDomainChange = (prev: string, next: string): boolean => {
+      if (!prev || prev === next) return false;
+      if (prev === 'tx-db' || next === 'tx-db') return false;
+      return true;
+    };
+
     const ensureDomain = () => {
       if (!renderer) return;
       const dom = domainNow();
       if (dom === valueDomain) return;
+      const shouldClear = shouldClearForDomainChange(valueDomain, dom);
       valueDomain = dom;
-      renderer.clearHistory();
+      if (shouldClear) renderer.clearHistory();
     };
 
     const pushFrame = (panDb: Float32Array, centerHz: bigint, hzPerPixel: number) => {
       if (!renderer) return;
       ensureDomain();
+      const dom = domainNow();
+      const rowDomain: PanSurfaceRowDomain = dom === 'tx-db' ? 'tx' : dom === 'pop' ? 'pop' : 'rx';
       lastRawPan = panDb;
-      renderer.pushRow(buildRow(panDb), Number(centerHz), hzPerPixel);
+      renderer.pushRow(buildRow(panDb), Number(centerHz), hzPerPixel, rowDomain);
     };
 
     const draw = () => {
@@ -180,7 +189,12 @@ export function Panadapter3D({
             : ownFrameHzPerPixel > 0
               ? ownFrameHzPerPixel
               : null;
-      renderer.draw(dbMin, dbMax, visualCenterHz(), viewHzPerPixel);
+      renderer.draw(dbMin, dbMax, visualCenterHz(), viewHzPerPixel, {
+        rxDbMin: s.dbMin,
+        rxDbMax: s.dbMax,
+        txDbMin: s.txDbMin,
+        txDbMax: s.txDbMax,
+      });
     };
 
     let inViewport = true;
@@ -324,13 +338,24 @@ export function Panadapter3D({
         if (state.receivers !== prev.receivers) requestRedraw();
       });
 
-      const clearDomainAndRedraw = () => {
-        if (!renderer || lost) return;
-        valueDomain = '';
-        renderer.clearHistory();
-        if (lastRawPan) pushFrame(lastRawPan, selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz, selectDisplaySlice(useDisplayStore.getState(), receiver).hzPerPixel);
-        requestRedraw();
-      };
+    const clearDomainAndRedraw = () => {
+      if (!renderer || lost) return;
+      const prevDomain = valueDomain;
+      const nextDomain = domainNow();
+      const shouldClear = shouldClearForDomainChange(prevDomain, nextDomain);
+      valueDomain = nextDomain;
+      if (shouldClear) renderer.clearHistory();
+      const shouldReplayLastFrame =
+        !!lastRawPan &&
+        prevDomain !== 'tx-db' &&
+        nextDomain !== 'tx-db' &&
+        (shouldClear || prevDomain === nextDomain);
+      if (shouldReplayLastFrame && lastRawPan) {
+        const slice = selectDisplaySlice(useDisplayStore.getState(), receiver);
+        pushFrame(lastRawPan, slice.centerHz, slice.hzPerPixel);
+      }
+      requestRedraw();
+    };
       unsubTx = useTxStore.subscribe((state, prev) => {
         if (
           state.moxOn !== prev.moxOn ||

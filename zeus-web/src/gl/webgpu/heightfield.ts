@@ -40,10 +40,24 @@ import { lutFor, type RenderColormapId } from '../colormap';
 
 const HISTORY_ROWS = 4096;
 
+export type HeightfieldRowDomain = 'rx' | 'pop' | 'tx';
+
+export type HeightfieldDbWindows = {
+  rxDbMin: number;
+  rxDbMax: number;
+  txDbMin: number;
+  txDbMax: number;
+};
+
 export type HeightfieldRenderer = {
   /** Upload the newest spectral row (dB per bin), tagged with the centre/span it
    *  was captured at. Re-allocates on a width change. */
-  pushRow: (rowDb: Float32Array, centerHz: number, hzPerPixel: number) => void;
+  pushRow: (
+    rowDb: Float32Array,
+    centerHz: number,
+    hzPerPixel: number,
+    domain?: HeightfieldRowDomain,
+  ) => void;
   /** Render the history. `viewCenterHz` / `viewHzPerPixel` are the animated view
    *  (view-center.ts / view-zoom.ts); when supplied the per-row sampling glides
    *  so pan/zoom are seamless. Null renders against the latest captured view. */
@@ -52,6 +66,7 @@ export type HeightfieldRenderer = {
     dbMax: number,
     viewCenterHz?: number | null,
     viewHzPerPixel?: number | null,
+    windows?: HeightfieldDbWindows,
   ) => void;
   resize: (w: number, h: number) => void;
   setColormap: (id: RenderColormapId) => void;
@@ -74,7 +89,7 @@ export type HeightfieldRenderer = {
   dispose: () => void;
 };
 
-const UNIFORM_FLOATS = 20; // 80 bytes — see WGSL Uniforms struct.
+const UNIFORM_FLOATS = 24; // 96 bytes — see WGSL Uniforms struct.
 
 // TS 5.7 types TypedArrays as ArrayBufferLike-backed, but the WebGPU queue wants
 // ArrayBuffer-backed views (it rejects SharedArrayBuffer). None of ours are
@@ -89,19 +104,31 @@ function lutTextureBytes(id: RenderColormapId): Uint8Array {
   return lut;
 }
 
+function rowDomainCode(domain: HeightfieldRowDomain | undefined): number {
+  switch (domain) {
+    case 'pop':
+      return 1;
+    case 'tx':
+      return 2;
+    default:
+      return 0;
+  }
+}
+
 const SHADER = /* wgsl */ `
 struct Uniforms {
   lightDir : vec4<f32>,
   p0 : vec4<f32>,  // writeRow, historyRows, texW, validRows
-  p1 : vec4<f32>,  // dbMin, dbMax, reliefScale, reliefDepth
+  p1 : vec4<f32>,  // rxDbMin, rxDbMax, reliefScale, reliefDepth
   p2 : vec4<f32>,  // canvasW, visibleRows, scroll, cleanup
   p3 : vec4<f32>,  // viewCentreHz, viewHzPerPixel, popGlow, _
+  p4 : vec4<f32>,  // txDbMin, txDbMax, popDbMin, popDbMax
 };
 @group(0) @binding(0) var<uniform> u : Uniforms;
 @group(0) @binding(1) var historyTex : texture_2d<f32>;
 @group(0) @binding(2) var lutTex : texture_2d<f32>;
 @group(0) @binding(3) var lutSampler : sampler;
-@group(0) @binding(4) var<storage, read> rowGeom : array<vec2<f32>>;
+@group(0) @binding(4) var<storage, read> rowGeom : array<vec4<f32>>;
 
 fn ringRow(age : f32) -> i32 {
   let h = u.p0.y;
@@ -122,7 +149,23 @@ fn levelAt(uvx : f32, age : f32) -> f32 {
   if (srcX < 0.0 || srcX > 1.0) { return 0.0; } // exposed edge → floor
   let texX = clamp(i32(round(srcX * (texW - 1.0))), 0, i32(texW) - 1);
   let db = textureLoad(historyTex, vec2<i32>(texX, row), 0).r;
-  return clamp((db - u.p1.x) / max(0.0001, u.p1.y - u.p1.x), 0.0, 1.0);
+  var dbMin = u.p1.x;
+  var dbMax = u.p1.y;
+  if (g.z > 1.5) {
+    dbMin = u.p4.x;
+    dbMax = u.p4.y;
+  } else if (g.z > 0.5) {
+    dbMin = u.p4.z;
+    dbMax = u.p4.w;
+  }
+  return clamp((db - dbMin) / max(0.0001, dbMax - dbMin), 0.0, 1.0);
+}
+
+fn rowDomainAt(uv : vec2<f32>) -> f32 {
+  if (u.p0.w < 0.5) { return 0.0; }
+  let ageRows = uv.y * max(1.0, u.p2.y) / max(0.05, u.p2.z);
+  if (ageRows > u.p0.w - 1.0) { return 0.0; }
+  return rowGeom[ringRow(ageRows)].z;
 }
 
 // Temporal de-speckle (Pop). A real signal persists into adjacent captured rows;
@@ -166,6 +209,7 @@ fn fs(in : VsOut) -> @location(0) vec4<f32> {
 
   let age = in.uv.y * visibleRows / scroll;
   let level = cleanLevel(in.uv.x, age);
+  let rowDomain = rowDomainAt(in.uv);
 
   // 4-tap hillshade for the topographic relief — neighbours one pixel / one row
   // away give a cheap surface normal, then Lambert. Contrast tuned by reliefDepth.
@@ -199,6 +243,8 @@ fn fs(in : VsOut) -> @location(0) vec4<f32> {
   let lvl = clamp((lifted - 0.5) * 1.12 + 0.5, 0.0, 1.0);
   let base = textureSample(lutTex, lutSampler, vec2<f32>(lvl, 0.5)).rgb;
   var col = base * shade;
+  let txRow = smoothstep(1.5, 2.0, rowDomain);
+  col = mix(col, col * vec3<f32>(1.18, 0.82, 0.76) + vec3<f32>(0.06, 0.01, 0.01), txRow * smoothstep(0.10, 0.85, level));
   // Crest sheen + specular glint, cyan-white. Faded by HEADROOM (1 - lvl) so the
   // brightest carriers don't blow past the ramp top — they stay defined and the
   // colormap owns the peak; the glow lives on the rising mid-levels.
@@ -256,13 +302,14 @@ export function createHeightfieldRenderer(
   };
   uploadLut('blue');
 
-  // Per-row capture geometry (centreHz, hzPerPixel) — one vec2 per ring slot.
+  // Per-row capture geometry (centreHz, hzPerPixel, value-domain, reserved).
+  // One vec4 per ring slot keeps WGSL storage-buffer layout naturally aligned.
   const rowGeomBuffer = device.createBuffer({
-    size: HISTORY_ROWS * 2 * 4,
+    size: HISTORY_ROWS * 4 * 4,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
-  const rowGeomScratch = new Float32Array(2);
-  const rowGeomZero = new Float32Array(HISTORY_ROWS * 2);
+  const rowGeomScratch = new Float32Array(4);
+  const rowGeomZero = new Float32Array(HISTORY_ROWS * 4);
 
   let texWidth = 0;
   let writeRow = 0;
@@ -309,7 +356,11 @@ export function createHeightfieldRenderer(
     rebuildBindGroup();
   };
 
-  const writeUniforms = (dbMin: number, dbMax: number, viewCenterHz: number, viewHzPerPixel: number) => {
+  const writeUniforms = (
+    viewCenterHz: number,
+    viewHzPerPixel: number,
+    windows: HeightfieldDbWindows,
+  ) => {
     // lightDir: cartographic NW (upper-left) and above; normalized in-shader.
     uniformData[0] = -0.5;
     uniformData[1] = 0.8;
@@ -324,8 +375,8 @@ export function createHeightfieldRenderer(
     // signals stand off the noise floor as illuminated ridges — especially with
     // Pop, where floor subtraction flattens the baseline so the relief lights up
     // only real carriers.
-    uniformData[8] = dbMin;
-    uniformData[9] = dbMax;
+    uniformData[8] = windows.rxDbMin;
+    uniformData[9] = windows.rxDbMax;
     uniformData[10] = 6 + 26 * reliefDepth;
     uniformData[11] = reliefDepth;
     // p2: canvasW, visibleRows (≈ canvasH), scroll, _
@@ -338,11 +389,16 @@ export function createHeightfieldRenderer(
     uniformData[17] = viewHzPerPixel;
     uniformData[18] = popGlow;
     uniformData[19] = 0;
+    // p4: txDbMin, txDbMax, popDbMin, popDbMax
+    uniformData[20] = windows.txDbMin;
+    uniformData[21] = windows.txDbMax;
+    uniformData[22] = 0;
+    uniformData[23] = 1;
     device.queue.writeBuffer(uniformBuffer, 0, gpuSrc(uniformData));
   };
 
   return {
-    pushRow(rowDb, centerHz, hzPerPixel) {
+    pushRow(rowDb, centerHz, hzPerPixel, domain = 'rx') {
       if (rowDb.length === 0) return;
       if (texWidth !== rowDb.length) allocHistory(rowDb.length);
       if (!historyTexture) return;
@@ -357,15 +413,22 @@ export function createHeightfieldRenderer(
       );
       rowGeomScratch[0] = Number.isFinite(centerHz) ? centerHz : 0;
       rowGeomScratch[1] = Number.isFinite(hzPerPixel) && hzPerPixel > 0 ? hzPerPixel : 0;
-      device.queue.writeBuffer(rowGeomBuffer, writeRow * 2 * 4, gpuSrc(rowGeomScratch));
+      rowGeomScratch[2] = rowDomainCode(domain);
+      rowGeomScratch[3] = 0;
+      device.queue.writeBuffer(rowGeomBuffer, writeRow * 4 * 4, gpuSrc(rowGeomScratch));
       validRows = Math.min(HISTORY_ROWS, validRows + 1);
     },
-    draw(dbMin, dbMax, viewCenterHz = null, viewHzPerPixel = null) {
+    draw(dbMin, dbMax, viewCenterHz = null, viewHzPerPixel = null, windows = undefined) {
       if (!bindGroup) return;
       const vCenter =
         viewCenterHz !== null && Number.isFinite(viewCenterHz) ? viewCenterHz : anchorCenterHz ?? 0;
       const vHz = viewHzPerPixel !== null && viewHzPerPixel > 0 ? viewHzPerPixel : anchorHzPerPixel;
-      writeUniforms(dbMin, dbMax, vCenter, vHz);
+      writeUniforms(vCenter, vHz, windows ?? {
+        rxDbMin: dbMin,
+        rxDbMax: dbMax,
+        txDbMin: dbMin,
+        txDbMax: dbMax,
+      });
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginRenderPass({
         colorAttachments: [
