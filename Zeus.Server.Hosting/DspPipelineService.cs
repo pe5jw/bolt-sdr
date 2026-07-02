@@ -4099,29 +4099,6 @@ public class DspPipelineService : BackgroundService,
         }
         if (resync || s.PsEnabled != _appliedPsEnabled)
         {
-            // pihpsdr transmitter.c:2467-2473 inverts the order: write the
-            // wire (RxSpec / HighPriority with PS bits set) FIRST, then sleep
-            // 100 ms to let the radio firmware spin up DDC0/DDC1 sync, then
-            // arm the engine. Without the settle window, the first 5-20
-            // pscc calls receive partial / glitched samples, scheck flags
-            // binfo[6], bs_count climbs to 2, calcc resets to LRESET — and
-            // the loop sometimes thrashes instead of converging.
-            //
-            // Disarm path stays engine-first: drop the engine run flag, then
-            // close the wire, then drain any in-flight paired frames so they
-            // don't arrive after PS has shut down.
-            //
-            // Task.Delay(100).Wait() is acceptable here — OnRadioStateChanged
-            // runs on a state-change handler thread, not the request path.
-            //
-            // P1 sibling (issue #172): the active P1 client gets the same
-            // arm/disarm sequencing — flip the wire bit (which also
-            // bumps NumReceiversMinusOne in the next Config frame so the
-            // gateware switches to the 2-DDC paired layout), wait the
-            // same 100 ms settle window, then arm the engine. On a
-            // non-HL2 P1 board this is harmless: SetPsEnabled stores the
-            // flag locally and the C0=0x14 wire byte is unaffected
-            // (board-gated in WriteAttenuatorPayload).
             var p1Active = _radio.ActiveClient;
             if (s.PsEnabled && _keyed)
             {
@@ -4134,38 +4111,29 @@ public class DspPipelineService : BackgroundService,
                 // OnRadioMoxChanged falling-edge re-apply arm it cleanly on
                 // key-up. Disarm (abort) below stays immediate.
             }
-            else if (s.PsEnabled)
-            {
-                _p2Client?.SetPsFeedbackEnabled(true);
-                p1Active?.SetPsEnabled(true);
-                // PS engine arm requires a feedback path that delivers paired
-                // samples. On P2 ANAN-class that's SetPsFeedbackEnabled above.
-                // On P1, HermesLite2 and HermesC10 (ANAN-G2E, classic Hermes
-                // v3.3 gateware with the relay-routed feedback tap on DDC2 +
-                // DAC reference on DDC3) deliver the 4-DDC paired layout PS
-                // needs — the NumReceiversMinusOne wire bump and 4-DDC parser
-                // path in Protocol1Client are gated to those two boards.
-                // On any other P1 board WDSP arms with no possible feedback
-                // source, sits in COLLECT waiting on paired samples that
-                // never arrive, and the blocking 100 ms settle below stacks
-                // on the state-change thread — together that freezes RX
-                // audio + waterfall (GH #426). Skip the engine arm in that
-                // case; the wire calls above are no-ops on the other P1
-                // boards (board-gated in WriteAttenuatorPayload + SnapshotState).
-                bool psEngineSupported = P1PsEngineArmSupported(
-                    p1Connected: p1Active is not null, _radio.ConnectedBoardKind);
-                if (psEngineSupported)
-                {
-                    try { Task.Delay(100).Wait(); } catch { /* ignore */ }
-                    engine.SetPsEnabled(true);
-                }
-            }
             else
             {
-                engine.SetPsEnabled(false);
-                _p2Client?.SetPsFeedbackEnabled(false);
-                p1Active?.SetPsEnabled(false);
-                DrainPsFeedback();
+                // PS engine arm requires a feedback path that delivers paired
+                // samples. On P2 ANAN-class that's SetPsFeedbackEnabled. On
+                // P1, HermesLite2 and HermesC10 (ANAN-G2E) deliver the 4-DDC
+                // paired layout PS needs; on any other P1 board WDSP would
+                // arm with no possible feedback source, sit in COLLECT, and
+                // freeze RX audio + waterfall (GH #426) — skip the engine arm
+                // there. The wire calls are board-gated no-ops on those
+                // boards (WriteAttenuatorPayload + SnapshotState).
+                bool psEngineSupported = P1PsEngineArmSupported(
+                    p1Connected: p1Active is not null, _radio.ConnectedBoardKind);
+                // #1302 F1/F6: the arm/disarm sequence is async now — on a
+                // HermesC10 the wire flip rides a stop/drain/restart
+                // transition (SetPsEnabledAsync) that must never run inline
+                // under _engineLock on the state-change thread, and the
+                // 100 ms pihpsdr settle (transmitter.c:2467-2473: wire first,
+                // settle, then engine arm) becomes a proper await instead of
+                // Task.Delay(100).Wait(). Single-flight FIFO worker: requests
+                // serialize, and SetPsEnabledAsync's idempotence collapses
+                // redundant transitions (e.g. the post-connect resync after a
+                // connect-while-armed is a wire no-op).
+                SchedulePsArmTransition(s.PsEnabled, p1Active, engine, psEngineSupported);
             }
             // Mark applied only when we actually armed or disarmed. A deferred
             // (keyed) arm leaves _appliedPsEnabled stale on purpose so the
@@ -4292,6 +4260,83 @@ public class DspPipelineService : BackgroundService,
         !p1Connected
         || board == HpsdrBoardKind.HermesLite2
         || board == HpsdrBoardKind.HermesC10;
+
+    // ---- PS arm/disarm worker (#1302 F1/F6) --------------------------------
+    // Single-flight FIFO chain: each request runs strictly after the previous
+    // one completes, off the state-change thread and outside _engineLock.
+    // Ordering per request preserves the shipped sequences:
+    //   arm    = wire (P2 bit / P1 SetPsEnabledAsync) → 100 ms settle →
+    //            engine.SetPsEnabled(true)          (pihpsdr order)
+    //   disarm = engine.SetPsEnabled(false) → wire → drain leftover frames
+    // On HermesC10 the P1 wire call is the stop/drain/restart transition —
+    // the receiver count is never flipped on a live stream.
+    private readonly object _psArmWorkSync = new();
+    private Task _psArmWork = Task.CompletedTask;
+
+    /// <summary>Tail of the PS arm/disarm worker chain — awaitable by tests
+    /// to observe completion of all scheduled transitions.</summary>
+    internal Task PsArmWorkForTests { get { lock (_psArmWorkSync) return _psArmWork; } }
+
+    private void SchedulePsArmTransition(
+        bool enable, IProtocol1Client? p1, IDspEngine engine, bool engineArmSupported)
+    {
+        lock (_psArmWorkSync)
+        {
+            var prev = _psArmWork;
+            _psArmWork = Task.Run(async () =>
+            {
+                try { await prev.ConfigureAwait(false); }
+                catch { /* previous request already logged its failure */ }
+                try
+                {
+                    await RunPsArmTransitionAsync(enable, p1, engine, engineArmSupported)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogError(ex, "ps.arm transition target={Enable} failed", enable);
+                }
+            });
+        }
+    }
+
+    private async Task RunPsArmTransitionAsync(
+        bool enable, IProtocol1Client? p1, IDspEngine engine, bool engineArmSupported)
+    {
+        if (enable)
+        {
+            _p2Client?.SetPsFeedbackEnabled(true);
+            if (p1 is not null)
+                await p1.SetPsEnabledAsync(true).ConfigureAwait(false);
+            if (engineArmSupported)
+            {
+                // pihpsdr settle window: without it the first 5-20 pscc calls
+                // receive partial/glitched samples, scheck flags binfo[6] and
+                // calcc thrashes through LRESET instead of converging.
+                await Task.Delay(100).ConfigureAwait(false);
+                lock (_engineLock)
+                {
+                    // The engine may have been replaced (reconnect) since this
+                    // request was scheduled; the new engine's resync re-arms
+                    // through its own state replay, so skip a stale arm.
+                    if (ReferenceEquals(engine, _engine))
+                        engine.SetPsEnabled(true);
+                }
+            }
+        }
+        else
+        {
+            lock (_engineLock)
+            {
+                if (ReferenceEquals(engine, _engine))
+                    engine.SetPsEnabled(false);
+            }
+            _p2Client?.SetPsFeedbackEnabled(false);
+            if (p1 is not null)
+                await p1.SetPsEnabledAsync(false).ConfigureAwait(false);
+            DrainPsFeedback();
+        }
+    }
 
     private static (int Ints, int Spi) ParseIntsSpi(string preset)
     {
