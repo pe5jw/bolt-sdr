@@ -139,6 +139,35 @@ export function Panadapter3D({
       lastPalette = id;
     };
 
+    let pendingCanvasW = 0;
+    let pendingCanvasH = 0;
+    let appliedCanvasW = 0;
+    let appliedCanvasH = 0;
+
+    const measureCanvasSize = (entry?: ResizeObserverEntry) => {
+      const rect = entry?.contentRect ?? container.getBoundingClientRect();
+      const dpr = Math.min(1, window.devicePixelRatio || 1);
+      return {
+        w: Math.max(1, Math.round(rect.width * dpr)),
+        h: Math.max(1, Math.round(rect.height * dpr)),
+      };
+    };
+
+    const applyPendingResize = () => {
+      if (!renderer) return;
+      if (pendingCanvasW <= 0 || pendingCanvasH <= 0) {
+        const next = measureCanvasSize();
+        pendingCanvasW = next.w;
+        pendingCanvasH = next.h;
+      }
+      if (pendingCanvasW === appliedCanvasW && pendingCanvasH === appliedCanvasH) return;
+      appliedCanvasW = pendingCanvasW;
+      appliedCanvasH = pendingCanvasH;
+      canvas.width = appliedCanvasW;
+      canvas.height = appliedCanvasH;
+      renderer.resize(appliedCanvasW, appliedCanvasH);
+    };
+
     const shouldClearForDomainChange = (prev: string, next: string): boolean => {
       if (!prev || prev === next) return false;
       if (prev === 'tx-db' || next === 'tx-db') return false;
@@ -165,6 +194,7 @@ export function Panadapter3D({
 
     const draw = () => {
       if (!renderer || lost) return;
+      applyPendingResize();
       const s = useDisplaySettingsStore.getState();
       const tx = useTxStore.getState();
       const keyed = tx.moxOn || tx.tunOn;
@@ -205,17 +235,13 @@ export function Panadapter3D({
       requestDrawBusFrame(draw);
     };
 
-    const resize = () => {
-      const { width, height } = container.getBoundingClientRect();
-      const dpr = Math.min(1, window.devicePixelRatio || 1);
-      const w = Math.max(1, Math.round(width * dpr));
-      const h = Math.max(1, Math.round(height * dpr));
-      canvas.width = w;
-      canvas.height = h;
-      renderer?.resize(w, h);
+    const queueResize = (entry?: ResizeObserverEntry) => {
+      const next = measureCanvasSize(entry);
+      pendingCanvasW = next.w;
+      pendingCanvasH = next.h;
       requestRedraw();
     };
-    const ro = new ResizeObserver(resize);
+    const ro = new ResizeObserver((entries) => queueResize(entries[entries.length - 1]));
     const io = new IntersectionObserver(
       (entries) => {
         for (const e of entries) inViewport = e.isIntersecting;
@@ -267,7 +293,7 @@ export function Panadapter3D({
       });
 
       setStatus('ready');
-      resize();
+      queueResize();
       ro.observe(container);
       io.observe(container);
       document.addEventListener('visibilitychange', onVisibilityChange);

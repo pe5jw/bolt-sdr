@@ -204,7 +204,42 @@ export function Panadapter({
         ? vc.getViewCenterHz()
         : Number(selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz);
 
+    let pendingCanvasW = 0;
+    let pendingCanvasH = 0;
+    let appliedCanvasW = 0;
+    let appliedCanvasH = 0;
+
+    const measureCanvasSize = (entry?: ResizeObserverEntry) => {
+      const rect = entry?.contentRect ?? container.getBoundingClientRect();
+      // Clamp the WebGL backing store at DPR=1. On a Retina display the
+      // native devicePixelRatio is 2 (or higher on 5K), which means the
+      // panadapter would render at 4× the pixels and feed 4× the texture
+      // data through every composite. The trace is a single-pixel-wide line
+      // over a smooth dB gradient — sub-pixel antialiasing is not visible
+      // and not worth the GPU cost. Browser CSS scaling fills the difference.
+      const dpr = Math.min(1, window.devicePixelRatio || 1);
+      return {
+        w: Math.max(1, Math.round(rect.width * dpr)),
+        h: Math.max(1, Math.round(rect.height * dpr)),
+      };
+    };
+
+    const applyPendingResize = () => {
+      if (pendingCanvasW <= 0 || pendingCanvasH <= 0) {
+        const next = measureCanvasSize();
+        pendingCanvasW = next.w;
+        pendingCanvasH = next.h;
+      }
+      if (pendingCanvasW === appliedCanvasW && pendingCanvasH === appliedCanvasH) return;
+      appliedCanvasW = pendingCanvasW;
+      appliedCanvasH = pendingCanvasH;
+      canvas.width = appliedCanvasW;
+      canvas.height = appliedCanvasH;
+      renderer.resize(appliedCanvasW, appliedCanvasH);
+    };
+
     const redraw = () => {
+      applyPendingResize();
       if (!anchorPan) return;
       const s = useDisplaySettingsStore.getState();
       // While keyed (MOX or TUN — server already feeds TX pixels via
@@ -252,26 +287,16 @@ export function Panadapter({
       requestDrawBusFrame(redraw);
     };
 
-    const resize = () => {
-      const { width, height } = container.getBoundingClientRect();
-      // Clamp the WebGL backing store at DPR=1. On a Retina display the
-      // native devicePixelRatio is 2 (or higher on 5K), which means the
-      // panadapter would render at 4× the pixels and feed 4× the texture
-      // data through every composite. The trace is a single-pixel-wide line
-      // over a smooth dB gradient — sub-pixel antialiasing is not visible
-      // and not worth the GPU cost. Browser CSS scaling fills the difference.
-      const dpr = Math.min(1, window.devicePixelRatio || 1);
-      const w = Math.max(1, Math.round(width * dpr));
-      const h = Math.max(1, Math.round(height * dpr));
-      canvas.width = w;
-      canvas.height = h;
-      renderer.resize(w, h);
+    const queueResize = (entry?: ResizeObserverEntry) => {
+      const next = measureCanvasSize(entry);
+      pendingCanvasW = next.w;
+      pendingCanvasH = next.h;
       requestRedraw();
     };
 
-    const ro = new ResizeObserver(resize);
+    const ro = new ResizeObserver((entries) => queueResize(entries[entries.length - 1]));
     ro.observe(container);
-    resize();
+    queueResize();
 
     // Pause WebGL when the panadapter is not actually visible. Two signals:
     // IntersectionObserver covers "tile scrolled out of view / display:none
@@ -468,7 +493,7 @@ export function Panadapter({
       schedulePanContextLoss(canvas, gl);
       releaseFrameConsumer();
     };
-  }, [receiver, stitched]);
+  }, [receiver, rxIndex, stitched]);
 
   usePanTuneGesture(canvasRef, receiver, { touchMode, tuneReceiver });
 

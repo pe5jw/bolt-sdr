@@ -135,6 +135,8 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
   let traceG = 0.627;
   let traceB = 0.157;
   let popIntensity = 1;
+  let canvasW = 0;
+  let canvasH = 0;
 
   const traceProg = buildProgram(gl, PAN_VS, PAN_FS);
   const uTraceWidth = gl.getUniformLocation(traceProg, 'uWidth');
@@ -204,7 +206,12 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
 
   return {
     resize(w, h) {
-      gl.viewport(0, 0, w, h);
+      const nextW = Math.max(1, Math.floor(w));
+      const nextH = Math.max(1, Math.floor(h));
+      if (nextW === canvasW && nextH === canvasH) return;
+      canvasW = nextW;
+      canvasH = nextH;
+      gl.viewport(0, 0, canvasW, canvasH);
     },
     draw(panDb, dbMin, dbMax, offsetPx, scaleX = 1) {
       // Draw-time zoom about the view centre (view-zoom.ts). 1.0 = no zoom;

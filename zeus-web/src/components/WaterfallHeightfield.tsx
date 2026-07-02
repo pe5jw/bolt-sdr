@@ -175,17 +175,34 @@ export function WaterfallHeightfield({
         ? vc.getViewCenterHz()
         : Number(selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz);
 
-    const resize = () => {
-      const { width, height } = container.getBoundingClientRect();
+    let pendingCanvasW = 0;
+    let pendingCanvasH = 0;
+    let appliedCanvasW = 0;
+    let appliedCanvasH = 0;
+
+    const measureCanvasSize = (entry?: ResizeObserverEntry) => {
+      const rect = entry?.contentRect ?? container.getBoundingClientRect();
       const dpr = Math.min(1, window.devicePixelRatio || 1);
-      const w = Math.max(1, Math.round(width * dpr));
-      const h = Math.max(1, Math.round(height * dpr));
-      canvas.width = w;
-      canvas.height = h;
-      renderer?.resize(w, h);
+      return {
+        w: Math.max(1, Math.round(rect.width * dpr)),
+        h: Math.max(1, Math.round(rect.height * dpr)),
+      };
     };
 
-    const ro = new ResizeObserver(resize);
+    const applyPendingResize = () => {
+      if (!renderer) return;
+      if (pendingCanvasW <= 0 || pendingCanvasH <= 0) {
+        const next = measureCanvasSize();
+        pendingCanvasW = next.w;
+        pendingCanvasH = next.h;
+      }
+      if (pendingCanvasW === appliedCanvasW && pendingCanvasH === appliedCanvasH) return;
+      appliedCanvasW = pendingCanvasW;
+      appliedCanvasH = pendingCanvasH;
+      canvas.width = appliedCanvasW;
+      canvas.height = appliedCanvasH;
+      renderer.resize(appliedCanvasW, appliedCanvasH);
+    };
 
     // Visibility gating (parity with Panadapter / WebGL Waterfall): skip the GPU
     // paint while the surface is scrolled off-screen or the tab is backgrounded.
@@ -209,6 +226,7 @@ export function WaterfallHeightfield({
 
     const draw = () => {
       if (!renderer || lost) return;
+      applyPendingResize();
       // Read settings LIVE every draw so the sliders take effect immediately.
       const { wfTxDbMin, wfTxDbMax, waterfallScrollSpeed } =
         useDisplaySettingsStore.getState();
@@ -278,6 +296,15 @@ export function WaterfallHeightfield({
       requestDrawBusFrame(draw);
     };
 
+    const queueResize = (entry?: ResizeObserverEntry) => {
+      const next = measureCanvasSize(entry);
+      pendingCanvasW = next.w;
+      pendingCanvasH = next.h;
+      requestRedraw();
+    };
+
+    const ro = new ResizeObserver((entries) => queueResize(entries[entries.length - 1]));
+
     let unsub: (() => void) | null = null;
     let unsubSettings: (() => void) | null = null;
     let unsubViewCenter: (() => void) | null = null;
@@ -321,7 +348,7 @@ export function WaterfallHeightfield({
       renderer.setColormap(useDisplaySettingsStore.getState().colormap);
       renderer.setScrollSpeed(useDisplaySettingsStore.getState().waterfallScrollSpeed);
       setStatus('ready');
-      resize();
+      queueResize();
       ro.observe(container);
       io.observe(container);
       document.addEventListener('visibilitychange', onVisibilityChange);

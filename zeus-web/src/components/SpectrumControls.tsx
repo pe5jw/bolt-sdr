@@ -17,6 +17,7 @@
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { useNotchStore } from '../state/notch-store';
+import { usePanadapterRenderStore } from '../state/panadapter-render-store';
 
 // Panadapter display toggles — dB auto/fixed range, Signal Pop, Snap-to-signal,
 // and the Notch arm/clear. These used to overlay the panadapter top-right, where
@@ -26,6 +27,8 @@ import { useNotchStore } from '../state/notch-store';
 export function SpectrumControls() {
   const autoRange = useDisplaySettingsStore((s) => s.autoRange);
   const setAutoRange = useDisplaySettingsStore((s) => s.setAutoRange);
+  const panadapter3dEnabled = usePanadapterRenderStore((s) => s.panadapter3dEnabled);
+  const togglePanadapterRenderMode = usePanadapterRenderStore((s) => s.togglePanadapterRenderMode);
   const popEnabled = useSignalEnhanceStore((s) => s.popEnabled);
   const togglePop = useSignalEnhanceStore((s) => s.togglePop);
   const snapEnabled = useSignalEnhanceStore((s) => s.snapEnabled);
@@ -62,6 +65,19 @@ export function SpectrumControls() {
         className={`btn sm pop-btn ${popEnabled ? 'active' : ''}`}
       >
         POP
+      </button>
+      <button
+        type="button"
+        onClick={togglePanadapterRenderMode}
+        aria-pressed={panadapter3dEnabled}
+        title={
+          panadapter3dEnabled
+            ? '3D panadapter: click to switch back to the legacy 2D trace'
+            : '2D panadapter: click to switch to the WebGPU 3D surface'
+        }
+        className={`btn sm ${panadapter3dEnabled ? 'active' : ''}`}
+      >
+        {panadapter3dEnabled ? '3D' : '2D'}
       </button>
       <button
         type="button"

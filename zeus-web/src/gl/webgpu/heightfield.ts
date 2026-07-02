@@ -447,8 +447,11 @@ export function createHeightfieldRenderer(
       device.queue.submit([encoder.finish()]);
     },
     resize(w, h) {
-      canvasW = Math.max(1, Math.floor(w));
-      canvasH = Math.max(1, Math.floor(h));
+      const nextW = Math.max(1, Math.floor(w));
+      const nextH = Math.max(1, Math.floor(h));
+      if (nextW === canvasW && nextH === canvasH) return;
+      canvasW = nextW;
+      canvasH = nextH;
     },
     setColormap(id) {
       uploadLut(id);
