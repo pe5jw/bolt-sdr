@@ -3047,12 +3047,15 @@ public class DspPipelineService : BackgroundService,
         bool wdspActive = engine is WdspDspEngine;
         bool wdspNativeLoadable = WdspDspEngine.NativeLibraryLoadable;
         bool wdspEmnrPost2Available = WdspDspEngine.EmnrPost2Available;
+        bool wdspNr3RnnrAvailable = WdspDspEngine.Nr3RnnrAvailable;
         bool wdspNr4SbnrAvailable = WdspDspEngine.Nr4SbnrAvailable;
+        bool nr3ModelActive = !string.IsNullOrWhiteSpace(state.Nr3ModelName);
         var nr = NormalizeNrConfig(state.Nr ?? new NrConfig());
         string requestedNrMode = nr.NrMode.ToString();
         string effectiveNrMode = wdspActive
             ? nr.NrMode switch
             {
+                NrMode.Rnnr when !wdspNr3RnnrAvailable || !nr3ModelActive => NrMode.Off.ToString(),
                 NrMode.Sbnr when !wdspNr4SbnrAvailable => NrMode.Off.ToString(),
                 _ => requestedNrMode,
             }
@@ -3071,11 +3074,11 @@ public class DspPipelineService : BackgroundService,
             EffectiveNrMode: effectiveNrMode);
     }
 
-    private static NrConfig NormalizeNrConfig(NrConfig cfg) =>
+    internal static NrConfig NormalizeNrConfig(NrConfig cfg) =>
         IsSupportedNrMode(cfg.NrMode) ? cfg : cfg with { NrMode = NrMode.Off };
 
-    private static bool IsSupportedNrMode(NrMode mode) =>
-        mode is NrMode.Off or NrMode.Anr or NrMode.Emnr or NrMode.Sbnr;
+    internal static bool IsSupportedNrMode(NrMode mode) =>
+        mode is NrMode.Off or NrMode.Anr or NrMode.Emnr or NrMode.Rnnr or NrMode.Sbnr;
 
     internal static DspRxChainDiagnosticsDto BuildRxDspChainDiagnostics(
         StateDto state,

@@ -127,6 +127,46 @@ describe('DspPanel SMART control', () => {
     expect(container.textContent).toContain('APPLIED');
   });
 
+  it('cycles NR3 before NR4 when an RNNoise model is active', () => {
+    useConnectionStore.setState({
+      status: 'Connected',
+      nr: { ...NR_CONFIG_DEFAULT, nrMode: 'Off' },
+      wdspNr3RnnrAvailable: true,
+      nr3ModelName: 'rnnoise_nr3_default.rnn',
+      nr3UsingBundledDefault: false,
+    });
+
+    act(() => {
+      root.render(<DspPanel />);
+    });
+
+    const nrButton = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((b) => {
+        const title = b.getAttribute('title') ?? '';
+        return title.includes('Noise reduction off')
+          || title.includes('NR1')
+          || title.includes('NR2')
+          || title.includes('NR3')
+          || title.includes('NR4');
+      });
+
+    expect(useConnectionStore.getState().nr.nrMode).toBe('Off');
+
+    act(() => { nrButton()!.click(); });
+    expect(useConnectionStore.getState().nr.nrMode).toBe('Anr');
+
+    act(() => { nrButton()!.click(); });
+    expect(useConnectionStore.getState().nr.nrMode).toBe('Emnr');
+
+    act(() => { nrButton()!.click(); });
+    expect(useConnectionStore.getState().nr.nrMode).toBe('Rnnr');
+    expect(nrButton()!.textContent?.trim()).toBe('NR3');
+
+    act(() => { nrButton()!.click(); });
+    expect(useConnectionStore.getState().nr.nrMode).toBe('Sbnr');
+    expect(nrButton()!.textContent?.trim()).toBe('NR4');
+  });
+
   it('opens the RX Audio Suite from the DSP panel', () => {
     act(() => {
       root.render(<DspPanel />);

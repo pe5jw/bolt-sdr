@@ -27,6 +27,14 @@ public sealed class DspPipelineAudioSanitizerTests
     private static float DbToLinear(double db) => (float)Math.Pow(10.0, db / 20.0);
 
     [Fact]
+    public void NormalizeNrConfig_PreservesRnnrMode()
+    {
+        var normalized = DspPipelineService.NormalizeNrConfig(new NrConfig(NrMode: NrMode.Rnnr));
+
+        Assert.Equal(NrMode.Rnnr, normalized.NrMode);
+    }
+
+    [Fact]
     public void SanitizeAudioBuffer_ClampsOverrangeAndZerosNonFiniteSamples()
     {
         float[] samples =

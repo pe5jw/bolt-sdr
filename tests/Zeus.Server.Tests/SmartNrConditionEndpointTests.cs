@@ -91,8 +91,8 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Equal("missing", root.GetProperty("status").GetString());
         Assert.False(root.GetProperty("fresh").GetBoolean());
         Assert.False(root.GetProperty("stale").GetBoolean());
-        Assert.Contains(root.GetProperty("requestedNrMode").GetString(), new[] { "Off", "Anr", "Emnr", "Sbnr" });
-        Assert.Contains(root.GetProperty("effectiveNrMode").GetString(), new[] { "Off", "Anr", "Emnr", "Sbnr" });
+        Assert.Contains(root.GetProperty("requestedNrMode").GetString(), new[] { "Off", "Anr", "Emnr", "Rnnr", "Sbnr" });
+        Assert.Contains(root.GetProperty("effectiveNrMode").GetString(), new[] { "Off", "Anr", "Emnr", "Rnnr", "Sbnr" });
         Assert.Contains(
             root.GetProperty("nr4Readiness").GetString(),
             new[] { "available", "missing-sbnr-exports", "wdsp-native-unloadable" });
@@ -160,7 +160,7 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Equal(6.8, root.GetProperty("coherentMaxSnrDb").GetDouble());
         Assert.Equal(1, root.GetProperty("peakCount").GetInt32());
         Assert.True(root.GetProperty("coherentSubthresholdSignal").GetBoolean());
-        Assert.Contains(root.GetProperty("effectiveNrMode").GetString(), new[] { "Off", "Anr", "Emnr", "Sbnr" });
+        Assert.Contains(root.GetProperty("effectiveNrMode").GetString(), new[] { "Off", "Anr", "Emnr", "Rnnr", "Sbnr" });
         var rxChain = root.GetProperty("rxChain");
         Assert.Equal("backend-radio-state", rxChain.GetProperty("source").GetString());
         Assert.Contains(rxChain.GetProperty("agcMode").GetString(), new[] { "Fixed", "Long", "Slow", "Med", "Fast", "Custom" });

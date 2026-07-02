@@ -87,7 +87,7 @@ public class NoiseReductionTests
 
     public static IEnumerable<object[]> AllCombos()
     {
-        foreach (var nr in new[] { NrMode.Off, NrMode.Anr, NrMode.Emnr, NrMode.Sbnr })
+        foreach (var nr in new[] { NrMode.Off, NrMode.Anr, NrMode.Emnr, NrMode.Rnnr, NrMode.Sbnr })
         foreach (var anf in new[] { false, true })
         foreach (var snb in new[] { false, true })
         foreach (var notches in new[] { false, true })
@@ -156,7 +156,7 @@ public class NoiseReductionTests
     [SkippableFact]
     public void Wdsp_TogglingNrModes_DoesNotLeaveBothEnabled()
     {
-        // NR button cycle is Off/NR1/NR2/NR4 - only one of ANR/EMNR/SBNR
+        // NR button cycle is Off/NR1/NR2/NR3/NR4 - only one of ANR/EMNR/RNNR/SBNR
         // may be running at a time. Proven here by cycling through each mode; the
         // engine must issue the counter-Run(0) before toggling the other on.
         // Off transitions are exercised even when SBNR symbols are missing so
