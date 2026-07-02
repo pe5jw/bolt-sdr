@@ -16,6 +16,7 @@ import {
   FREEDV_WINDOW_MIN_HEIGHT,
   useFreeDvWindowStore,
 } from '../state/freedv-window-store';
+import { useLayoutStore } from '../state/layout-store';
 
 /** Edge codes for the resize handles — 4 edges + 4 corners. */
 type ResizeEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
@@ -146,6 +147,11 @@ function ResizeHandle({ edge }: { edge: ResizeEdge }) {
 export function FreeDvWindow() {
   const isOpen = useFreeDvWindowStore((s) => s.isOpen);
   const close = useFreeDvWindowStore((s) => s.close);
+  // Settings replaces the workspace inline (not a modal), with no z-index
+  // of its own — so this fixed-position, zIndex:420 popup would paint over
+  // it. Hide while Settings is showing; the store's isOpen stays true so
+  // the popup reappears in place the moment Settings closes.
+  const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
   const x = useFreeDvWindowStore((s) => s.x);
   const y = useFreeDvWindowStore((s) => s.y);
   const width = useFreeDvWindowStore((s) => s.width);
@@ -231,6 +237,10 @@ export function FreeDvWindow() {
     [],
   );
 
+  // A CLOSED window unmounts (nothing to preserve). An OPEN window stays
+  // MOUNTED while Settings is up — hidden via display:none below — so the
+  // FreeDV TX-text draft and modem session survive a Settings open/close
+  // instead of being torn down and reset (#1269).
   if (!isOpen) return null;
 
   return (
@@ -246,7 +256,9 @@ export function FreeDvWindow() {
         height,
         // Above the Zeus topbar (zIndex 300), below modal dialogs (10000).
         zIndex: 420,
-        display: 'flex',
+        // Kept mounted but hidden while Settings replaces the workspace, so
+        // the FreeDV session and TX-text draft aren't torn down.
+        display: settingsViewOpen ? 'none' : 'flex',
         flexDirection: 'column',
         background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
         border: '1px solid var(--line)',

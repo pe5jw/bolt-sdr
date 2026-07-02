@@ -22,6 +22,7 @@ import {
 } from '../state/digital-window-store';
 import { Ft8PopBody } from '../layout/ft8/Ft8PopBody';
 import { WsprPopBody } from '../layout/ft8/WsprPopBody';
+import { useLayoutStore } from '../state/layout-store';
 import '../styles/ft8-theme.css';
 
 export function DigitalWindow() {
@@ -31,6 +32,11 @@ export function DigitalWindow() {
   const x = useDigitalWindowStore((s) => s.x);
   const y = useDigitalWindowStore((s) => s.y);
   const setPosition = useDigitalWindowStore((s) => s.setPosition);
+  // Settings replaces the workspace inline (not a modal), with no z-index
+  // of its own — so this fixed-position, zIndex:420 popup would paint over
+  // it. Hide while Settings is showing without exiting the digital mode,
+  // so the popup reappears in place when Settings closes.
+  const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
 
   const open = ft8Open || wsprOpen;
 
@@ -119,6 +125,11 @@ export function DigitalWindow() {
     dragStateRef.current = null;
   }, []);
 
+  // A CLOSED window unmounts (nothing live to preserve). An OPEN window
+  // stays MOUNTED while Settings is up — hidden via display:none below — so
+  // an active FT8 QSO's once-per-QSO guards (QRZ lookup, HamClock DX push)
+  // and the operator's tab/draft survive a Settings open/close. Unmounting
+  // here would reset those guard refs and re-fire the network egress (#1269).
   if (!open) return null;
 
   // Fixed size; height clamped to the viewport so the frame stays fully on-screen
@@ -144,7 +155,9 @@ export function DigitalWindow() {
         // Above the Zeus topbar (zIndex 300), below modal dialogs (10000) — the
         // "always on top" mechanism, same as FreeDvWindow (no OS API).
         zIndex: 420,
-        display: 'flex',
+        // Kept mounted but hidden while Settings replaces the workspace, so
+        // the digital session (QSO guards, tab, TX draft) isn't torn down.
+        display: settingsViewOpen ? 'none' : 'flex',
         flexDirection: 'column',
         background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
         border: '1px solid var(--line)',
