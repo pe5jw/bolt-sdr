@@ -422,6 +422,11 @@ export type RadioStateDto = {
   txMoxPreKeyDelayMs: number;
   // Old-school end-of-over roger beep. Default off on older servers.
   rogerBeepEnabled: boolean;
+  // TX timeout in seconds (issue #1270). Maximum single-transmission length
+  // before the PA-protection guard fires. 0 = disabled (no guard); otherwise
+  // server-clamped to [30, 600]. Legacy servers without this field fall back to
+  // 120 in normalizeState.
+  txTimeoutSec: number;
   twoToneFreq1: number;
   twoToneFreq2: number;
   twoToneMag: number;
@@ -2548,6 +2553,11 @@ export function normalizeState(raw: unknown): RadioStateDto {
       typeof r.txMoxPreKeyDelayMs === 'number' ? r.txMoxPreKeyDelayMs : 0,
     rogerBeepEnabled:
       typeof r.rogerBeepEnabled === 'boolean' ? r.rogerBeepEnabled : false,
+    // 0 = disabled must be preserved (>=0), not coerced back to the 120 default.
+    txTimeoutSec:
+      typeof r.txTimeoutSec === 'number' && r.txTimeoutSec >= 0
+        ? Math.round(r.txTimeoutSec)
+        : 120,
     twoToneFreq1: typeof r.twoToneFreq1 === 'number' ? r.twoToneFreq1 : 700,
     twoToneFreq2: typeof r.twoToneFreq2 === 'number' ? r.twoToneFreq2 : 1900,
     twoToneMag: typeof r.twoToneMag === 'number' ? r.twoToneMag : 0.49,
@@ -6592,6 +6602,28 @@ export function setRogerBeep(
     (raw) => ({
       rogerBeepEnabled: Boolean((raw as { rogerBeepEnabled?: unknown }).rogerBeepEnabled),
     }),
+  );
+}
+
+// TX timeout: POST /api/tx/timeout { seconds }. Returns { txTimeoutSec }.
+// seconds=0 disables the guard; otherwise the server clamps to [30, 600] s and
+// the echoed value reflects what was applied. Issue #1270.
+export function setTxTimeout(
+  seconds: number,
+  signal?: AbortSignal,
+): Promise<{ txTimeoutSec: number }> {
+  return jsonFetch(
+    '/api/tx/timeout',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ seconds: Math.round(seconds) }),
+      signal,
+    },
+    (raw) => {
+      const v = (raw as { txTimeoutSec?: unknown }).txTimeoutSec;
+      return { txTimeoutSec: typeof v === 'number' ? v : 120 };
+    },
   );
 }
 

@@ -1193,6 +1193,17 @@ public sealed record StateDto(
     // calibrate on muted RF — see RadioService.SetTxMoxPreKeyDelayMs.
     int TxMoxPreKeyDelayMs = 0,
 
+    // ---- TX timeout (PA protection) ----
+    // Maximum length of a single MOX or TUN transmission in seconds. When
+    // exceeded, TxMetersService trips MOX/TUN and emits an AlertFrame — the
+    // same protection path as the SWR trip. 0 = disabled (no guard); any other
+    // value is clamped to [30, 600] on write. Default 120 preserves the
+    // historical FR-6 limit for operators who never change it. About 30 s
+    // before the trip fires the server emits a
+    // <see cref="AlertKind.TxTimeoutWarning"/> heads-up so the operator can
+    // un-key or reset the timer instead of being surprised.
+    int TxTimeoutSec = 120,
+
     // Hardware NCO frequency in Hz. Independent of VfoHz: the dial roams over
     // the sampled spectrum while the radio's hardware centre stays put.
     // Updated only by explicit calls to <c>POST /api/radio/lo</c> (or by the
@@ -1695,6 +1706,12 @@ public sealed record TxPreKeyDelaySetRequest(int DelayMs);
 
 /// <summary>Body of <c>POST /api/tx/roger-beep</c>.</summary>
 public sealed record RogerBeepSetRequest(bool Enabled);
+
+/// <summary>TX timeout in whole seconds — how long a single MOX or TUN
+/// transmission may run before the protection guard fires. A value of 0
+/// disables the timeout entirely (no guard); otherwise clamped server-side to
+/// [30, 600]. See <see cref="StateDto.TxTimeoutSec"/>.</summary>
+public sealed record TxTimeoutSetRequest(int Seconds);
 
 // TUN has its own drive % so the operator can pre-set a lower tune level
 // without touching the MOX drive. Same per-band PA gain compensates both,

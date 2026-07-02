@@ -190,6 +190,10 @@ public sealed class RadioStateEntry
     // Old-school end-of-over roger beep. Default false preserves existing
     // transmit behaviour for legacy rows.
     public bool RogerBeepEnabled { get; set; }
+    // TX timeout seconds. 0 = disabled (no guard); otherwise 30..600. Default
+    // 120 = the historical FR-6 limit, so legacy rows missing this field
+    // hydrate with the same guard that has always been in force. Issue #1270.
+    public int TxTimeoutSec { get; set; } = 120;
     // Hardware NCO at last flush. Persisted so a restart retunes the radio
     // to the same physical centre the operator was last looking at. Zero on
     // legacy rows (pre-CTUN, or rows written by the old CTUN-off branch);

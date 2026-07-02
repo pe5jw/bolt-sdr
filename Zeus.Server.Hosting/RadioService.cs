@@ -162,6 +162,10 @@ public sealed class RadioService : IDisposable
     // never calibrates on muted RF — see SetTxMoxPreKeyDelayMs / ClampPreKeyToPs.
     // Issue #630.
     private int _txMoxPreKeyDelayMs;
+    // TX timeout seconds. Authoritative copy read by TxMetersService on every
+    // tick to evaluate the FR-6 protection trip; the StateDto mirror is for
+    // the frontend + persistence. Issue #1270.
+    private int _txTimeoutSec = DefaultTxTimeoutSec;
     // Which drive % the next frame uses. Latched via NotifyTunActive from
     // TxService whenever the MOX/TUN keying state changes so a drag on either
     // slider during a live TX picks the right source without polling.
@@ -579,6 +583,7 @@ public sealed class RadioService : IDisposable
             _txMoxPreKeyDelayMs = ClampPreKeyToPs(
                 Math.Clamp(rsSnap.TxMoxPreKeyDelayMs, 0, MaxPreKeyDelayMs),
                 ps?.MoxDelaySec ?? 0.2);
+            _txTimeoutSec = ClampTxTimeoutSec(rsSnap.TxTimeoutSec);
         }
 
         // RX2 (VFO-B) tuning is hydrated into the canonical Receivers[1] entry —
@@ -669,6 +674,7 @@ public sealed class RadioService : IDisposable
             DrivePct: Volatile.Read(ref _drivePct),
             TunePct: Volatile.Read(ref _tunePct),
             TxMoxPreKeyDelayMs: Volatile.Read(ref _txMoxPreKeyDelayMs),
+            TxTimeoutSec: Volatile.Read(ref _txTimeoutSec),
             // Hardware NCO — persisted in RadioStateStore so a restart resumes
             // on the same physical centre. RadioLoHz snaps to VfoHz on legacy
             // rows (RadioLoHz==0 — e.g. rows written by the old CTUN-off
@@ -2832,6 +2838,44 @@ public sealed class RadioService : IDisposable
     /// rising edge. Already PS-clamped.</summary>
     public int TxMoxPreKeyDelayMs => Volatile.Read(ref _txMoxPreKeyDelayMs);
 
+    // ---- TX timeout (issue #1270) ---------------------------------------
+    // 0 = disabled (the operator turned the guard off entirely — the reporter
+    // and KB2UKA both asked for this). Otherwise minimum 30 s so an operator
+    // can shorten the guard for CW/digital ops while still leaving a safety
+    // window; maximum 600 s = 10 min so a very long QSO tail can't defeat PA
+    // protection unless the operator explicitly disables it. Default preserves
+    // the historical FR-6 120 s value.
+    internal const int DisabledTxTimeoutSec = 0;
+    internal const int MinTxTimeoutSec = 30;
+    internal const int MaxTxTimeoutSec = 600;
+    internal const int DefaultTxTimeoutSec = 120;
+
+    /// <summary>Normalise a requested TX-timeout to the stored form: 0 (or any
+    /// non-positive value) means "disabled"; anything else is clamped to
+    /// [<see cref="MinTxTimeoutSec"/>, <see cref="MaxTxTimeoutSec"/>].</summary>
+    internal static int ClampTxTimeoutSec(int seconds)
+        => seconds <= 0 ? DisabledTxTimeoutSec : Math.Clamp(seconds, MinTxTimeoutSec, MaxTxTimeoutSec);
+
+    /// <summary>
+    /// Set the maximum single-transmission length in seconds. A value &lt;= 0
+    /// disables the guard entirely; otherwise it is clamped to
+    /// [<see cref="MinTxTimeoutSec"/>, <see cref="MaxTxTimeoutSec"/>].
+    /// Returns the updated snapshot so the caller can surface the applied
+    /// value (which may be clamped or 0 = disabled).
+    /// </summary>
+    public StateDto SetTxTimeoutSec(int seconds)
+    {
+        int clamped = ClampTxTimeoutSec(seconds);
+        Interlocked.Exchange(ref _txTimeoutSec, clamped);
+        Mutate(s => s with { TxTimeoutSec = clamped });
+        return Snapshot();
+    }
+
+    /// <summary>Authoritative TX timeout in seconds read by TxMetersService on
+    /// every meter tick to evaluate the protection trip. 0 = disabled (no
+    /// trip). Issue #1270.</summary>
+    public int TxTimeoutSec => Volatile.Read(ref _txTimeoutSec);
+
     // Re-clamp the stored pre-key delay after the PS MOX hold-off changed, so
     // lowering PsMoxDelaySec can never leave a now-too-large pre-key window in
     // place. Called from SetPsAdvanced after the PS mutate commits.
@@ -4311,6 +4355,7 @@ public sealed class RadioService : IDisposable
                 TunePct = snap.TunePct,
                 TxMoxPreKeyDelayMs = snap.TxMoxPreKeyDelayMs,
                 RogerBeepEnabled = snap.RogerBeepEnabled,
+                TxTimeoutSec = snap.TxTimeoutSec,
                 RadioLoHz = snap.RadioLoHz,
                 // RX2 tuning persists from the canonical Receivers[1] entry (the
                 // flat VFO-B StateDto fields are gone); the RadioStateEntry schema
