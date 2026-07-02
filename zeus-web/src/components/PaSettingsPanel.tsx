@@ -450,6 +450,7 @@ export function PaSettingsPanel() {
                   paMaxPowerWatts: clamp(Number(e.target.value) || 0, PA_MAX_W_MIN, PA_MAX_W_MAX),
                 })
               }
+              aria-label="Rated PA output in watts"
               className="pa-num-input w-20 rounded px-2 py-0.5 text-right text-xs"
             />
             {settings.global.paMaxPowerWatts === 0 && (
@@ -480,6 +481,7 @@ export function PaSettingsPanel() {
                   .then((r) => setTxTimeoutSecLocal(r.txTimeoutSec))
                   .catch(() => {});
               }}
+              aria-label="TX timeout in seconds"
               className="pa-num-input w-20 rounded px-2 py-0.5 text-right text-xs"
             />
             <label

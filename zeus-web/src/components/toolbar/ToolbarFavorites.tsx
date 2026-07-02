@@ -196,7 +196,8 @@ export function ToolbarFavorites({
           type="button"
           onClick={() => setOpen((v) => !v)}
           className={`btn sm ${open ? 'active' : ''}`}
-          title={`All ${label.toLowerCase()} options — drag onto a favorite to pin`}
+          title={`All ${label.toLowerCase()} options — drag onto a favorite to pin (or press 1, 2, or 3 with a chip focused)`}
+          aria-label={`All ${label.toLowerCase()} options`}
           aria-expanded={open}
           style={{ marginLeft: 4 }}
         >
@@ -212,7 +213,9 @@ export function ToolbarFavorites({
           aria-label={`${label} options`}
           style={{ top: popoverPos.top, left: popoverPos.left }}
         >
-          <div className="toolbar-fav__hint">DRAG ONTO A FAVORITE TO PIN</div>
+          <div className="toolbar-fav__hint">
+            DRAG ONTO A FAVORITE TO PIN — OR PRESS 1, 2, OR 3
+          </div>
           <div className="toolbar-fav__grid">
             {options.map((opt) => {
               const isFav = safeSlots.includes(opt.key);
@@ -230,10 +233,18 @@ export function ToolbarFavorites({
                     onSelect(opt.key);
                     setOpen(false);
                   }}
+                  onKeyDown={(e) => {
+                    if (opt.disabled) return;
+                    if (e.key === '1' || e.key === '2' || e.key === '3') {
+                      e.preventDefault();
+                      dropOnFav(Number(e.key) - 1, opt.key);
+                    }
+                  }}
                   title={
                     opt.disabled
                       ? (opt.title ?? `${opt.label} — coming soon`)
-                      : (opt.title ?? `${opt.label} — drag onto a favorite slot to pin`)
+                      : (opt.title ??
+                        `${opt.label} — drag onto a favorite slot to pin, or press 1, 2, or 3 to pin as that favorite`)
                   }
                   className={`toolbar-fav__chip ${isActive ? 'is-active' : ''} ${isFav ? 'is-pinned' : ''} ${dragKey === opt.key ? 'is-dragging' : ''} ${opt.disabled ? 'is-disabled' : ''}`}
                 >

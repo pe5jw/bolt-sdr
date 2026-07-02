@@ -453,3 +453,21 @@ input[type="range"]::-moz-range-thumb {
   box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 1px 4px rgba(0,0,0,0.5);
   cursor: pointer;
 }
+
+/* Suppress native number-input spin-button arrows across the app.
+   Rationale: WebKit exposes ::-webkit-inner-spin-button and
+   ::-webkit-outer-spin-button as separate accessibility nodes
+   (AXIncrementorArrow / AXDecrementArrow) with no accessible name, and no
+   aria-* attribute on the outer input can label them. Hiding the pseudo-
+   element removes the unlabeled AX nodes entirely; sighted users still
+   type into the field, and keyboard ↑/↓ (screen-reader users included)
+   still increment/decrement. Firefox: -moz-appearance: textfield. */
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
