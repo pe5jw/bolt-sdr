@@ -43,14 +43,15 @@ export function isDigitalEntryAvailable(key: DigitalEntryKey): boolean {
 
 /**
  * Why a digital entry is greyed out (tooltip text), or null when available.
- * Distinguishes not-installed from installed-but-not-restarted so the operator
- * knows the next step, and keeps WSPR's "coming soon" wording.
+ * Distinguishes not-installed from installed-but-not-live (activation failed
+ * or the instance is shut down — installs go live without a restart) so the
+ * operator knows the next step, and keeps WSPR's "coming soon" wording.
  */
 export function digitalEntryUnavailableReason(key: DigitalEntryKey): string | null {
   if (DIGITAL_UNAVAILABLE[key]) return `${key} — coming soon (not yet available)`;
   const plugin = useDigitalPluginStore.getState();
   if (!plugin.installed) return 'Install the Zeus Digital plugin (Settings → Plugins)';
-  if (!plugin.live) return 'Restart Zeus to activate the Zeus Digital plugin';
+  if (!plugin.live) return 'Zeus Digital plugin is not responding — try restarting Zeus';
   return null;
 }
 

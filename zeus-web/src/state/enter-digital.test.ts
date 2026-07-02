@@ -129,11 +129,11 @@ describe('availability gate', () => {
     );
   });
 
-  it('gates FT8/FT4 off when installed but not restarted (routes not live)', () => {
+  it('gates FT8/FT4 off when installed but not live (activation failed / shut down)', () => {
     useDigitalPluginStore.setState({ installed: true, live: false });
     expect(isDigitalEntryAvailable('FT8')).toBe(false);
     expect(digitalEntryUnavailableReason('FT4')).toBe(
-      'Restart Zeus to activate the Zeus Digital plugin',
+      'Zeus Digital plugin is not responding — try restarting Zeus',
     );
   });
 

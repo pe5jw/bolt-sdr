@@ -10,8 +10,9 @@
 //
 //   installed — its id appears in the installed-plugin list (plugins-store),
 //   live      — GET /api/plugins/com.kb2uka.digital/status answers 2xx, i.e.
-//               its routes were mapped THIS boot (a fresh install needs one
-//               restart; a shut-down instance answers 503 and stays grey).
+//               its routes are live (the host maps plugin routes dynamically,
+//               so a fresh store install lights up immediately; a shut-down
+//               instance answers 503 and stays grey).
 //
 // The probe re-runs at boot (main.tsx), on every app-WS reconnect (the server
 // may have restarted under the open tab) and whenever the installed list
@@ -217,8 +218,8 @@ function syncEventStream(): void {
 
 if (typeof window !== 'undefined') {
   // Gate input 1: the installed list. Recompute `installed` on every list
-  // change and re-probe when the flag flips (install → probe shows not-live
-  // until restart; uninstall → probe confirms the routes 404/503).
+  // change and re-probe when the flag flips (install → probe confirms the
+  // freshly-mapped routes; uninstall → probe confirms the routes 404/503).
   usePluginsStore.subscribe((s) => {
     const installed = s.installed.some((p) => p.id === DIGITAL_PLUGIN_ID);
     if (installed !== useDigitalPluginStore.getState().installed) {

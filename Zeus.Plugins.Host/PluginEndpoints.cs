@@ -127,34 +127,55 @@ public static class PluginEndpoints
             return Results.File(fullPath, contentType);
         });
 
-        // Per-plugin endpoints from IBackendPlugin
+        // Per-plugin endpoints from IBackendPlugin flow through ONE mutable
+        // data source registered in the route table at startup, so a plugin
+        // installed / uninstalled / reinstalled MID-SESSION goes live (or
+        // dark) on the next request — no restart. Mapping routes directly
+        // onto `app` after the server has started silently does nothing
+        // (the matcher never re-reads them), which is why store installs
+        // used to 404 until restart.
+        var backendRoutes = new PluginBackendEndpointDataSource();
+        app.DataSources.Add(backendRoutes);
+        manager.PluginActivated += p => backendRoutes.SetPluginEndpoints(
+            p.Loaded.Manifest.Id, BuildBackendEndpoints(app.ServiceProvider, p));
+        manager.PluginDeactivated += p => backendRoutes.RemovePluginEndpoints(
+            p.Loaded.Manifest.Id);
+        // Seed plugins already active (startup activation runs before MapAll).
+        // Subscribing first closes the gap for an activation racing this loop;
+        // SetPluginEndpoints is idempotent per id so a double-publish is fine.
         foreach (var p in manager.Active)
         {
-            MapBackendEndpointsFor(app, p);
+            backendRoutes.SetPluginEndpoints(
+                p.Loaded.Manifest.Id, BuildBackendEndpoints(app.ServiceProvider, p));
         }
     }
 
     /// <summary>
-    /// Re-maps the backend endpoints for plugins activated after app
-    /// startup (e.g. after BYOP install). Idempotent per plugin id;
-    /// existing mappings are NOT removed because ASP.NET routing is
-    /// immutable post-build. Restart Zeus to fully unmap a plugin's
-    /// endpoints.
+    /// Build (without registering) one activated plugin's
+    /// <c>/api/plugins/{id}/...</c> endpoints, for publication via
+    /// <see cref="PluginBackendEndpointDataSource"/>. Returns an empty list
+    /// for non-backend plugins and for plugins whose MapEndpoints throws —
+    /// a bad plugin endpoint mapping must not take down the host.
     /// </summary>
-    public static void MapBackendEndpointsFor(IEndpointRouteBuilder app, ActivatedPlugin p)
+    internal static IReadOnlyList<Microsoft.AspNetCore.Http.Endpoint> BuildBackendEndpoints(
+        IServiceProvider services, ActivatedPlugin p)
     {
-        if (p.Loaded.Plugin is not IBackendPlugin backend) return;
-        var group = app.MapGroup($"/api/plugins/{p.Loaded.Manifest.Id}");
+        if (p.Loaded.Plugin is not IBackendPlugin backend)
+            return Array.Empty<Microsoft.AspNetCore.Http.Endpoint>();
         try
         {
+            var builder = new DetachedEndpointRouteBuilder(services);
+            var group = builder.MapGroup($"/api/plugins/{p.Loaded.Manifest.Id}");
             backend.MapEndpoints(group);
+            // .Endpoints forces endpoint construction — handler-signature
+            // errors surface here, inside the try, not at request time.
+            return builder.DataSources.SelectMany(ds => ds.Endpoints).ToArray();
         }
         catch (Exception ex)
         {
-            // Logged but not rethrown — a bad plugin endpoint mapping
-            // shouldn't take down server startup.
             Console.Error.WriteLine(
                 $"[plugins] {p.Loaded.Manifest.Id}: MapEndpoints threw: {ex.Message}");
+            return Array.Empty<Microsoft.AspNetCore.Http.Endpoint>();
         }
     }
 

@@ -125,7 +125,7 @@ export function SpottingSettingsPanel() {
           role="alert"
         >
           {pluginInstalled
-            ? 'Restart Zeus to activate the Zeus Digital plugin — spotting is configured there.'
+            ? 'Zeus Digital plugin is not responding — try restarting Zeus. Spotting is configured there.'
             : 'Spotting is provided by the Zeus Digital plugin. Install it from Settings → Plugins.'}
         </div>
       )}

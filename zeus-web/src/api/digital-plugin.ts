@@ -14,9 +14,10 @@
 // frontend used to reach at /api/ft8|/api/wspr|/api/spotting now lives under
 // /api/plugins/com.kb2uka.digital (EXCEPT /api/ft8/settings — the UI-shell
 // per-mode prefs stay core). GET /status doubles as the liveness probe the
-// mode-gate uses: 2xx means the plugin's routes are mapped THIS boot; 404
-// (not installed / not activated) and 503 (shut down — zombie-route guard)
-// both read as not-live.
+// mode-gate uses: 2xx means the plugin's routes are live (mapped at boot or
+// on a mid-session install — the host publishes plugin routes dynamically);
+// 404 (not installed / activation failed) and 503 (shut down) both read as
+// not-live.
 
 import { getServerBaseUrl } from '../serverUrl';
 
@@ -25,9 +26,9 @@ export const DIGITAL_PLUGIN_BASE = `/api/plugins/${DIGITAL_PLUGIN_ID}`;
 
 /**
  * Liveness probe for the mode gate: true ONLY on a 2xx from GET /status.
- * Installed-but-not-restarted (404) and shut-down-instance (503) are both
- * "not live". Network errors read as not-live too — the next probe trigger
- * (ws reconnect / install refresh) recovers.
+ * Not-installed / failed-activation (404) and shut-down-instance (503) are
+ * both "not live". Network errors read as not-live too — the next probe
+ * trigger (ws reconnect / install refresh) recovers.
  */
 export async function probeDigitalPlugin(signal?: AbortSignal): Promise<boolean> {
   try {
