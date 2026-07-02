@@ -1022,6 +1022,17 @@ public sealed class PsAutoAttenuateService : BackgroundService
                     return;
                 }
 
+                // Same G2E policy as the P2 branch: the attenuation servo
+                // runs ONLY during the deliberate two-tone calibration, never
+                // mid-QSO voice TX (piHPSDR parity, ps_menu.c:169-177).
+                // Correction itself still runs on voice with the calibrated
+                // value; only attenuator WRITES are two-tone-scoped.
+                if (!_tx.IsTwoToneOn)
+                {
+                    LogGate("c10.skip=not-twotone (G2E servo is two-tone-only)");
+                    return;
+                }
+
                 var psm = engine.GetPsStageMeters();
                 int feedback = (int)Math.Round(psm.FeedbackLevel);
 
@@ -1036,9 +1047,27 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 }
                 _lastCalibrationAttempts = psm.CalibrationAttempts;
 
-                // info[4] == 0 → calcc hasn't completed a fit yet.
+                // info[4] == 0 → usually calcc hasn't completed a fit yet —
+                // EXCEPT a completed too-quiet "cold" fit, whose feedback
+                // level integer-truncates to 0 (calcc.c:368-369). With the
+                // P1 register's silicon-reset 31 dB start, an over-padded
+                // tap would deadlock here exactly like the P2 #1248 case, so
+                // ride the same Thetis −10 dB rail down (ComputeAttnStepDb(0)
+                // = −10). Only on a completed fit (info5 > 0) with headroom.
                 if (feedback <= 0)
                 {
+                    if (psm.CalibrationAttempts > 0 && _currentAttnDb > TxAttnMinDb)
+                    {
+                        _c10DeltaDb = -10;
+                        _c10SavedAuto = s.PsAuto;
+                        _c10SavedSingle = s.PsSingle;
+                        engine.SetPsControl(autoCal: false, singleCal: false);
+                        _log.LogInformation(
+                            "psAutoAttn.c10.monitor cold-fit fb=0 info5={Cal} delta={Delta} attn={Db} — walking attenuation down (Thetis −10 dB rail)",
+                            psm.CalibrationAttempts, _c10DeltaDb, _currentAttnDb);
+                        _c10State = P2AutoAttState.SetNewValues;
+                        return;
+                    }
                     LogGate($"c10.skip=fb-zero psm.fb={psm.FeedbackLevel:F2}");
                     return;
                 }
@@ -1049,6 +1078,19 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 bool tooQuiet = feedback < FeedbackLowThreshold && _currentAttnDb > TxAttnMinDb;
                 if (!tooHot && !tooQuiet)
                 {
+                    // G2E post-calibration persist — same policy as the P2
+                    // branch: only a value that has PRODUCED an in-window fit
+                    // is worth restoring on the next connect; mid-walk values
+                    // never persist (the #1249 poison-ratchet class).
+                    if (feedback >= FeedbackLowThreshold
+                        && _currentAttnDb != _lastPersistedAttnDb)
+                    {
+                        _lastPersistedAttnDb = _currentAttnDb;
+                        _radio.SetPsTxAttenuationDb(_currentAttnDb);
+                        _log.LogInformation(
+                            "psAutoAttn.c10.persist attn={Db} fb={Fb} — in-window calibration result persisted",
+                            _currentAttnDb, feedback);
+                    }
                     LogGate($"c10.skip=in-window fb={feedback} attn={_currentAttnDb}");
                     return;
                 }
@@ -1056,11 +1098,7 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 // mi0bot PSForm.cs:745-761 — full ddB step (no ±1 clamp)
                 // so a single dance pulls a hot envelope back into window
                 // in one cycle. NaN guard + ±100 dB rails per mi0bot.
-                double ddB = 20.0 * Math.Log10(feedback / IdealFeedback);
-                if (double.IsNaN(ddB)) ddB = 10.0;
-                else if (ddB < -100.0) ddB = -10.0;
-                else if (ddB > 100.0) ddB = 10.0;
-                _c10DeltaDb = (int)Math.Round(ddB, MidpointRounding.AwayFromZero);
+                _c10DeltaDb = ComputeAttnStepDb(feedback);
 
                 // Save the operator's current cal-mode so RestoreOperation
                 // brings it back exactly. mi0bot uses _save_singlecalON /
@@ -1073,8 +1111,8 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 engine.SetPsControl(autoCal: false, singleCal: false);
 
                 _log.LogInformation(
-                    "psAutoAttn.c10.monitor fb={Fb} info5={Cal} ddB={DDb:F1} delta={Delta} attn={Db}",
-                    feedback, psm.CalibrationAttempts, ddB, _c10DeltaDb, _currentAttnDb);
+                    "psAutoAttn.c10.monitor fb={Fb} info5={Cal} delta={Delta} attn={Db}",
+                    feedback, psm.CalibrationAttempts, _c10DeltaDb, _currentAttnDb);
                 _c10State = P2AutoAttState.SetNewValues;
                 return;
             }
@@ -1096,10 +1134,12 @@ public sealed class PsAutoAttenuateService : BackgroundService
                         _currentAttnDb, newAttn);
                     _currentAttnDb = newAttn;
                     p1.SetPsTxAttenOnTxDb(newAttn);
-                    // Persist per board so this converged value is restored on
-                    // the next connect (DspPipelineService) instead of booting
-                    // at the silicon 31 dB and starving the feedback tap.
-                    _radio.SetPsTxAttenuationDb(newAttn);
+                    // Mid-walk values surface to the UI but are NOT persisted
+                    // — same G2E policy as the P2 branch: only a value that
+                    // produced an in-window fit lands in the per-board store
+                    // (see the Monitor in-window persist above; the #1249
+                    // poison-ratchet class).
+                    _radio.SetPsTxAttenuationDbStateOnly(newAttn);
                     // mi0bot PSForm.cs:783 Thread.Sleep(100) — give the
                     // 0x1c frame time to land on the wire before the next
                     // tick re-enables PS in calcc.

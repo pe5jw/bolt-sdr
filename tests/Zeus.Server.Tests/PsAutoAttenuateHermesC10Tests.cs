@@ -48,7 +48,7 @@ public class PsAutoAttenuateHermesC10Tests : IDisposable
 
     public void Dispose()
     {
-        foreach (var suffix in new[] { "", ".pa" })
+        foreach (var suffix in new[] { "", ".pa", ".ps" })
         {
             try { if (File.Exists(_dbPath + suffix)) File.Delete(_dbPath + suffix); } catch { }
         }
@@ -85,7 +85,13 @@ public class PsAutoAttenuateHermesC10Tests : IDisposable
         var loggerFactory = NullLoggerFactory.Instance;
         var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath);
         var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath + ".pa");
-        var radio = new RadioService(loggerFactory, dspStore, paStore);
+        // Real PS store so the persist-policy tests can assert exactly what
+        // lands on disk (mid-walk values must NOT; in-window results must).
+        var psStore = new PsSettingsStore(NullLogger<PsSettingsStore>.Instance, _dbPath + ".ps");
+        var radio = new RadioService(
+            loggerFactory, dspStore, paStore,
+            filterPresetStore: null, txIqSource: null,
+            preferredRadioStore: null, psStore: psStore);
 
         // Constructed but never connected — RadioService then reports the
         // client's board kind and IsConnected without any socket I/O.
@@ -102,13 +108,16 @@ public class PsAutoAttenuateHermesC10Tests : IDisposable
         return new Harness { Radio = radio, Tx = tx, Client = client, Engine = engine, Svc = svc };
     }
 
-    // Arm PS (auto-cal mode, the operator default) and key MOX, then clear
-    // any engine calls the arm path recorded so the assertions see the dance
-    // bracket alone.
+    // Arm PS (auto-cal mode, the operator default), key MOX, and start the
+    // two-tone generator — the G2E servo is two-tone-only (piHPSDR parity),
+    // so every dance test must run inside the deliberate calibration window.
+    // Then clear any engine calls the arm path recorded so the assertions
+    // see the dance bracket alone.
     private static void ArmAndKey(Harness h)
     {
         h.Radio.SetPs(new PsControlSetRequest(Enabled: true, Auto: true, Single: false));
         Assert.True(h.Tx.TrySetMox(true, out var err), $"TrySetMox failed: {err}");
+        h.Tx.SetTwoToneOn(true);
         h.Engine.PsControlCalls.Clear();
     }
 
@@ -179,23 +188,67 @@ public class PsAutoAttenuateHermesC10Tests : IDisposable
     }
 
     [Fact]
-    public void FeedbackZero_NeverWalks()
+    public void FeedbackZero_NoCompletedFit_NeverWalks()
     {
-        // SESSION-LEAD AMENDMENT 1: no stall-acquisition heuristics. fb=0
-        // (e.g. a heavily over-attenuated external sampler tap) must NOT
-        // trigger an automatic walk in either direction — recovery is the
-        // operator's manual attenuation control. CalibrationAttempts keeps
-        // incrementing so it is specifically the fb>0 gate being pinned.
+        // fb=0 with CalibrationAttempts stuck at 0 = calcc genuinely hasn't
+        // completed a fit (e.g. hw_peak stall) — must NOT walk in either
+        // direction. Only a COMPLETED cold fit (info5 > 0) earns the rail.
         using var h = Build(HpsdrBoardKind.HermesC10);
         ArmAndKey(h);
 
-        for (int cal = 1; cal <= 4; cal++)
+        for (int i = 0; i < 4; i++)
         {
-            h.Engine.Meters = Meters(0, calibrationAttempts: cal);
+            h.Engine.Meters = Meters(0, calibrationAttempts: 0);
             h.Svc.Tick1();
         }
 
         Assert.Equal(31, h.Client.PsTxAttenOnTxDb);   // silicon default, untouched
+        Assert.Empty(h.Engine.PsControlCalls);
+    }
+
+    [Fact]
+    public void ColdFits_WalkDownTheMinusTenRail_OutOfDeafness()
+    {
+        // The #1248 deaf-at-31 escape: a heavily-padded tap completes fits
+        // whose feedback level integer-truncates to 0 (calcc.c:368-369).
+        // Each fresh cold fit rides the Thetis −10 dB rail DOWN
+        // (20·log10(0/152.293) → −∞ → −10): 31 → 21 → 11 → 1, one full
+        // dance (disable → write → restore) per fit. At attn 0 the rail
+        // stops (nothing left to open up).
+        using var h = Build(HpsdrBoardKind.HermesC10);
+        ArmAndKey(h);
+
+        var expected = new[] { 21, 11, 1 };
+        for (int cal = 1; cal <= 3; cal++)
+        {
+            h.Engine.Meters = Meters(0, calibrationAttempts: cal);
+            h.Svc.Tick1();   // Monitor: cold-fit rail → disable PS
+            h.Svc.Tick1();   // SetNewValues: −10 on the wire
+            h.Svc.Tick1();   // RestoreOperation: re-arm saved cal-mode
+            Assert.Equal(expected[cal - 1], h.Client.PsTxAttenOnTxDb);
+        }
+        // Three complete brackets — PS never left disabled.
+        Assert.Equal(6, h.Engine.PsControlCalls.Count);
+    }
+
+    [Fact]
+    public void VoiceMoxWithoutTwoTone_SkipsDance()
+    {
+        // G2E policy (piHPSDR parity): the attenuation servo runs ONLY
+        // during the deliberate two-tone calibration — an armed PS must
+        // never dance the attenuator mid-QSO voice TX (the class that
+        // burned the G2, g2_ps_blowout_508, and poisoned the G2E testers'
+        // stores).
+        using var h = Build(HpsdrBoardKind.HermesC10);
+        h.Client.SetPsTxAttenOnTxDb(10);
+        ArmAndKey(h);
+        h.Tx.SetTwoToneOn(false);   // voice MOX only
+        h.Engine.Meters = Meters(250, calibrationAttempts: 1);
+
+        h.Svc.Tick1();
+        h.Svc.Tick1();
+
+        Assert.Equal(10, h.Client.PsTxAttenOnTxDb);
         Assert.Empty(h.Engine.PsControlCalls);
     }
 
@@ -290,6 +343,39 @@ public class PsAutoAttenuateHermesC10Tests : IDisposable
         Assert.Equal(new[] { (false, false), (true, false) }, h.Engine.PsControlCalls);
     }
 
+    // ---- Persist policy --------------------------------------------------------
+
+    [Fact]
+    public void PersistsOnlyInWindowCalibrationResults_NeverMidWalk()
+    {
+        // The #1249 poison-ratchet class: mid-walk servo values must never
+        // land in the per-board store (both field testers' stores were
+        // ratcheted to 31 dB and re-applied on every connect). Only a value
+        // that PRODUCED an in-window fit — a completed calibration —
+        // persists. Mid-walk the live value still surfaces in state for the
+        // PURESIGNAL panel.
+        using var h = Build(HpsdrBoardKind.HermesC10);
+        // Cache the per-board key exactly like a real P1 G2E connect does.
+        h.Radio.ApplyPsHwPeakForConnection(isProtocol2: false, board: HpsdrBoardKind.HermesC10);
+        h.Client.SetPsTxAttenOnTxDb(10);
+        ArmAndKey(h);
+
+        // Quiet fit: fb=100 → −4 → attn 6. Mid-walk: wire + state move,
+        // store does NOT.
+        h.Engine.Meters = Meters(100, calibrationAttempts: 1);
+        h.Svc.Tick1();   // Monitor → disable
+        h.Svc.Tick1();   // SetNewValues → wire 6
+        h.Svc.Tick1();   // RestoreOperation
+        Assert.Equal(6, h.Client.PsTxAttenOnTxDb);
+        Assert.Equal(6, h.Radio.Snapshot().PsTxFeedbackAttenuationDb);
+        Assert.Null(h.Radio.GetPersistedPsTxAttnDb());   // nothing on disk yet
+
+        // The next fit lands in-window at attn 6 → THAT persists.
+        h.Engine.Meters = Meters(150, calibrationAttempts: 2);
+        h.Svc.Tick1();   // Monitor: in-window → persist calibration result
+        Assert.Equal(6, h.Radio.GetPersistedPsTxAttnDb());
+    }
+
     // ---- Mid-dance recovery ---------------------------------------------------
 
     [Fact]
@@ -307,6 +393,7 @@ public class PsAutoAttenuateHermesC10Tests : IDisposable
         Assert.Equal(new[] { (false, false) }, h.Engine.PsControlCalls);
 
         Assert.True(h.Tx.TrySetMox(false, out _));
+        h.Tx.SetTwoToneOn(false);   // two-tone drops with the unkey
         h.Svc.Tick1();   // not-keyed recover path
 
         Assert.Equal(new[] { (false, false), (true, false) }, h.Engine.PsControlCalls);

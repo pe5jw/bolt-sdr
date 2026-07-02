@@ -444,11 +444,34 @@ public sealed class WdspDspEngine : IDspEngine
     private double _psAmpDelayNs = 150.0;
     private bool _psPtol;                // false = strict 0.8 ; true = relax 0.4 (matches pihpsdr/Thetis: ptol ? 0.4 : 0.8)
     private const int PsFeedbackBlockSize = 1024;
-    // PS feedback IQ runs at 192 kHz on G2 / Saturn / ANAN-7000 (P2 paired
-    // DDC0/DDC1 — see SetPSFeedbackRate(id, 192_000) in OpenTxChannel).
-    // Used when configuring the PS-feedback display analyzer so its bin-clip
-    // math matches the data rate it's receiving.
-    private const int PsFeedbackSampleRateHz = 192_000;
+    // PS feedback IQ sample rate. 192 kHz on every P2 path — the paired
+    // DDC0/DDC1 scheme (G2 / Saturn / ANAN-7000) and the HermesC10 keyed
+    // time-mux burst both run the feedback DDC at a fixed 192 kHz — and on
+    // the HL2 P1 path (shipped behaviour, untouched). On the HermesC10 P1
+    // 4-DDC path the feedback rides the normal EP6 stream at the WIRE rate
+    // (all P1 DDCs share the one global rate), so DspPipelineService
+    // overrides this via SetPsFeedbackRateHz before OpenTxChannel — telling
+    // WDSP 192 kHz while feeding it 48/96/384 kHz mis-scales calcc's
+    // mox/loop-delay sample counts and amp-delay lines and the fit never
+    // converges. (Thetis instead force-hops the whole radio to 192 kHz
+    // during PS TX, console.cs:8487-8506; piHPSDR ties the feedback rate to
+    // the radio rate, receiver.c:1590-1596 — we follow piHPSDR.) Used by
+    // SetPSFeedbackRate at TXA open and by the PS-feedback display
+    // analyzer's bin-clip config.
+    private int _psFeedbackRateHz = 192_000;
+
+    /// <summary>
+    /// Override the PS feedback sample rate (Hz) BEFORE <see cref="OpenTxChannel"/>
+    /// runs. HermesC10-P1 only today — see the <see cref="_psFeedbackRateHz"/>
+    /// comment. No-op after TXA open (the value is latched into WDSP at open;
+    /// P1 rate changes tear down and rebuild the whole engine, so the seam
+    /// re-runs on every re-rate).
+    /// </summary>
+    public void SetPsFeedbackRateHz(int rateHz)
+    {
+        if (rateHz <= 0) return;
+        _psFeedbackRateHz = rateHz;
+    }
     private readonly int[] _psInfoBuf = new int[16];
     // Edge-triggered state-transition log target. 255 is an out-of-range
     // sentinel so the first observed state always logs (LRESET..LTURNON
@@ -918,7 +941,7 @@ public sealed class WdspDspEngine : IDspEngine
             if (_psFbDispAlive && _psFbDispId is int psFb)
             {
                 _psFbDispZoomLevel = level;
-                TryConfigureTxAnalyzer(psFb, PsFeedbackSampleRateHz, PsFeedbackBlockSize, _psFbDispRxSampleRateHz, _psFbDispPixelWidth, level, _txFftSize, _txWinType, AnalyzerKaiserPi);
+                TryConfigureTxAnalyzer(psFb, _psFeedbackRateHz, PsFeedbackBlockSize, _psFbDispRxSampleRateHz, _psFbDispPixelWidth, level, _txFftSize, _txWinType, AnalyzerKaiserPi);
             }
         }
 
@@ -1682,7 +1705,7 @@ public sealed class WdspDspEngine : IDspEngine
         {
             if (_psFbDispAlive && _psFbDispId is int psFb)
             {
-                TryConfigureTxAnalyzer(psFb, PsFeedbackSampleRateHz, PsFeedbackBlockSize, _psFbDispRxSampleRateHz, _psFbDispPixelWidth, _psFbDispZoomLevel, fft, win, AnalyzerKaiserPi);
+                TryConfigureTxAnalyzer(psFb, _psFeedbackRateHz, PsFeedbackBlockSize, _psFbDispRxSampleRateHz, _psFbDispPixelWidth, _psFbDispZoomLevel, fft, win, AnalyzerKaiserPi);
                 ConfigureDisplayAveragingTau(psFb, tau);
             }
         }
@@ -1887,7 +1910,7 @@ public sealed class WdspDspEngine : IDspEngine
             // flip is the load-bearing pattern. PS setters are independent of
             // `SetChannelState`, so they're safe to run unconditionally at
             // TXA open time.
-            NativeMethods.SetPSFeedbackRate(id, 192_000);
+            NativeMethods.SetPSFeedbackRate(id, _psFeedbackRateHz);
             // pihpsdr semantic (transmitter.c:2517): ps_ptol=0 (default) → 0.8
             // strict; ps_ptol=1 → 0.4 relaxed. Same convention in Thetis
             // PSForm.designer.cs.
@@ -1915,8 +1938,8 @@ public sealed class WdspDspEngine : IDspEngine
             // SetPSRunCal stays 0 until the operator arms PS.
             // Bring-up diagnostic — drop once PS is confirmed stable on rack.
             _log.LogInformation(
-                "wdsp.psSeed pinMode=1 mapMode=1 ptol={Ptol} hwPeak={Peak:F4} feedbackRate=192000",
-                _psPtol ? 0.4 : 0.8, _psHwPeak);
+                "wdsp.psSeed pinMode=1 mapMode=1 ptol={Ptol} hwPeak={Peak:F4} feedbackRate={FbRate}",
+                _psPtol ? 0.4 : 0.8, _psHwPeak, _psFeedbackRateHz);
 
             // TX panadapter analyzer — issue #81. Match the first RXA's pixel
             // width and zoom so the TX trace renders into the same widget
@@ -2856,14 +2879,14 @@ public sealed class WdspDspEngine : IDspEngine
                 _log.LogWarning("wdsp.psFb.open XCreateAnalyzer rc={Rc} — PS-Monitor will fall back to TX trace", rc);
                 return;
             }
-            bool configured = TryConfigureTxAnalyzer(psFbId, PsFeedbackSampleRateHz, PsFeedbackBlockSize, rxRate, pixelWidth, zoom, _txFftSize, _txWinType, AnalyzerKaiserPi);
+            bool configured = TryConfigureTxAnalyzer(psFbId, _psFeedbackRateHz, PsFeedbackBlockSize, rxRate, pixelWidth, zoom, _txFftSize, _txWinType, AnalyzerKaiserPi);
             if (!configured)
             {
                 NativeMethods.DestroyAnalyzer(psFbId);
                 ReleaseNativeSlot(psFbId);
                 _log.LogWarning(
                     "wdsp.psFb.open skipped — rx={RxRate} psFb={PsFbRate} not an integer multiple; PS-Monitor will fall back to TX trace",
-                    rxRate, PsFeedbackSampleRateHz);
+                    rxRate, _psFeedbackRateHz);
                 return;
             }
             ConfigureDisplayAveragingTau(psFbId, _txAvgTauSec);
@@ -2874,7 +2897,7 @@ public sealed class WdspDspEngine : IDspEngine
             _psFbDispAlive = true;
             _log.LogInformation(
                 "wdsp.psFb.open id={Id} pix={Pix} rxRate={RxRate} psFbRate={PsFbRate} zoom={Zoom}",
-                psFbId, pixelWidth, rxRate, PsFeedbackSampleRateHz, zoom);
+                psFbId, pixelWidth, rxRate, _psFeedbackRateHz, zoom);
         }
     }
 

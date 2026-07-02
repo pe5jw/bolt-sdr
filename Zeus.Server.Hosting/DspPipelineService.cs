@@ -3587,6 +3587,16 @@ public class DspPipelineService : BackgroundService,
         // Seed the operator's persisted TX display config before TXA opens so
         // the analyzer comes up at their FFT/window/smoothing. Display-only.
         SeedTxDisplayConfig(wdsp);
+        // G2E (HermesC10) P1: PS feedback rides the 4-DDC EP6 stream at the
+        // WIRE rate — all P1 DDCs share the single global rate — not the
+        // fixed 192 kHz of the P2 paired-DDC scheme. Tell WDSP the truth
+        // BEFORE TXA opens (SetPSFeedbackRate latches at open) or calcc's
+        // delay/sample math runs 4× off at 48 kHz and the fit never
+        // converges. piHPSDR model (receiver.c:1590-1596). P1 rate changes
+        // rebuild the engine through this same path, so the value tracks.
+        // HL2 keeps the shipped 192 kHz default untouched.
+        if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesC10)
+            wdsp.SetPsFeedbackRateHz(rate);
         // P1 DAC runs at 48 kHz; keep TXA at the 48/48/48 profile Hermes is
         // calibrated against.
         wdsp.OpenTxChannel(outputRateHz: 48_000);

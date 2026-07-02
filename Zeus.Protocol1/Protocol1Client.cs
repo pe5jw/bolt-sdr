@@ -483,6 +483,20 @@ public sealed class Protocol1Client : IProtocol1Client
 
             // DDC2 → pscc RX, DDC3 → pscc TX. Mirror mi0bot cmaster.cs:8537-8538
             // (FOUR_DDC routing for HL2 with tot=5: psrx=2, pstx=3).
+            //
+            // Route to pscc ONLY while keyed — Thetis parity: the 4-DDC
+            // stream may run at rest (HermesC10 stays 4-DDC for the whole
+            // armed period), but Thetis's cmaster router assigns psrx/pstx
+            // only in the MOX+PS control states (console.cs GetDDC P1 states
+            // 5/7), so at rest DDC2/DDC3 are parsed and DISCARDED. Feeding
+            // rest-state silence into pscc would churn calcc's MOX-delay
+            // machinery for nothing. Reset the pairing accumulator on the
+            // keyed→unkeyed edge so a block never straddles two overs.
+            if (Volatile.Read(ref _mox) == 0)
+            {
+                _psBlockFill = 0;
+                return;
+            }
             for (int s = 0; s < samples; s++)
             {
                 if (_psBlockFill == 0) _psBlockStartSeq = seq;
@@ -973,9 +987,27 @@ public sealed class Protocol1Client : IProtocol1Client
         // semantic upgrade is that DDC2 is a real relay-routed sampler tap
         // there instead of HL2's radiated leakage.
         // See HandlePs4DdcPacket above for the cross-reference to upstream
-        // gateware. Outside PS+MOX we stay at single-DDC so the existing
-        // 1-DDC EP6 packet shape and parser are bit-exact unchanged.
-        byte numRxMinus1 = (byte)(psOn && (isHl2 || isC10) && moxOn ? 3 : 0);
+        // gateware. Outside PS we stay at single-DDC so the existing 1-DDC
+        // EP6 packet shape and parser are bit-exact unchanged.
+        //
+        // GATE SEMANTICS DIFFER PER BOARD — deliberately:
+        //   HL2: 4-DDC only during PS+MOX (the shipped, field-working HL2
+        //        behaviour — do not touch).
+        //   HermesC10 (G2E): 4-DDC for the WHOLE armed period, keyed or not.
+        //        Flipping the EP6 framing live at every TR edge is the
+        //        verified #1283 field failure (#1285): the Config register
+        //        rides only 2 of 16 C&C rotation phases, so the parser and
+        //        the radio disagreed about the packet shape for ~20-40 ms at
+        //        every key-down AND key-up — garbage parses plus a ~3.3×
+        //        TX-pacing error at every TX onset. No reference client
+        //        changes the P1 receiver count on a live stream: Thetis runs
+        //        the G2E at nddc=4 permanently (console.cs:8318-8322) and
+        //        piHPSDR switches only at PS-arm time behind a full protocol
+        //        stop/restart (transmitter.c:2504-2511). Arm-scoped framing
+        //        means the only format transitions happen at the arm/disarm
+        //        CLICK — unkeyed, where a brief self-healing mismatch window
+        //        costs a few ms of RX display, never TX.
+        byte numRxMinus1 = (byte)(psOn && ((isHl2 && moxOn) || isC10) ? 3 : 0);
 
         return new(
             VfoAHz: Interlocked.Read(ref _vfoAHz),
@@ -1045,6 +1077,9 @@ public sealed class Protocol1Client : IProtocol1Client
         // TxLoopAsync to emit one EP2 packet. N = rxRate / 48 kHz because the
         // HL2's TX DAC clock runs at a fixed 48 kHz regardless of the RX rate.
         int rxPktCounter = 0;
+        // HermesC10 PS pacing — fractional EP2 credit accumulator (exact
+        // 381 pkt/s release regardless of RX rate; see the 4-DDC branch).
+        double psTxCredit = 0.0;
 
         try
         {
@@ -1127,14 +1162,22 @@ public sealed class Protocol1Client : IProtocol1Client
                 // publishes DDC0 to the IqFrame channel (RX1 audio +
                 // panadapter stay alive) and DDC2/DDC3 to the
                 // PsFeedbackFrame channel.
-                if (Volatile.Read(ref _psEnabled) != 0
-                    && Volatile.Read(ref _mox) != 0
-                    && (HpsdrBoardKind)Volatile.Read(ref _boardKind)
-                        is HpsdrBoardKind.HermesLite2 or HpsdrBoardKind.HermesC10)
+                var psBoard = (HpsdrBoardKind)Volatile.Read(ref _boardKind);
+                bool ps4DdcActive = Volatile.Read(ref _psEnabled) != 0
+                    // Parser gate mirrors SnapshotState's NumReceiversMinusOne
+                    // gate EXACTLY (see the comment there): HL2 = PS+MOX only
+                    // (shipped behaviour, untouched); HermesC10 = the whole
+                    // armed period, keyed or not, so the packet shape never
+                    // changes at a TR edge (#1285).
+                    && (psBoard == HpsdrBoardKind.HermesC10
+                        || (psBoard == HpsdrBoardKind.HermesLite2
+                            && Volatile.Read(ref _mox) != 0));
+                if (ps4DdcActive)
                 {
                     HandlePs4DdcPacket(buffer.AsSpan(0, n), micScratch);
-                    // Pace the TX loop off the same RX clock so MOX TX
-                    // continues to fire while PS is armed.
+                    // Pace the TX loop off the same RX clock so EP2 (C&C at
+                    // rest, TX IQ during MOX) continues to fire while PS is
+                    // armed.
                     var psRateHz = (HpsdrSampleRate)Volatile.Read(ref _rate) switch
                     {
                         HpsdrSampleRate.Rate48k => 48_000,
@@ -1145,14 +1188,32 @@ public sealed class Protocol1Client : IProtocol1Client
                     };
                     // 4-DDC packets are 38 paired samples/packet, so the
                     // RX pkt rate is rateHz/38 (vs rateHz/126 for N=1).
-                    // Target TX pkt rate stays at 48k/126 ≈ 381. Rounded
-                    // division avoids the integer-truncation overshoot we
-                    // had earlier.
+                    // Target TX pkt rate stays at 48k/126 ≈ 381.
                     double rxPktsPerSec = psRateHz / (double)PacketParser.Hl2Ps4DdcSamplesPerPacket;
-                    int psTxDivider = Math.Max(1, (int)Math.Round(rxPktsPerSec / 381.0));
-                    if ((++rxPktCounter % psTxDivider) == 0)
+                    if (psBoard == HpsdrBoardKind.HermesC10)
                     {
-                        try { _txSignal.Release(); } catch (SemaphoreFullException) { }
+                        // Fractional accumulator — the rounded-integer divider
+                        // over/under-sends EP2 by up to ~10% depending on rate
+                        // (48k: 1263/381 = 3.315 → 3 → +10.5% oversend; 192k:
+                        // ~+2%), which drifts the radio's TX FIFO over a long
+                        // transmission. Accumulate exact credits instead:
+                        // release once per (rxPktsPerSec/381) packets on
+                        // average, error bounded by one packet.
+                        psTxCredit += 381.0 / rxPktsPerSec;
+                        if (psTxCredit >= 1.0)
+                        {
+                            psTxCredit -= 1.0;
+                            try { _txSignal.Release(); } catch (SemaphoreFullException) { }
+                        }
+                    }
+                    else
+                    {
+                        // HL2: shipped rounded-divider pacing, untouched.
+                        int psTxDivider = Math.Max(1, (int)Math.Round(rxPktsPerSec / 381.0));
+                        if ((++rxPktCounter % psTxDivider) == 0)
+                        {
+                            try { _txSignal.Release(); } catch (SemaphoreFullException) { }
+                        }
                     }
                     continue;
                 }
@@ -1375,10 +1436,15 @@ public sealed class Protocol1Client : IProtocol1Client
                     _  => (ControlFrame.CcRegister.Config,     ControlFrame.CcRegister.RxFreq4),
                 };
             }
-            // PS armed but RX-only: cache RxFreq3 / RxFreq4 / LnaTxGainStable
-            // so the radio has them ready for the next MOX edge. Number-of-
-            // receivers in Config is 0 here so DDC2/DDC3 aren't streaming;
-            // these writes are harmless.
+            // PS armed but RX-only. On the HL2, Config carries
+            // NumReceiversMinusOne=0 here (4-DDC is MOX-scoped), so
+            // RxFreq3/RxFreq4/LnaTxGainStable are harmless pre-caching for
+            // the next MOX edge. On the HermesC10 the framing is ARM-scoped
+            // (NumReceiversMinusOne=3 for the whole armed period — see
+            // SnapshotState), so DDC2/DDC3 ARE streaming at rest: these same
+            // writes keep their NCOs tuned and the TX-time attenuation
+            // current, and the parser discards their rest-state samples
+            // (HandlePs4DdcPacket routes to pscc only while keyed).
             return q switch
             {
                 0  => (ControlFrame.CcRegister.Config,     ControlFrame.CcRegister.RxFreq),

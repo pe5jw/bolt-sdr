@@ -309,14 +309,39 @@ public class ControlFramePsHermesC10GoldenTests
     }
 
     [Theory]
+    // ARM-SCOPED framing (#1285 rework): the receiver count follows the PS
+    // ARM state alone on the G2E — 4-DDC for the whole armed period, keyed
+    // or not — so the EP6 packet shape NEVER changes at a TR edge. The
+    // original armed+keyed gate flipped the framing live at every key-down
+    // and key-up, and the Config register rides only 2 of 16 C&C rotation
+    // phases, so the radio and the parser disagreed about the packet shape
+    // for ~20-40 ms at every TR edge (garbage parses + ~3.3× TX-pacing
+    // error at TX onset — the "breaks TX" field report). Thetis runs the
+    // G2E at nddc=4 permanently (console.cs:8318-8322); piHPSDR changes the
+    // count only at PS-arm time behind a full protocol stop/restart
+    // (transmitter.c:2504-2511). PS off keeps the wire bit-identical.
     [InlineData(true, true, 3)]    // armed + keyed → 4-DDC (IF_last_chan = 3, Hermes.v:2151)
-    [InlineData(true, false, 0)]   // armed at rest → single DDC, byte-identical wire
-    [InlineData(false, true, 0)]   // keyed, PS off → single DDC
+    [InlineData(true, false, 3)]   // armed at rest → STILL 4-DDC (no TR-edge format flip)
+    [InlineData(false, true, 0)]   // keyed, PS off → single DDC, byte-identical wire
     [InlineData(false, false, 0)]  // idle
-    public void C10_NumRx_FourDdc_OnlyWhenArmedAndKeyed(bool psEnabled, bool mox, byte expected)
+    public void C10_NumRx_FourDdc_WheneverArmed(bool psEnabled, bool mox, byte expected)
     {
         using var client = new Protocol1Client();
         client.SetBoardKind(HpsdrBoardKind.HermesC10);
+        client.SetPsEnabled(psEnabled);
+        client.SetMox(mox);
+        Assert.Equal(expected, client.SnapshotState().NumReceiversMinusOne);
+    }
+
+    [Theory]
+    // HL2 keeps the shipped PS+MOX-scoped gate — field-working, untouched.
+    [InlineData(true, true, 3)]
+    [InlineData(true, false, 0)]
+    [InlineData(false, true, 0)]
+    public void Hl2_NumRx_FourDdc_OnlyWhenArmedAndKeyed_Unchanged(bool psEnabled, bool mox, byte expected)
+    {
+        using var client = new Protocol1Client();
+        client.SetBoardKind(HpsdrBoardKind.HermesLite2);
         client.SetPsEnabled(psEnabled);
         client.SetMox(mox);
         Assert.Equal(expected, client.SnapshotState().NumReceiversMinusOne);
