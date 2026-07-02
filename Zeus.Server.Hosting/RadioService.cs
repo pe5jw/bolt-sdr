@@ -170,8 +170,9 @@ public sealed class RadioService : IDisposable
     private StateDto _state;
 
     // Session-only per-receiver config for the extra DDC receivers (RX3+, index
-    // 2..MaxReceivers-1). RX1/RX2 stay on the flat StateDto fields; these feed
-    // ProjectReceivers for the extra entries and, via that array, the
+    // 2..MaxReceivers-1). RX1/RX2 keep their tuning/control on the flat
+    // StateDto fields, with per-receiver ADC source carried in Receivers[].
+    // These extras feed ProjectReceivers and, via that array, the
     // DspPipelineService multi-DDC path. Not persisted — the operator re-enables
     // extra receivers each session (no silent auto-spin-up of DDCs on restart).
     // Guarded by _sync. Indices 0/1 are unused (RX1/RX2 are the flat fields).
@@ -1257,6 +1258,8 @@ public sealed class RadioService : IDisposable
                 if (index == 1) SetRx2(new Rx2SetRequest(AfGainDb: af));
                 else SetRxAfGain(af);
             }
+            if (adcSource is byte a)
+                Mutate(s => WithReceiverAdcSource(s, index, a));
             return Snapshot();
         }
         if (index < 2 || index >= _extraReceivers.Length)
@@ -4123,8 +4126,8 @@ public sealed class RadioService : IDisposable
     }
 
     // Patch the authoritative RX2 (index 1) entry inside a StateDto's Receivers
-    // array, returning a new StateDto. Callers set only RX2's tuning fields
-    // (VFO / mode / filter / AF gain) here — the subsequent Mutate /
+    // array, returning a new StateDto. Callers set RX2's receiver-array fields
+    // (VFO / mode / filter / AF gain / ADC source) here — the subsequent Mutate /
     // ProjectReceivers pass re-overlays the flat control fields. This is the
     // write counterpart to ReceiverProjection.Rx2 (the read accessor). Off the
     // audio thread (operator setters), so the small list copy is fine.
@@ -4145,6 +4148,48 @@ public sealed class RadioService : IDisposable
         return s with { Receivers = list };
     }
 
+    private static ReceiverDto Rx1ProjectionSeed(StateDto s) => new(
+        Index: 0, Enabled: true, AdcSource: ReceiverAdcSource(s, 0),
+        VfoHz: s.VfoHz, Mode: s.Mode,
+        FilterLowHz: s.FilterLowHz, FilterHighHz: s.FilterHighHz,
+        FilterPresetName: s.FilterPresetName,
+        AfGainDb: s.RxAfGainDb, SampleRateHz: s.SampleRate,
+        Muted: s.Rx1Muted);
+
+    private static StateDto WithReceiverAdcSource(StateDto s, int index, byte adcSource)
+    {
+        var seed = index == 0
+            ? Rx1ProjectionSeed(s)
+            : index == 1
+                ? s.Rx2()
+                : throw new ArgumentOutOfRangeException(nameof(index), index, "only RX1/RX2 are stored in StateDto.Receivers");
+        var next = seed with { AdcSource = adcSource };
+        var src = s.Receivers;
+        if (src is null)
+            return s with { Receivers = new[] { next } };
+
+        var list = new List<ReceiverDto>(src.Count);
+        bool replaced = false;
+        foreach (var r in src)
+        {
+            if (r.Index == index) { list.Add(next); replaced = true; }
+            else list.Add(r);
+        }
+        if (!replaced) list.Add(next);
+        return s with { Receivers = list };
+    }
+
+    private static byte ReceiverAdcSource(StateDto s, int index)
+    {
+        if (s.Receivers is { } receivers)
+        {
+            for (int i = 0; i < receivers.Count; i++)
+                if (receivers[i].Index == index)
+                    return receivers[i].AdcSource;
+        }
+        return 0;
+    }
+
     // Build the canonical per-receiver array (wire v2). Index 0 = RX1 is rebuilt
     // from the flat RX1 fields; index 1 = RX2 is carried forward from the array
     // (authoritative) with Enabled
@@ -4159,7 +4204,7 @@ public sealed class RadioService : IDisposable
         var list = new List<ReceiverDto>(2)
         {
             new ReceiverDto(
-                Index: 0, Enabled: true, AdcSource: 0,
+                Index: 0, Enabled: true, AdcSource: ReceiverAdcSource(s, 0),
                 VfoHz: s.VfoHz, Mode: s.Mode,
                 FilterLowHz: s.FilterLowHz, FilterHighHz: s.FilterHighHz,
                 FilterPresetName: s.FilterPresetName,
@@ -4175,7 +4220,7 @@ public sealed class RadioService : IDisposable
             {
                 Index = 1,
                 Enabled = s.Rx2Enabled,
-                AdcSource = 0,
+                AdcSource = ReceiverAdcSource(s, 1),
                 SampleRateHz = s.SampleRate,
                 Muted = s.Rx2Muted,
             },

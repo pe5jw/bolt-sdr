@@ -3423,6 +3423,7 @@ public class DspPipelineService : BackgroundService,
         // RadioService.SetRadioLo). See docs/prd/panfall_behavior.md.
         var p2 = _p2Client;
         p2?.SetVfoAHz(s.RadioLoHz);
+        p2?.SetReceiverAdcSources(ReceiverAdcSource(s, 0), ReceiverAdcSource(s, 1));
         // RX2 (true second receiver): enable/disable its DDC and tune its NCO to
         // VFO B's effective LO so it demodulates its own band, independent of
         // RX1. SetRx2Enabled is idempotent (only re-sends on a real change);
@@ -4090,6 +4091,9 @@ public class DspPipelineService : BackgroundService,
     // Receivers[] array, which RadioService keeps current on every Mutate.
     private static bool IsReceiverMuted(StateDto s, int rxIndex) =>
         s.Receivers is { } rs && rxIndex >= 0 && rxIndex < rs.Count && rs[rxIndex].Muted;
+
+    private static byte ReceiverAdcSource(StateDto s, int rxIndex) =>
+        s.Receivers is { } rs && rxIndex >= 0 && rxIndex < rs.Count ? rs[rxIndex].AdcSource : (byte)0;
 
     // Per-secondary-receiver tuning params, read from the canonical Receivers[]
     // entry (RX2 = index 1, RX3+ = index N). RadioService keeps the array

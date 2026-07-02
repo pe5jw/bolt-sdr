@@ -156,6 +156,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // accessed ints/uints. _rx2Enabled: 0 = off, 1 = on.
     private int _rx2Enabled;
     private uint _rx2FreqHz = 7_100_000;
+    private int _rx1AdcSource;
+    private int _rx2AdcSource;
     // TX DUC NCO frequency. Normally tracks _rxFreqHz (the shared RX0/TX LO) so
     // the TX carrier lands at the RX0 frequency — byte-identical to the historic
     // single-frequency model. For dual-RX split TX (TX VFO = B with RX2 on) the
@@ -171,10 +173,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // base+2). _extraReceiverCount counts RX3.. ; total user receivers =
     // 2 + _extraReceiverCount and RX2 MUST be enabled (no DDC gaps). Indexed by
     // receiver index: _extraRxFreqHz[2] = RX3 NCO, _extraRxAdc[2] = RX3 ADC
-    // source, etc. When _extraReceiverCount == 0 the RX1/RX2 path below is
-    // entirely unchanged and SendCmdRx keeps using the byte-pinned legacy
-    // composer — extras are purely additive and never touch the PureSignal
-    // DDC0/1 branch. Read on the RX thread + command threads (volatile-accessed).
+    // source, etc. When _extraReceiverCount == 0 the RX1/RX2 path below keeps
+    // using the byte-pinned legacy composer, with the operator-selected RX1/RX2
+    // ADC sources supplied explicitly. Extras are purely additive and never
+    // touch the PureSignal DDC0/1 branch. Read on the RX thread + command
+    // threads (volatile-accessed).
     private int _extraReceiverCount;
     private readonly uint[] _extraRxFreqHz = new uint[MaxRxDdc];
     private readonly byte[] _extraRxAdc = new byte[MaxRxDdc];
@@ -860,6 +863,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
+    /// Set the physical ADC source for RX1/RX2 DDCs. Defaults remain ADC0, but
+    /// the operator can opt either receiver onto ADC1 when a second feedline is
+    /// present.
+    /// </summary>
+    public void SetReceiverAdcSources(byte rx1AdcSource, byte rx2AdcSource)
+    {
+        bool changed = Interlocked.Exchange(ref _rx1AdcSource, rx1AdcSource) != rx1AdcSource;
+        changed |= Interlocked.Exchange(ref _rx2AdcSource, rx2AdcSource) != rx2AdcSource;
+        if (changed && _rxTask is not null)
+            SendCmdRx();
+    }
+
+    /// <summary>
     /// Configure the extra user receivers beyond RX2 (RX3..) for full multi-DDC.
     /// <paramref name="count"/> is the number of receivers past RX2 (0 = RX1/RX2
     /// only, the legacy path). Extras are contiguous — receiver index 2+i sits on
@@ -873,13 +889,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     {
         int maxExtras = MaxRxDdc - RxBaseDdc(_boardKind) - 2;
         int clamped = Math.Clamp(count, 0, Math.Max(0, maxExtras));
+        bool adcChanged = false;
         for (int k = 0; k < clamped; k++)
         {
             int rcvr = 2 + k;
-            _extraRxAdc[rcvr] = adcSources is not null && k < adcSources.Count ? adcSources[k] : (byte)0;
+            byte nextAdc = adcSources is not null && k < adcSources.Count ? adcSources[k] : (byte)0;
+            if (_extraRxAdc[rcvr] != nextAdc)
+            {
+                _extraRxAdc[rcvr] = nextAdc;
+                adcChanged = true;
+            }
         }
-        if (Interlocked.Exchange(ref _extraReceiverCount, clamped) == clamped) return;
-        if (_rxTask is not null)
+        bool countChanged = Interlocked.Exchange(ref _extraReceiverCount, clamped) != clamped;
+        if ((countChanged || adcChanged) && _rxTask is not null)
         {
             SendCmdRx();
             SendCmdHighPriority(run: true);
@@ -2107,18 +2129,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     internal static byte Rx2AdcSource(byte numAdc, HpsdrBoardKind boardKind)
     {
-        // RX2 shares RX1's ADC (ADC0 = the main receive antenna). RX1's DDC is
-        // always configured on ADC0, so a second receiver listening on a
-        // different band must read the same ADC to hear the same antenna.
+        // Default RX2 to RX1's ADC (ADC0 = the main receive antenna). A second
+        // receiver listening on another band usually needs the same ADC to hear
+        // the same antenna.
         //
         // The earlier code sourced ADC1 on dual-ADC Orion/Saturn/G2 boards on
         // the theory that ADC1 is "the RX2 input". On a G2 that is the separate
         // RX2/EXT antenna jack — empty on a normal single-antenna station, so
         // DDC3 clocked out at full rate but carried silence (verified on a live
         // G2: RX2 IQ RMS 9.6e-6 vs RX1 6.2e-4, a flat panadapter). Defaulting to
-        // ADC0 makes RX2 work for the common same-antenna case. A future RX2
-        // antenna/ADC selector can opt back into ADC1 for true diversity / a
-        // second feedline; until that UX exists, ADC0 is the only correct default.
+        // ADC0 makes RX2 work for the common same-antenna case. The manual
+        // per-receiver ADC selector can opt RX2 back into ADC1 for true
+        // diversity / a second feedline; ADC0 remains the correct default.
         _ = numAdc;
         _ = boardKind;
         return 0x00;
@@ -2139,7 +2161,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         bool adcDitherEnabled = false,
         bool adcRandomEnabled = false,
         bool rx2Enabled = false,
-        bool g2eFeedbackBurst = false)
+        bool g2eFeedbackBurst = false,
+        byte rx1AdcSource = 0,
+        byte? rx2AdcSource = null)
     {
         var p = new byte[BufLen];
         WriteBeU32(p, 0, seq);
@@ -2212,7 +2236,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
         p[7] = ddcEnable;
         int off = 17 + rxDdc * 6;
-        p[off + 0] = 0x00;
+        p[off + 0] = rx1AdcSource;
         WriteBeU16(p, off + 1, sampleRateKhz);
         p[off + 5] = 24;
 
@@ -2223,7 +2247,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             // same feedline — see Rx2AdcSource. Sourcing ADC1 fed the empty
             // RX2/EXT jack and produced a silent DDC on a normal station.
             int off2 = 17 + rx2Ddc * 6;
-            p[off2 + 0] = Rx2AdcSource(numAdc, boardKind);
+            p[off2 + 0] = rx2AdcSource ?? Rx2AdcSource(numAdc, boardKind);
             WriteBeU16(p, off2 + 1, sampleRateKhz);
             p[off2 + 5] = 24;
         }
@@ -2351,11 +2375,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             // tests), so existing behaviour is preserved; extras add DDC config
             // blocks for RxBaseDdc+2.. only. PS DDC0/1 handling is inside the
             // composer and untouched.
-            byte rxAdc = Rx2AdcSource(_numAdc, _boardKind); // ADC0 (same antenna)
+            byte rx1Adc = (byte)Volatile.Read(ref _rx1AdcSource);
+            byte rx2Adc = (byte)Volatile.Read(ref _rx2AdcSource);
             var specs = new List<DdcReceiverSpec>(2 + extras)
             {
-                new DdcReceiverSpec(rxAdc, (ushort)_sampleRateKhz),  // RX1
-                new DdcReceiverSpec(rxAdc, (ushort)_sampleRateKhz),  // RX2
+                new DdcReceiverSpec(rx1Adc, (ushort)_sampleRateKhz),  // RX1
+                new DdcReceiverSpec(rx2Adc, (ushort)_sampleRateKhz),  // RX2
             };
             for (int k = 0; k < extras; k++)
                 specs.Add(new DdcReceiverSpec(_extraRxAdc[2 + k], (ushort)_sampleRateKhz));
@@ -2379,7 +2404,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 _adcDitherEnabled,
                 _adcRandomEnabled,
                 Volatile.Read(ref _rx2Enabled) != 0,
-                g2eFeedbackBurst);
+                g2eFeedbackBurst,
+                (byte)Volatile.Read(ref _rx1AdcSource),
+                (byte)Volatile.Read(ref _rx2AdcSource));
         }
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1025));
     }

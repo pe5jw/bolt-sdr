@@ -1446,8 +1446,8 @@ public sealed record Rx2SetRequest(
 
 /// <summary>Configure one receiver by index (RX1=0, RX2=1, RX3+=2..) for the
 /// full multi-DDC model — the body of <c>POST /api/receivers/{index}</c>. Every
-/// field is optional; only the supplied ones change. For index ≥ 2 these drive
-/// an extra hardware DDC (<c>AdcSource</c> selects the phase-synchronous ADC 0/1).
+/// field is optional; only the supplied ones change. <c>AdcSource</c> selects
+/// the phase-synchronous ADC 0/1 for every Protocol-2 hardware DDC receiver.
 /// </summary>
 public sealed record ReceiverSetRequest(
     bool? Enabled = null,
