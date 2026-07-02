@@ -784,6 +784,14 @@ public sealed class RadioService : IDisposable
             TwoToneMag = snap.TwoToneMag,
             HwPeakByBoard = hwPeakByBoard,
             TxAttnByBoard = txAttnByBoard,
+            // Carry the migration marker forward — this rebuild replaces the
+            // whole entry, and dropping the marker back to 0 would re-run the
+            // HermesC10 poison wipe on the next startup, deleting a freshly
+            // calibrated value. A brand-new entry (no prior record) is stamped
+            // at the current version for the same reason: it was created after
+            // the poison window and must never be wiped.
+            // See PsSettingsStore.MigrateTxAttnPoison.
+            TxAttnMigration = existing?.TxAttnMigration ?? PsSettingsStore.TxAttnMigrationCurrent,
         });
     }
 
@@ -803,6 +811,18 @@ public sealed class RadioService : IDisposable
         // the "differs" hint track what's actually applied.
         Mutate(s => s.PsTxFeedbackAttenuationDb == db ? s : s with { PsTxFeedbackAttenuationDb = db });
     }
+
+    /// <summary>
+    /// Surface a live servo attenuation value in state WITHOUT persisting.
+    /// The G2E (HermesC10) two-tone servo walks the wire value live but only
+    /// persists a value that produced an in-window fit (a completed
+    /// calibration) — mid-walk values must stay visible to the operator's
+    /// PURESIGNAL panel yet never land in the per-board store (the #1249
+    /// poison-ratchet class). The eventual in-window persist goes through
+    /// <see cref="SetPsTxAttenuationDb"/> as usual.
+    /// </summary>
+    public void SetPsTxAttenuationDbStateOnly(int db)
+        => Mutate(s => s.PsTxFeedbackAttenuationDb == db ? s : s with { PsTxFeedbackAttenuationDb = db });
 
     /// <summary>
     /// Persisted PS TX feedback attenuation (dB) for the currently-connected

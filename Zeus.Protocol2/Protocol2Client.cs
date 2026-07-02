@@ -267,6 +267,15 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // active (the only state on every board except the 10E with its interlock
     // lifted). See SetPsFeedbackEnabled / PsTxAdcProtectFloorDb.
     private byte? _txAttnBeforePsSeed;
+    // True once ANY caller has explicitly written the TX step attenuation via
+    // SetTxAttenuationDb — operator control, the auto-attenuate dance, or the
+    // connect-time restore of a persisted per-board value. The HermesC10
+    // (ANAN-G2E) PS-arm protective seed only fires while this is false: a
+    // deliberate value is never overridden (Thetis / piHPSDR parity — the
+    // stored per-band attenuation is sticky and 31 dB is only the
+    // virgin-store default). The 10E (HermesII) keeps the unconditional
+    // force-seed until it has a bench. See SetPsFeedbackEnabled.
+    private bool _txAttnExplicitlySet;
     // PA settings — pushed from RadioService when PaSettingsStore changes or
     // the VFO crosses a band edge. _paEnabled is the global toggle that lands
     // in CmdGeneral[58]; _driveByte is the pre-calibrated drive level for
@@ -1491,8 +1500,20 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // Every other board, and either board with its kill-switch forced false,
         // takes the historical path untouched (the dual-ADC G2/OrionMkII never
         // qualifies, so its wire is provably unchanged).
+        // HermesC10 (ANAN-G2E) honours a deliberately-set attenuation: once
+        // the operator, the auto-attenuate dance, or the connect-time restore
+        // of a persisted value has written the byte, the arm-time seed must
+        // NOT slam it back to 31 dB. That force-override was the P2 field
+        // deadlock on self-protecting external taps (#960/#1248): 31 dB on an
+        // already-padded tap starves calcc below its fit floor, and the dance
+        // only walks after a fit — so PS could never converge. Thetis keeps
+        // the per-band stored value sticky (31 is only the fresh default,
+        // console.cs:1748) and piHPSDR writes the persisted operator value;
+        // this matches both. The 10E (HermesII) keeps the unconditional seed
+        // until it has a bench.
+        bool honorExplicit = _boardKind == HpsdrBoardKind.HermesC10 && _txAttnExplicitlySet;
         bool seededTxAttn = false;
-        if (SeedsTxAdcProtection(_boardKind))
+        if (SeedsTxAdcProtection(_boardKind) && !honorExplicit)
         {
             if (on)
             {
@@ -2759,6 +2780,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public void SetTxAttenuationDb(byte db)
     {
         if (db > 31) db = 31;
+        // Any explicit write — operator control, the auto-attenuate dance, or
+        // the connect-time restore of a persisted per-board value — marks the
+        // attenuation as deliberately chosen. The HermesC10 PS-arm protective
+        // seed honours this and never overrides a deliberate value (Thetis /
+        // piHPSDR parity: the stored per-band value is sticky; 31 dB is only
+        // the virgin-store default). Recorded even when the value matches the
+        // current byte so an explicit 0 counts as deliberate.
+        _txAttnExplicitlySet = true;
         if (_txStepAttnDb == db) return;
         _txStepAttnDb = db;
         if (_rxTask is not null) SendCmdTx();

@@ -106,6 +106,12 @@ public sealed class PsAutoAttenuateService : BackgroundService
     // observed counter (0 or any value) registers as "new".
     private int _lastCalibrationAttempts = -1;
 
+    // G2E (HermesC10) post-calibration persist tracker — the last attenuation
+    // value written to the per-board store from the in-window Monitor persist.
+    // int.MinValue = nothing persisted this arm. Reset on every PS-arm edge so
+    // a re-calibration that lands on the same value still persists once.
+    private int _lastPersistedAttnDb = int.MinValue;
+
     // Diagnostic gate-skip logging emits only on outcome TRANSITIONS. A sticky
     // gate (e.g. PS disarmed for an entire session) would otherwise drown the
     // INFO-level ring buffer with the same `skip=PsEnabled-off` line every
@@ -258,6 +264,25 @@ public sealed class PsAutoAttenuateService : BackgroundService
         }
     }
 
+    /// <summary>
+    /// Thetis attenuator step for a completed calcc fit (PSForm.cs:745-761):
+    /// ddB = 20·log10(feedback / 152.293), NaN → +10, and out-of-range rails
+    /// clamp to ±10 dB per dance. feedback = 0 (a completed too-quiet "cold"
+    /// fit, calcc.c:368-369 integer truncation) rides the −∞ → −10 rail —
+    /// walking the attenuator DOWN out of deafness, which is how Thetis
+    /// escapes the deaf-at-31 state the G2E testers hit (#1248). Extracted
+    /// from the (previously duplicated) HL2/P2 Monitor branches; behaviour
+    /// is byte-identical to the inline math it replaces.
+    /// </summary>
+    internal static int ComputeAttnStepDb(int feedback)
+    {
+        double ddB = 20.0 * Math.Log10(feedback / IdealFeedback);
+        if (double.IsNaN(ddB)) ddB = 10.0;
+        else if (ddB < -100.0) ddB = -10.0;
+        else if (ddB > 100.0) ddB = 10.0;
+        return (int)Math.Round(ddB, MidpointRounding.AwayFromZero);
+    }
+
     private void ClearStallFlag()
     {
         _stallStartTickMs = 0;
@@ -316,6 +341,7 @@ public sealed class PsAutoAttenuateService : BackgroundService
         {
             _currentAttnDb = ReadRadioTxAttnDb();
             _lastCalibrationAttempts = -1;
+            _lastPersistedAttnDb = int.MinValue;
             _hl2State = Hl2AutoAttState.Monitor;
             _p2State = P2AutoAttState.Monitor;
             _stallStartTickMs = 0;
@@ -655,11 +681,7 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 // mi0bot PSForm.cs:745-761 — full ddB step (no ±1 clamp on HL2)
                 // so a single dance can pull a hot envelope back into window
                 // in one cycle. NaN guard + ±100 dB rails per mi0bot.
-                double ddB = 20.0 * Math.Log10(feedback / IdealFeedback);
-                if (double.IsNaN(ddB)) ddB = 10.0;
-                else if (ddB < -100.0) ddB = -10.0;
-                else if (ddB > 100.0) ddB = 10.0;
-                _hl2DeltaDb = (int)Math.Round(ddB, MidpointRounding.AwayFromZero);
+                _hl2DeltaDb = ComputeAttnStepDb(feedback);
 
                 // Save the operator's current cal-mode so RestoreOperation
                 // brings it back exactly. mi0bot uses _save_singlecalON /
@@ -674,8 +696,8 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 engine.SetPsControl(autoCal: false, singleCal: false);
 
                 _log.LogInformation(
-                    "psAutoAttn.hl2.monitor fb={Fb} info5={Cal} ddB={DDb:F1} delta={Delta} attn={Db}",
-                    feedback, psm.CalibrationAttempts, ddB, _hl2DeltaDb, _currentAttnDb);
+                    "psAutoAttn.hl2.monitor fb={Fb} info5={Cal} delta={Delta} attn={Db}",
+                    feedback, psm.CalibrationAttempts, _hl2DeltaDb, _currentAttnDb);
                 _hl2State = Hl2AutoAttState.SetNewValues;
                 return;
             }
@@ -751,6 +773,23 @@ public sealed class PsAutoAttenuateService : BackgroundService
                     return;
                 }
 
+                // Single-ADC G2E (HermesC10): the attenuation servo runs ONLY
+                // during the deliberate two-tone calibration, never mid-QSO
+                // voice TX — piHPSDR parity (ps_menu.c:169-177: the calibration
+                // timer self-removes the instant twotone drops). The on-air
+                // attenuator dance is the failure class that burned the G2
+                // (g2_ps_blowout_508) and self-poisoned the G2E testers'
+                // stores (#1248/#1249). Correction itself (calcc/iqc) still
+                // runs on voice with the calibrated value; only attenuator
+                // WRITES are two-tone-scoped. Dual-ADC boards keep their
+                // shipped behaviour.
+                bool isC10 = _radio.ConnectedBoardKind == HpsdrBoardKind.HermesC10;
+                if (isC10 && !_tx.IsTwoToneOn)
+                {
+                    LogGate("p2.skip=c10-not-twotone (G2E servo is two-tone-only)");
+                    return;
+                }
+
                 var psm = engine.GetPsStageMeters();
                 int feedback = (int)Math.Round(psm.FeedbackLevel);
 
@@ -765,9 +804,33 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 }
                 _lastCalibrationAttempts = psm.CalibrationAttempts;
 
-                // info[4] == 0 → calcc hasn't completed a fit yet.
+                // info[4] == 0 → usually calcc hasn't completed a fit yet.
+                // EXCEPT on the G2E: a very cold tap COMPLETES fits whose
+                // feedback level integer-truncates to 0 (calcc.c:368-369 —
+                // binfo[4] = (int)(256·hw_scale/rx_scale)), and we only reach
+                // here after the CalibrationAttemptsChanged gate, so
+                // info5 > 0 with fb == 0 is a completed too-quiet fit, not
+                // "no fit yet". Thetis handles this via the ddB rail —
+                // 20·log10(0/152.293) → −∞ → clamped to a −10 dB step
+                // (PSForm.cs:745-761) — walking the attenuator DOWN out of
+                // deafness. Zeus's old unconditional fb-zero skip is exactly
+                // the 31 dB deadlock from #1248: seeded deaf, fits report 0,
+                // skip forever. Scoped to HermesC10; other boards keep the
+                // shipped skip.
                 if (feedback <= 0)
                 {
+                    if (isC10 && psm.CalibrationAttempts > 0 && _currentAttnDb > TxAttnMinDb)
+                    {
+                        _p2DeltaDb = -10;
+                        _p2SavedAuto = s.PsAuto;
+                        _p2SavedSingle = s.PsSingle;
+                        engine.SetPsControl(autoCal: false, singleCal: false);
+                        _log.LogInformation(
+                            "psAutoAttn.p2.monitor c10 cold-fit fb=0 info5={Cal} delta={Delta} attn={Db} — walking attenuation down (Thetis −10 dB rail)",
+                            psm.CalibrationAttempts, _p2DeltaDb, _currentAttnDb);
+                        _p2State = P2AutoAttState.SetNewValues;
+                        return;
+                    }
                     LogGate($"p2.skip=fb-zero psm.fb={psm.FeedbackLevel:F2}");
                     return;
                 }
@@ -781,6 +844,25 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 bool tooQuiet = feedback < FeedbackLowThreshold && _currentAttnDb > TxAttnMinDb;
                 if (!tooHot && !tooQuiet)
                 {
+                    // G2E post-calibration persist: only a value that has
+                    // PRODUCED an in-window fit is worth restoring on the next
+                    // connect. Per-step persistence is what let #1249's broken
+                    // walk ratchet garbage (31 dB) into both testers' stores
+                    // and re-apply it on every connect. We only reach here
+                    // during two-tone (gate above) after a fresh fit landed
+                    // feedback in [128,181] at _currentAttnDb — the definition
+                    // of a good calibration. Dual-ADC boards keep their
+                    // shipped per-step persist.
+                    if (isC10
+                        && feedback >= FeedbackLowThreshold
+                        && _currentAttnDb != _lastPersistedAttnDb)
+                    {
+                        _lastPersistedAttnDb = _currentAttnDb;
+                        _radio.SetPsTxAttenuationDb(_currentAttnDb);
+                        _log.LogInformation(
+                            "psAutoAttn.p2.persist c10 attn={Db} fb={Fb} — in-window calibration result persisted",
+                            _currentAttnDb, feedback);
+                    }
                     LogGate($"p2.skip=in-window fb={feedback} attn={_currentAttnDb}");
                     return;
                 }
@@ -788,11 +870,7 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 // mi0bot PSForm.cs:745-761 — full ddB step (no ±1 clamp)
                 // so a single dance pulls a hot envelope back into window
                 // in one cycle. NaN guard + ±100 dB rails per mi0bot.
-                double ddB = 20.0 * Math.Log10(feedback / IdealFeedback);
-                if (double.IsNaN(ddB)) ddB = 10.0;
-                else if (ddB < -100.0) ddB = -10.0;
-                else if (ddB > 100.0) ddB = 10.0;
-                _p2DeltaDb = (int)Math.Round(ddB, MidpointRounding.AwayFromZero);
+                _p2DeltaDb = ComputeAttnStepDb(feedback);
 
                 // Save the operator's current cal-mode so RestoreOperation
                 // brings it back exactly. mi0bot uses _save_singlecalON /
@@ -809,8 +887,8 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 engine.SetPsControl(autoCal: false, singleCal: false);
 
                 _log.LogInformation(
-                    "psAutoAttn.p2.monitor fb={Fb} info5={Cal} ddB={DDb:F1} delta={Delta} attn={Db}",
-                    feedback, psm.CalibrationAttempts, ddB, _p2DeltaDb, _currentAttnDb);
+                    "psAutoAttn.p2.monitor fb={Fb} info5={Cal} delta={Delta} attn={Db}",
+                    feedback, psm.CalibrationAttempts, _p2DeltaDb, _currentAttnDb);
                 _p2State = P2AutoAttState.SetNewValues;
                 return;
             }
@@ -835,7 +913,17 @@ public sealed class PsAutoAttenuateService : BackgroundService
                     // Persist per board so this converged value is restored on
                     // the next connect (DspPipelineService) instead of booting
                     // at 0 dB and re-saturating the feedback ADC.
-                    _radio.SetPsTxAttenuationDb(newAttn);
+                    // EXCEPT on the G2E (HermesC10): mid-walk values are NOT
+                    // persisted — #1249's broken walk ratcheted 31 dB into both
+                    // testers' stores this way, and every connect re-applied
+                    // the poison. The G2E persists only in Monitor, after a
+                    // fresh fit lands feedback in-window at this value (a
+                    // completed calibration); mid-walk it surfaces the live
+                    // value to the UI without touching the store.
+                    if (_radio.ConnectedBoardKind != HpsdrBoardKind.HermesC10)
+                        _radio.SetPsTxAttenuationDb(newAttn);
+                    else
+                        _radio.SetPsTxAttenuationDbStateOnly(newAttn);
                     // mi0bot PSForm.cs:783 Thread.Sleep(100) — give the
                     // wire byte time to land before the next tick re-enables
                     // PS in calcc.
