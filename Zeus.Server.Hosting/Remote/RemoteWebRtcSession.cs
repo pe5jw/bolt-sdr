@@ -145,9 +145,13 @@ public sealed class RemoteWebRtcSession
     ///                            feedback chain can saturate the feedback ADC.
     ///   /api/prefs/databases   — switching/importing/deleting the active prefs
     ///                            LiteDB out from under the running radio.
+    ///   /api/app               — process-control endpoints such as restart,
+    ///                            quit, and uninstall. These are local-only;
+    ///                            tunneled requests reach Kestrel as loopback.
     /// </summary>
     private static readonly string[] WriteDeniedPrefixes =
     {
+        "/api/app",
         "/api/tx/ps",
         "/api/prefs/databases",
     };

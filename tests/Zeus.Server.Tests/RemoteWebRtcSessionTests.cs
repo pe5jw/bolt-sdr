@@ -323,6 +323,28 @@ public sealed class RemoteWebRtcSessionTests
         server.Close();
     }
 
+    [Theory]
+    [InlineData("POST", "/api/app/restart")]
+    [InlineData("POST", "/api/app/quit")]
+    [InlineData("POST", "/api/app/uninstall")]
+    public async Task PostUnlock_AppControlMutation_Refused403_WithoutTouchingLoopback(
+        string method, string path)
+    {
+        var factory = new StubHttpClientFactory(_ =>
+            throw new InvalidOperationException("loopback must NOT be called for app-control mutation"));
+        ApiSession(factory, out var server);
+        await using var client = new ProverClient(Password);
+        await UnlockAsync(server, client);
+
+        var replyJson = await SendApiUntilReply(
+            client, 12, method, path, "{}", "application/json");
+        using var doc = JsonDocument.Parse(replyJson);
+        Assert.Equal(403, doc.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal(0, factory.CallCount);
+
+        server.Close();
+    }
+
     [Fact]
     public async Task PostUnlock_TraversalToDenylistedPath_Refused_WithoutTouchingLoopback()
     {

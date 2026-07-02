@@ -146,20 +146,6 @@ public static class ZeusEndpoints
         app.MapGet("/api/capabilities",
             (HttpContext ctx, CapabilitiesService caps) => Results.Ok(caps.Snapshot(ctx)));
 
-        static bool IsLocalRequest(HttpContext ctx)
-        {
-            static IPAddress Normalize(IPAddress ip)
-                => ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip;
-
-            var remote = ctx.Connection.RemoteIpAddress;
-            if (remote is null) return true;
-            remote = Normalize(remote);
-            if (IPAddress.IsLoopback(remote)) return true;
-
-            var local = ctx.Connection.LocalIpAddress;
-            return local is not null && remote.Equals(Normalize(local));
-        }
-
         static object FirewallStatusDto(WindowsFirewallStatus status, bool localRequest) => new
         {
             status.Supported,
@@ -178,12 +164,12 @@ public static class ZeusEndpoints
         // browser cannot trigger a UAC prompt on the host machine.
         app.MapGet("/api/system/windows-firewall",
             (HttpContext ctx, IWindowsFirewallService firewall) =>
-                Results.Ok(FirewallStatusDto(firewall.GetStatus(), IsLocalRequest(ctx))));
+                Results.Ok(FirewallStatusDto(firewall.GetStatus(), LocalRequestGuard.IsLocalRequest(ctx))));
 
         app.MapPost("/api/system/windows-firewall/allow",
             async (HttpContext ctx, IWindowsFirewallService firewall, CancellationToken ct) =>
             {
-                if (!IsLocalRequest(ctx))
+                if (!LocalRequestGuard.IsLocalRequest(ctx))
                 {
                     return Results.Json(
                         new
@@ -3589,14 +3575,18 @@ public static class ZeusEndpoints
             }
         });
 
-        app.MapPost("/api/app/restart", (AppRestartService restart) =>
+        app.MapPost("/api/app/restart", (HttpContext ctx, AppRestartService restart) =>
         {
+            if (LocalRequestGuard.RejectIfNotLocalSameOrigin(ctx, "restart Zeus") is { } rejected)
+                return rejected;
             restart.RequestRestart();
             return Results.Ok(new { restarting = true });
         });
 
-        app.MapPost("/api/app/quit", (AppRestartService restart) =>
+        app.MapPost("/api/app/quit", (HttpContext ctx, AppRestartService restart) =>
         {
+            if (LocalRequestGuard.RejectIfNotLocalSameOrigin(ctx, "quit Zeus") is { } rejected)
+                return rejected;
             restart.RequestQuit();
             return Results.Ok(new { quitting = true });
         });
