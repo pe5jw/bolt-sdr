@@ -111,7 +111,10 @@ export const DEFAULT_TILE_SPAN: Record<string, { w: number; h: number }> = {
   step: { w: 6, h: 6 },
   cw: { w: 8, h: 8 },
   tx: { w: 6, h: 10 },
-  ps: { w: 8, h: 10 },
+  // Full dashboard (calibration hero + mode row + timing/hardware cards +
+  // two-tone). A shorter default hides the ARM toggle below the fold on
+  // first add. Presentation-only — see panels.ts:ps.
+  ps: { w: 12, h: 26 },
   band: { w: 12, h: 4 },
   mode: { w: 8, h: 4 },
   meters: { w: 12, h: 16 },
