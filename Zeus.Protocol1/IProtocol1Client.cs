@@ -242,10 +242,37 @@ public interface IProtocol1Client : IDisposable
     void SetPsEnabled(bool on);
 
     /// <summary>
+    /// Arm or disarm PureSignal, routing through the HermesC10 (ANAN-G2E, P1)
+    /// safe stop/drain/restart transition when the stream is live (#1302 —
+    /// the P1 receiver count must NEVER change on a live stream: the classic-
+    /// Hermes gateware applies it mid-frame and permanently sync-shifts the
+    /// EP6 byte stream). Idempotent: no transition and no wire traffic when
+    /// the client is already in the requested mode, so the reconnect resync
+    /// path is a no-op after connect-while-armed. On HL2 / other boards, or
+    /// before <see cref="StartAsync"/>, degrades to the plain flag store of
+    /// <see cref="SetPsEnabled"/>. This is the ONLY correct way to change the
+    /// PS arm state on a live HermesC10 connection.
+    /// </summary>
+    Task SetPsEnabledAsync(bool on, CancellationToken ct = default);
+
+    /// <summary>
     /// Current PS arm state, as set by <see cref="SetPsEnabled"/>. Read by
     /// DspPipelineService to gate the P1 PS feedback pump.
     /// </summary>
     bool PsEnabled { get; }
+
+    /// <summary>
+    /// Fires (at most once per stall, on the RX thread) when PS is armed on a
+    /// HermesC10 P1 stream and zero 4-DDC packets have parsed for ~2 s while
+    /// datagrams are still arriving — the misframed-stream fingerprint of
+    /// issue #1302. The subscriber (RadioService) auto-disarms PS through the
+    /// normal StateDto flow. Handlers must not block.
+    /// </summary>
+    event Action? PsFeedbackStalled;
+
+    /// <summary>Monotonic count of PS-armed 4-DDC EP6 packets that failed the
+    /// sync/framing parse since Start (#1302 observability).</summary>
+    long Ps4DdcSyncFailCount { get; }
 
     /// <summary>
     /// Push the latest WDSP <c>calcc</c> predistortion subindex/value to
