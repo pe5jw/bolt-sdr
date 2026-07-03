@@ -2,6 +2,7 @@
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Zeus.Contracts;
 using Zeus.Server;
 
 namespace Zeus.Server.Tests;
@@ -95,6 +96,20 @@ public sealed class TxServiceUnkeyOrderingTests : IDisposable
         order.Clear();
 
         Assert.True(tx.TrySetMox(false, out var offErr), offErr);
+
+        Assert.Equal(new[] { "roger", "wire:False", "dsp:False" }, order);
+    }
+
+    [Fact]
+    public void TrySetMox_OffFromCatVoiceRelease_EmitsRogerBeep_WhenEnabled()
+    {
+        var (radio, tx, order) = BuildConnectedTx();
+        radio.SetRogerBeepEnabled(true);
+        Assert.True(tx.TrySetMox(true, MoxSource.Cat, out var onErr), onErr);
+        Assert.Equal(new[] { "dsp:True", "wire:True" }, order);
+        order.Clear();
+
+        Assert.True(tx.TrySetMox(false, MoxSource.Cat, out var offErr), offErr);
 
         Assert.Equal(new[] { "roger", "wire:False", "dsp:False" }, order);
     }

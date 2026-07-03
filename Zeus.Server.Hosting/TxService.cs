@@ -87,15 +87,6 @@ public sealed class TxService
     private static bool IsRogerBeepMode(RxMode mode) =>
         mode is RxMode.LSB or RxMode.USB or RxMode.AM or RxMode.SAM or RxMode.DSB or RxMode.FM;
 
-    private static bool IsRogerBeepRelease(MoxSource source, MoxSource? owner) =>
-        source switch
-        {
-            MoxSource.UI => owner is null or MoxSource.UI,
-            MoxSource.Hardware => owner == MoxSource.Hardware,
-            MoxSource.Midi => owner == MoxSource.Midi,
-            _ => false,
-        };
-
     public TxService(RadioService radio, DspPipelineService pipeline, StreamingHub hub, IBandPlanService bandPlan, ILogger<TxService> log)
     {
         _radio = radio;
@@ -267,8 +258,7 @@ public sealed class TxService
             }
 
             if (stateBeforeDrop.RogerBeepEnabled
-                && IsRogerBeepMode(stateBeforeDrop.Mode)
-                && IsRogerBeepRelease(source, ownerBeforeDrop))
+                && IsRogerBeepMode(stateBeforeDrop.Mode))
             {
                 _pipeline.DrainRogerBeepTail();
             }

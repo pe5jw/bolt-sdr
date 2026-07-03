@@ -139,11 +139,11 @@ public sealed class TxAudioIngest : IDisposable
     private const int FreeDvTxTailDrainSlackMs = 120;   // headroom over the measured backlog
     private const int FreeDvTxTailCeilingMs = 1200;     // absolute runaway cap on the drain
     private const int FreeDvTxTailGuardMs = 160;        // post-drain FIFO flush hold
-    private const int RogerBeepDurationMs = 120;
+    private const int RogerBeepDurationMs = 180;
     private const int RogerBeepTransportDrainTimeoutMs = 350;
-    private const int RogerBeepTailGuardMs = 70;
+    private const int RogerBeepTailGuardMs = 120;
     private const double RogerBeepFrequencyHz = 1000.0;
-    private const float RogerBeepMagnitude = 0.20f;
+    private const float RogerBeepMagnitude = 0.60f;
 
     private long _totalMicSamples;
     private long _totalTxBlocks;
@@ -469,6 +469,8 @@ public sealed class TxAudioIngest : IDisposable
             long deadline = System.Diagnostics.Stopwatch.GetTimestamp();
             int sampleIndex = 0;
             int blocks = 0;
+            float micPeak = 0f;
+            float iqPeak = 0f;
 
             while (sampleIndex < totalSamples)
             {
@@ -477,7 +479,11 @@ public sealed class TxAudioIngest : IDisposable
                 for (int i = 0; i < active; i++)
                 {
                     float env = RogerBeepEnvelope(sampleIndex + i, totalSamples);
-                    _tailMic[i] = (float)(Math.Sin(phase) * RogerBeepMagnitude * env);
+                    float sample = (float)(Math.Sin(phase) * RogerBeepMagnitude * env);
+                    _tailMic[i] = sample;
+                    float sampleAbs = sample;
+                    if (sampleAbs < 0) sampleAbs = -sampleAbs;
+                    if (sampleAbs > micPeak) micPeak = sampleAbs;
                     phase += phaseStep;
                     if (phase >= 2.0 * Math.PI) phase -= 2.0 * Math.PI;
                 }
@@ -488,6 +494,12 @@ public sealed class TxAudioIngest : IDisposable
                 if (produced > 0)
                 {
                     var iqSpan = new ReadOnlySpan<float>(_tailIq, 0, 2 * produced);
+                    for (int i = 0; i < iqSpan.Length; i++)
+                    {
+                        float sampleAbs = iqSpan[i];
+                        if (sampleAbs < 0) sampleAbs = -sampleAbs;
+                        if (sampleAbs > iqPeak) iqPeak = sampleAbs;
+                    }
                     _ring.Write(iqSpan);
                     _forwardP2?.Invoke(new ReadOnlyMemory<float>(_tailIq, 0, 2 * produced));
                     emitted = true;
@@ -512,8 +524,8 @@ public sealed class TxAudioIngest : IDisposable
                 TimeSpan.FromMilliseconds(RogerBeepTransportDrainTimeoutMs)) ?? true;
             Thread.Sleep(RogerBeepTailGuardMs);
             _log.LogInformation(
-                "tx.rogerBeep.tail dropping PTT: blocks={Blocks} durationMs={Duration} transportDrained={TransportDrained} guardMs={Guard}",
-                blocks, RogerBeepDurationMs, transportDrained, RogerBeepTailGuardMs);
+                "tx.rogerBeep.tail dropping PTT: blocks={Blocks} durationMs={Duration} freqHz={Freq:F0} micPeak={MicPeak:F4} iqPeak={IqPeak:F4} transportDrained={TransportDrained} guardMs={Guard}",
+                blocks, RogerBeepDurationMs, RogerBeepFrequencyHz, micPeak, iqPeak, transportDrained, RogerBeepTailGuardMs);
             return emitted;
         }
         catch (Exception ex)

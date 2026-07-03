@@ -557,10 +557,10 @@ public class TxAudioIngestTests
         bool emitted = ingest.DrainRogerBeepTail();
 
         Assert.True(emitted);
-        Assert.Equal(6, engine.ProcessedBlocks);
-        Assert.Equal(6, p2Blocks.Count);
+        Assert.Equal(9, engine.ProcessedBlocks);
+        Assert.Equal(9, p2Blocks.Count);
         Assert.All(p2Blocks, block => Assert.Equal(2048, block.Length));
-        Assert.Contains(p2Blocks.SelectMany(block => block), v => Math.Abs(v) > 0.05f);
+        Assert.Contains(p2Blocks.SelectMany(block => block), v => Math.Abs(v) > 0.2f);
     }
 
     [Fact]
