@@ -528,6 +528,39 @@ describe('usePanTuneGesture mobile touch mode', () => {
     unmount();
   });
 
+  it('uses plain wheel as pointer-anchored zoom on wideband frames', async () => {
+    const width = 2048;
+    const hzPerPixel = 60_000_000 / width;
+    useConnectionStore.setState({ ctunEnabled: false, zoomLevel: 4, vfoHz: 14_200_000 });
+    useDisplayStore.setState({
+      width,
+      centerHz: 30_000_000n,
+      hzPerPixel,
+      panDb: new Float32Array(width),
+      wfDb: new Float32Array(width),
+      panValid: true,
+      wfValid: true,
+      lastSeq: 10,
+    });
+    viewCenter.viewCenterFor('A').snapTo(30_000_000, hzPerPixel);
+    viewZoom.snapTo(hzPerPixel);
+
+    const { container, unmount } = render(createElement(GestureProbe, { touchMode: 'normal' }));
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+    await act(async () => {
+      wheel(canvas, { deltaY: 40, clientX: 50 });
+      await flush();
+    });
+
+    expect(setVfoMock).not.toHaveBeenCalled();
+    expect(setZoomMock).not.toHaveBeenCalled();
+    expect(viewZoom.getTargetHzPerPixel()).toBeLessThan(hzPerPixel);
+    expect(viewCenter.viewCenterFor('A').getTargetCenterHz()).toBeCloseTo(27_000_000, 0);
+
+    unmount();
+  });
+
   it('uses the CW effective LO when recentering CTUN zoom-in', async () => {
     useConnectionStore.setState({
       mode: 'CWU',

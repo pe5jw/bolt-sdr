@@ -67,10 +67,12 @@ import { usePanTuneGesture, type PanTuneGestureOptions } from '../util/use-pan-t
 import { isWidebandDisplayGeometry, resolveSpectrumViewport } from '../util/wideband-view';
 import type { RenderColormapId } from '../gl/colormap';
 import { FilterCursorOverlay } from './FilterCursorOverlay';
+import { FreqAxis } from './FreqAxis';
 import { NotchOverlay } from './NotchOverlay';
 import { PassbandOverlay } from './PassbandOverlay';
 import { WfDbScale } from './WfDbScale';
 import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
+import { WidebandViewportControls } from './WidebandViewportControls';
 
 type WaterfallProps = {
   /** When true, noise floor fades to transparent so the QRZ-mode map shows through. */
@@ -115,6 +117,17 @@ export function Waterfall({
   const reliefDepthCss = Math.max(0, Math.min(1, waterfallReliefDepth / 100)).toFixed(2);
   const smoothnessCss = Math.max(0, Math.min(1, waterfallSmoothness / 100)).toFixed(2);
   const receiverFilterColor = spectrumReceiverFilterColor(receiver);
+  const displayWidth = useDisplayStore((s) => {
+    const slice = selectDisplaySlice(s, receiver);
+    return slice.width || slice.panDb?.length || slice.wfDb?.length || 0;
+  });
+  const displayHzPerPixel = useDisplayStore((s) => selectDisplaySlice(s, receiver).hzPerPixel);
+  const displayCenterHz = useDisplayStore((s) => Number(selectDisplaySlice(s, receiver).centerHz));
+  const widebandDisplay = isWidebandDisplayGeometry({
+    width: displayWidth,
+    hzPerPixel: displayHzPerPixel,
+    centerHz: displayCenterHz,
+  });
   // Live transparency, read by buildRenderer() on context-restore so a rebuild
   // mid-QRZ-mode comes back transparent rather than occluding the map (#629).
   const transparentRef = useRef(transparent);
@@ -743,7 +756,8 @@ export function Waterfall({
       )}
       {/* One global waterfall dB scale — only RX1 (leftmost) renders it, and
           only when the parent isn't drawing a grid-spanning scale itself. */}
-      {dbScale && rxIndex === 0 && <WfDbScale />}
+      {dbScale && rxIndex === 0 && !widebandDisplay && <WfDbScale />}
+      {widebandDisplay && <FreqAxis receiver={receiver} stitched={stitched} />}
       {/* Dial-position cursor on BOTH halves (RX2) — each tracks its own VFO. */}
       <div
         ref={cursorRef}
@@ -753,14 +767,15 @@ export function Waterfall({
       {/* Passband + hover crosshair on BOTH halves (RX2), each tracking its own
           receiver's geometry, so a click lands wherever the operator points.
           Parity with the WebGPU heightfield and the panadapter. */}
-      <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
+      {!widebandDisplay && <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />}
       <FilterCursorOverlay containerRef={containerRef} receiver={receiver} />
-      {rxIndex === 0 && (!stitched || foreground) && (
+      {rxIndex === 0 && !widebandDisplay && (!stitched || foreground) && (
         <>
           {/* No delete x here — the single control lives on the panadapter (top). */}
           <NotchOverlay resizable containerRef={containerRef} />
         </>
       )}
+      {widebandDisplay && <WidebandViewportControls containerRef={containerRef} receiver={receiver} />}
     </div>
   );
 }
