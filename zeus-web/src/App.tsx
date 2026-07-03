@@ -1309,49 +1309,52 @@ export default function App() {
           bar; the previous separate BottomStatusBar was merged in here so
           the chrome doesn't duplicate. */}
       <div className="transport">
-        <MoxButton />
-        <TunButton />
-        <PsToggleButton />
-        <div className="transport-sep" />
-        <AudioToggle />
-        <MicMeter />
-        <div className="transport-sep hide-mobile" />
-        <CtunButton />
-        <button type="button" className="btn ghost hide-mobile">SPLIT</button>
-        <button type="button" className="btn ghost hide-mobile">RIT</button>
-        <button type="button" className="btn ghost hide-mobile">SAVE MEM</button>
-        <div className="spacer" style={{ flex: 1 }} />
-        <WorkspaceZoomControls />
-        <PaTempChip />
-        <div className="chip hide-mobile">
-          <span className="k">PRE</span>
-          <span className="v">{preampOn ? 'ON' : 'OFF'}</span>
+        <div className="transport-primary">
+          <MoxButton />
+          <TunButton />
+          <PsToggleButton />
+          <div className="transport-sep" />
+          <AudioToggle />
+          <MicMeter />
+          <div className="transport-sep hide-mobile" />
+          <CtunButton />
+          <button type="button" className="btn ghost hide-mobile">SPLIT</button>
+          <button type="button" className="btn ghost hide-mobile">RIT</button>
+          <button type="button" className="btn ghost hide-mobile">SAVE MEM</button>
         </div>
-        <span className={`chip ${connected ? 'accent' : ''}`}>
-          <span className="k">RADIO</span>
-          <span className="v mono">{connected ? (endpoint ?? '—') : '—'}</span>
-        </span>
-        <RotatorStatusPill />
-        <QrzStatusPill />
-        <ReportProblemButton />
-        {/* Reset acts on the active layout's tile arrangement. Disabled
-            while the Settings view is showing (no active workspace to
-            mutate). Add Panel now lives inside the workspace surface. */}
-        <button
-          type="button"
-          className="btn ghost"
-          onClick={() => {
-            const s = useLayoutStore.getState();
-            const active = s.layouts.find((l) => l.id === s.activeLayoutId);
-            if (!active) return;
-            setConfirmResetLayout({ id: active.id, name: active.name });
-          }}
-          disabled={settingsViewOpen}
-          title="Reset active layout to default"
-          aria-label="Reset active layout to default"
-        >
-          ⟳ Default
-        </button>
+        <div className="transport-status">
+          <WorkspaceZoomControls />
+          <PaTempChip />
+          <div className="chip hide-mobile">
+            <span className="k">PRE</span>
+            <span className="v">{preampOn ? 'ON' : 'OFF'}</span>
+          </div>
+          <span className={`chip transport-radio-chip ${connected ? 'accent' : ''}`}>
+            <span className="k">RADIO</span>
+            <span className="v mono">{connected ? (endpoint ?? '—') : '—'}</span>
+          </span>
+          <RotatorStatusPill />
+          <QrzStatusPill />
+          <ReportProblemButton />
+          {/* Reset acts on the active layout's tile arrangement. Disabled
+              while the Settings view is showing (no active workspace to
+              mutate). Add Panel now lives inside the workspace surface. */}
+          <button
+            type="button"
+            className="btn ghost"
+            onClick={() => {
+              const s = useLayoutStore.getState();
+              const active = s.layouts.find((l) => l.id === s.activeLayoutId);
+              if (!active) return;
+              setConfirmResetLayout({ id: active.id, name: active.name });
+            }}
+            disabled={settingsViewOpen}
+            title="Reset active layout to default"
+            aria-label="Reset active layout to default"
+          >
+            ⟳ Default
+          </button>
+        </div>
       </div>
 
       {disconnectedOverlay}

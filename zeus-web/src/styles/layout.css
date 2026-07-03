@@ -1223,9 +1223,11 @@
   border: 1px solid rgba(255,255,255,0.06);
   border-radius: var(--r-xs);
   font-size: 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
-.chip .k { color: var(--fg-2); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; font-size: 9px; }
-.chip .v { color: var(--fg-0); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip .k { color: var(--fg-2); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; font-size: 9px; white-space: nowrap; }
+.chip .v { color: var(--fg-0); font-weight: 700; font-variant-numeric: tabular-nums; min-width: 0; white-space: nowrap; }
 .chip.mono .v { font-family: var(--font-mono); }
 .chip.accent .v { color: var(--accent); }
 .chip.tx .v { color: var(--tx); }
@@ -4008,6 +4010,45 @@
      the cluster itself, but the readout stays click-to-reset-to-100 % so the
      operator can always return to the default. */
   zoom: var(--zeus-chrome-zoom, 1);
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: hidden;
+}
+.transport-primary,
+.transport-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  white-space: nowrap;
+}
+.transport-primary::-webkit-scrollbar,
+.transport-status::-webkit-scrollbar { height: 0; }
+.transport-primary {
+  flex: 1 1 auto;
+}
+.transport-status {
+  flex: 0 0 auto;
+  max-width: 72%;
+}
+.transport-primary > *,
+.transport-status > * {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.transport .chip {
+  align-items: center;
+}
+.transport-radio-chip .v {
+  display: inline-block;
+  max-width: clamp(96px, 12vw, 170px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
 }
 /* Transport buttons read as flat clickable regions of the toolbar, not raised
    chiclets. TX (MOX-on) is excluded — it keeps its red bevel/pulse for safety. */
