@@ -1593,6 +1593,19 @@ public sealed class RadioService : IDisposable
     /// </summary>
     public StateDto SetRadioLo(long hz)
     {
+        // Suppress LO writes while MOX is held. AlignLoForTx snapped the shared
+        // NCO to the dial on key-down; a late-arriving push from the frontend
+        // keep-in-view autopan, ruler tween, or /api/state reconcile would
+        // overwrite that mid-TX and land the carrier on the frozen CTUN centre
+        // instead of the dial (issue #1332). RestoreLoAfterTx puts the RX
+        // centre back on un-key. Internal alignment callers reach
+        // SetRadioLoUnchecked so the key-down snap and un-key restore still land.
+        lock (_sync) { if (_mox) return Snapshot(); }
+        return SetRadioLoUnchecked(hz);
+    }
+
+    private StateDto SetRadioLoUnchecked(long hz)
+    {
         long clamped = Math.Clamp(hz, 0L, 60_000_000L);
         long previous;
         lock (_sync) { previous = _state.RadioLoHz; }
@@ -1658,7 +1671,7 @@ public sealed class RadioService : IDisposable
         if (mode != RxMode.CWU && mode != RxMode.CWL) return false;
         long targetLo = CwOffset.EffectiveLoHz(mode, vfo);
         if (targetLo == currentLo) return false;
-        SetRadioLo(targetLo);
+        SetRadioLoUnchecked(targetLo);
         return true;
     }
 
@@ -1702,7 +1715,7 @@ public sealed class RadioService : IDisposable
         }
         long targetLo = CwOffset.EffectiveLoHz(mode, vfo);
         if (targetLo == currentLo) return false;
-        SetRadioLo(targetLo);
+        SetRadioLoUnchecked(targetLo);
         return true;
     }
 
@@ -1723,7 +1736,7 @@ public sealed class RadioService : IDisposable
             restore = _ctunPreTxLoHz;
             _ctunPreTxLoHz = long.MinValue;
         }
-        SetRadioLo(restore);
+        SetRadioLoUnchecked(restore);
         return true;
     }
 
@@ -1753,9 +1766,11 @@ public sealed class RadioService : IDisposable
         if (!enabled)
         {
             // Turning CTUN off: recentre the NCO on the dial (mirrors a classic
-            // SetVfo). SetRadioLo fires StateChanged so the WDSP shift drops to
-            // zero and the frontend frames recentre.
-            SetRadioLo(CwOffset.EffectiveLoHz(mode, vfo));
+            // SetVfo). SetRadioLoUnchecked fires StateChanged so the WDSP shift
+            // drops to zero and the frontend frames recentre. Bypasses the MOX
+            // guard so an operator toggling CTUN off mid-TX still lands the LO
+            // on the dial they're transmitting on.
+            SetRadioLoUnchecked(CwOffset.EffectiveLoHz(mode, vfo));
         }
         return Snapshot();
     }
@@ -2764,8 +2779,10 @@ public sealed class RadioService : IDisposable
         // no-ops when CTUN is off. (CW pre-aligns in CwEngine for its baseband
         // calc; AlignLoForTx then finds the LO already on the dial and is a
         // no-op, but the frozen centre it recorded is still restored below.)
-        if (on) AlignLoForTx();
+        // Latch _mox before AlignLoForTx so a concurrent guarded SetRadioLo
+        // (the frontend LO heartbeat) cannot slip between the snap and guard.
         lock (_sync) _mox = on;
+        if (on) AlignLoForTx();
         ActiveClient?.SetMox(on);
         MoxChanged?.Invoke(on);
         if (!on) RestoreLoAfterTx();
