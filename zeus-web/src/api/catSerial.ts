@@ -32,6 +32,10 @@ export type CatSerialPortConfig = {
   parity: string;
   dataBits: number;
   stopBits: string;
+  // piHPSDR AutoRprt parity: when true, the port comes up already in AI1 mode
+  // so devices that expect unsolicited frequency updates but never send AI1;
+  // still get them. Off by default — existing configs behave unchanged.
+  autoReport: boolean;
 };
 
 export type CatSerialPortStatus = CatSerialPortConfig & {
@@ -56,6 +60,7 @@ export function defaultPortConfig(): CatSerialPortConfig {
     parity: 'None',
     dataBits: 8,
     stopBits: 'One',
+    autoReport: false,
   };
 }
 
@@ -69,6 +74,7 @@ function normalizePort(raw: unknown, index: number): CatSerialPortStatus {
     parity: typeof r.parity === 'string' ? r.parity : 'None',
     dataBits: typeof r.dataBits === 'number' ? r.dataBits : 8,
     stopBits: typeof r.stopBits === 'string' ? r.stopBits : 'One',
+    autoReport: Boolean(r.autoReport),
     open: Boolean(r.open),
     clientActivity: typeof r.clientActivity === 'number' ? r.clientActivity : 0,
     error: typeof r.error === 'string' && r.error.length > 0 ? r.error : null,
