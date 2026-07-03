@@ -25,6 +25,7 @@ import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture, type PanTuneGestureOptions } from '../util/use-pan-tune-gesture';
+import { isWidebandDisplayGeometry } from '../util/wideband-view';
 import { BandOverlay } from './BandOverlay';
 import { FilterCursorOverlay } from './FilterCursorOverlay';
 import { FreqAxis } from './FreqAxis';
@@ -86,6 +87,7 @@ export function Panadapter3D({
     let disposed = false;
     let lost = false;
     let lastSeqDrawn = -1;
+    let wasWidebandDisplay = false;
     let lastPalette = '';
     let lastRawPan: Float32Array | null = null;
     let valueDomain = '';
@@ -318,16 +320,24 @@ export function Panadapter3D({
           planKey: String(receiver),
         });
         const frameCenter = Number(slice.centerHz);
+        const widebandDisplay = isWidebandDisplayGeometry({
+          width: slice.width,
+          hzPerPixel: slice.hzPerPixel,
+          centerHz: frameCenter,
+        });
+        const enteringWidebandDisplay = widebandDisplay && !wasWidebandDisplay;
 
         if (rxIndex === 0 && slice.hzPerPixel > 0) {
-          if (decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
+          if (widebandDisplay) {
+            if (enteringWidebandDisplay || decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
+          } else if (decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
           else viewZoom.setTarget(slice.hzPerPixel);
         }
 
-        if (decision.kind === 'reset') {
+        if (decision.kind === 'reset' || enteringWidebandDisplay) {
           vc.snapTo(frameCenter, slice.hzPerPixel);
           renderer.clearHistory();
-        } else {
+        } else if (!widebandDisplay) {
           vc.reconcileFrame(frameCenter, slice.hzPerPixel);
         }
 
@@ -339,6 +349,7 @@ export function Panadapter3D({
             if (shouldTxAutoRange(tx, ds.txAutoRange)) ds.updateTxAutoRange(slice.panDb);
           }
         }
+        wasWidebandDisplay = widebandDisplay;
         requestRedraw();
       });
 

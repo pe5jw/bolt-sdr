@@ -62,6 +62,7 @@ import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture, type PanTuneGestureOptions } from '../util/use-pan-tune-gesture';
+import { isWidebandDisplayGeometry } from '../util/wideband-view';
 import { BandOverlay } from './BandOverlay';
 import { FilterCursorOverlay } from './FilterCursorOverlay';
 import { FreqAxis } from './FreqAxis';
@@ -321,6 +322,7 @@ export function Panadapter({
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     let lastSeqDrawn = -1;
+    let wasWidebandDisplay = false;
     const unsub = useDisplayStore.subscribe((state) => {
       const slice = selectDisplaySlice(state, receiver);
       if (slice.lastSeq === 0) return;
@@ -337,13 +339,21 @@ export function Panadapter({
         planKey: String(receiver),
       });
       const frameCenter = Number(slice.centerHz);
+      const widebandDisplay = isWidebandDisplayGeometry({
+        width: slice.width,
+        hzPerPixel: slice.hzPerPixel,
+        centerHz: frameCenter,
+      });
+      const enteringWidebandDisplay = widebandDisplay && !wasWidebandDisplay;
 
       // Drive the shared zoom tween (view-zoom.ts) from RX1 only — see the
       // matching block in Waterfall.tsx. Idempotent with the waterfall's call;
       // having both A surfaces drive it keeps zoom animating in layouts where
       // only one of them is mounted.
       if (rxIndex === 0 && slice.hzPerPixel > 0) {
-        if (decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
+        if (widebandDisplay) {
+          if (enteringWidebandDisplay || decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
+        } else if (decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
         else viewZoom.setTarget(slice.hzPerPixel);
       }
 
@@ -359,11 +369,15 @@ export function Panadapter({
           anchorHzPerPixel = slice.hzPerPixel;
         }
       } else {
-        // push/shift: feed the frame center back to the view-center. With no
-        // recent operator gesture this recognises external tunes (CAT/TCI,
-        // band buttons, typed entry, mode changes) and glides there — which
-        // also arms the refill hold via the target-change stamp.
-        vc.reconcileFrame(frameCenter, slice.hzPerPixel);
+        if (widebandDisplay) {
+          if (enteringWidebandDisplay) vc.snapTo(frameCenter, slice.hzPerPixel);
+        } else {
+          // push/shift: feed the frame center back to the view-center. With no
+          // recent operator gesture this recognises external tunes (CAT/TCI,
+          // band buttons, typed entry, mode changes) and glides there — which
+          // also arms the refill hold via the target-change stamp.
+          vc.reconcileFrame(frameCenter, slice.hzPerPixel);
+        }
         // Adoption is unconditional (issue #597 Phase 2): the backend now
         // stamps CenterHz with the LO the pixels were actually computed at
         // (delay-compensated LO-history lookup), so mid-retune frames are
@@ -376,6 +390,7 @@ export function Panadapter({
           anchorHzPerPixel = slice.hzPerPixel;
         }
       }
+      wasWidebandDisplay = widebandDisplay;
 
       // While transmitting voice (MOX/PTT), fit the TX display windows to the
       // live signal. TUNE and two-tone are excluded — see shouldTxAutoRange();

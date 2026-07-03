@@ -72,10 +72,17 @@ const vfoLocked = () => useVfoLockStore.getState().locked;
 import { armSnapLock } from './snap-lock';
 import { useNotchStore } from '../state/notch-store';
 import * as viewCenter from '../state/view-center';
+import * as viewZoom from '../state/view-zoom';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import { roundToStep } from './number';
 import { applyCtunZoomCenterAfterState, centerCtunForZoomIn, centerKiwiForZoomIn } from './ctun-zoom-center';
 import { rulerDragTargetHz } from './use-ruler-pan-gesture';
+import {
+  clampPointerFraction,
+  isWidebandDisplayGeometry,
+  resolveSpectrumViewport,
+  zoomWidebandViewport,
+} from './wideband-view';
 
 const MAX_HZ = 60_000_000;
 const CLICK_SLOP_PX = 3;
@@ -205,8 +212,18 @@ export function resolvePanTuneTarget(
   const ds = selectDisplaySlice(useDisplayStore.getState(), receiver);
   if (!ds.panDb || ds.hzPerPixel <= 0) return fallback;
 
-  const maxRadiusHz = Math.min(ds.hzPerPixel * SNAP_RADIUS_PX, enhance.snapRadiusHz);
-  const hysteresisHz = ds.hzPerPixel * SNAP_HYSTERESIS_PX;
+  const width = ds.width || ds.panDb.length;
+  const vc = viewCenter.viewCenterFor(receiver);
+  const viewport = resolveSpectrumViewport({
+    width,
+    sourceCenterHz: Number(ds.centerHz),
+    sourceHzPerPixel: ds.hzPerPixel,
+    viewCenterHz: vc.isInitialized() ? vc.getTargetCenterHz() : undefined,
+    viewHzPerPixel: viewZoom.isInitialized() ? viewZoom.getTargetHzPerPixel() : undefined,
+  });
+  const radiusHzPerPixel = viewport?.hzPerPixel ?? ds.hzPerPixel;
+  const maxRadiusHz = Math.min(radiusHzPerPixel * SNAP_RADIUS_PX, enhance.snapRadiusHz);
+  const hysteresisHz = radiusHzPerPixel * SNAP_HYSTERESIS_PX;
   const sticky = lastSnapHz.get(rxIdx) ?? null;
   const mode = getReceiverMode(useConnectionStore.getState(), tuneReceiver);
   const centerHz = Number(ds.centerHz);
@@ -340,14 +357,28 @@ function readView(receiver: SpectrumReceiver = 'A'): { centerHz: number; spanHz:
   if (width <= 0 || hzPerPixel <= 0) return null;
   // Secondary receivers (RX2 / RX3+) centre on their own VFO when their slice
   // hasn't arrived yet; RX1 falls back to its frame centre.
-  const centerHz =
+  const sourceCenterHz =
     s.width > 0 && s.hzPerPixel > 0
       ? Number(s.centerHz)
       : isSecondaryReceiver(receiver)
       ? getReceiverVfoHz(useConnectionStore.getState(), receiver)
       : Number(fallback.centerHz);
+  const vc = viewCenter.viewCenterFor(receiver);
+  const viewport = resolveSpectrumViewport({
+    width,
+    sourceCenterHz,
+    sourceHzPerPixel: hzPerPixel,
+    viewCenterHz: vc.isInitialized() ? vc.getTargetCenterHz() : undefined,
+    viewHzPerPixel: viewZoom.isInitialized() ? viewZoom.getTargetHzPerPixel() : undefined,
+  });
+  if (viewport) {
+    return {
+      centerHz: viewport.centerHz,
+      spanHz: viewport.spanHz,
+    };
+  }
   return {
-    centerHz,
+    centerHz: sourceCenterHz,
     spanHz: width * hzPerPixel,
   };
 }
@@ -513,8 +544,22 @@ export function usePanTuneGesture(
       const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
       const width = s.width || s.panDb?.length || 0;
       if (!width || s.hzPerPixel <= 0) return null;
+      const sourceCenterHz = fallbackPanCenterHz();
+      const viewport = resolveSpectrumViewport({
+        width,
+        sourceCenterHz,
+        sourceHzPerPixel: s.hzPerPixel,
+        viewCenterHz: panVc.isInitialized() ? panVc.getTargetCenterHz() : undefined,
+        viewHzPerPixel: viewZoom.isInitialized() ? viewZoom.getTargetHzPerPixel() : undefined,
+      });
+      if (viewport) {
+        return {
+          centerHz: viewport.centerHz,
+          spanHz: viewport.spanHz,
+        };
+      }
       return {
-        centerHz: panVc.isInitialized() ? panVc.getTargetCenterHz() : fallbackPanCenterHz(),
+        centerHz: sourceCenterHz,
         spanHz: width * s.hzPerPixel,
       };
     };
@@ -633,8 +678,45 @@ export function usePanTuneGesture(
       scheduleFlush();
     };
 
-    const nudgeZoom = (delta: number) => {
+    const tryNudgeWidebandZoom = (delta: number, anchorClientX?: number): boolean => {
+      const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
+      const width = s.width || s.panDb?.length || s.wfDb?.length || 0;
+      const sourceCenterHz = Number(s.centerHz);
+      if (
+        !isWidebandDisplayGeometry({
+          width,
+          hzPerPixel: s.hzPerPixel,
+          centerHz: sourceCenterHz,
+        })
+      ) {
+        return false;
+      }
+      const rect = canvas.getBoundingClientRect();
+      const pointerFraction =
+        rect.width > 0 && anchorClientX !== undefined
+          ? clampPointerFraction((anchorClientX - rect.left) / rect.width)
+          : 0.5;
+      const currentCenterHz = panVc.isInitialized() ? panVc.getTargetCenterHz() : sourceCenterHz;
+      const currentHzPerPixel = viewZoom.isInitialized()
+        ? viewZoom.getTargetHzPerPixel()
+        : s.hzPerPixel;
+      const next = zoomWidebandViewport({
+        width,
+        sourceHzPerPixel: s.hzPerPixel,
+        currentHzPerPixel,
+        currentCenterHz,
+        pointerFraction,
+        zoomDelta: delta,
+      });
+      if (!next) return true;
+      viewZoom.setTarget(next.hzPerPixel);
+      panVc.nudgeTargetHz(next.centerHz - currentCenterHz);
+      return true;
+    };
+
+    const nudgeZoom = (delta: number, anchorClientX?: number) => {
       if (delta === 0) return;
+      if (tryNudgeWidebandZoom(delta, anchorClientX)) return;
       const state = useConnectionStore.getState();
       const cur = state.zoomLevel;
       const next = clampZoom(cur + delta);
@@ -972,7 +1054,7 @@ export function usePanTuneGesture(
         return;
       }
       if (shift) {
-        nudgeZoom(-dir);
+        nudgeZoom(-dir, e.clientX);
         return;
       }
       nudgeVfo(dir * useToolbarFavoritesStore.getState().stepHz);
