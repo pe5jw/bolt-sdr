@@ -207,7 +207,7 @@ describe('InstalledPlugins', () => {
           version: '0.1.0',
           author: 'EI6LF',
           description: 'A demo.',
-          homepage: null,
+          homepage: 'https://example.com/demo',
           license: 'GPL-2.0-or-later',
           capabilities: ['hub:emit'],
           ui: null,
@@ -221,8 +221,15 @@ describe('InstalledPlugins', () => {
     });
 
     expect(container.textContent).toContain('Demo Plugin');
-    expect(container.textContent).toContain('hub:emit');
-    expect(container.textContent).toContain('SDK ABI v1');
+    expect(container.textContent).toContain('A demo.');
+    expect(container.textContent).toContain('v0.1.0');
+    expect(container.textContent).not.toContain('demo ·');
+    expect(container.textContent).not.toContain('EI6LF');
+    expect(container.textContent).not.toContain('GPL-2.0-or-later');
+    expect(container.textContent).not.toContain('HOMEPAGE');
+    expect(container.textContent).not.toContain('https://example.com/demo');
+    expect(container.textContent).not.toContain('hub:emit');
+    expect(container.textContent).not.toContain('SDK ABI');
   });
 
   it('keeps scanned VSTs out of the regular Installed list', () => {
@@ -318,7 +325,12 @@ describe('InstalledPlugins', () => {
     });
 
     expect(container.textContent).toContain('RNNoise RX');
-    expect(container.textContent).toContain('rx.post-demod');
+    expect(container.textContent).toContain('VST3 plugin registered from a scanned directory.');
+    expect(container.textContent).toContain('v1.0.0');
+    expect(container.textContent).not.toContain('com.openhpsdr.zeus.rxvst.rnnoise');
+    expect(container.textContent).not.toContain('Scanned VST');
+    expect(container.textContent).not.toContain('Unknown');
+    expect(container.textContent).not.toContain('rx.post-demod');
     expect(container.textContent).not.toContain('Demo Plugin');
   });
 
@@ -401,6 +413,8 @@ describe('InstalledPlugins', () => {
       '[role="alertdialog"]',
     );
     expect(cancelDialog?.textContent).toContain('Uninstall Demo Plugin');
+    expect(cancelDialog?.textContent).toContain('Demo Plugin will be removed');
+    expect(cancelDialog?.textContent).not.toContain('demo will be removed');
     const cancelBtn = findButton('Cancel');
     expect(cancelBtn).toBeDefined();
     await act(async () => {
@@ -449,7 +463,7 @@ describe('PluginBrowser', () => {
     vi.unstubAllGlobals();
   });
 
-  it('shows the source URL and a card per registry entry', () => {
+  it('shows name description version badges and hides registry metadata', () => {
     usePluginsStore.setState({
       ...EMPTY_REGISTRY,
       registry: {
@@ -462,7 +476,7 @@ describe('PluginBrowser', () => {
             description: 'A demo entry.',
             author: 'EI6LF',
             license: 'GPL-2.0-or-later',
-            homepage: null,
+            homepage: 'https://example.com/demo',
             categories: ['rx'],
             verified: true,
             versions: [
@@ -482,10 +496,19 @@ describe('PluginBrowser', () => {
     act(() => {
       root.render(<PluginBrowser />);
     });
-    expect(container.textContent).toContain('https://example.com/registry.json');
     expect(container.textContent).toContain('Demo');
+    expect(container.textContent).toContain('A demo entry.');
     expect(container.textContent).toContain('VERIFIED');
-    expect(container.textContent).toContain('latest v0.1.0');
+    expect(container.textContent).toContain('v0.1.0');
+    expect(container.textContent).toContain('rx');
+    expect(container.textContent).not.toContain('https://example.com/registry.json');
+    expect(container.textContent).not.toContain('https://example.com/demo');
+    expect(container.textContent).not.toContain('demo ·');
+    expect(container.textContent).not.toContain('EI6LF');
+    expect(container.textContent).not.toContain('GPL-2.0-or-later');
+    expect(container.textContent).not.toContain('SDK ABI');
+    expect(container.textContent).not.toContain('0.6.0');
+    expect(container.textContent).not.toContain('platforms');
   });
 
   it('install button posts a registry-source payload', async () => {

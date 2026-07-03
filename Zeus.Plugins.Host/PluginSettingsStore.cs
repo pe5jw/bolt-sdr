@@ -99,6 +99,15 @@ public sealed class PluginSettingsStore : IDisposable
         }
     }
 
+    public void DropCollection(string pluginId)
+    {
+        if (string.IsNullOrWhiteSpace(pluginId)) return;
+        lock (_lock)
+        {
+            _db.DropCollection(CollectionName(pluginId));
+        }
+    }
+
     internal static string CollectionName(string pluginId)
         => "plugin_" + pluginId.Replace('.', '_').Replace('-', '_');
 

@@ -46,6 +46,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createWfRenderer, type WfGlCaps } from '../gl/waterfall';
 import { planForFrame, resetFramePlan } from '../gl/frame-plan';
+import type { WfShiftDecision } from '../gl/wf-shift';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { useConnectionStore } from '../state/connection-store';
 import { registerFrameConsumer, selectDisplaySlice, useDisplayStore } from '../state/display-store';
@@ -63,6 +64,7 @@ import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture, type PanTuneGestureOptions } from '../util/use-pan-tune-gesture';
+import { isWidebandDisplayGeometry, resolveSpectrumViewport } from '../util/wideband-view';
 import type { RenderColormapId } from '../gl/colormap';
 import { FilterCursorOverlay } from './FilterCursorOverlay';
 import { NotchOverlay } from './NotchOverlay';
@@ -220,6 +222,7 @@ export function Waterfall({
     }
 
     let lastSeqDrawn = -1;
+    let wasWidebandDisplay = false;
     // Count context-restore cycles — a one-off eviction logs once; a steady
     // leak would climb, which is the signal to dig further (#629).
     let restoreCount = 0;
@@ -406,14 +409,28 @@ export function Waterfall({
         width: slice.width,
         planKey: String(receiver),
       });
+      const frameCenter = Number(slice.centerHz);
+      const widebandDisplay = isWidebandDisplayGeometry({
+        width: slice.width,
+        hzPerPixel: slice.hzPerPixel,
+        centerHz: frameCenter,
+      });
+      const enteringWidebandDisplay = widebandDisplay && !wasWidebandDisplay;
+      const renderDecision: WfShiftDecision =
+        enteringWidebandDisplay && decision.kind !== 'reset'
+          ? { kind: 'reset', reason: 'span' }
+          : decision;
       // Drive the shared zoom tween (view-zoom.ts) from RX1 only — zoom is a
       // single global setting, so one driver avoids RX2's resets interrupting
       // an in-flight glide. A hard reset snaps (no glide); otherwise ease to
       // the server span so a zoom step scales smoothly instead of snapping.
       if (rxIndex === 0 && slice.hzPerPixel > 0) {
-        if (decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
+        if (widebandDisplay) {
+          if (enteringWidebandDisplay || decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
+        } else if (decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
         else viewZoom.setTarget(slice.hzPerPixel);
       }
+      if (widebandDisplay && enteringWidebandDisplay) vc.snapTo(frameCenter, slice.hzPerPixel);
       const wfDb = slice.wfValid && slice.wfDb ? slice.wfDb : null;
       wfFrames++;
       if (wfDb) wfValidFrames++;
@@ -454,7 +471,8 @@ export function Waterfall({
         }
         wfForPush = rowForPush;
       }
-      renderer.pushFrame(decision, wfForPush, slice.centerHz, slice.hzPerPixel, { terrainRow: terrainForPush });
+      renderer.pushFrame(renderDecision, wfForPush, slice.centerHz, slice.hzPerPixel, { terrainRow: terrainForPush });
+      wasWidebandDisplay = widebandDisplay;
       requestRedraw();
     });
 
@@ -614,7 +632,15 @@ export function Waterfall({
         cur.style.left = '50%';
         return;
       }
-      const spanHz = s.width * s.hzPerPixel;
+      const viewport = resolveSpectrumViewport({
+        width: s.width,
+        sourceCenterHz: Number(s.centerHz),
+        sourceHzPerPixel: s.hzPerPixel,
+        viewCenterHz: vc.isInitialized() ? vc.getTargetCenterHz() : undefined,
+        viewHzPerPixel: viewZoom.isInitialized() ? viewZoom.getTargetHzPerPixel() : undefined,
+      });
+      if (!viewport) return;
+      const spanHz = viewport.spanHz;
       const c = useConnectionStore.getState();
       const vfoHz = getReceiverVfoHz(c, receiver);
       // Dial offset from THIS receiver's animated target center, so the cursor
@@ -624,6 +650,7 @@ export function Waterfall({
     };
     const schedule = () => requestDrawBusFrame(update);
     const unsubVc = vc.subscribe(schedule);
+    const unsubVz = viewZoom.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
       // RX1 is the flat primary VFO; every secondary (RX2 = index 1, RX3+) lives
       // in the receivers[] array, whose reference changes on any update.
@@ -635,6 +662,7 @@ export function Waterfall({
     schedule();
     return () => {
       unsubVc();
+      unsubVz();
       unsubConn();
       unsubFrame();
       cancelDrawBusFrame(update);

@@ -784,6 +784,14 @@ public sealed class RadioService : IDisposable
             TwoToneMag = snap.TwoToneMag,
             HwPeakByBoard = hwPeakByBoard,
             TxAttnByBoard = txAttnByBoard,
+            // Carry the migration marker forward — this rebuild replaces the
+            // whole entry, and dropping the marker back to 0 would re-run the
+            // HermesC10 poison wipe on the next startup, deleting a freshly
+            // calibrated value. A brand-new entry (no prior record) is stamped
+            // at the current version for the same reason: it was created after
+            // the poison window and must never be wiped.
+            // See PsSettingsStore.MigrateTxAttnPoison.
+            TxAttnMigration = existing?.TxAttnMigration ?? PsSettingsStore.TxAttnMigrationCurrent,
         });
     }
 
@@ -803,6 +811,18 @@ public sealed class RadioService : IDisposable
         // the "differs" hint track what's actually applied.
         Mutate(s => s.PsTxFeedbackAttenuationDb == db ? s : s with { PsTxFeedbackAttenuationDb = db });
     }
+
+    /// <summary>
+    /// Surface a live servo attenuation value in state WITHOUT persisting.
+    /// The G2E (HermesC10) two-tone servo walks the wire value live but only
+    /// persists a value that produced an in-window fit (a completed
+    /// calibration) — mid-walk values must stay visible to the operator's
+    /// PURESIGNAL panel yet never land in the per-board store (the #1249
+    /// poison-ratchet class). The eventual in-window persist goes through
+    /// <see cref="SetPsTxAttenuationDb"/> as usual.
+    /// </summary>
+    public void SetPsTxAttenuationDbStateOnly(int db)
+        => Mutate(s => s.PsTxFeedbackAttenuationDb == db ? s : s with { PsTxFeedbackAttenuationDb = db });
 
     /// <summary>
     /// Persisted PS TX feedback attenuation (dB) for the currently-connected
@@ -1031,6 +1051,12 @@ public sealed class RadioService : IDisposable
                 _rxAudioSource);
             client.AdcOverloadObserved += OnAdcOverload;
             client.Disconnected += OnClientDisconnected;
+            // #1302 F4: PS feedback watchdog — fires when an armed HermesC10
+            // stream stops yielding parseable 4-DDC packets for 2 s while
+            // datagrams still arrive. Auto-disarm PS through the normal
+            // StateDto flow so the UI reflects it and DspPipelineService
+            // restarts the radio out of the misframed state.
+            client.PsFeedbackStalled += OnPsFeedbackStalled;
             _activeClient = client;
             // Record the discovered firmware for the diagnostics snapshot.
             _connectedFirmware = firmware;
@@ -1060,6 +1086,18 @@ public sealed class RadioService : IDisposable
             // treated as HL2 for PA calibration / drive profile — issue #294.
             if (discoveredKind != HpsdrBoardKind.Unknown)
                 client.SetBoardKind(discoveredKind);
+            // #1302 F2: hand the current PS arm state to the client BEFORE
+            // StartAsync. PsEnabled survives a disconnect (by design — a
+            // separate decision), so a reconnect-while-armed must start
+            // DIRECTLY in 4-DDC mode on HermesC10: the initial handshake
+            // announces numRx=3 and the parser opens in 4-DDC format, and the
+            // radio's persisted IF_last_chan is corrected by the pre-announce
+            // frames in StartAsync while run=0. The later DspPipelineService
+            // resync then finds the client already in the requested mode and
+            // performs NO live transition (SetPsEnabledAsync is idempotent).
+            // Board-gated effects only: on non-PS P1 boards this stores a
+            // state-tracking flag with zero wire impact.
+            client.SetPsEnabled(Snapshot().PsEnabled);
             int restoredHz = ResolveConnectSampleRateHz(client.BoardKind, hpsdrRate.SampleRateHz(), protocol2: false);
             if (restoredHz != hpsdrRate.SampleRateHz())
             {
@@ -1169,6 +1207,7 @@ public sealed class RadioService : IDisposable
         {
             client.Disconnected -= OnClientDisconnected;
             client.AdcOverloadObserved -= OnAdcOverload;
+            client.PsFeedbackStalled -= OnPsFeedbackStalled;
             Disconnected?.Invoke();
             await TearDownClientAsync(client, ct).ConfigureAwait(false);
             _log.LogInformation("radio.disconnected");
@@ -4093,9 +4132,10 @@ public sealed class RadioService : IDisposable
     /// board, which over-scaled the PS curve on non-Saturn variants.
     /// </summary>
     public static double ResolvePsHwPeak(bool isProtocol2, HpsdrBoardKind board, OrionMkIIVariant variant) =>
-        // Per-protocol switch shaped so the P1 follow-up (separately
-        // tracked) can wire HW-peak per-board too. P1 today is gated off
-        // in the frontend but the engine still receives the right number
+        // Per-protocol switch shaped so future P1 boards can wire HW-peak
+        // per-board too. On P1, PS is live on HermesLite2 and HermesC10
+        // (ANAN-G2E); the remaining P1 boards keep the engine-arm guard in
+        // DspPipelineService (GH #426) but still receive the right number
         // on connect — keeps Synthetic + tests deterministic.
         (isProtocol2, board) switch
         {
@@ -4536,6 +4576,20 @@ public sealed class RadioService : IDisposable
     internal void MarkConnectedNonP2ForTest(string endpoint) =>
         Mutate(s => s with { Status = ConnectionStatus.Connected, Endpoint = endpoint });
 
+    /// <summary>Test seam: inject a constructed-but-unconnected
+    /// <see cref="Protocol1Client"/> as the active P1 client, so
+    /// <see cref="ActiveClient"/> / <see cref="ConnectedBoardKind"/> /
+    /// <see cref="IsConnected"/> behave as a live P1 session without any
+    /// socket I/O (real network in unit tests crashes the Windows CI test
+    /// host). The caller owns the client's lifetime; nothing here starts
+    /// the RX/TX loops. Used by the PsAutoAttenuate HermesC10 suite to
+    /// exercise the board dispatch against the real client's atten_on_Tx
+    /// plumbing.</summary>
+    internal void SetActiveClientForTest(Protocol1Client? client)
+    {
+        lock (_sync) _activeClient = client;
+    }
+
     public void MarkProtocol2Disconnected()
     {
         Protocol2Client? previous;
@@ -4744,6 +4798,25 @@ public sealed class RadioService : IDisposable
     // pool so StopAsync's _rxThread.Join() doesn't deadlock the calling thread.
     private void OnClientDisconnected() =>
         _ = Task.Run(() => DisconnectAsync(CancellationToken.None));
+
+    // #1302 F4: PS feedback watchdog fired — an armed HermesC10 stream went
+    // 2 s with zero parseable 4-DDC packets while datagrams kept arriving
+    // (misframed EP6). Auto-disarm PS via the normal Mutate → StateChanged
+    // flow: DspPipelineService picks up PsEnabled=false and routes the wire
+    // change through the client's safe stop/drain/restart transition, which
+    // also realigns the radio's EP6 framing. Runs off-thread — the event
+    // fires on the RX thread, which must never block on the state pipeline.
+    // PsEnabled is not persisted, so no store write is needed.
+    private void OnPsFeedbackStalled()
+    {
+        _log.LogWarning(
+            "p1.ps.watchdog auto-disarming PureSignal — no parseable 4-DDC feedback for 2 s while the stream is alive (issue #1302 guard)");
+        _ = Task.Run(() =>
+        {
+            try { Mutate(s => s with { PsEnabled = false }); }
+            catch (Exception ex) { _log.LogWarning(ex, "p1.ps.watchdog auto-disarm failed"); }
+        });
+    }
 
     // Protocol1 → RadioService bridge. Runs on the RX thread at ~1.2 kHz;
     // hands off to HandleAdcOverload for the logic the tests can drive.

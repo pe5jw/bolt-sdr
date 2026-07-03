@@ -3519,7 +3519,8 @@ public class DspPipelineService : BackgroundService,
     /// <summary>
     /// Manually set the PS TX feedback attenuation (operator alternative to
     /// AutoAttenuate). Pushes the value to the connected radio — HL2 via the
-    /// AD9866 TX-PGA step, every other board via the P2 step attenuator — then
+    /// AD9866 TX-PGA step, HermesC10 on P1 via the gateware atten_on_Tx
+    /// register, every other board via the P2 step attenuator — then
     /// persists it per board and surfaces it in state via RadioService. This
     /// is what lets an operator on a fixed external-tap chain dial the
     /// feedback into calcc's range once and run with AutoAttenuate off.
@@ -3531,6 +3532,20 @@ public class DspPipelineService : BackgroundService,
         {
             int clamped = Math.Clamp(db, -28, 31);
             _radio.ActiveClient?.SetHl2TxStepAttenuationDb(clamped);
+            _radio.SetPsTxAttenuationDb(clamped);
+        }
+        else if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesC10
+                 && _radio.ActiveClient is { } c10P1)
+        {
+            // HermesC10 (ANAN-G2E) on Protocol 1: the classic-Hermes gateware
+            // muxes atten_on_Tx (0..31 dB) onto the step attenuator while
+            // FPGA_PTT, protecting the relay-routed PS feedback tap from
+            // clipping the ADC. Carried in C3[4:0] of the PS-armed rotation's
+            // 0x1c frame (board-branched in ControlFrame). The G2E's P2 side
+            // (native Saturn path) has no P1 ActiveClient and falls through
+            // to the P2 branch below.
+            int clamped = Math.Clamp(db, 0, 31);
+            c10P1.SetPsTxAttenOnTxDb(clamped);
             _radio.SetPsTxAttenuationDb(clamped);
         }
         else
@@ -3572,6 +3587,16 @@ public class DspPipelineService : BackgroundService,
         // Seed the operator's persisted TX display config before TXA opens so
         // the analyzer comes up at their FFT/window/smoothing. Display-only.
         SeedTxDisplayConfig(wdsp);
+        // G2E (HermesC10) P1: PS feedback rides the 4-DDC EP6 stream at the
+        // WIRE rate — all P1 DDCs share the single global rate — not the
+        // fixed 192 kHz of the P2 paired-DDC scheme. Tell WDSP the truth
+        // BEFORE TXA opens (SetPSFeedbackRate latches at open) or calcc's
+        // delay/sample math runs 4× off at 48 kHz and the fit never
+        // converges. piHPSDR model (receiver.c:1590-1596). P1 rate changes
+        // rebuild the engine through this same path, so the value tracks.
+        // HL2 keeps the shipped 192 kHz default untouched.
+        if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesC10)
+            wdsp.SetPsFeedbackRateHz(rate);
         // P1 DAC runs at 48 kHz; keep TXA at the 48/48/48 profile Hermes is
         // calibrated against.
         wdsp.OpenTxChannel(outputRateHz: 48_000);
@@ -3615,13 +3640,21 @@ public class DspPipelineService : BackgroundService,
         _radio.ApplyPsHwPeakForConnection(isProtocol2: false, _radio.ConnectedBoardKind);
         // Restore the persisted PS feedback attenuation so a hot external-tap
         // chain isn't sitting at 0 dB on a fresh connect — at 0 dB the
-        // feedback ADC rails and calcc can never fit. HL2 only on the P1 side
-        // (it owns the AD9866 TX-PGA step attenuator). No-op when nothing was
-        // saved for this board yet.
+        // feedback ADC rails and calcc can never fit. On the P1 side HL2 owns
+        // the AD9866 TX-PGA step attenuator and HermesC10 owns the gateware
+        // atten_on_Tx register (0x1c C3[4:0], PTT-muxed); other P1 boards
+        // have no PS feedback attenuator. No-op when nothing was saved for
+        // this board yet — HermesC10 then keeps emitting the silicon reset
+        // default 31 via the sentinel path (never a force-seeded value).
         if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2
             && _radio.GetPersistedPsTxAttnDb() is int hl2Attn)
         {
             _radio.ActiveClient?.SetHl2TxStepAttenuationDb(hl2Attn);
+        }
+        else if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesC10
+            && _radio.GetPersistedPsTxAttnDb() is int c10Attn)
+        {
+            _radio.ActiveClient?.SetPsTxAttenOnTxDb(c10Attn);
         }
         // P1's Connected event is raised after RadioService already broadcast
         // Status=Connected, so the first state callback can hit the synthetic
@@ -4066,29 +4099,6 @@ public class DspPipelineService : BackgroundService,
         }
         if (resync || s.PsEnabled != _appliedPsEnabled)
         {
-            // pihpsdr transmitter.c:2467-2473 inverts the order: write the
-            // wire (RxSpec / HighPriority with PS bits set) FIRST, then sleep
-            // 100 ms to let the radio firmware spin up DDC0/DDC1 sync, then
-            // arm the engine. Without the settle window, the first 5-20
-            // pscc calls receive partial / glitched samples, scheck flags
-            // binfo[6], bs_count climbs to 2, calcc resets to LRESET — and
-            // the loop sometimes thrashes instead of converging.
-            //
-            // Disarm path stays engine-first: drop the engine run flag, then
-            // close the wire, then drain any in-flight paired frames so they
-            // don't arrive after PS has shut down.
-            //
-            // Task.Delay(100).Wait() is acceptable here — OnRadioStateChanged
-            // runs on a state-change handler thread, not the request path.
-            //
-            // P1 sibling (issue #172): the active P1 client gets the same
-            // arm/disarm sequencing — flip the wire bit (which also
-            // bumps NumReceiversMinusOne in the next Config frame so the
-            // gateware switches to the 2-DDC paired layout), wait the
-            // same 100 ms settle window, then arm the engine. On a
-            // non-HL2 P1 board this is harmless: SetPsEnabled stores the
-            // flag locally and the C0=0x14 wire byte is unaffected
-            // (board-gated in WriteAttenuatorPayload).
             var p1Active = _radio.ActiveClient;
             if (s.PsEnabled && _keyed)
             {
@@ -4101,41 +4111,39 @@ public class DspPipelineService : BackgroundService,
                 // OnRadioMoxChanged falling-edge re-apply arm it cleanly on
                 // key-up. Disarm (abort) below stays immediate.
             }
-            else if (s.PsEnabled)
-            {
-                _p2Client?.SetPsFeedbackEnabled(true);
-                p1Active?.SetPsEnabled(true);
-                // PS engine arm requires a feedback path that delivers paired
-                // samples. On P2 ANAN-class that's SetPsFeedbackEnabled above.
-                // On P1, only HermesLite2 delivers the 2-DDC paired layout
-                // PS needs — Protocol1Client.cs:643 (NumReceiversMinusOne
-                // wire bump) and :1004 (4-DDC parser path) are both HL2-gated.
-                // On a non-HL2 P1 board WDSP arms with no possible feedback
-                // source, sits in COLLECT waiting on paired samples that
-                // never arrive, and the blocking 100 ms settle below stacks
-                // on the state-change thread — together that freezes RX
-                // audio + waterfall (GH #426). Skip the engine arm in that
-                // case; the wire calls above are no-ops on non-HL2 P1
-                // (board-gated in WriteAttenuatorPayload + SnapshotState).
-                bool p1Connected = p1Active is not null;
-                bool psEngineSupported = !p1Connected
-                    || _radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2;
-                if (psEngineSupported)
-                {
-                    try { Task.Delay(100).Wait(); } catch { /* ignore */ }
-                    engine.SetPsEnabled(true);
-                }
-            }
             else
             {
-                engine.SetPsEnabled(false);
-                _p2Client?.SetPsFeedbackEnabled(false);
-                p1Active?.SetPsEnabled(false);
-                DrainPsFeedback();
+                // PS engine arm requires a feedback path that delivers paired
+                // samples. On P2 ANAN-class that's SetPsFeedbackEnabled. On
+                // P1, HermesLite2 and HermesC10 (ANAN-G2E) deliver the 4-DDC
+                // paired layout PS needs; on any other P1 board WDSP would
+                // arm with no possible feedback source, sit in COLLECT, and
+                // freeze RX audio + waterfall (GH #426) — skip the engine arm
+                // there. The wire calls are board-gated no-ops on those
+                // boards (WriteAttenuatorPayload + SnapshotState).
+                bool psEngineSupported = P1PsEngineArmSupported(
+                    p1Connected: p1Active is not null, _radio.ConnectedBoardKind);
+                // #1302 F1/F6: the arm/disarm sequence is async now — on a
+                // HermesC10 the wire flip rides a stop/drain/restart
+                // transition (SetPsEnabledAsync) that must never run inline
+                // under _engineLock on the state-change thread, and the
+                // 100 ms pihpsdr settle (transmitter.c:2467-2473: wire first,
+                // settle, then engine arm) becomes a proper await instead of
+                // Task.Delay(100).Wait(). Single-flight FIFO worker: requests
+                // serialize, and SetPsEnabledAsync's idempotence collapses
+                // redundant transitions (e.g. the post-connect resync after a
+                // connect-while-armed is a wire no-op).
+                SchedulePsArmTransition(s.PsEnabled, p1Active, engine, psEngineSupported);
             }
             // Mark applied only when we actually armed or disarmed. A deferred
             // (keyed) arm leaves _appliedPsEnabled stale on purpose so the
             // MOX-off re-apply re-enters this block and arms.
+            // Known benign divergence: this latches at SCHEDULING time — if
+            // the async transition later fails (logged at ERROR by the
+            // worker) the DTO and wire disagree until the next resync/
+            // reconnect replays the state. Accepted; a failed transition
+            // means the session is already tearing down or the radio is
+            // unreachable, and the reconnect path re-seeds from Snapshot().
             if (!(s.PsEnabled && _keyed))
                 _appliedPsEnabled = s.PsEnabled;
         }
@@ -4243,6 +4251,99 @@ public class DspPipelineService : BackgroundService,
     // "16/256" → (16, 256). Falls back to (16, 256) on any parse failure
     // because that's the only ints/spi pair WDSP allows save/restore on
     // (Thetis PSForm.cs:865) — a safe default.
+    /// <summary>
+    /// Whether the WDSP PS engine may be armed for the live connection — the
+    /// GH #426 guard. On Protocol 2 (no P1 client) the ANAN-class feedback
+    /// DDC path always exists. On Protocol 1 only HermesLite2 and HermesC10
+    /// (ANAN-G2E, classic Hermes v3.3 — relay-routed feedback tap on DDC2 +
+    /// TX DAC reference on DDC3) deliver the 4-DDC paired layout PS needs;
+    /// on any other P1 board WDSP would arm with no possible feedback
+    /// source, park in COLLECT, and the blocking 100 ms settle would freeze
+    /// RX audio + waterfall (GH #426). Pure so the carve-out is pinned by
+    /// tests board-by-board.
+    /// </summary>
+    internal static bool P1PsEngineArmSupported(bool p1Connected, HpsdrBoardKind board) =>
+        !p1Connected
+        || board == HpsdrBoardKind.HermesLite2
+        || board == HpsdrBoardKind.HermesC10;
+
+    // ---- PS arm/disarm worker (#1302 F1/F6) --------------------------------
+    // Single-flight FIFO chain: each request runs strictly after the previous
+    // one completes, off the state-change thread and outside _engineLock.
+    // Ordering per request preserves the shipped sequences:
+    //   arm    = wire (P2 bit / P1 SetPsEnabledAsync) → 100 ms settle →
+    //            engine.SetPsEnabled(true)          (pihpsdr order)
+    //   disarm = engine.SetPsEnabled(false) → wire → drain leftover frames
+    // On HermesC10 the P1 wire call is the stop/drain/restart transition —
+    // the receiver count is never flipped on a live stream.
+    private readonly object _psArmWorkSync = new();
+    private Task _psArmWork = Task.CompletedTask;
+
+    /// <summary>Tail of the PS arm/disarm worker chain — awaitable by tests
+    /// to observe completion of all scheduled transitions.</summary>
+    internal Task PsArmWorkForTests { get { lock (_psArmWorkSync) return _psArmWork; } }
+
+    private void SchedulePsArmTransition(
+        bool enable, IProtocol1Client? p1, IDspEngine engine, bool engineArmSupported)
+    {
+        lock (_psArmWorkSync)
+        {
+            var prev = _psArmWork;
+            _psArmWork = Task.Run(async () =>
+            {
+                try { await prev.ConfigureAwait(false); }
+                catch { /* previous request already logged its failure */ }
+                try
+                {
+                    await RunPsArmTransitionAsync(enable, p1, engine, engineArmSupported)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogError(ex, "ps.arm transition target={Enable} failed", enable);
+                }
+            });
+        }
+    }
+
+    private async Task RunPsArmTransitionAsync(
+        bool enable, IProtocol1Client? p1, IDspEngine engine, bool engineArmSupported)
+    {
+        if (enable)
+        {
+            _p2Client?.SetPsFeedbackEnabled(true);
+            if (p1 is not null)
+                await p1.SetPsEnabledAsync(true).ConfigureAwait(false);
+            if (engineArmSupported)
+            {
+                // pihpsdr settle window: without it the first 5-20 pscc calls
+                // receive partial/glitched samples, scheck flags binfo[6] and
+                // calcc thrashes through LRESET instead of converging.
+                await Task.Delay(100).ConfigureAwait(false);
+                lock (_engineLock)
+                {
+                    // The engine may have been replaced (reconnect) since this
+                    // request was scheduled; the new engine's resync re-arms
+                    // through its own state replay, so skip a stale arm.
+                    if (ReferenceEquals(engine, _engine))
+                        engine.SetPsEnabled(true);
+                }
+            }
+        }
+        else
+        {
+            lock (_engineLock)
+            {
+                if (ReferenceEquals(engine, _engine))
+                    engine.SetPsEnabled(false);
+            }
+            _p2Client?.SetPsFeedbackEnabled(false);
+            if (p1 is not null)
+                await p1.SetPsEnabledAsync(false).ConfigureAwait(false);
+            DrainPsFeedback();
+        }
+    }
+
     private static (int Ints, int Spi) ParseIntsSpi(string preset)
     {
         if (string.IsNullOrWhiteSpace(preset)) return (16, 256);
@@ -5541,7 +5642,15 @@ public class DspPipelineService : BackgroundService,
         DrainDspCommands();
         var engine = Volatile.Read(ref _engine);
         engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
-        // No Tick on PS-feedback — display cadence is paced by IQ frames.
+        // PS-feedback frames drive the display tick too (see the P2 sink for
+        // the full rationale): on a single-ADC time-mux board the user-RX IQ
+        // stream — the normal tick pacer — stops entirely for the keyed burst,
+        // and without this the panadapter/waterfall freeze for the whole
+        // transmission. Same RX-loop thread as OnIqFrame; the elapsed-time
+        // throttle inside keeps the cadence at ~30 Hz when both streams flow
+        // (HL2 4-DDC keeps DDC0 user RX alive during PS, so this is a no-op
+        // there in practice).
+        MaybeTickInline();
     }
 
     // ---- IRxPacketSink (Protocol 2) -----------------------------------------
@@ -5596,6 +5705,20 @@ public class DspPipelineService : BackgroundService,
         DrainDspCommands();
         var engine = Volatile.Read(ref _engine);
         engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+        // Display tick (#960 G2E bench): the display cadence is normally paced
+        // by OnIqFrame, and ExecuteAsync's PeriodicTimer stands down while an
+        // RX sink is attached. On a single-ADC time-mux board (HermesC10/G2E)
+        // a keyed PS burst diverts the operator's ONLY DDC to these feedback
+        // frames, so no IQ frame — and therefore no display tick — arrives for
+        // the entire transmission: the panadapter/waterfall freeze at the last
+        // RX frame until unkey. Ticking from the feedback cadence keeps the
+        // display alive; while keyed, Tick's source-select already prefers the
+        // TX / PS-feedback analyzers, so the operator sees a live TX spectrum
+        // during the burst — the same UX as the dual-ADC G2/Orion family.
+        // Same RX-loop thread as OnIqFrame (HandlePsPairedPacket runs on the
+        // RxLoop thread), and MaybeTickInline's elapsed-time gate throttles to
+        // ~30 Hz on dual-ADC boards where IQ and feedback frames both flow.
+        MaybeTickInline();
     }
 
     // RX2 bring-up probe: 1 Hz log of incoming IQ RMS/peak per receiver. A live
@@ -5656,13 +5779,25 @@ public class DspPipelineService : BackgroundService,
     {
         long now = Stopwatch.GetTimestamp();
         long last = _lastTickStopwatchTicks;
-        if (last == 0 || (now - last) >= TickPeriodStopwatchTicks)
+        if (ShouldTickInline(now, last, TickPeriodStopwatchTicks))
         {
             if (last != 0) RecordTickInterval(now - last, now);
             _lastTickStopwatchTicks = now;
             Tick(_panBuf, _wfBuf, _audioBuf);
         }
     }
+
+    /// <summary>
+    /// Pure inline-tick throttle: tick on the very first call, then at most
+    /// once per <paramref name="periodTicks"/>. Extracted static + internal so
+    /// the cadence contract is unit-testable — it is what keeps the display at
+    /// ~30 Hz no matter how many producers call <see cref="MaybeTickInline"/>
+    /// (user-RX IQ frames AND PS-feedback frames both pace it; on a single-ADC
+    /// time-mux board the feedback frames are the ONLY pacer during a keyed
+    /// burst — see the P2 <c>OnPsFeedbackFrame</c> sink).
+    /// </summary>
+    internal static bool ShouldTickInline(long nowTicks, long lastTicks, long periodTicks)
+        => lastTicks == 0 || (nowTicks - lastTicks) >= periodTicks;
 
     // #1148: accumulate inline-tick interval stats and emit at ~1 Hz. Called
     // only from MaybeTickInline (single active RX thread), so no synchronisation
@@ -5982,6 +6117,31 @@ public class DspPipelineService : BackgroundService,
             {
                 wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
                 if (wf) wfSource = "rx";
+            }
+
+            // Last-resort keyed source (#960 G2E freeze): on a single-ADC
+            // time-mux board (HermesC10 / ANAN-G2E) a keyed PS burst diverts
+            // the board's ONLY DDC to feedback, starving the RX analyzer, and
+            // at RX rates ≥ 192k the TX display analyzer never opened (TXA DSP
+            // rate below the span) — so every source above returns stale and
+            // the panadapter/waterfall freeze for the whole transmission. The
+            // PS-feedback analyzer is fed by the burst itself (the actual
+            // post-PA on-air signal), making it the board's one live spectrum
+            // while keyed. Ordering keeps every other board byte-identical: a
+            // dual-ADC radio's RX analyzer stays fresh during TX and wins
+            // above; this fires only when nothing else produced pixels.
+            if (_keyed && _appliedPsEnabled)
+            {
+                if (!pan)
+                {
+                    pan = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Panadapter, panBuf);
+                    if (pan) { panSource = "ps-feedback"; psFbPanUsed = true; }
+                }
+                if (!wf)
+                {
+                    wf = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+                    if (wf) { wfSource = "ps-feedback"; psFbWfUsed = true; }
+                }
             }
 
             // TX display calibration offset (Thetis TXDisplayCalOffset). Pure

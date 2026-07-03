@@ -216,7 +216,7 @@ const PTT_STATUS_BYTES = 2;
 
 // 0x38 / 0x39 / 0x3A — RESERVED. The FT8 decode / WSPR spot / FT8 TX status
 // frames moved to the Zeus Digital plugin's SSE stream
-// (/api/plugins/com.kb2uka.digital/events — see api/digital-plugin.ts). The
+// (/api/plugins/{resolved digital plugin id}/events — see api/digital-plugin.ts). The
 // byte values stay reserved in Zeus.Contracts.MsgType; do not reuse them.
 
 // 0x3B MidiLearn: variable-length UTF-8 JSON MidiLearnFrame after the type

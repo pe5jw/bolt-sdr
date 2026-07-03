@@ -1,5 +1,4 @@
 using System.IO.Compression;
-using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Zeus.Plugins.Contracts;
@@ -14,7 +13,7 @@ namespace Zeus.Plugins.Host.Registry;
 /// </summary>
 public sealed class PluginInstaller
 {
-    private readonly HttpClient _http;
+    private readonly IPluginPackageDownloader _downloader;
     private readonly IRegistryClient _registry;
     private readonly PluginManager _manager;
     private readonly string _pluginRoot;
@@ -31,8 +30,18 @@ public sealed class PluginInstaller
         PluginManager manager,
         string pluginRoot,
         ILogger<PluginInstaller>? log = null)
+        : this(new PluginPackageDownloader(http), registry, manager, pluginRoot, log)
     {
-        _http = http;
+    }
+
+    public PluginInstaller(
+        IPluginPackageDownloader downloader,
+        IRegistryClient registry,
+        PluginManager manager,
+        string pluginRoot,
+        ILogger<PluginInstaller>? log = null)
+    {
+        _downloader = downloader;
         _registry = registry;
         _manager = manager;
         _pluginRoot = pluginRoot;
@@ -58,21 +67,10 @@ public sealed class PluginInstaller
     public async Task<InstalledPlugin> InstallFromUrlAsync(
         string url, string? expectedSha256, CancellationToken ct)
     {
-        if (!url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-            throw new PluginInstallException($"refusing non-HTTPS download URL: {url}");
-
-        var tempZip = Path.GetTempFileName();
-        try
-        {
-            await DownloadAsync(url, tempZip, ct).ConfigureAwait(false);
-            if (expectedSha256 is { Length: > 0 })
-                VerifySha256(tempZip, expectedSha256);
-            return await InstallFromZipFileAsync(tempZip, ct).ConfigureAwait(false);
-        }
-        finally
-        {
-            try { File.Delete(tempZip); } catch { /* ignore */ }
-        }
+        using var package = await _downloader
+            .DownloadAndVerifyToTempFileAsync(url, expectedSha256, ct)
+            .ConfigureAwait(false);
+        return await InstallFromZipFileAsync(package.Path, ct).ConfigureAwait(false);
     }
 
     /// <summary>Install from a local zip on disk (BYOP "Install from file…").</summary>
@@ -171,27 +169,6 @@ public sealed class PluginInstaller
                     $"plugin '{id}' deactivated but its files could not be removed yet. Restart Zeus to complete.", ex);
             }
         }
-    }
-
-    private async Task DownloadAsync(string url, string dest, CancellationToken ct)
-    {
-        using var resp = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)
-            .ConfigureAwait(false);
-        resp.EnsureSuccessStatusCode();
-
-        await using var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        await using var dst = File.Create(dest);
-        await src.CopyToAsync(dst, ct).ConfigureAwait(false);
-    }
-
-    private static void VerifySha256(string path, string expected)
-    {
-        using var stream = File.OpenRead(path);
-        var bytes = SHA256.HashData(stream);
-        var actual = Convert.ToHexString(bytes);
-        if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
-            throw new PluginInstallException(
-                $"sha256 mismatch — expected {expected.ToLowerInvariant()}, got {actual.ToLowerInvariant()}");
     }
 
     /// <summary>Extract while rejecting zip-slip and arbitrary writes outside the dest dir.</summary>

@@ -60,6 +60,8 @@ import {
   type ReceiverKey,
 } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
+import * as viewZoom from '../state/view-zoom';
+import { resolveSpectrumViewport } from '../util/wideband-view';
 
 // Edge-resize tuning constants — shared with the advanced filter mini-pan.
 const DRAG_MIN_INTERVAL_MS = 50; // throttle for live setFilter writes during a drag
@@ -131,10 +133,18 @@ export function PassbandOverlay({
     const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
     const len = s.width;
     if (!len || s.hzPerPixel <= 0) return null;
-    const span = len * s.hzPerPixel;
+    const viewport = resolveSpectrumViewport({
+      width: len,
+      sourceCenterHz: Number(s.centerHz),
+      sourceHzPerPixel: s.hzPerPixel,
+      viewCenterHz: vc.isInitialized() ? vc.getViewCenterHz() : undefined,
+      viewHzPerPixel: viewZoom.isInitialized() ? viewZoom.getDisplayedHzPerPixel() : undefined,
+    });
+    if (!viewport) return null;
+    const span = viewport.spanHz;
     const frac = (clientX - rect.left) / rect.width;
     const c = useConnectionStore.getState();
-    const visualCenter = vc.isInitialized() ? vc.getViewCenterHz() : Number(s.centerHz);
+    const visualCenter = viewport.centerHz;
     const absHz = visualCenter - span / 2 + frac * span;
     return absHz - getReceiverVfoHz(c, receiver);
   };
@@ -219,9 +229,17 @@ export function PassbandOverlay({
       if (!rect) return;
       const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
       if (!s.width || s.hzPerPixel <= 0) return;
-      const spanHz = s.width * s.hzPerPixel;
+      const viewport = resolveSpectrumViewport({
+        width: s.width,
+        sourceCenterHz: Number(s.centerHz),
+        sourceHzPerPixel: s.hzPerPixel,
+        viewCenterHz: vc.isInitialized() ? vc.getViewCenterHz() : undefined,
+        viewHzPerPixel: viewZoom.isInitialized() ? viewZoom.getDisplayedHzPerPixel() : undefined,
+      });
+      if (!viewport) return;
+      const spanHz = viewport.spanHz;
       const conn = useConnectionStore.getState();
-      const view = vc.isInitialized() ? vc.getViewCenterHz() : Number(s.centerHz);
+      const view = viewport.centerHz;
       // The passband hangs off the VIEW center — which is, by definition,
       // always rendered at the screen center (the orange zero line). So
       // during a tuning glide the filter stays PINNED to the line while the
@@ -263,6 +281,7 @@ export function PassbandOverlay({
     };
     const schedule = () => requestDrawBusFrame(update);
     const unsubVc = vc.subscribe(schedule);
+    const unsubVz = viewZoom.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
       if (
         s.filterLowHz !== prev.filterLowHz ||
@@ -283,6 +302,7 @@ export function PassbandOverlay({
     schedule();
     return () => {
       unsubVc();
+      unsubVz();
       unsubConn();
       unsubFrame();
       cancelDrawBusFrame(update);
@@ -291,9 +311,17 @@ export function PassbandOverlay({
 
   if (!width || hzPerPixel <= 0) return null;
 
-  const spanHz = width * hzPerPixel;
   const frameCenter = Number(centerHz);
-  const initialView = vc.isInitialized() ? vc.getViewCenterHz() : frameCenter;
+  const initialViewport = resolveSpectrumViewport({
+    width,
+    sourceCenterHz: frameCenter,
+    sourceHzPerPixel: hzPerPixel,
+    viewCenterHz: vc.isInitialized() ? vc.getViewCenterHz() : undefined,
+    viewHzPerPixel: viewZoom.isInitialized() ? viewZoom.getDisplayedHzPerPixel() : undefined,
+  });
+  if (!initialViewport) return null;
+  const spanHz = initialViewport.spanHz;
+  const initialView = initialViewport.centerHz;
   const initialTarget = vc.isInitialized() ? vc.getTargetCenterHz() : frameCenter;
   const startHz = initialView - spanHz / 2;
 
