@@ -76,18 +76,18 @@ public sealed class TxServiceUnkeyOrderingTests : IDisposable
     }
 
     [Fact]
-    public void TrySetMox_On_EmitsRogerBeepAfterWireKey_WhenEnabled()
+    public void TrySetMox_On_DoesNotEmitRogerBeep_WhenEnabled()
     {
         var (radio, tx, order) = BuildConnectedTx();
         radio.SetRogerBeepEnabled(true);
 
         Assert.True(tx.TrySetMox(true, out var onErr), onErr);
 
-        Assert.Equal(new[] { "dsp:True", "wire:True", "roger" }, order);
+        Assert.Equal(new[] { "dsp:True", "wire:True" }, order);
     }
 
     [Fact]
-    public void TrySetMox_Off_DoesNotEmitRogerBeep_WhenEnabled()
+    public void TrySetMox_Off_EmitsRogerBeepBeforeWireDrop_WhenEnabled()
     {
         var (radio, tx, order) = BuildConnectedTx();
         radio.SetRogerBeepEnabled(true);
@@ -96,7 +96,7 @@ public sealed class TxServiceUnkeyOrderingTests : IDisposable
 
         Assert.True(tx.TrySetMox(false, out var offErr), offErr);
 
-        Assert.Equal(new[] { "wire:False", "dsp:False" }, order);
+        Assert.Equal(new[] { "roger", "wire:False", "dsp:False" }, order);
     }
 
     private sealed class RecordingPipeline(
@@ -106,7 +106,7 @@ public sealed class TxServiceUnkeyOrderingTests : IDisposable
         ILoggerFactory logs) : DspPipelineService(radio, hub, Array.Empty<IRxAudioSink>(), logs)
     {
         public override void SetMox(bool on) => order.Add($"dsp:{on}");
-        public override bool TransmitRogerBeepTone()
+        public override bool DrainRogerBeepTail()
         {
             order.Add("roger");
             return true;

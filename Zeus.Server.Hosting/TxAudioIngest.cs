@@ -140,6 +140,7 @@ public sealed class TxAudioIngest : IDisposable
     private const int FreeDvTxTailCeilingMs = 1200;     // absolute runaway cap on the drain
     private const int FreeDvTxTailGuardMs = 160;        // post-drain FIFO flush hold
     private const int RogerBeepDurationMs = 120;
+    private const int RogerBeepTailGuardMs = 70;
     private const double RogerBeepFrequencyHz = 1000.0;
     private const float RogerBeepMagnitude = 0.20f;
 
@@ -435,11 +436,11 @@ public sealed class TxAudioIngest : IDisposable
     }
 
     /// <summary>
-    /// Clock a short voice-mode roger beep through the normal TX chain after
-    /// an accepted local MOX key-down. If the operator configured a pre-key
-    /// delay, wait for that mute window to close before emitting RF.
+    /// Clock a short voice-mode roger beep through the normal TX chain before
+    /// PTT drops. Called by <see cref="TxService"/> after an accepted local
+    /// MOX release while the wire MOX bit is still asserted.
     /// </summary>
-    public bool TransmitRogerBeepTone()
+    public bool DrainRogerBeepTail()
     {
         if (_freeDv?.Active == true) return false;
         if (_txOwnedByTuneDriver()) return false;
@@ -456,8 +457,6 @@ public sealed class TxAudioIngest : IDisposable
         bool emitted = false;
         try
         {
-            WaitForPreKeyWindow();
-
             int totalSamples = Math.Max(1, TxRateHz * RogerBeepDurationMs / 1000);
             double phase = 0.0;
             double phaseStep = 2.0 * Math.PI * RogerBeepFrequencyHz / TxRateHz;
@@ -505,36 +504,26 @@ public sealed class TxAudioIngest : IDisposable
                 }
             }
 
+            Thread.Sleep(RogerBeepTailGuardMs);
             _log.LogInformation(
-                "tx.rogerBeep.keyDown: blocks={Blocks} durationMs={Duration}",
-                blocks, RogerBeepDurationMs);
+                "tx.rogerBeep.tail dropping PTT: blocks={Blocks} durationMs={Duration} guardMs={Guard}",
+                blocks, RogerBeepDurationMs, RogerBeepTailGuardMs);
             return emitted;
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "tx.rogerBeep.keyDown threw");
+            _log.LogWarning(ex, "tx.rogerBeep.tail drain threw");
             return false;
         }
         finally
         {
-            lock (_sync) _accumulatorFill = 0;
+            lock (_sync)
+            {
+                _ring.Clear();
+                _accumulatorFill = 0;
+                _lastSeenMox = false;
+            }
             Volatile.Write(ref _tailDraining, 0);
-        }
-    }
-
-    private void WaitForPreKeyWindow()
-    {
-        long openAt = _preKeyOpenAtTicks();
-        if (openAt == 0L) return;
-
-        long freq = System.Diagnostics.Stopwatch.Frequency;
-        while (true)
-        {
-            long remaining = openAt - System.Diagnostics.Stopwatch.GetTimestamp();
-            if (remaining <= 0) return;
-            int ms = (int)(remaining * 1000 / freq);
-            if (ms > 0) Thread.Sleep(Math.Min(ms, 20));
-            else Thread.Yield();
         }
     }
 

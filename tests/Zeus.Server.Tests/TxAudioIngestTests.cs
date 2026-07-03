@@ -544,7 +544,7 @@ public class TxAudioIngestTests
     }
 
     [Fact]
-    public void RogerBeepTone_EmitsToneThroughTxChain()
+    public void RogerBeepTail_EmitsToneThroughTxChain()
     {
         var engine = new StubEngine { BlockSize = 1024 };
         var ring = new TxIqRing();
@@ -554,7 +554,7 @@ public class TxAudioIngestTests
             ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>(),
             forwardP2: iq => p2Blocks.Add(iq.ToArray()));
 
-        bool emitted = ingest.TransmitRogerBeepTone();
+        bool emitted = ingest.DrainRogerBeepTail();
 
         Assert.True(emitted);
         Assert.Equal(6, engine.ProcessedBlocks);
