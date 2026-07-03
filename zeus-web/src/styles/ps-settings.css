@@ -1603,14 +1603,16 @@
   display: inline-flex;
 }
 
-.ps-popover-anchor {
-  position: absolute;
-  /* Anchor above the transport row; the small gap clears the panel rim
-     and gives the pointer room to cross from button to popover without
+.ps-popover-portal {
+  /* Portalled to <body> and pinned above the PS button. Fixed positioning
+     (left/top set inline from the button rect) keeps the popover immune to
+     the transport bar's overflow clipping — the bar scrolls its control
+     clusters horizontally, and any non-visible ancestor overflow would
+     clip an in-bar absolute anchor. The 8 px gap clears the panel rim and
+     gives the pointer room to cross from button to popover without
      dropping into "neither hovered" briefly. */
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
+  position: fixed;
+  transform: translate(-50%, calc(-100% - 8px));
   z-index: 60;
   pointer-events: auto;
   /* Keep clear of the viewport edges on narrow windows. */
