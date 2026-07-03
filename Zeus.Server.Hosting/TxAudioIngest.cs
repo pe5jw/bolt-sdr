@@ -119,11 +119,11 @@ public sealed class TxAudioIngest : IDisposable
     // mute by writing FROM this buffer, not by zeroing _scratchIq in place.
     private readonly float[] _muteIq = new float[4096];
 
-    // FreeDV end-of-over TX tail. Non-zero while the mic hot path must yield TX
-    // exclusively to DrainFreeDvTxTail (no double-feed into WDSP fexchange2),
+    // Exclusive TXA utility path. Non-zero while the mic hot path must yield TX
+    // to a tail drain or key-down prime (no double-feed into WDSP fexchange2),
     // exactly as it defers to TxTuneDriver. Also the re-entrancy guard (CAS) so
-    // two rapid un-keys can't both drive ProcessTxBlock. Dedicated scratch so the
-    // drain (run on the un-key thread) never aliases _scratchMic/_scratchIq.
+    // rapid edge transitions can't both drive ProcessTxBlock. Dedicated scratch
+    // so API-thread work never aliases _scratchMic/_scratchIq.
     private int _tailDraining;
     private readonly float[] _tailMic = new float[1024];
     private readonly float[] _tailIq = new float[4096];
@@ -144,6 +144,7 @@ public sealed class TxAudioIngest : IDisposable
     private const int RogerBeepTailGuardMs = 120;
     private const double RogerBeepFrequencyHz = 1000.0;
     private const float RogerBeepMagnitude = 0.60f;
+    private const int KeyDownPrimeBlocks = 12;
 
     private long _totalMicSamples;
     private long _totalTxBlocks;
@@ -531,6 +532,73 @@ public sealed class TxAudioIngest : IDisposable
         catch (Exception ex)
         {
             _log.LogWarning(ex, "tx.rogerBeep.tail drain threw");
+            return false;
+        }
+        finally
+        {
+            lock (_sync)
+            {
+                _ring.Clear();
+                _accumulatorFill = 0;
+                _lastSeenMox = false;
+            }
+            Volatile.Write(ref _tailDraining, 0);
+        }
+    }
+
+    /// <summary>
+    /// Prime WDSP TXA with silence immediately after MOX-on, before the radio
+    /// wire key is asserted. Some TXA backends retain output from the previous
+    /// tail; this clocks that state through and discards it so the next over
+    /// starts with fresh mic audio, not the previous roger beep.
+    /// </summary>
+    public bool PrimeTxDspForKeyDown()
+    {
+        if (_freeDv?.Active == true) return false;
+        if (_txOwnedByTuneDriver()) return false;
+
+        var engine = _engineProvider();
+        int blockSize = engine?.TxBlockSamples ?? 0;
+        int iqOut = engine?.TxOutputSamples ?? 0;
+        if (engine is null || blockSize <= 0 || iqOut <= 0
+            || blockSize > _tailMic.Length || 2 * iqOut > _tailIq.Length)
+            return false;
+
+        if (Interlocked.CompareExchange(ref _tailDraining, 1, 0) != 0) return false;
+        lock (_sync) { _accumulatorFill = 0; }
+        int blocks = 0;
+        float iqPeak = 0f;
+        long startTs = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            Array.Clear(_tailMic, 0, blockSize);
+            for (int b = 0; b < KeyDownPrimeBlocks; b++)
+            {
+                int produced = engine.ProcessTxBlock(
+                    new ReadOnlySpan<float>(_tailMic, 0, blockSize),
+                    new Span<float>(_tailIq, 0, 2 * iqOut));
+                if (produced <= 0) continue;
+
+                var iqSpan = new ReadOnlySpan<float>(_tailIq, 0, 2 * produced);
+                for (int i = 0; i < iqSpan.Length; i++)
+                {
+                    float sampleAbs = iqSpan[i];
+                    if (sampleAbs < 0) sampleAbs = -sampleAbs;
+                    if (sampleAbs > iqPeak) iqPeak = sampleAbs;
+                }
+                blocks++;
+            }
+
+            double primeMs = (System.Diagnostics.Stopwatch.GetTimestamp() - startTs)
+                * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            _log.LogInformation(
+                "tx.keyDownPrime beforeWireKey blocks={Blocks} iqPeak={IqPeak:F4} elapsedMs={Elapsed:F2}",
+                blocks, iqPeak, primeMs);
+            return blocks > 0;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "tx.keyDownPrime threw");
             return false;
         }
         finally

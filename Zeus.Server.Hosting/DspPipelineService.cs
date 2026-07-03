@@ -1379,6 +1379,12 @@ public class DspPipelineService : BackgroundService,
     /// </summary>
     public virtual bool DrainRogerBeepTail() => ResolveTxIngest()?.DrainRogerBeepTail() ?? false;
 
+    /// <summary>
+    /// Clocks any stale WDSP TXA output through silence and discards it before
+    /// the radio wire MOX bit is asserted on a new key-down.
+    /// </summary>
+    public virtual bool PrimeTxDspForKeyDown() => ResolveTxIngest()?.PrimeTxDspForKeyDown() ?? false;
+
     public virtual bool DrainTxIqTransportTail(TimeSpan timeout)
     {
         var p2 = _p2Client;

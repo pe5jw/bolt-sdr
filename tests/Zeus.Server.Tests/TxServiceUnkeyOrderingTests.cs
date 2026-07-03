@@ -20,8 +20,8 @@ namespace Zeus.Server.Tests;
 // These tests pin the ordering through the universal keying chokepoint:
 //   • MOX-OFF → wire MOX edge (RadioService.MoxChanged) must fire BEFORE the
 //     pipeline teardown (DspPipelineService.SetMox(false)).
-//   • MOX-ON  → unchanged: the pipeline (TXA up / RXA mute) must run BEFORE the
-//     wire key, so the first TX frame never carries stale RX-side IQ.
+//   • MOX-ON  → the pipeline (TXA up / RXA mute) and a silent TXA prime must run
+//     BEFORE the wire key, so the first TX frame never carries stale IQ.
 public sealed class TxServiceUnkeyOrderingTests : IDisposable
 {
     private readonly string _dbPath =
@@ -71,9 +71,9 @@ public sealed class TxServiceUnkeyOrderingTests : IDisposable
 
         Assert.True(tx.TrySetMox(true, out var onErr), onErr);
 
-        // On the key-down edge the order is unchanged: the WDSP TX chain comes up
-        // before the wire MOX bit, so the first TX frame can't carry stale RX IQ.
-        Assert.Equal(new[] { "dsp:True", "wire:True" }, order);
+        // On the key-down edge the WDSP TX chain comes up and is primed before
+        // the wire MOX bit, so the first TX frame can't carry stale TXA output.
+        Assert.Equal(new[] { "dsp:True", "prime", "wire:True" }, order);
     }
 
     [Fact]
@@ -84,7 +84,7 @@ public sealed class TxServiceUnkeyOrderingTests : IDisposable
 
         Assert.True(tx.TrySetMox(true, out var onErr), onErr);
 
-        Assert.Equal(new[] { "dsp:True", "wire:True" }, order);
+        Assert.Equal(new[] { "dsp:True", "prime", "wire:True" }, order);
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public sealed class TxServiceUnkeyOrderingTests : IDisposable
         var (radio, tx, order) = BuildConnectedTx();
         radio.SetRogerBeepEnabled(true);
         Assert.True(tx.TrySetMox(true, MoxSource.Cat, out var onErr), onErr);
-        Assert.Equal(new[] { "dsp:True", "wire:True" }, order);
+        Assert.Equal(new[] { "dsp:True", "prime", "wire:True" }, order);
         order.Clear();
 
         Assert.True(tx.TrySetMox(false, MoxSource.Cat, out var offErr), offErr);
@@ -124,6 +124,11 @@ public sealed class TxServiceUnkeyOrderingTests : IDisposable
         public override bool DrainRogerBeepTail()
         {
             order.Add("roger");
+            return true;
+        }
+        public override bool PrimeTxDspForKeyDown()
+        {
+            order.Add("prime");
             return true;
         }
     }
