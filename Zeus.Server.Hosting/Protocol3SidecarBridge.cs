@@ -9,7 +9,10 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json.Nodes;
+using System.Threading.Channels;
+using Zeus.Contracts;
 
 namespace Zeus.Server;
 
@@ -25,8 +28,21 @@ public sealed class Protocol3SidecarBridge : IDisposable
 {
     public const string HttpClientName = "Protocol3Sidecar";
     private const string HostedSessionArmValue = "ENABLE_SIDECAR_P3_HOSTED_SESSION";
+    private const int DefaultAnalyzerFftLength = 65_536;
+    private const int DefaultReceiveMs = 0;
+    private const int DefaultControlTimeoutMs = 250;
+    private const int TxIqFramesPerPacket = 240;
+    private const int TxIqBytesPerFrame = 6;
+    private const int TxIqPayloadBytes = TxIqFramesPerPacket * TxIqBytesPerFrame;
+    private const int TxIqS24Max = 0x7f_ffff;
+    private const int TxIqS24Min = -0x80_0000;
+    private const int TxIqSendQueueCapacity = 2048;
+    private const int TxControlKeepalivePeriodMs = 100;
+    private const string SidecarPidFileName = "protocol3-sidecar.pid";
 
     private readonly object _sync = new();
+    private readonly object _txIqSync = new();
+    private readonly SemaphoreSlim _restartSync = new(1, 1);
     private readonly IHttpClientFactory _httpFactory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<Protocol3SidecarBridge> _log;
@@ -35,6 +51,61 @@ public sealed class Protocol3SidecarBridge : IDisposable
     private bool _ownsProcess;
     private Uri? _diagnosticsUrl;
     private Protocol3SidecarSnapshot? _lastSnapshot;
+    private IPEndPoint? _txIqIngestEndpoint;
+    private Channel<byte[]>? _txIqSendQueue;
+    private CancellationTokenSource? _txIqSendCts;
+    private Task? _txIqSendTask;
+    private readonly object _txControlKeepaliveSync = new();
+    private CancellationTokenSource? _txControlKeepaliveCts;
+    private Task? _txControlKeepaliveTask;
+    private string? _txControlKeepalivePayload;
+    private readonly byte[] _txIqPacket = new byte[TxIqPayloadBytes];
+    private int _txIqPacketBytes;
+    private int _txIqQueueDepth;
+    private long _txIqPacketsSent;
+    private long _txIqPacketsDropped;
+    private long _txIqPacketsQueued;
+    private long _txIqQueueDropped;
+    private long _txControlPosts;
+    private long _lastTxActivityUnixMs;
+    private long _controlPostSuccesses;
+    private long _controlPostMissingUrl;
+    private int _txIqStreamingArmed;
+    private string? _lastControlPostUrl;
+    private int _lastControlPostStatus;
+    private string? _lastControlPostError;
+    private string? _lastControlPostBody;
+    private string? _lastTxControlPayload;
+    private Protocol3SidecarConnection? _lastConnection;
+    private StateDto? _lastReceiverState;
+    private int _lastReceiverRxStreams;
+    private int _lastReceiverSampleRateHz;
+    private long _restartAttempts;
+    private long _restartSuccesses;
+    private long _restartFailures;
+    private long _lastRestartUnixMs;
+    private string? _lastRestartReason;
+    private string? _lastRestartError;
+
+    private sealed record Protocol3SidecarConnection(
+        IPEndPoint RadioEndpoint,
+        int P3Port,
+        int SampleRateHz,
+        int RxStreams,
+        StateDto InitialState);
+
+    internal readonly record struct SidecarPidRecord(
+        int ProcessId,
+        long StartUnixMs,
+        string DiagnosticsUrl);
+
+    public Uri? DiagnosticsUrl
+    {
+        get
+        {
+            lock (_sync) return _diagnosticsUrl;
+        }
+    }
 
     public Protocol3SidecarBridge(
         IHttpClientFactory httpFactory,
@@ -50,8 +121,19 @@ public sealed class Protocol3SidecarBridge : IDisposable
     {
         get
         {
+            IPEndPoint? txIqEndpoint;
+            int txIqPartialBytes;
+            int txIqQueueDepth;
+            lock (_txIqSync)
+            {
+                txIqEndpoint = _txIqIngestEndpoint;
+                txIqPartialBytes = _txIqPacketBytes;
+                txIqQueueDepth = _txIqQueueDepth;
+            }
+
             lock (_sync)
             {
+                var lastRestartUnixMs = Interlocked.Read(ref _lastRestartUnixMs);
                 return new
                 {
                     configured = ExistingDiagnosticsUrl() is not null ||
@@ -60,6 +142,29 @@ public sealed class Protocol3SidecarBridge : IDisposable
                     diagnosticsUrl = _diagnosticsUrl?.ToString(),
                     last = _lastSnapshot,
                     sidecarOutput = _processOutput?.Snapshot(),
+                    txIqIngestEndpoint = txIqEndpoint?.ToString(),
+                    txIqPacketsSent = Interlocked.Read(ref _txIqPacketsSent),
+                    txIqPacketsDropped = Interlocked.Read(ref _txIqPacketsDropped),
+                    txIqPacketsQueued = Interlocked.Read(ref _txIqPacketsQueued),
+                    txIqQueueDropped = Interlocked.Read(ref _txIqQueueDropped),
+                    txIqQueueDepth,
+                    txIqPartialBytes,
+                    txIqStreamingArmed = Volatile.Read(ref _txIqStreamingArmed) != 0,
+                    txControlPosts = Interlocked.Read(ref _txControlPosts),
+                    lastTxActivityUnixMs = LastTxActivityUnixMs is > 0 ? LastTxActivityUnixMs : (long?)null,
+                    controlPostSuccesses = Interlocked.Read(ref _controlPostSuccesses),
+                    controlPostMissingUrl = Interlocked.Read(ref _controlPostMissingUrl),
+                    lastControlPostUrl = _lastControlPostUrl,
+                    lastControlPostStatus = _lastControlPostStatus,
+                    lastControlPostError = _lastControlPostError,
+                    lastControlPostBody = _lastControlPostBody,
+                    lastTxControlPayload = _lastTxControlPayload,
+                    restartAttempts = Interlocked.Read(ref _restartAttempts),
+                    restartSuccesses = Interlocked.Read(ref _restartSuccesses),
+                    restartFailures = Interlocked.Read(ref _restartFailures),
+                    lastRestartUnixMs = lastRestartUnixMs > 0 ? lastRestartUnixMs : (long?)null,
+                    lastRestartReason = _lastRestartReason,
+                    lastRestartError = _lastRestartError,
                 };
             }
         }
@@ -70,6 +175,7 @@ public sealed class Protocol3SidecarBridge : IDisposable
         int p3Port,
         int sampleRateHz,
         int rxStreams,
+        StateDto initialState,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(radioEndpoint);
@@ -77,12 +183,14 @@ public sealed class Protocol3SidecarBridge : IDisposable
         if (sampleRateHz <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRateHz));
         if (rxStreams is < 1 or > 10) throw new ArgumentOutOfRangeException(nameof(rxStreams));
 
+        RememberConnection(radioEndpoint, p3Port, sampleRateHz, rxStreams, initialState);
+
         var existingUrl = ExistingDiagnosticsUrl();
         if (existingUrl is not null)
         {
             var existing = await WaitForReadyAsync(existingUrl, rxStreams, TimeSpan.FromSeconds(10), ct)
                 .ConfigureAwait(false);
-            Remember(existing, ownsProcess: false, process: null);
+            Remember(existing, ownsProcess: false, process: null, txIqIngestPort: ConfiguredTxIqIngestPort());
             return existing;
         }
 
@@ -100,26 +208,30 @@ public sealed class Protocol3SidecarBridge : IDisposable
             throw new InvalidOperationException($"N9DSP native library was not found: {n9dspLibrary}");
 
         await DisconnectAsync(ct).ConfigureAwait(false);
+        StopPreviousOwnedSidecar();
 
         var listenUrl = ListenUrl();
         var diagnosticsUrl = DiagnosticsUrlForListen(listenUrl);
-        var psi = BuildStartInfo(project, n9dspLibrary, listenUrl, radioEndpoint.Address, p3Port, sampleRateHz, rxStreams);
+        var txIqIngestPort = TxIqIngestPort();
+        var psi = BuildStartInfo(project, n9dspLibrary, listenUrl, radioEndpoint.Address, p3Port, sampleRateHz, rxStreams, initialState, txIqIngestPort);
         var process = Process.Start(psi) ??
             throw new InvalidOperationException("Protocol 3 sidecar process did not start.");
+        WriteOwnedSidecarPidFile(process, diagnosticsUrl);
         var output = ProcessOutputTail.Attach(process);
-        Remember(null, true, process, diagnosticsUrl, output);
+        Remember(null, true, process, diagnosticsUrl, output, txIqIngestPort);
         _log.LogInformation(
-            "p3.sidecar.start pid={Pid} radio={Radio} p3Port={Port} diagnostics={Diagnostics}",
+            "p3.sidecar.start pid={Pid} radio={Radio} p3Port={Port} diagnostics={Diagnostics} txIqIngest={TxIqIngestPort}",
             process.Id,
             radioEndpoint.Address,
             p3Port,
-            diagnosticsUrl);
+            diagnosticsUrl,
+            txIqIngestPort);
 
         try
         {
             var snapshot = await WaitForReadyAsync(diagnosticsUrl, rxStreams, TimeSpan.FromSeconds(15), ct)
                 .ConfigureAwait(false);
-            Remember(snapshot, true, process, diagnosticsUrl, output);
+            Remember(snapshot, true, process, diagnosticsUrl, output, txIqIngestPort);
             return snapshot;
         }
         catch
@@ -143,6 +255,8 @@ public sealed class Protocol3SidecarBridge : IDisposable
             _diagnosticsUrl = null;
             _lastSnapshot = null;
         }
+        StopTxControlKeepalive();
+        ClearTxIqIngest();
 
         if (process is null || !kill) return;
 
@@ -161,6 +275,7 @@ public sealed class Protocol3SidecarBridge : IDisposable
         }
         finally
         {
+            DeleteOwnedSidecarPidFile(process);
             process.Dispose();
         }
     }
@@ -169,6 +284,93 @@ public sealed class Protocol3SidecarBridge : IDisposable
     {
         try { DisconnectAsync(CancellationToken.None).GetAwaiter().GetResult(); }
         catch { }
+    }
+
+    internal async Task<bool> RequestRestartAsync(string reason, CancellationToken ct)
+    {
+        if (!await _restartSync.WaitAsync(0, ct).ConfigureAwait(false))
+            return false;
+
+        try
+        {
+            Protocol3SidecarConnection? connection;
+            StateDto? receiverState;
+            bool ownsProcess;
+            lock (_sync)
+            {
+                connection = _lastConnection;
+                receiverState = _lastReceiverState;
+                ownsProcess = _ownsProcess;
+            }
+
+            if (connection is null || !ownsProcess)
+            {
+                _lastRestartError = "restart skipped; sidecar is not owned by this Zeus process.";
+                return false;
+            }
+
+            var state = receiverState ?? connection.InitialState;
+            Interlocked.Increment(ref _restartAttempts);
+            Interlocked.Exchange(ref _lastRestartUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            _lastRestartReason = reason;
+            _lastRestartError = null;
+            _log.LogWarning("p3.sidecar.restart.request reason={Reason}", reason);
+
+            await DisconnectAsync(ct).ConfigureAwait(false);
+            await ConnectAsync(
+                    connection.RadioEndpoint,
+                    connection.P3Port,
+                    connection.SampleRateHz,
+                    connection.RxStreams,
+                    state,
+                    ct)
+                .ConfigureAwait(false);
+
+            Interlocked.Increment(ref _restartSuccesses);
+            _log.LogInformation("p3.sidecar.restart.complete reason={Reason}", reason);
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Interlocked.Increment(ref _restartFailures);
+            _lastRestartError = ex.Message;
+            _log.LogWarning(ex, "p3.sidecar.restart.failed reason={Reason}", reason);
+            return false;
+        }
+        finally
+        {
+            _restartSync.Release();
+        }
+    }
+
+    internal long LastTxActivityUnixMs => Interlocked.Read(ref _lastTxActivityUnixMs);
+
+    internal void ForwardTxIq(ReadOnlySpan<float> iqInterleaved)
+    {
+        if (iqInterleaved.Length < 2) return;
+        if (Volatile.Read(ref _txIqStreamingArmed) == 0) return;
+
+        lock (_txIqSync)
+        {
+            var queue = _txIqSendQueue;
+            if (_txIqIngestEndpoint is null || queue is null) return;
+
+            var frames = iqInterleaved.Length / 2;
+            for (var frame = 0; frame < frames; frame++)
+            {
+                WriteS24BigEndian(_txIqPacket, _txIqPacketBytes, FloatToS24(iqInterleaved[frame * 2]));
+                _txIqPacketBytes += 3;
+                WriteS24BigEndian(_txIqPacket, _txIqPacketBytes, FloatToS24(iqInterleaved[frame * 2 + 1]));
+                _txIqPacketBytes += 3;
+
+                if (_txIqPacketBytes == TxIqPayloadBytes)
+                    EnqueueTxIqPacketLocked(queue);
+            }
+        }
     }
 
     internal static Protocol3SidecarSnapshot ValidateDiagnosticsSnapshot(
@@ -284,14 +486,177 @@ public sealed class Protocol3SidecarBridge : IDisposable
         return ValidateDiagnosticsSnapshot(root, diagnosticsUrl, rxStreams);
     }
 
-    private ProcessStartInfo BuildStartInfo(
+    internal async Task PushReceiverSettingsAsync(
+        StateDto state,
+        int rxStreams,
+        int sampleRateHz,
+        CancellationToken ct)
+    {
+        RememberReceiverState(state, rxStreams, sampleRateHz);
+        Uri? diagnosticsUrl;
+        lock (_sync)
+        {
+            diagnosticsUrl = _diagnosticsUrl;
+        }
+        if (diagnosticsUrl is null) return;
+
+        var payload = BuildReceiverSettingsJson(state, rxStreams, sampleRateHz);
+        var url = Endpoint(diagnosticsUrl, "/api/control/receivers");
+        var http = _httpFactory.CreateClient(HttpClientName);
+        using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+        using var response = await http.PostAsync(url, content, ct).ConfigureAwait(false);
+        if (response.IsSuccessStatusCode) return;
+
+        var detail = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        if (detail.Length > 512) detail = detail[..512];
+        throw new InvalidOperationException(
+            $"Protocol 3 sidecar receiver control returned HTTP {(int)response.StatusCode}: {detail}");
+    }
+
+    internal async Task PushTxControlAsync(
+        bool mox,
+        bool txEnable,
+        bool tune,
+        int driveLevel,
+        CancellationToken ct)
+    {
+        Interlocked.Increment(ref _txControlPosts);
+        var active = mox || txEnable || tune;
+        if (active)
+            MarkTxActivity();
+        if (!active)
+        {
+            DisarmTxIqStreaming();
+            StopTxControlKeepalive();
+            ResetTxIqSendQueue();
+        }
+
+        var payload = new JsonObject
+        {
+            ["mox"] = mox,
+            ["txEnable"] = txEnable,
+            ["tune"] = tune,
+            ["driveLevel"] = Math.Clamp(driveLevel, 0, 255),
+            ["timeoutMs"] = DefaultControlTimeoutMs,
+        }.ToJsonString();
+        _lastTxControlPayload = payload;
+        await PostControlAsync("/api/control/tx/control", payload, "TX control", ct)
+            .ConfigureAwait(false);
+        if (active)
+        {
+            Volatile.Write(ref _txIqStreamingArmed, 1);
+            StartTxControlKeepalive(payload);
+        }
+    }
+
+    internal Task PushRfPathAsync(bool paEnabled, CancellationToken ct)
+    {
+        var payload = new JsonObject
+        {
+            ["paEnabled"] = paEnabled,
+            ["timeoutMs"] = DefaultControlTimeoutMs,
+        }.ToJsonString();
+        return PostControlAsync("/api/control/rf-path", payload, "RF path", ct);
+    }
+
+    internal Task PushAudioControlAsync(AudioFrontEndPush push, CancellationToken ct)
+    {
+        var micControl = push.MicControlByte;
+        var source = push.Source.ToString();
+        var payload = new JsonObject
+        {
+            ["micControlByte"] = micControl,
+            ["micPttEnabled"] = (micControl & 0x04) == 0,
+            ["micRingEnabled"] = (micControl & 0x08) != 0,
+            ["lineInGain"] = push.LineInGain,
+            ["source"] = source,
+            ["timeoutMs"] = DefaultControlTimeoutMs,
+        }.ToJsonString();
+        return PostControlAsync("/api/control/audio", payload, "audio control", ct);
+    }
+
+    internal async Task PrepareHostTxIqAsync(
+        CancellationToken ct,
+        int settleMilliseconds = DefaultControlTimeoutMs,
+        int commandTimeoutMilliseconds = DefaultControlTimeoutMs)
+    {
+        DisarmTxIqStreaming();
+        settleMilliseconds = Math.Clamp(settleMilliseconds, 100, 10000);
+        commandTimeoutMilliseconds = Math.Clamp(commandTimeoutMilliseconds, 100, 10000);
+        Uri? diagnosticsUrl;
+        lock (_sync)
+        {
+            diagnosticsUrl = _diagnosticsUrl;
+        }
+        if (diagnosticsUrl is null) return;
+
+        var url = Endpoint(
+            diagnosticsUrl,
+            "/api/control/tx/prepare-host-iq",
+            $"timeoutMs={commandTimeoutMilliseconds.ToString(CultureInfo.InvariantCulture)}&settleMs={settleMilliseconds.ToString(CultureInfo.InvariantCulture)}");
+        var http = _httpFactory.CreateClient(HttpClientName);
+        using var content = new StringContent("{}", Encoding.UTF8, "application/json");
+        using var response = await http.PostAsync(url, content, ct).ConfigureAwait(false);
+        if (response.IsSuccessStatusCode)
+        {
+            return;
+        }
+
+        var detail = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        if (detail.Length > 512) detail = detail[..512];
+        throw new InvalidOperationException(
+            $"Protocol 3 sidecar host TX IQ prepare returned HTTP {(int)response.StatusCode}: {detail}");
+    }
+
+    private async Task PostControlAsync(
+        string path,
+        string payload,
+        string label,
+        CancellationToken ct)
+    {
+        Uri? diagnosticsUrl;
+        lock (_sync)
+        {
+            diagnosticsUrl = _diagnosticsUrl;
+        }
+        if (diagnosticsUrl is null)
+        {
+            Interlocked.Increment(ref _controlPostMissingUrl);
+            _lastControlPostError = $"{label}: diagnostics URL is not set.";
+            return;
+        }
+
+        var url = Endpoint(diagnosticsUrl, path);
+        _lastControlPostUrl = url.ToString();
+        var http = _httpFactory.CreateClient(HttpClientName);
+        using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+        using var response = await http.PostAsync(url, content, ct).ConfigureAwait(false);
+        _lastControlPostStatus = (int)response.StatusCode;
+        var detail = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        _lastControlPostBody = detail.Length > 512 ? detail[..512] : detail;
+        if (response.IsSuccessStatusCode)
+        {
+            Interlocked.Increment(ref _controlPostSuccesses);
+            _lastControlPostError = null;
+            return;
+        }
+
+        if (detail.Length > 512) detail = detail[..512];
+        _lastControlPostError = $"{label}: HTTP {(int)response.StatusCode}: {detail}";
+        throw new InvalidOperationException(
+            $"Protocol 3 sidecar {label} returned HTTP {(int)response.StatusCode}: {detail}");
+    }
+
+    internal ProcessStartInfo BuildStartInfo(
         string project,
         string n9dspLibrary,
         Uri listenUrl,
         IPAddress radioIp,
         int p3Port,
         int sampleRateHz,
-        int rxStreams)
+        int rxStreams,
+        StateDto initialState,
+        int txIqIngestPort = 0)
     {
         var dotnet = Setting("DotnetPath", "ZEUS_PROTOCOL3_SIDECAR_DOTNET");
         if (string.IsNullOrWhiteSpace(dotnet)) dotnet = "dotnet";
@@ -319,24 +684,198 @@ public sealed class Protocol3SidecarBridge : IDisposable
         psi.ArgumentList.Add("--port");
         psi.ArgumentList.Add(p3Port.ToString(CultureInfo.InvariantCulture));
         psi.ArgumentList.Add("--receive-ms");
-        psi.ArgumentList.Add("3000");
+        psi.ArgumentList.Add(IntSetting("ReceiveMs", "ZEUS_PROTOCOL3_RECEIVE_MS", DefaultReceiveMs).ToString(CultureInfo.InvariantCulture));
         psi.ArgumentList.Add("--poll-ms");
-        psi.ArgumentList.Add("1000");
+        psi.ArgumentList.Add(IntSetting("PollMs", "ZEUS_PROTOCOL3_DISPLAY_POLL_MS", fallback: 20).ToString(CultureInfo.InvariantCulture));
+        psi.ArgumentList.Add("--diagnostics-publish-ms");
+        psi.ArgumentList.Add(IntSetting("DiagnosticsPublishMs", "ZEUS_PROTOCOL3_DIAGNOSTICS_PUBLISH_MS", fallback: 50).ToString(CultureInfo.InvariantCulture));
         psi.ArgumentList.Add("--hosted-wait-ms");
         psi.ArgumentList.Add("7000");
         psi.ArgumentList.Add("--serve-ms");
         psi.ArgumentList.Add("0");
-        psi.ArgumentList.Add("--freeze-ready-snapshot");
+        if (txIqIngestPort > 0)
+        {
+            psi.ArgumentList.Add("--tx-iq-ingest-port");
+            psi.ArgumentList.Add(txIqIngestPort.ToString(CultureInfo.InvariantCulture));
+        }
         psi.ArgumentList.Add("--rx-count");
         psi.ArgumentList.Add(rxStreams.ToString(CultureInfo.InvariantCulture));
         psi.ArgumentList.Add("--rx-rate");
         psi.ArgumentList.Add(sampleRateHz.ToString(CultureInfo.InvariantCulture));
+        psi.ArgumentList.Add("--analyzer-fft-length");
+        psi.ArgumentList.Add(IntSetting("AnalyzerFftLength", "ZEUS_PROTOCOL3_ANALYZER_FFT_LENGTH", DefaultAnalyzerFftLength).ToString(CultureInfo.InvariantCulture));
+        var analyzerProcessEvery = IntSetting("AnalyzerProcessEvery", "ZEUS_PROTOCOL3_ANALYZER_PROCESS_EVERY", 0);
+        if (analyzerProcessEvery > 0)
+        {
+            psi.ArgumentList.Add("--analyzer-process-every");
+            psi.ArgumentList.Add(analyzerProcessEvery.ToString(CultureInfo.InvariantCulture));
+        }
+        if (BoolSetting("RxIqConjugate", "ZEUS_PROTOCOL3_RX_IQ_CONJUGATE", fallback: true))
+            psi.ArgumentList.Add("--rx-iq-conjugate");
+        else
+            psi.ArgumentList.Add("--rx-iq-normal");
+        psi.ArgumentList.Add("--rx-settings-json");
+        psi.ArgumentList.Add(BuildReceiverSettingsJson(initialState, rxStreams, sampleRateHz));
         psi.ArgumentList.Add("--n9dsp-library");
         psi.ArgumentList.Add(n9dspLibrary);
         psi.Environment["N9DSP_NATIVE_LIBRARY"] = n9dspLibrary;
         psi.Environment["P3_ZEUS_HOSTED_RADIO_SESSION"] = HostedSessionArmValue;
         return psi;
     }
+
+    internal static string BuildReceiverSettingsJson(StateDto state, int rxStreams, int sampleRateHz)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        if (rxStreams is < 1 or > WireContract.MaxReceivers)
+            throw new ArgumentOutOfRangeException(nameof(rxStreams));
+        if (sampleRateHz <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRateHz));
+
+        var receivers = state.Receivers ?? Array.Empty<ReceiverDto>();
+        var ctunCenterHz = state.RadioLoHz > 0 ? state.RadioLoHz : state.VfoHz;
+        var array = new JsonArray();
+        for (var index = 0; index < rxStreams; index++)
+        {
+            var rx = ReceiverFor(state, receivers, index);
+            var enabled = rx.Enabled && index < state.MaxReceivers;
+            var centerHz = state.CtunEnabled ? ctunCenterHz : rx.VfoHz;
+            var tuningOffsetHz = state.CtunEnabled ? ClampInt64(rx.VfoHz - centerHz) : 0;
+            var muted = rx.Muted ||
+                (index == 0 && state.Rx1Muted) ||
+                (index == 1 && state.Rx2Muted);
+            var nr = state.Nr;
+
+            array.Add(new JsonObject
+            {
+                ["receiverIndex"] = index,
+                ["enabled"] = enabled,
+                ["dspChannelIndex"] = index,
+                ["ddcIndex"] = index,
+                ["adcSource"] = rx.AdcSource,
+                ["centerFrequencyHz"] = centerHz,
+                ["tuningOffsetHz"] = tuningOffsetHz,
+                ["mode"] = (int)rx.Mode,
+                ["passbandLowHz"] = rx.FilterLowHz,
+                ["passbandHighHz"] = rx.FilterHighHz,
+                ["afGainDb"] = enabled && !muted ? rx.AfGainDb : -120.0,
+                ["sampleRateHz"] = sampleRateHz,
+                ["enableRxAgc"] = state.Agc?.Mode == AgcMode.Fixed ? 0 : 1,
+                ["rxAgcProfile"] = RxAgcProfile(state.Agc?.Mode ?? AgcMode.Med),
+                ["agcAttackMs"] = 2.0,
+                ["agcReleaseMs"] = state.Agc?.DecayMs ?? 120,
+                ["agcHangMs"] = state.Agc?.HangMs ?? 0,
+                ["agcHangThresholdRms"] = HangThresholdRms(state.Agc?.HangThreshold),
+                ["agcMaxGainDb"] = state.AgcTopDb,
+                ["agcSlope"] = state.Agc?.Slope ?? 0,
+                ["agcHoldThresholdRms"] = 0.0,
+                ["enableRxNoiseBlanker"] = nr?.NbMode == NbMode.Nb1 ? 1 : 0,
+                ["rxNoiseBlankerThresholdDb"] = nr?.NbThreshold ?? 20.0,
+                ["rxNoiseBlankerTailUs"] = 80.0,
+                ["rxNoiseBlankerRecoveryUs"] = 120.0,
+                ["enableRxSpectralBlanker"] = EnableRxSpectralBlanker(nr),
+                ["rxSpectralBlankerThresholdDb"] = nr?.NbThreshold ?? 20.0,
+                ["rxSpectralBlankerTailMs"] = 1.0,
+                ["rxSpectralBlankerRecoveryMs"] = 3.0,
+                ["enableRxNotch"] = nr?.AnfEnabled == true ? 1 : 0,
+                ["enableRxSquelch"] = state.Squelch?.Enabled == true ? 1 : 0,
+                ["rxSquelchThresholdDb"] = SquelchThresholdDb(state.Squelch),
+                ["rxSquelchHysteresisDb"] = 3.0,
+                ["rxSquelchAttackMs"] = 5.0,
+                ["rxSquelchReleaseMs"] = 50.0,
+                ["enableRxAnr"] = EnableRxAnr(nr),
+                ["rxAnrStrength"] = AnrStrength(nr),
+                ["rxAnrAdaptationRate"] = 0.05,
+                ["enableRxEmnr"] = EnableRxEmnr(nr),
+                ["rxEmnrStrength"] = EmnrStrength(nr),
+                ["rxEmnrNoiseFloor"] = EmnrNoiseFloor(nr),
+                ["rxEmnrAttackMs"] = 4.0,
+                ["rxEmnrReleaseMs"] = 120.0,
+                ["enableRxMultiNotch"] = nr?.NbpNotchesEnabled == true ? 2 : 0,
+            });
+        }
+
+        return array.ToJsonString();
+    }
+
+    private static ReceiverDto ReceiverFor(StateDto state, IReadOnlyList<ReceiverDto> receivers, int index)
+    {
+        if (index == 0)
+        {
+            return new ReceiverDto(
+                0,
+                Enabled: true,
+                AdcSource: 0,
+                VfoHz: state.VfoHz,
+                Mode: state.Mode,
+                FilterLowHz: state.FilterLowHz,
+                FilterHighHz: state.FilterHighHz,
+                FilterPresetName: state.FilterPresetName,
+                AfGainDb: state.RxAfGainDb,
+                SampleRateHz: state.SampleRate,
+                Muted: state.Rx1Muted);
+        }
+
+        var existing = receivers.FirstOrDefault(receiver => receiver.Index == index);
+        if (existing is not null)
+        {
+            return index == 1
+                ? existing with { Enabled = state.Rx2Enabled, Muted = state.Rx2Muted, SampleRateHz = state.SampleRate }
+                : existing;
+        }
+
+        return new ReceiverDto(
+            index,
+            Enabled: false,
+            AdcSource: 0,
+            VfoHz: state.VfoHz,
+            Mode: state.Mode,
+            FilterLowHz: state.FilterLowHz,
+            FilterHighHz: state.FilterHighHz,
+            FilterPresetName: state.FilterPresetName,
+            AfGainDb: -120.0,
+            SampleRateHz: state.SampleRate,
+            Muted: true);
+    }
+
+    private static int ClampInt64(long value) =>
+        value < int.MinValue ? int.MinValue :
+        value > int.MaxValue ? int.MaxValue :
+        (int)value;
+
+    private static int RxAgcProfile(AgcMode mode) => mode switch
+    {
+        AgcMode.Fast => 1,
+        AgcMode.Med => 2,
+        AgcMode.Slow => 3,
+        AgcMode.Long => 4,
+        AgcMode.Fixed => 0,
+        _ => 2,
+    };
+
+    private static double HangThresholdRms(int? percent) =>
+        percent is null ? 0.05 : Math.Clamp(percent.Value, 0, 100) / 100.0;
+
+    private static double SquelchThresholdDb(SquelchConfig? squelch) =>
+        squelch is null ? -140.0 : -140.0 + Math.Clamp(squelch.Level, 0, 100);
+
+    private static int EnableRxSpectralBlanker(NrConfig? nr) =>
+        nr?.SnbEnabled == true || nr?.NbMode == NbMode.Nb2 ? 1 : 0;
+
+    private static int EnableRxAnr(NrConfig? nr) =>
+        nr?.NrMode is NrMode.Anr or NrMode.Rnnr ? 1 : 0;
+
+    private static double AnrStrength(NrConfig? nr) =>
+        nr?.NrMode == NrMode.Rnnr ? 0.55 : 0.85;
+
+    private static int EnableRxEmnr(NrConfig? nr) =>
+        nr?.NrMode is NrMode.Emnr or NrMode.Sbnr or NrMode.Rnnr ? 1 : 0;
+
+    private static double EmnrStrength(NrConfig? nr) =>
+        nr?.NrMode == NrMode.Rnnr ? 0.45 :
+        nr?.NrMode == NrMode.Sbnr && nr.Nr4ReductionAmount is double reduction ? Math.Clamp(reduction / 20.0, 0.0, 1.0) :
+        nr?.EmnrPost2Factor is double factor ? Math.Clamp(factor / 20.0, 0.0, 1.0) : 0.75;
+
+    private static double EmnrNoiseFloor(NrConfig? nr) =>
+        nr?.EmnrPost2Nlevel is double level ? Math.Clamp(level / 800.0, 0.0, 0.25) : 0.015;
 
     private Uri ListenUrl()
     {
@@ -356,6 +895,21 @@ public sealed class Protocol3SidecarBridge : IDisposable
         return new Uri($"http://127.0.0.1:{port}/");
     }
 
+    private int TxIqIngestPort()
+    {
+        var configured = ConfiguredTxIqIngestPort();
+        if (configured > 0) return configured;
+
+        using var udp = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        return ((IPEndPoint)udp.Client.LocalEndPoint!).Port;
+    }
+
+    private int ConfiguredTxIqIngestPort()
+    {
+        var port = IntSetting("TxIqIngestPort", "ZEUS_PROTOCOL3_TX_IQ_INGEST_PORT", 0);
+        return port is > 0 and <= 65535 ? port : 0;
+    }
+
     private Uri? ExistingDiagnosticsUrl()
     {
         var raw = Setting("DiagnosticsUrl", "ZEUS_PROTOCOL3_SIDECAR_DIAGNOSTICS_URL");
@@ -366,6 +920,186 @@ public sealed class Protocol3SidecarBridge : IDisposable
         return uri;
     }
 
+    private void StopPreviousOwnedSidecar()
+    {
+        var path = SidecarPidFilePath();
+        try
+        {
+            if (!File.Exists(path)) return;
+            var text = File.ReadAllText(path, Encoding.UTF8);
+            if (!TryParseSidecarPidRecord(text, out var record))
+            {
+                TryDeleteFile(path);
+                return;
+            }
+
+            using var process = Process.GetProcessById(record.ProcessId);
+            if (!ProcessStartMatches(process, record.StartUnixMs))
+            {
+                _log.LogDebug(
+                    "p3.sidecar.orphan.skip pid={Pid} diagnostics={Diagnostics} reason=start-time-mismatch",
+                    record.ProcessId,
+                    record.DiagnosticsUrl);
+                return;
+            }
+
+            if (!process.HasExited)
+            {
+                _log.LogWarning(
+                    "p3.sidecar.orphan.stop pid={Pid} diagnostics={Diagnostics}",
+                    record.ProcessId,
+                    record.DiagnosticsUrl);
+                process.Kill(entireProcessTree: true);
+                if (!process.WaitForExit(5000))
+                {
+                    _log.LogWarning("p3.sidecar.orphan.stop.timeout pid={Pid}", record.ProcessId);
+                    return;
+                }
+            }
+
+            TryDeleteFile(path);
+        }
+        catch (ArgumentException)
+        {
+            TryDeleteFile(path);
+        }
+        catch (InvalidOperationException)
+        {
+            TryDeleteFile(path);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "p3.sidecar.orphan.stop.error");
+        }
+    }
+
+    private void WriteOwnedSidecarPidFile(Process process, Uri diagnosticsUrl)
+    {
+        if (!TryGetProcessStartUnixMs(process, out var startUnixMs)) return;
+        var path = SidecarPidFilePath();
+        try
+        {
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory))
+                Directory.CreateDirectory(directory);
+
+            var text = string.Join(
+                Environment.NewLine,
+                $"pid={process.Id.ToString(CultureInfo.InvariantCulture)}",
+                $"startUnixMs={startUnixMs.ToString(CultureInfo.InvariantCulture)}",
+                $"diagnosticsUrl={diagnosticsUrl}",
+                string.Empty);
+            File.WriteAllText(path, text, Encoding.UTF8);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "p3.sidecar.pid.write.failed");
+        }
+    }
+
+    private void DeleteOwnedSidecarPidFile(Process process)
+    {
+        var path = SidecarPidFilePath();
+        try
+        {
+            if (!File.Exists(path)) return;
+            if (!TryGetProcessStartUnixMs(process, out var startUnixMs)) return;
+            var text = File.ReadAllText(path, Encoding.UTF8);
+            if (!TryParseSidecarPidRecord(text, out var record)) return;
+            if (record.ProcessId == process.Id && StartUnixMsMatches(startUnixMs, record.StartUnixMs))
+                TryDeleteFile(path);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "p3.sidecar.pid.delete.failed");
+        }
+    }
+
+    internal static bool TryParseSidecarPidRecord(string? text, out SidecarPidRecord record)
+    {
+        record = default;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+
+        int? pid = null;
+        long? startUnixMs = null;
+        string? diagnosticsUrl = null;
+        foreach (var rawLine in text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0 || line[0] == '#') continue;
+            var parts = line.Split('=', 2, StringSplitOptions.TrimEntries);
+            if (parts.Length != 2) continue;
+
+            if (string.Equals(parts[0], "pid", StringComparison.OrdinalIgnoreCase) &&
+                int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedPid))
+            {
+                pid = parsedPid;
+            }
+            else if (string.Equals(parts[0], "startUnixMs", StringComparison.OrdinalIgnoreCase) &&
+                long.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedStartUnixMs))
+            {
+                startUnixMs = parsedStartUnixMs;
+            }
+            else if (string.Equals(parts[0], "diagnosticsUrl", StringComparison.OrdinalIgnoreCase))
+            {
+                diagnosticsUrl = parts[1];
+            }
+        }
+
+        if (pid is not > 0 || startUnixMs is not > 0 || string.IsNullOrWhiteSpace(diagnosticsUrl))
+            return false;
+        if (!Uri.TryCreate(diagnosticsUrl, UriKind.Absolute, out var uri) ||
+            !string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+            !uri.IsLoopback ||
+            !string.Equals(uri.AbsolutePath, "/api/diagnostics/v2", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        record = new SidecarPidRecord(pid.Value, startUnixMs.Value, uri.ToString());
+        return true;
+    }
+
+    private static string SidecarPidFilePath() =>
+        Path.Combine(LocalZeusDataDirectory(), SidecarPidFileName);
+
+    private static string LocalZeusDataDirectory()
+    {
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        return string.IsNullOrWhiteSpace(localAppData)
+            ? AppContext.BaseDirectory
+            : Path.Combine(localAppData, "Zeus");
+    }
+
+    private static bool ProcessStartMatches(Process process, long expectedStartUnixMs) =>
+        TryGetProcessStartUnixMs(process, out var actualStartUnixMs) &&
+        StartUnixMsMatches(actualStartUnixMs, expectedStartUnixMs);
+
+    internal static bool StartUnixMsMatches(long actualStartUnixMs, long expectedStartUnixMs) =>
+        actualStartUnixMs > 0 &&
+        expectedStartUnixMs > 0 &&
+        Math.Abs(actualStartUnixMs - expectedStartUnixMs) <= 1000;
+
+    private static bool TryGetProcessStartUnixMs(Process process, out long startUnixMs)
+    {
+        startUnixMs = 0;
+        try
+        {
+            startUnixMs = new DateTimeOffset(process.StartTime).ToUnixTimeMilliseconds();
+            return startUnixMs > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try { File.Delete(path); }
+        catch { }
+    }
+
     private static Uri DiagnosticsUrlForListen(Uri listenUrl)
     {
         ValidateLoopbackHttpBase(listenUrl, "Protocol 3 sidecar listen URL");
@@ -373,6 +1107,17 @@ public sealed class Protocol3SidecarBridge : IDisposable
         {
             Path = "/api/diagnostics/v2",
             Query = string.Empty,
+            Fragment = string.Empty,
+        }.Uri;
+    }
+
+    private static Uri Endpoint(Uri diagnosticsUrl, string path, string? query = null)
+    {
+        ValidateDiagnosticsUrl(diagnosticsUrl);
+        return new UriBuilder(diagnosticsUrl)
+        {
+            Path = path,
+            Query = query ?? string.Empty,
             Fragment = string.Empty,
         }.Uri;
     }
@@ -415,12 +1160,53 @@ public sealed class Protocol3SidecarBridge : IDisposable
         return Path.GetFullPath(Environment.ExpandEnvironmentVariables(value));
     }
 
-    private bool BoolSetting(string key, string env)
+    private int IntSetting(string key, string env, int fallback)
     {
         var value = Setting(key, env);
+        if (string.IsNullOrWhiteSpace(value)) return fallback;
+        return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : fallback;
+    }
+
+    private bool BoolSetting(string key, string env, bool fallback = false)
+    {
+        var value = Setting(key, env);
+        if (string.IsNullOrWhiteSpace(value)) return fallback;
         return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void RememberConnection(
+        IPEndPoint radioEndpoint,
+        int p3Port,
+        int sampleRateHz,
+        int rxStreams,
+        StateDto initialState)
+    {
+        lock (_sync)
+        {
+            _lastConnection = new Protocol3SidecarConnection(
+                radioEndpoint,
+                p3Port,
+                sampleRateHz,
+                rxStreams,
+                initialState);
+            _lastReceiverState = initialState;
+            _lastReceiverRxStreams = rxStreams;
+            _lastReceiverSampleRateHz = sampleRateHz;
+        }
+    }
+
+    private void RememberReceiverState(StateDto state, int rxStreams, int sampleRateHz)
+    {
+        lock (_sync)
+        {
+            _lastReceiverState = state;
+            _lastReceiverRxStreams = rxStreams;
+            _lastReceiverSampleRateHz = sampleRateHz;
+        }
     }
 
     private void Remember(
@@ -428,7 +1214,8 @@ public sealed class Protocol3SidecarBridge : IDisposable
         bool ownsProcess,
         Process? process,
         Uri? diagnosticsUrl = null,
-        ProcessOutputTail? output = null)
+        ProcessOutputTail? output = null,
+        int txIqIngestPort = 0)
     {
         lock (_sync)
         {
@@ -438,6 +1225,283 @@ public sealed class Protocol3SidecarBridge : IDisposable
             _processOutput = output;
             _diagnosticsUrl = diagnosticsUrl ?? snapshot?.DiagnosticsUrl;
         }
+        ConfigureTxIqIngest(txIqIngestPort);
+    }
+
+    private void ClearTxIqIngest()
+    {
+        DisarmTxIqStreaming();
+        CancellationTokenSource? cts;
+        Task? task;
+        lock (_txIqSync)
+        {
+            _txIqIngestEndpoint = null;
+            _txIqSendQueue?.Writer.TryComplete();
+            _txIqSendQueue = null;
+            cts = _txIqSendCts;
+            task = _txIqSendTask;
+            _txIqSendCts = null;
+            _txIqSendTask = null;
+            _txIqPacketBytes = 0;
+            _txIqQueueDepth = 0;
+        }
+        CancelAndDisposeTxIqSender(cts, task);
+    }
+
+    private void ConfigureTxIqIngest(int txIqIngestPort)
+    {
+        DisarmTxIqStreaming();
+        CancellationTokenSource? oldCts;
+        Task? oldTask;
+        lock (_txIqSync)
+        {
+            _txIqSendQueue?.Writer.TryComplete();
+            oldCts = _txIqSendCts;
+            oldTask = _txIqSendTask;
+            _txIqSendQueue = null;
+            _txIqSendCts = null;
+            _txIqSendTask = null;
+            _txIqPacketBytes = 0;
+            _txIqQueueDepth = 0;
+
+            if (txIqIngestPort <= 0)
+            {
+                _txIqIngestEndpoint = null;
+                CancelAndDisposeTxIqSender(oldCts, oldTask);
+                return;
+            }
+
+            var endpoint = new IPEndPoint(IPAddress.Loopback, txIqIngestPort);
+            var queue = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(TxIqSendQueueCapacity)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = true,
+                SingleWriter = false,
+                AllowSynchronousContinuations = false,
+            });
+            var cts = new CancellationTokenSource();
+
+            _txIqIngestEndpoint = endpoint;
+            _txIqSendQueue = queue;
+            _txIqSendCts = cts;
+            _txIqSendTask = Task.Run(
+                () => RunTxIqSenderAsync(queue.Reader, endpoint, cts.Token),
+                CancellationToken.None);
+        }
+        CancelAndDisposeTxIqSender(oldCts, oldTask);
+    }
+
+    private void ResetTxIqSendQueue()
+    {
+        DisarmTxIqStreaming();
+        int port;
+        lock (_txIqSync)
+        {
+            port = _txIqIngestEndpoint?.Port ?? 0;
+        }
+        if (port > 0) ConfigureTxIqIngest(port);
+    }
+
+    private void DisarmTxIqStreaming()
+    {
+        Volatile.Write(ref _txIqStreamingArmed, 0);
+    }
+
+    private static void CancelAndDisposeTxIqSender(CancellationTokenSource? cts, Task? task)
+    {
+        if (cts is null) return;
+        try { cts.Cancel(); }
+        catch (ObjectDisposedException) { return; }
+
+        if (task is null || task.IsCompleted)
+        {
+            try { cts.Dispose(); }
+            catch (ObjectDisposedException) { }
+            return;
+        }
+
+        _ = task.ContinueWith(
+            _ =>
+            {
+                try { cts.Dispose(); }
+                catch (ObjectDisposedException) { }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private void StartTxControlKeepalive(string payload)
+    {
+        CancellationTokenSource? oldCts = null;
+        Task? oldTask = null;
+        lock (_txControlKeepaliveSync)
+        {
+            _txControlKeepalivePayload = payload;
+            if (_txControlKeepaliveTask is { IsCompleted: false })
+                return;
+
+            oldCts = _txControlKeepaliveCts;
+            oldTask = _txControlKeepaliveTask;
+            var cts = new CancellationTokenSource();
+            _txControlKeepaliveCts = cts;
+            _txControlKeepaliveTask = Task.Run(
+                () => RunTxControlKeepaliveAsync(cts.Token),
+                CancellationToken.None);
+        }
+        CancelAndDisposeTxControlKeepalive(oldCts, oldTask);
+    }
+
+    private void StopTxControlKeepalive()
+    {
+        CancellationTokenSource? cts;
+        Task? task;
+        lock (_txControlKeepaliveSync)
+        {
+            _txControlKeepalivePayload = null;
+            cts = _txControlKeepaliveCts;
+            task = _txControlKeepaliveTask;
+            _txControlKeepaliveCts = null;
+            _txControlKeepaliveTask = null;
+        }
+        CancelAndDisposeTxControlKeepalive(cts, task);
+    }
+
+    private static void CancelAndDisposeTxControlKeepalive(CancellationTokenSource? cts, Task? task)
+    {
+        if (cts is null) return;
+        try { cts.Cancel(); }
+        catch (ObjectDisposedException) { return; }
+
+        if (task is null || task.IsCompleted)
+        {
+            try { cts.Dispose(); }
+            catch (ObjectDisposedException) { }
+            return;
+        }
+
+        _ = task.ContinueWith(
+            _ =>
+            {
+                try { cts.Dispose(); }
+                catch (ObjectDisposedException) { }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private async Task RunTxControlKeepaliveAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(TxControlKeepalivePeriodMs, ct).ConfigureAwait(false);
+                string? payload;
+                lock (_txControlKeepaliveSync)
+                {
+                    payload = _txControlKeepalivePayload;
+                }
+                if (string.IsNullOrWhiteSpace(payload))
+                    continue;
+
+                Interlocked.Increment(ref _txControlPosts);
+                try
+                {
+                    await PostControlAsync("/api/control/tx/control", payload, "TX control keepalive", ct)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "p3.sidecar.tx-control.keepalive.failed");
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private void EnqueueTxIqPacketLocked(Channel<byte[]> queue)
+    {
+        var packet = new byte[TxIqPayloadBytes];
+        Buffer.BlockCopy(_txIqPacket, 0, packet, 0, TxIqPayloadBytes);
+        if (queue.Writer.TryWrite(packet))
+        {
+            _txIqQueueDepth++;
+            Interlocked.Increment(ref _txIqPacketsQueued);
+        }
+        else
+        {
+            Interlocked.Increment(ref _txIqQueueDropped);
+        }
+        _txIqPacketBytes = 0;
+    }
+
+    private async Task RunTxIqSenderAsync(
+        ChannelReader<byte[]> reader,
+        IPEndPoint endpoint,
+        CancellationToken ct)
+    {
+        using var udp = new UdpClient(AddressFamily.InterNetwork);
+
+        try
+        {
+            while (await reader.WaitToReadAsync(ct).ConfigureAwait(false))
+            {
+                while (reader.TryRead(out var packet))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    SendTxIqPacket(udp, endpoint, packet);
+                    lock (_txIqSync)
+                    {
+                        if (_txIqQueueDepth > 0) _txIqQueueDepth--;
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (ChannelClosedException) { }
+    }
+
+    private void SendTxIqPacket(UdpClient udp, IPEndPoint endpoint, byte[] packet)
+    {
+        try
+        {
+            udp.Send(packet, packet.Length, endpoint);
+            MarkTxActivity();
+            Interlocked.Increment(ref _txIqPacketsSent);
+        }
+        catch (SocketException ex)
+        {
+            Interlocked.Increment(ref _txIqPacketsDropped);
+            _log.LogDebug(ex, "p3.sidecar.tx_iq.send_failed endpoint={Endpoint}", endpoint);
+        }
+        catch (ObjectDisposedException ex)
+        {
+            Interlocked.Increment(ref _txIqPacketsDropped);
+            _log.LogDebug(ex, "p3.sidecar.tx_iq.send_disposed endpoint={Endpoint}", endpoint);
+        }
+    }
+
+    private void MarkTxActivity() =>
+        Interlocked.Exchange(ref _lastTxActivityUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+    private static int FloatToS24(float sample)
+    {
+        if (!float.IsFinite(sample)) return 0;
+        var scaled = (int)MathF.Round(Math.Clamp(sample, -1f, 1f) * TxIqS24Max);
+        return Math.Clamp(scaled, TxIqS24Min, TxIqS24Max);
+    }
+
+    private static void WriteS24BigEndian(byte[] buffer, int offset, int value)
+    {
+        buffer[offset] = (byte)((value >> 16) & 0xff);
+        buffer[offset + 1] = (byte)((value >> 8) & 0xff);
+        buffer[offset + 2] = (byte)(value & 0xff);
     }
 
     private bool HasOwnedProcessExited(out int? exitCode, out string output)

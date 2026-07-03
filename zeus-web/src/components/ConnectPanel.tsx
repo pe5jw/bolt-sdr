@@ -66,6 +66,7 @@ import {
   ApiError,
   type PrefsDatabaseInfo,
   type RadioInfoDto,
+  type RadioStateDto,
   type Protocol3SidecarStatusDto,
 } from '../api/client';
 import {
@@ -740,11 +741,24 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         if (p3SidecarUnavailable) {
           throw new Error(PROTOCOL3_SIDECAR_UNCONFIGURED_TITLE);
         }
-        await apiConnectP3({
-          endpoint: ep,
-          sampleRate: 1_536_000,
-        });
-        const fresh = await fetchState();
+        let fresh: RadioStateDto | null = null;
+        try {
+          await apiConnectP3({
+            endpoint: ep,
+            sampleRate: 1_536_000,
+          });
+        } catch (err) {
+          if (!errorMessage(err).includes('Already connected')) throw err;
+          fresh = await fetchState();
+          if (
+            fresh.status !== 'Connected' ||
+            fresh.connectedProtocol !== 'P3' ||
+            fresh.endpoint !== ep
+          ) {
+            throw err;
+          }
+        }
+        fresh ??= await fetchState();
         applyState(fresh);
         hydrateTxFromState(fresh);
       } else if (isP2) {

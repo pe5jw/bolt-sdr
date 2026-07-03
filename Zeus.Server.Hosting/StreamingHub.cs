@@ -159,6 +159,7 @@ public sealed class StreamingHub
     // this once per tick to skip WDSP analyzer reads and frame serialisation
     // for control-only clients.
     private int _displayStreamRequests;
+    private int _preferredDisplayStreamRequests;
 
     /// <summary>
     /// True when at least one connected client has requested the RX audio
@@ -169,6 +170,8 @@ public sealed class StreamingHub
     internal bool DisplayStreamRequested => Volatile.Read(ref _displayStreamRequests) > 0;
 
     internal int DisplaySubscriberCount => Volatile.Read(ref _displayStreamRequests);
+
+    internal int PreferredDisplaySubscriberCount => Volatile.Read(ref _preferredDisplayStreamRequests);
 
     public StreamingHub(ILogger<StreamingHub> log)
     {
@@ -213,6 +216,7 @@ public sealed class StreamingHub
         connectedClients = ClientCount,
         audioSubscribers = Volatile.Read(ref _audioStreamRequests),
         displaySubscribers = Volatile.Read(ref _displayStreamRequests),
+        preferredDisplaySubscribers = Volatile.Read(ref _preferredDisplayStreamRequests),
         drops = new
         {
             audio = System.Threading.Interlocked.Read(ref _dropsAudio),
@@ -497,9 +501,14 @@ public sealed class StreamingHub
         var payload = new byte[total];
         var writer = new FixedBufferWriter(payload, total);
         frame.Serialize(writer);
+        var preferredDisplayRequested = Volatile.Read(ref _preferredDisplayStreamRequests) > 0;
         foreach (var client in _clients.Values)
         {
-            if (!client.WantsDisplay) continue;
+            if (client is ClientSession session)
+            {
+                if (!session.WantsDisplay) continue;
+                if (preferredDisplayRequested && !session.PrefersDisplay) continue;
+            }
             if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsDisplay);
         }
     }
@@ -938,14 +947,20 @@ public sealed class StreamingHub
         // (panadapter / waterfall / mini-pan). Broadcast reads this from the
         // DSP thread, so store it as an int and use Volatile/Interlocked.
         private int _wantsDisplay;
+        private int _prefersDisplay;
         public bool WantsDisplay => Volatile.Read(ref _wantsDisplay) != 0;
+        public bool PrefersDisplay => Volatile.Read(ref _prefersDisplay) != 0;
 
-        public void SetWantsDisplay(bool want)
+        public void SetWantsDisplay(bool want, bool preferred = false)
         {
             int next = want ? 1 : 0;
+            int nextPreferred = want && preferred ? 1 : 0;
             int prev = Interlocked.Exchange(ref _wantsDisplay, next);
-            if (prev == next) return;
-            Interlocked.Add(ref _hub._displayStreamRequests, want ? 1 : -1);
+            int prevPreferred = Interlocked.Exchange(ref _prefersDisplay, nextPreferred);
+            if (prev != next)
+                Interlocked.Add(ref _hub._displayStreamRequests, next - prev);
+            if (prevPreferred != nextPreferred)
+                Interlocked.Add(ref _hub._preferredDisplayStreamRequests, nextPreferred - prevPreferred);
         }
 
         // Intercept the client→server control frame here (we have the session
@@ -959,7 +974,8 @@ public sealed class StreamingHub
             }
             if (frame.Length >= 1 && frame.Span[0] == MsgTypeDisplayStreamRequest)
             {
-                SetWantsDisplay(frame.Length > 1 && frame.Span[1] != 0);
+                var level = frame.Length > 1 ? frame.Span[1] : (byte)0;
+                SetWantsDisplay(level != 0, preferred: level >= 2);
                 return;
             }
             _hub.DispatchInbound(frame);

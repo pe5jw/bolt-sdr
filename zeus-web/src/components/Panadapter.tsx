@@ -118,7 +118,7 @@ export function Panadapter({
     // the context we're about to (re)create (mirrors Waterfall.tsx, #629).
     cancelPendingPanContextLoss(canvas);
 
-    const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, premultipliedAlpha: true });
+    const gl = canvas.getContext('webgl2', { antialias: false, alpha: true, premultipliedAlpha: true });
     if (!gl) {
       console.error('WebGL2 not available');
       return;

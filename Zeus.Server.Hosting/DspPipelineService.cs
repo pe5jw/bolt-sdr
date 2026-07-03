@@ -761,6 +761,7 @@ public class DspPipelineService : BackgroundService,
     // growing a P2 variant there would require a larger refactor; for now
     // keeping it isolated avoids touching any P1 behavior.
     private Zeus.Protocol2.Protocol2Client? _p2Client;
+    private readonly Protocol3SidecarBridge? _p3Sidecar;
 
     // Protocol-2 wideband display mode. The radio transport is enabled only
     // when this user setting is on AND at least one display client is mounted.
@@ -1293,7 +1294,8 @@ public class DspPipelineService : BackgroundService,
         Nr3ModelStore? nr3ModelStore = null,
         IKiwiAudioBus? kiwiAudioBus = null,
         RxAudioMuteState? rxAudioMute = null,
-        TxIqRing? txIqRing = null)
+        TxIqRing? txIqRing = null,
+        Protocol3SidecarBridge? p3Sidecar = null)
     {
         _radio = radio;
         _hub = hub;
@@ -1301,6 +1303,7 @@ public class DspPipelineService : BackgroundService,
         _freeDv = freeDv;
         _kiwiAudioBus = kiwiAudioBus;
         _rxAudioMute = rxAudioMute;
+        _p3Sidecar = p3Sidecar;
         // Materialise once at construction so the per-tick fan-out is an
         // array-index loop (no enumerator allocation, no LINQ on the hot path).
         _audioSinks = audioSinks.ToArray();
@@ -4963,13 +4966,89 @@ public class DspPipelineService : BackgroundService,
     }
 
     /// <summary>
-    /// Forward a WDSP TXA block of interleaved float IQ to the live P2 client.
-    /// No-op when P2 isn't connected; safe to call from TxTuneDriver / future
-    /// mic-MOX feeders without branching on protocol.
+    /// Forward a WDSP TXA block of interleaved float IQ to the live protocol
+    /// client. P2 sends directly to the radio DUC; P3 sends the same IQ
+    /// payload into the hosted sidecar's credit-paced TX egress.
     /// </summary>
     public void ForwardTxIqToP2(ReadOnlySpan<float> iqInterleaved)
     {
         _p2Client?.SendTxIq(iqInterleaved);
+        if (_radio.IsProtocol3Active)
+            _p3Sidecar?.ForwardTxIq(iqInterleaved);
+    }
+
+    /// <summary>
+    /// Protocol 3 RX/display/audio is supplied by the hosted sidecar, but Zeus
+    /// still owns the local WDSP TXA chain. Open that TX path explicitly on P3
+    /// connect so MOX/TUN can produce 192 kHz IQ for the sidecar TX ingress.
+    /// </summary>
+    public int ConnectP3TxEngine(int sampleRateHz)
+    {
+        int rateHz = sampleRateHz > 0 ? sampleRateHz : 192_000;
+
+        var current = Volatile.Read(ref _engine);
+        if (current is WdspDspEngine && Volatile.Read(ref _sampleRateHz) == rateHz)
+            return rateHz;
+
+        var wdsp = new WdspDspEngine(_loggerFactory.CreateLogger<WdspDspEngine>());
+        int channelId = wdsp.OpenChannel(rateHz, Width);
+        SeedTxDisplayConfig(wdsp);
+        // Saturn/G2 DUC-compatible host-IQ mode is 48 kHz mic -> 96 kHz DSP ->
+        // 192 kHz IQ, matching the proven P2 G2 path.
+        wdsp.OpenTxChannel(outputRateHz: 192_000);
+        try { ApplyStateToNewChannel(wdsp, channelId); }
+        catch (EntryPointNotFoundException ex)
+        {
+            _log.LogWarning(ex, "dsp.pipeline p3 wdsp missing entry point - partial config applied");
+        }
+
+        IDspEngine? old;
+        int oldChannel;
+        lock (_engineLock)
+        {
+            old = _engine;
+            oldChannel = _channelId;
+            Volatile.Write(ref _engine, wdsp);
+            Volatile.Write(ref _channelId, channelId);
+            ResetSecondaryRxChannels();
+            Volatile.Write(ref _sampleRateHz, rateHz);
+        }
+
+        TeardownEngine(old, oldChannel);
+        _psResyncRequired = true;
+        _appliedTxMonitorEnabled = false;
+        _log.LogInformation("dsp.pipeline p3 tx engine=wdsp channel={Id} rxRate={Rate} txIqRate=192000", channelId, rateHz);
+        RaiseEngineChanged(wdsp);
+        OnRadioStateChanged(_radio.Snapshot());
+        return rateHz;
+    }
+
+    public void DisconnectP3TxEngine()
+    {
+        if (!_radio.IsProtocol3Active && Volatile.Read(ref _engine) is SyntheticDspEngine)
+            return;
+
+        var synth = new SyntheticDspEngine();
+        int channelId = synth.OpenChannel(SyntheticSampleRateHz, Width);
+        ApplyStateToNewChannel(synth, channelId);
+
+        IDspEngine? old;
+        int oldChannel;
+        lock (_engineLock)
+        {
+            old = _engine;
+            oldChannel = _channelId;
+            Volatile.Write(ref _engine, synth);
+            Volatile.Write(ref _channelId, channelId);
+            ResetSecondaryRxChannels();
+            Volatile.Write(ref _sampleRateHz, SyntheticSampleRateHz);
+        }
+
+        TeardownEngine(old, oldChannel);
+        _psResyncRequired = true;
+        _appliedTxMonitorEnabled = false;
+        RaiseEngineChanged(synth);
+        _log.LogInformation("dsp.pipeline p3 tx disconnected, engine=synthetic");
     }
 
     public async Task DisconnectP2Async(CancellationToken ct)

@@ -49,6 +49,12 @@ function stubFetch(statusCode: number, pluginIds: string[] = []) {
   return fn;
 }
 
+function installDigitalPlugin() {
+  usePluginsStore.setState({
+    installed: [parsePluginDto({ id: DIGITAL_PLUGIN_ID, name: 'Zeus Digital' })],
+  });
+}
+
 describe('digital-plugin-store', () => {
   beforeEach(() => {
     stubFetch(200);
@@ -62,6 +68,7 @@ describe('digital-plugin-store', () => {
   });
 
   it('probe marks live on a 2xx /status', async () => {
+    installDigitalPlugin();
     await useDigitalPluginStore.getState().probe();
     expect(useDigitalPluginStore.getState().live).toBe(true);
     expect(useDigitalPluginStore.getState().probed).toBe(true);
@@ -69,6 +76,7 @@ describe('digital-plugin-store', () => {
 
   it('probe marks NOT live on 404 (installed but not restarted)', async () => {
     stubFetch(404);
+    installDigitalPlugin();
     await useDigitalPluginStore.getState().probe();
     expect(useDigitalPluginStore.getState().live).toBe(false);
     expect(useDigitalPluginStore.getState().probed).toBe(true);
@@ -76,15 +84,26 @@ describe('digital-plugin-store', () => {
 
   it('probe marks NOT live on 503 (zombie-route guard after shutdown)', async () => {
     stubFetch(503);
+    installDigitalPlugin();
     await useDigitalPluginStore.getState().probe();
     expect(useDigitalPluginStore.getState().live).toBe(false);
   });
 
   it('probe marks NOT live on a network error', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new Error('offline'))) as never);
+    installDigitalPlugin();
     await useDigitalPluginStore.getState().probe();
     expect(useDigitalPluginStore.getState().live).toBe(false);
     expect(useDigitalPluginStore.getState().probed).toBe(true);
+  });
+
+  it('does not fetch /status when the plugin is not installed', async () => {
+    const fn = stubFetch(404);
+    await useDigitalPluginStore.getState().probe();
+    expect(useDigitalPluginStore.getState().installed).toBe(false);
+    expect(useDigitalPluginStore.getState().live).toBe(false);
+    expect(useDigitalPluginStore.getState().probed).toBe(true);
+    expect(fn.mock.calls.some((c) => String(c[0]) === `${DIGITAL_PLUGIN_BASE}/status`)).toBe(false);
   });
 
   it('installed follows the plugins-store list and re-probes on change', async () => {

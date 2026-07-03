@@ -6,6 +6,7 @@
 // endpoint definition.
 
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Net;
 using Zeus.Contracts;
 using Zeus.Plugins.Host;
@@ -29,6 +30,7 @@ public static class ZeusEndpoints
     public static WebApplication MapZeusEndpoints(this WebApplication app)
     {
         var log = app.Services.GetRequiredService<ILogger<object>>();
+        var configuration = app.Configuration;
 
         // Live Diagnostics API v2 — unified, registry-driven surface
         // (/api/diagnostics/v2). Legacy diagnostics routes below delegate to
@@ -1500,18 +1502,39 @@ public static class ZeusEndpoints
             ConnectRequest req,
             Protocol3PresenceProbe p3Presence,
             Protocol3SidecarBridge sidecar,
+            DspPipelineService dsp,
             RadioService radio,
             HttpContext ctx) =>
         {
-            const int p3RxStreams = Zeus.Contracts.WireContract.MaxReceivers;
-            const int p3RxRateHz = 1_536_000;
+            var p3RxRateHz = Protocol3RxRateHz(configuration);
 
             log.LogInformation("api.connect.p3 endpoint={Ep}", req.Endpoint);
 
             if (!TryParseIpEndpoint(req.Endpoint, out var ipEndpoint))
                 return Results.BadRequest(new { error = $"Invalid endpoint '{req.Endpoint}'." });
             if (radio.IsConnected)
+            {
+                var currentState = radio.Snapshot();
+                if (radio.IsProtocol3Active && SameIpEndpoint(currentState.Endpoint, ipEndpoint))
+                {
+                    return Results.Ok(new
+                    {
+                        protocol = "P3",
+                        endpoint = currentState.Endpoint ?? req.Endpoint,
+                        sampleRateHz = currentState.SampleRate,
+                        maxReceivers = currentState.MaxReceivers,
+                        hardwareMaxReceivers = currentState.MaxReceivers,
+                        diagnosticsUrl = sidecar.DiagnosticsUrl?.ToString(),
+                        dspEngine = "n9dsp",
+                        txEngine = "WDSP",
+                        txEngineRateHz = currentState.SampleRate,
+                        txIqRateHz = 192_000,
+                        alreadyConnected = true,
+                    });
+                }
+
                 return Results.Conflict(new { error = "Already connected. Disconnect first." });
+            }
 
             var p3 = await p3Presence
                 .ProbeAsync(ipEndpoint.Address, TimeSpan.FromMilliseconds(700), ctx.RequestAborted)
@@ -1522,6 +1545,9 @@ public static class ZeusEndpoints
                     new { error = "Protocol 3 p3app was not detected on this radio.", protocol3Available = false },
                     statusCode: StatusCodes.Status409Conflict);
             }
+            var initialState = radio.Snapshot();
+            var p3MaxRxStreams = p3.MaxRxStreams > int.MaxValue ? int.MaxValue : (int)p3.MaxRxStreams;
+            var p3RxStreams = Protocol3RequestedRxStreams(initialState, p3MaxRxStreams);
             if (p3.MaxRxStreams < p3RxStreams)
             {
                 return Results.Json(
@@ -1536,21 +1562,28 @@ public static class ZeusEndpoints
             try
             {
                 var snapshot = await sidecar
-                    .ConnectAsync(ipEndpoint, p3.Port, p3RxRateHz, p3RxStreams, ctx.RequestAborted)
+                    .ConnectAsync(ipEndpoint, p3.Port, p3RxRateHz, p3RxStreams, initialState, ctx.RequestAborted)
                     .ConfigureAwait(false);
                 radio.MarkProtocol3Connected(
                     req.Endpoint,
                     p3RxRateHz,
                     Math.Min(snapshot.RxActiveStreams, Zeus.Contracts.WireContract.MaxReceivers),
                     p3.FirmwareVersion.ToString());
+                var txEngineRateHz = dsp.ConnectP3TxEngine(p3RxRateHz);
+                radio.ReplayPaSnapshot();
+                radio.ReplayAudioFrontEnd();
                 return Results.Ok(new
                 {
                     protocol = "P3",
                     endpoint = req.Endpoint,
                     sampleRateHz = p3RxRateHz,
                     maxReceivers = snapshot.RxActiveStreams,
+                    hardwareMaxReceivers = p3.MaxRxStreams,
                     diagnosticsUrl = snapshot.DiagnosticsUrl.ToString(),
                     dspEngine = snapshot.DspEngine,
+                    txEngine = "WDSP",
+                    txEngineRateHz,
+                    txIqRateHz = 192_000,
                 });
             }
             catch (InvalidOperationException ex)
@@ -1574,6 +1607,7 @@ public static class ZeusEndpoints
 
         app.MapPost("/api/disconnect/p3", async (
             Protocol3SidecarBridge sidecar,
+            DspPipelineService dsp,
             RadioService radio,
             HttpContext ctx) =>
         {
@@ -1581,15 +1615,25 @@ public static class ZeusEndpoints
             await sidecar.DisconnectAsync(ctx.RequestAborted);
             if (radio.IsProtocol3Active)
                 radio.MarkProtocol3Disconnected();
+            dsp.DisconnectP3TxEngine();
             return Results.Ok(new { status = "disconnected" });
         });
 
-        app.MapGet("/api/protocol3/sidecar", (Protocol3SidecarBridge sidecar) =>
-            Results.Ok(sidecar.Status));
+        app.MapGet("/api/protocol3/sidecar", (
+            Protocol3SidecarBridge sidecar,
+            Protocol3SidecarFrameForwarder frames,
+            Protocol3SidecarControlForwarder control) =>
+            Results.Ok(new
+            {
+                bridge = sidecar.Status,
+                frames = frames.Status,
+                control = control.Status,
+            }));
 
         app.MapPost("/api/disconnect", async (
             RadioService r,
             Protocol3SidecarBridge sidecar,
+            DspPipelineService dsp,
             HttpContext ctx) =>
         {
             log.LogInformation("api.disconnect");
@@ -1597,6 +1641,7 @@ public static class ZeusEndpoints
             {
                 await sidecar.DisconnectAsync(ctx.RequestAborted);
                 r.MarkProtocol3Disconnected();
+                dsp.DisconnectP3TxEngine();
                 return Results.Ok(r.Snapshot());
             }
             return Results.Ok(await r.DisconnectAsync(ctx.RequestAborted));
@@ -4636,6 +4681,56 @@ public static class ZeusEndpoints
         if (!IPAddress.TryParse(host, out var ip)) return false;
         ep = new IPEndPoint(ip, port);
         return true;
+    }
+
+    internal static bool SameIpEndpoint(string? current, IPEndPoint requested)
+    {
+        if (string.IsNullOrWhiteSpace(current))
+            return false;
+        return TryParseIpEndpoint(current, out var parsed) &&
+               parsed.Address.Equals(requested.Address) &&
+               parsed.Port == requested.Port;
+    }
+
+    internal static int Protocol3RequestedRxStreams(StateDto state, int radioMaxRxStreams)
+    {
+        var cappedMax = Math.Clamp(radioMaxRxStreams, 1, WireContract.MaxReceivers);
+        var requested = 1;
+
+        if (state.Rx2Enabled)
+            requested = 2;
+
+        if (state.Receivers is not null)
+        {
+            foreach (var receiver in state.Receivers)
+            {
+                if (!receiver.Enabled)
+                    continue;
+                if (receiver.Index < 0 || receiver.Index >= WireContract.MaxReceivers)
+                    continue;
+                requested = Math.Max(requested, receiver.Index + 1);
+            }
+        }
+
+        return Math.Clamp(requested, 1, cappedMax);
+    }
+
+    internal static int Protocol3RxRateHz(IConfiguration configuration)
+    {
+        const int fallback = 192_000;
+        var raw = Environment.GetEnvironmentVariable("ZEUS_PROTOCOL3_RX_RATE_HZ");
+        if (string.IsNullOrWhiteSpace(raw))
+            raw = configuration["Zeus:Protocol3:RxRateHz"] ??
+                  configuration["Zeus:Protocol3:Sidecar:RxRateHz"];
+        if (string.IsNullOrWhiteSpace(raw))
+            return fallback;
+        if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+            return fallback;
+
+        var rateHz = parsed < 10_000 ? checked(parsed * 1000) : parsed;
+        return rateHz is 48_000 or 96_000 or 192_000 or 384_000 or 768_000 or 1_536_000
+            ? rateHz
+            : fallback;
     }
 
     // Connect-time projection of the discovered board byte → kind. Protocol 1

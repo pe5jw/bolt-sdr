@@ -33,6 +33,17 @@ public sealed class NativeAudioSinkDiagnosticsTests
         Assert.Equal(0L, d.OverrunSamplesTotal);
         Assert.Equal(0L, d.RebufferEvents);
         Assert.Equal(0, d.RingDepthSamples);
+        Assert.False(d.OutputOpen);
+        Assert.Null(d.ConfiguredOutputDeviceId);
+        Assert.Null(d.ActiveOutputDeviceId);
+        Assert.Equal(0, d.OutputSampleRateHz);
+        Assert.Equal(0, d.OutputChannels);
+        Assert.Equal(0L, d.TotalSamplesIn);
+        Assert.Equal(0L, d.TotalSamplesOut);
+        Assert.Equal(0L, d.DroppedFormatSamplesTotal);
+        Assert.Equal(0L, d.DroppedMutedSamplesTotal);
+        Assert.Equal(0, d.LastInputSampleRateHz);
+        Assert.Equal(0, d.LastInputChannels);
         // A fresh sink starts in the rebuffering state — it holds silence until
         // the prebuffer cushion fills before (re)starting playback.
         Assert.True(d.Rebuffering);

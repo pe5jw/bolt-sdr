@@ -326,10 +326,19 @@ public static class ZeusHost
         builder.Services.AddSingleton<Protocol3PresenceProbe>();
         builder.Services.AddHttpClient(Protocol3SidecarBridge.HttpClientName, c =>
         {
-            c.Timeout = TimeSpan.FromSeconds(3);
+            c.Timeout = TimeSpan.FromSeconds(15);
             c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus");
         });
+        builder.Logging.AddFilter(
+            $"System.Net.Http.HttpClient.{Protocol3SidecarBridge.HttpClientName}",
+            LogLevel.Warning);
         builder.Services.AddSingleton<Protocol3SidecarBridge>();
+        builder.Services.AddSingleton<Protocol3SidecarFrameForwarder>();
+        builder.Services.AddSingleton<Protocol3SidecarControlForwarder>();
+        builder.Services.AddHostedService(sp =>
+            sp.GetRequiredService<Protocol3SidecarControlForwarder>());
+        builder.Services.AddHostedService(sp =>
+            sp.GetRequiredService<Protocol3SidecarFrameForwarder>());
         // TxIqRing is shared: TxAudioIngest writes modulated IQ into it, Protocol1Client
         // (constructed inside RadioService) reads from it for the EP2 payload.
         builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();

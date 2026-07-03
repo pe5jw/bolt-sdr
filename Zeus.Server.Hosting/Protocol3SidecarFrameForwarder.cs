@@ -1,0 +1,889 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Zeus - OpenHPSDR Protocol-1 / Protocol-2 client.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF),
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
+
+using System.Buffers.Binary;
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text.Json.Nodes;
+using Zeus.Contracts;
+
+namespace Zeus.Server;
+
+public sealed class Protocol3SidecarFrameForwarder : BackgroundService
+{
+    private const float DisplayFloorDb = -140.0f;
+    private const int DefaultDisplayPollMs = 33;
+    private const int DefaultDisplayMaxWidth = 2048;
+    private const int DefaultAudioPollMs = 10;
+    private const int MaxDisplayWidth = ushort.MaxValue;
+    private const int MaxAudioFramesPerPoll = 64;
+    private const int MaxRadioMicPacketsPerPoll = 128;
+    private const int MaxAudioPayloadBytes = 2 * 1024 * 1024;
+    private const int MaxRadioMicPayloadBytes = RadioMicReceiver.PacketBytes * MaxRadioMicPacketsPerPoll;
+    private const bool DefaultReverseDisplayBins = false;
+    private const int HealthPollMs = 1000;
+    private const int IncompleteRxRestartPolls = 150;
+    private const int StaleAudioRestartMs = 2500;
+    private const int RestartCooldownMs = 5000;
+    private const int TxActivityRestartGraceMs = 10000;
+
+    private readonly RadioService _radio;
+    private readonly Protocol3SidecarBridge _sidecar;
+    private readonly StreamingHub _hub;
+    private readonly IRxAudioSink[] _audioSinks;
+    private readonly TxAudioIngest _txIngest;
+    private readonly RadioMicReceiver _radioMicReceiver;
+    private readonly IHttpClientFactory _httpFactory;
+    private readonly HttpClient _http;
+    private readonly ILogger<Protocol3SidecarFrameForwarder> _log;
+    private readonly int _displayPollMs;
+    private readonly int _displayMaxWidth;
+    private readonly int _audioPollMs;
+    private readonly bool _reverseDisplayBins;
+
+    private long _displayFramesForwarded;
+    private long _audioFramesForwarded;
+    private long _radioMicPacketsForwarded;
+    private long _displayPollFailures;
+    private long _audioPollFailures;
+    private long _radioMicPollFailures;
+    private long _lastDisplayFrameUnixMs;
+    private long _lastAudioFrameUnixMs;
+    private long _lastRadioMicPacketUnixMs;
+    private long _lastDisplayFailureLogMs;
+    private long _lastAudioFailureLogMs;
+    private long _lastRadioMicFailureLogMs;
+    private long _lastHealthPollUnixMs;
+    private long _lastRestartRequestUnixMs;
+    private long _lastTxActivityUnixMs;
+    private long _healthPollFailures;
+    private long _restartRequests;
+    private string? _lastRestartReason;
+    private int _lastDisplayWidth;
+    private int _lastDisplayRxId;
+    private int _lastDisplayHzPerPixelBits;
+    private int _lastAudioRxId;
+    private int _lastAudioSampleRateHz;
+    private int _lastAudioSampleCount;
+    private int _running;
+    private uint _displaySeq;
+
+    public Protocol3SidecarFrameForwarder(
+        RadioService radio,
+        Protocol3SidecarBridge sidecar,
+        StreamingHub hub,
+        IEnumerable<IRxAudioSink> audioSinks,
+        TxAudioIngest txIngest,
+        IHttpClientFactory httpFactory,
+        IConfiguration configuration,
+        ILogger<Protocol3SidecarFrameForwarder> log)
+    {
+        _radio = radio;
+        _sidecar = sidecar;
+        _hub = hub;
+        _audioSinks = audioSinks.ToArray();
+        _txIngest = txIngest;
+        _radioMicReceiver = new RadioMicReceiver(
+            block => txIngest.OnMicPcmBytesFromRadioMic(block),
+            log);
+        _httpFactory = httpFactory;
+        _http = httpFactory.CreateClient(Protocol3SidecarBridge.HttpClientName);
+        _log = log;
+        _displayPollMs = ResolveDisplayPollMs(configuration);
+        _displayMaxWidth = ResolveDisplayMaxWidth(configuration);
+        _audioPollMs = ResolveAudioPollMs(configuration);
+        _reverseDisplayBins = ResolveReverseDisplayBins(configuration);
+    }
+
+    public object Status
+    {
+        get
+        {
+            var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var displayMs = Interlocked.Read(ref _lastDisplayFrameUnixMs);
+            var audioMs = Interlocked.Read(ref _lastAudioFrameUnixMs);
+            var radioMicMs = Interlocked.Read(ref _lastRadioMicPacketUnixMs);
+            return new
+            {
+                running = Volatile.Read(ref _running) != 0,
+                display = new
+                {
+                    framesForwarded = Interlocked.Read(ref _displayFramesForwarded),
+                    pollFailures = Interlocked.Read(ref _displayPollFailures),
+                    lastFrameUnixMs = displayMs > 0 ? displayMs : (long?)null,
+                    lastFrameAgeMs = displayMs > 0 ? Math.Max(0, nowMs - displayMs) : (long?)null,
+                    lastRxId = Volatile.Read(ref _lastDisplayRxId),
+                    lastWidth = Volatile.Read(ref _lastDisplayWidth),
+                    maxWidth = _displayMaxWidth,
+                    lastHzPerPixel = BitConverter.Int32BitsToSingle(Volatile.Read(ref _lastDisplayHzPerPixelBits)),
+                    reverseDisplayBins = _reverseDisplayBins,
+                    pollMs = _displayPollMs,
+                },
+                audio = new
+                {
+                    framesForwarded = Interlocked.Read(ref _audioFramesForwarded),
+                    pollFailures = Interlocked.Read(ref _audioPollFailures),
+                    lastFrameUnixMs = audioMs > 0 ? audioMs : (long?)null,
+                    lastFrameAgeMs = audioMs > 0 ? Math.Max(0, nowMs - audioMs) : (long?)null,
+                    lastRxId = Volatile.Read(ref _lastAudioRxId),
+                    lastSampleRateHz = Volatile.Read(ref _lastAudioSampleRateHz),
+                    lastSampleCount = Volatile.Read(ref _lastAudioSampleCount),
+                    sinkCount = _audioSinks.Length,
+                    pollMs = _audioPollMs,
+                },
+                health = new
+                {
+                    pollFailures = Interlocked.Read(ref _healthPollFailures),
+                    restartRequests = Interlocked.Read(ref _restartRequests),
+                    lastHealthPollUnixMs = Interlocked.Read(ref _lastHealthPollUnixMs) > 0
+                        ? Interlocked.Read(ref _lastHealthPollUnixMs)
+                        : (long?)null,
+                    lastRestartRequestUnixMs = Interlocked.Read(ref _lastRestartRequestUnixMs) > 0
+                        ? Interlocked.Read(ref _lastRestartRequestUnixMs)
+                        : (long?)null,
+                    lastRestartReason = _lastRestartReason,
+                    incompleteRxRestartPolls = IncompleteRxRestartPolls,
+                    staleAudioRestartMs = StaleAudioRestartMs,
+                    txActivityRestartGraceMs = TxActivityRestartGraceMs,
+                    lastTxActivityUnixMs = Interlocked.Read(ref _lastTxActivityUnixMs) > 0
+                        ? Interlocked.Read(ref _lastTxActivityUnixMs)
+                        : (long?)null,
+                },
+                radioMic = new
+                {
+                    packetsForwarded = Interlocked.Read(ref _radioMicPacketsForwarded),
+                    pollFailures = Interlocked.Read(ref _radioMicPollFailures),
+                    lastPacketUnixMs = radioMicMs > 0 ? radioMicMs : (long?)null,
+                    lastPacketAgeMs = radioMicMs > 0 ? Math.Max(0, nowMs - radioMicMs) : (long?)null,
+                    receiverPacketsAccepted = _radioMicReceiver.TotalPacketsAccepted,
+                    receiverPacketsDropped = _radioMicReceiver.TotalPacketsDropped,
+                    receiverBlocksForwarded = _radioMicReceiver.TotalBlocksForwarded,
+                    maxPacketsPerPoll = MaxRadioMicPacketsPerPoll,
+                    pollMs = _audioPollMs,
+                }
+            };
+        }
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        Volatile.Write(ref _running, 1);
+        try
+        {
+            await Task.WhenAll(
+                    RunDisplayLoopAsync(stoppingToken),
+                    RunAudioLoopAsync(stoppingToken),
+                    RunRadioMicLoopAsync(stoppingToken))
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            Volatile.Write(ref _running, 0);
+        }
+    }
+
+    private async Task RunDisplayLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                if (_radio.IsProtocol3Active && _hub.DisplayStreamRequested && _sidecar.DiagnosticsUrl is { } diagnosticsUrl)
+                {
+                    await PollDisplayAsync(diagnosticsUrl, ct).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref _displayPollFailures);
+                LogThrottled(ref _lastDisplayFailureLogMs, ex, "p3.sidecar.display.forward.failed");
+            }
+
+            await DelayQuietAsync(_displayPollMs, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task RunAudioLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                if (_radio.IsProtocol3Active && _sidecar.DiagnosticsUrl is { } diagnosticsUrl)
+                {
+                    await PollAudioAsync(diagnosticsUrl, ct).ConfigureAwait(false);
+                    await PollHealthAsync(diagnosticsUrl, ct).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref _audioPollFailures);
+                LogThrottled(ref _lastAudioFailureLogMs, ex, "p3.sidecar.audio.forward.failed");
+            }
+
+            await DelayQuietAsync(_audioPollMs, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task RunRadioMicLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                if (_radio.IsProtocol3Active &&
+                    IsRadioMicSourceActive() &&
+                    _sidecar.DiagnosticsUrl is { } diagnosticsUrl)
+                {
+                    await PollRadioMicAsync(diagnosticsUrl, ct).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref _radioMicPollFailures);
+                LogThrottled(ref _lastRadioMicFailureLogMs, ex, "p3.sidecar.radio-mic.forward.failed");
+            }
+
+            await DelayQuietAsync(_audioPollMs, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task PollDisplayAsync(Uri diagnosticsUrl, CancellationToken ct)
+    {
+        var state = _radio.Snapshot();
+        var zoom = Math.Clamp(state.ZoomLevel, 1, 64);
+        var url = Endpoint(
+            diagnosticsUrl,
+            "/api/diagnostics/v2/p3-display-frames",
+            $"zoom={zoom.ToString(CultureInfo.InvariantCulture)}&center=0&maxFrames=1&dropStale=true");
+        using var response = await _http.GetAsync(url, ct).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        var root = await JsonNode.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false) as JsonObject;
+        if (root?["frames"] is not JsonArray frames) return;
+
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        foreach (var node in frames)
+        {
+            if (node is not JsonObject frameObject) continue;
+            if (!TryBuildDisplayFrame(
+                    frameObject,
+                    ++_displaySeq,
+                    nowMs,
+                    _reverseDisplayBins,
+                    _displayMaxWidth,
+                    out var frame))
+            {
+                continue;
+            }
+
+            _hub.Broadcast(frame);
+            Interlocked.Increment(ref _displayFramesForwarded);
+            Interlocked.Exchange(ref _lastDisplayFrameUnixMs, nowMs);
+            Volatile.Write(ref _lastDisplayRxId, frame.RxId);
+            Volatile.Write(ref _lastDisplayWidth, frame.Width);
+            Volatile.Write(ref _lastDisplayHzPerPixelBits, BitConverter.SingleToInt32Bits(frame.HzPerPixel));
+        }
+    }
+
+    private async Task PollAudioAsync(Uri diagnosticsUrl, CancellationToken ct)
+    {
+        var url = Endpoint(
+            diagnosticsUrl,
+            "/api/diagnostics/v2/p3-audio-frames",
+            $"maxFrames={MaxAudioFramesPerPoll}&dropStale=false");
+        using var response = await _http.GetAsync(url, ct).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        var bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+        if (bytes.Length > MaxAudioPayloadBytes)
+            throw new InvalidDataException($"Protocol 3 audio payload too large: {bytes.Length} bytes.");
+
+        var frames = ParseAudioFramesPayload(bytes);
+        var forwardedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        foreach (var frame in frames)
+        {
+            foreach (var sink in _audioSinks)
+            {
+                sink.Publish(frame);
+            }
+
+            Interlocked.Increment(ref _audioFramesForwarded);
+            Interlocked.Exchange(ref _lastAudioFrameUnixMs, forwardedUnixMs);
+            Volatile.Write(ref _lastAudioRxId, frame.RxId);
+            Volatile.Write(ref _lastAudioSampleRateHz, checked((int)frame.SampleRateHz));
+            Volatile.Write(ref _lastAudioSampleCount, frame.SampleCount);
+        }
+    }
+
+    private async Task PollRadioMicAsync(Uri diagnosticsUrl, CancellationToken ct)
+    {
+        var url = Endpoint(
+            diagnosticsUrl,
+            "/api/diagnostics/v2/p3-radio-mic-packets",
+            $"maxPackets={MaxRadioMicPacketsPerPoll}&dropStale=true");
+        using var response = await _http.GetAsync(url, ct).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        var bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+        if (bytes.Length > MaxRadioMicPayloadBytes)
+            throw new InvalidDataException($"Protocol 3 radio-mic payload too large: {bytes.Length} bytes.");
+
+        var packets = ForwardRadioMicPacketPayload(bytes);
+        if (packets > 0)
+        {
+            Interlocked.Add(ref _radioMicPacketsForwarded, packets);
+            Interlocked.Exchange(ref _lastRadioMicPacketUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        }
+    }
+
+    private async Task PollHealthAsync(Uri diagnosticsUrl, CancellationToken ct)
+    {
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var lastPollMs = Interlocked.Read(ref _lastHealthPollUnixMs);
+        if (lastPollMs > 0 && nowMs - lastPollMs < HealthPollMs) return;
+        if (Interlocked.CompareExchange(ref _lastHealthPollUnixMs, nowMs, lastPollMs) != lastPollMs)
+            return;
+
+        try
+        {
+            using var response = await _http.GetAsync(diagnosticsUrl, ct).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            var root = await JsonNode.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false) as JsonObject;
+            if (root is null) return;
+
+            var audioMs = Interlocked.Read(ref _lastAudioFrameUnixMs);
+            var audioAgeMs = audioMs > 0 ? Math.Max(0, nowMs - audioMs) : (long?)null;
+            var lastRestartMs = Interlocked.Read(ref _lastRestartRequestUnixMs);
+            var txActivityMs = Math.Max(
+                TxActivityUnixMs(root, nowMs),
+                _sidecar.LastTxActivityUnixMs);
+            if (txActivityMs > 0)
+                Interlocked.Exchange(ref _lastTxActivityUnixMs, txActivityMs);
+            var lastTxActivityMs = Interlocked.Read(ref _lastTxActivityUnixMs);
+            if (!ShouldRestartForIncompleteRx(
+                    root,
+                    audioAgeMs,
+                    nowMs,
+                    lastRestartMs,
+                    lastTxActivityMs,
+                    out var reason))
+            {
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref _lastRestartRequestUnixMs, nowMs, lastRestartMs) != lastRestartMs)
+                return;
+
+            Interlocked.Increment(ref _restartRequests);
+            _lastRestartReason = reason;
+            await _sidecar.RequestRestartAsync(reason, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Interlocked.Increment(ref _healthPollFailures);
+            LogThrottled(ref _lastAudioFailureLogMs, ex, "p3.sidecar.health.poll.failed");
+        }
+    }
+
+    internal static bool ShouldRestartForIncompleteRx(
+        JsonObject diagnostics,
+        long? audioAgeMs,
+        long nowUnixMs,
+        long lastRestartUnixMs,
+        long lastTxActivityUnixMs,
+        out string reason)
+    {
+        reason = string.Empty;
+        if (lastRestartUnixMs > 0 && nowUnixMs - lastRestartUnixMs < RestartCooldownMs)
+            return false;
+        if (lastTxActivityUnixMs > 0 && nowUnixMs - lastTxActivityUnixMs < TxActivityRestartGraceMs)
+            return false;
+
+        if (diagnostics["hostedRadioSession"] is not JsonObject hosted)
+            return false;
+
+        var incomplete = JsonLong(hosted, "consecutiveIncompleteRxPolls", 0);
+        var rxProcessed = JsonBool(hosted, "rxProcessed", fallback: true);
+        if (rxProcessed || incomplete < IncompleteRxRestartPolls)
+            return false;
+
+        if (audioAgeMs is { } age && age < StaleAudioRestartMs)
+            return false;
+
+        var rxReason = JsonString(hosted, "rxReason", "incomplete RX poll");
+        reason =
+            $"Sidecar RX stalled: {incomplete} incomplete RX polls, " +
+            $"audio age {(audioAgeMs?.ToString(CultureInfo.InvariantCulture) ?? "none")} ms, {rxReason}";
+        return true;
+    }
+
+    internal static long TxActivityUnixMs(JsonObject diagnostics, long nowUnixMs)
+    {
+        if (diagnostics["txIqIngestLoop"] is JsonObject txLoop)
+        {
+            if (TryParseUtcUnixMs(JsonString(txLoop, "lastSenderUtc", string.Empty), out var lastSenderMs))
+                return lastSenderMs;
+        }
+
+        if (diagnostics["p3"] is JsonObject p3 &&
+            TryParseUtcUnixMs(JsonString(p3, "txIqIngressLastUtc", string.Empty), out var ingressMs))
+        {
+            return ingressMs;
+        }
+
+        return 0;
+    }
+
+    internal static bool TryBuildDisplayFrame(
+        JsonObject source,
+        uint seq,
+        double tsUnixMs,
+        bool reverseDisplayBins,
+        out DisplayFrame frame) =>
+        TryBuildDisplayFrame(
+            source,
+            seq,
+            tsUnixMs,
+            reverseDisplayBins,
+            MaxDisplayWidth,
+            out frame);
+
+    internal static bool TryBuildDisplayFrame(
+        JsonObject source,
+        uint seq,
+        double tsUnixMs,
+        bool reverseDisplayBins,
+        int maxDisplayWidth,
+        out DisplayFrame frame)
+    {
+        frame = default;
+        if (!JsonBool(source, "ready", fallback: true)) return false;
+        var width = JsonInt(source, "width", 0);
+        if (width <= 0 || width > MaxDisplayWidth) return false;
+
+        var panDb = source["panDb"] as JsonArray;
+        var wfDb = source["wfDb"] as JsonArray;
+        if (panDb is null || wfDb is null || panDb.Count != width || wfDb.Count != width) return false;
+
+        var centerHz = JsonLong(source, "centerHz", JsonLong(source, "centerFrequencyHz", 0));
+        var hzPerPixel = (float)JsonDouble(source, "hzPerPixel", 0.0);
+        if (centerHz <= 0 || !float.IsFinite(hzPerPixel) || hzPerPixel <= 0.0f) return false;
+
+        var sourceWidth = width;
+        var effectiveMaxWidth = Math.Clamp(maxDisplayWidth, 1, MaxDisplayWidth);
+        if (width > effectiveMaxWidth)
+        {
+            var pan = JsonFloatArray(panDb, width, effectiveMaxWidth);
+            var wf = JsonFloatArray(wfDb, width, effectiveMaxWidth);
+            width = effectiveMaxWidth;
+            hzPerPixel *= (float)((double)sourceWidth / width);
+            if (!float.IsFinite(hzPerPixel) || hzPerPixel <= 0.0f) return false;
+
+            frame = BuildDisplayFrameFromArrays(source, seq, tsUnixMs, reverseDisplayBins, width, centerHz, hzPerPixel, pan, wf);
+            return frame.BodyFlags != DisplayBodyFlags.None;
+        }
+        else
+        {
+            var pan = JsonFloatArray(panDb, width);
+            var wf = JsonFloatArray(wfDb, width);
+            frame = BuildDisplayFrameFromArrays(source, seq, tsUnixMs, reverseDisplayBins, width, centerHz, hzPerPixel, pan, wf);
+            return frame.BodyFlags != DisplayBodyFlags.None;
+        }
+    }
+
+    private static DisplayFrame BuildDisplayFrameFromArrays(
+        JsonObject source,
+        uint seq,
+        double tsUnixMs,
+        bool reverseDisplayBins,
+        int width,
+        long centerHz,
+        float hzPerPixel,
+        float[] pan,
+        float[] wf)
+    {
+        var lowToHigh = JsonBool(source, "lowToHigh", fallback: true);
+        var sidecarReverseDisplayBins = JsonBool(source, "reverseDisplayBins", fallback: false);
+        var hostShouldReverseDisplayBins = JsonBool(source, "hostShouldReverseDisplayBins", fallback: false);
+        if (reverseDisplayBins || sidecarReverseDisplayBins || hostShouldReverseDisplayBins || !lowToHigh)
+        {
+            Array.Reverse(pan);
+            Array.Reverse(wf);
+        }
+
+        var flags = DisplayBodyFlags.None;
+        if (pan.Length == width) flags |= DisplayBodyFlags.PanValid;
+        if (wf.Length == width) flags |= DisplayBodyFlags.WfValid;
+        return new DisplayFrame(
+            Seq: seq,
+            TsUnixMs: tsUnixMs,
+            RxId: checked((byte)Math.Clamp(JsonInt(source, "rxId", 0), 0, byte.MaxValue)),
+            BodyFlags: flags,
+            Width: checked((ushort)width),
+            CenterHz: centerHz,
+            HzPerPixel: hzPerPixel,
+            PanDb: pan,
+            WfDb: wf);
+    }
+
+    internal int ForwardRadioMicPacketPayload(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length == 0) return 0;
+        if (payload.Length % RadioMicReceiver.PacketBytes != 0)
+            throw new InvalidDataException("Protocol 3 radio-mic payload is not aligned to 132-byte packets.");
+
+        var packets = payload.Length / RadioMicReceiver.PacketBytes;
+        for (var offset = 0; offset < payload.Length; offset += RadioMicReceiver.PacketBytes)
+        {
+            _radioMicReceiver.Accept(payload.Slice(offset, RadioMicReceiver.PacketBytes));
+        }
+
+        return packets;
+    }
+
+    internal static bool ResolveReverseDisplayBins(IConfiguration configuration) =>
+        BoolSetting(
+            configuration,
+            "ReverseDisplayBins",
+            "ZEUS_PROTOCOL3_REVERSE_DISPLAY_BINS",
+            fallback: DefaultReverseDisplayBins);
+
+    internal static int ResolveDisplayPollMs(IConfiguration configuration)
+    {
+        var envValue = Environment.GetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_POLL_MS");
+        if (!string.IsNullOrWhiteSpace(envValue))
+            return IntValue(envValue, DefaultDisplayPollMs, 8, 500);
+
+        var configured = configuration["Zeus:Protocol3:Sidecar:DisplayPollMs"];
+        return IntValue(configured, DefaultDisplayPollMs, DefaultDisplayPollMs, 500);
+    }
+
+    internal static int ResolveDisplayMaxWidth(IConfiguration configuration) =>
+        IntSetting(
+            configuration,
+            "DisplayMaxWidth",
+            "ZEUS_PROTOCOL3_FRAME_DISPLAY_MAX_WIDTH",
+            DefaultDisplayMaxWidth,
+            256,
+            MaxDisplayWidth);
+
+    internal static int ResolveAudioPollMs(IConfiguration configuration) =>
+        IntSetting(
+            configuration,
+            "AudioPollMs",
+            "ZEUS_PROTOCOL3_FRAME_AUDIO_POLL_MS",
+            DefaultAudioPollMs,
+            2,
+            250);
+
+    private bool IsRadioMicSourceActive()
+    {
+        var source = _radio.Snapshot().TxAudioSource;
+        _txIngest.SetActiveSource(source);
+        return source != TxAudioSource.Host;
+    }
+
+    internal static IReadOnlyList<AudioFrame> ParseAudioFramesPayload(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length < 16) return Array.Empty<AudioFrame>();
+        if (payload[0] != (byte)'P' ||
+            payload[1] != (byte)'3' ||
+            payload[2] != (byte)'A' ||
+            payload[3] != (byte)'U')
+        {
+            throw new InvalidDataException("Protocol 3 audio payload has invalid magic.");
+        }
+
+        var version = BinaryPrimitives.ReadUInt16LittleEndian(payload[4..6]);
+        var headerBytes = BinaryPrimitives.ReadUInt16LittleEndian(payload[6..8]);
+        var count = BinaryPrimitives.ReadUInt32LittleEndian(payload[8..12]);
+        if (version != 1) throw new InvalidDataException($"Unsupported Protocol 3 audio payload version {version}.");
+        if (headerBytes < 16 || headerBytes > payload.Length)
+            throw new InvalidDataException("Protocol 3 audio payload has invalid header length.");
+        if (count > 256) throw new InvalidDataException("Protocol 3 audio payload frame count is unreasonable.");
+
+        var frames = new List<AudioFrame>(checked((int)count));
+        var offset = (int)headerBytes;
+        for (var index = 0; index < count; index++)
+        {
+            if (offset + 32 > payload.Length)
+                throw new InvalidDataException("Protocol 3 audio frame header is truncated.");
+
+            var header = payload.Slice(offset, 32);
+            var rxId = header[0];
+            var channels = header[1];
+            var seq = BinaryPrimitives.ReadUInt32LittleEndian(header[4..8]);
+            var tsMs = BinaryPrimitives.ReadUInt64LittleEndian(header[8..16]);
+            var sampleRateHz = BinaryPrimitives.ReadUInt32LittleEndian(header[16..20]);
+            var sampleCount = BinaryPrimitives.ReadUInt32LittleEndian(header[20..24]);
+            var sampleBytes = BinaryPrimitives.ReadUInt32LittleEndian(header[24..28]);
+            offset += 32;
+
+            if (channels == 0) throw new InvalidDataException("Protocol 3 audio frame has zero channels.");
+            if (sampleCount > ushort.MaxValue) throw new InvalidDataException("Protocol 3 audio frame has too many samples.");
+            var expectedBytes = checked(sampleCount * channels * sizeof(float));
+            if (sampleBytes != expectedBytes)
+                throw new InvalidDataException("Protocol 3 audio frame sample byte count does not match header.");
+            if (offset + sampleBytes > payload.Length)
+                throw new InvalidDataException("Protocol 3 audio frame samples are truncated.");
+
+            var samples = new float[checked((int)(sampleCount * channels))];
+            payload.Slice(offset, checked((int)sampleBytes)).CopyTo(MemoryMarshal.AsBytes(samples.AsSpan()));
+            offset += checked((int)sampleBytes);
+
+            frames.Add(new AudioFrame(
+                Seq: seq,
+                TsUnixMs: tsMs,
+                RxId: rxId,
+                Channels: channels,
+                SampleRateHz: sampleRateHz,
+                SampleCount: checked((ushort)sampleCount),
+                Samples: samples));
+        }
+
+        return frames;
+    }
+
+    private static float[] JsonFloatArray(JsonArray array, int width)
+    {
+        var values = new float[width];
+        for (var index = 0; index < width; index++)
+        {
+            values[index] = JsonArrayFloat(array, index);
+        }
+        return values;
+    }
+
+    private static float[] JsonFloatArray(JsonArray array, int sourceWidth, int targetWidth)
+    {
+        if (targetWidth <= 0) throw new ArgumentOutOfRangeException(nameof(targetWidth));
+        if (sourceWidth <= targetWidth) return JsonFloatArray(array, sourceWidth);
+
+        var values = new float[targetWidth];
+        var scale = (double)sourceWidth / targetWidth;
+        for (var target = 0; target < targetWidth; target++)
+        {
+            var start = (int)Math.Floor(target * scale);
+            var end = (int)Math.Floor((target + 1) * scale);
+            if (end <= start) end = start + 1;
+            start = Math.Clamp(start, 0, sourceWidth - 1);
+            end = Math.Clamp(end, start + 1, sourceWidth);
+
+            double sum = 0.0;
+            var count = 0;
+            for (var sourceIndex = start; sourceIndex < end; sourceIndex++)
+            {
+                var value = JsonArrayFloat(array, sourceIndex);
+                if (!float.IsFinite(value)) continue;
+                sum += value;
+                count++;
+            }
+
+            values[target] = count > 0 ? (float)(sum / count) : DisplayFloorDb;
+        }
+
+        return values;
+    }
+
+    private static float JsonArrayFloat(JsonArray array, int index)
+    {
+        var value = JsonArrayDouble(array, index, DisplayFloorDb);
+        var sample = (float)value;
+        return float.IsFinite(sample) ? sample : DisplayFloorDb;
+    }
+
+    internal static float[] DownsampleBins(ReadOnlySpan<float> source, int targetWidth)
+    {
+        if (targetWidth <= 0) throw new ArgumentOutOfRangeException(nameof(targetWidth));
+        if (source.Length <= targetWidth) return source.ToArray();
+
+        var values = new float[targetWidth];
+        var scale = (double)source.Length / targetWidth;
+        for (var target = 0; target < targetWidth; target++)
+        {
+            var start = (int)Math.Floor(target * scale);
+            var end = (int)Math.Floor((target + 1) * scale);
+            if (end <= start) end = start + 1;
+            start = Math.Clamp(start, 0, source.Length - 1);
+            end = Math.Clamp(end, start + 1, source.Length);
+
+            double sum = 0.0;
+            var count = 0;
+            for (var sourceIndex = start; sourceIndex < end; sourceIndex++)
+            {
+                var value = source[sourceIndex];
+                if (!float.IsFinite(value)) continue;
+                sum += value;
+                count++;
+            }
+
+            values[target] = count > 0 ? (float)(sum / count) : DisplayFloorDb;
+        }
+
+        return values;
+    }
+
+    private static Uri Endpoint(Uri diagnosticsUrl, string path, string query)
+    {
+        return new UriBuilder(diagnosticsUrl)
+        {
+            Path = path,
+            Query = query,
+            Fragment = string.Empty,
+        }.Uri;
+    }
+
+    private void LogThrottled(ref long lastLogMs, Exception ex, string message)
+    {
+        var now = Environment.TickCount64;
+        var prior = Interlocked.Read(ref lastLogMs);
+        if (now - prior < 1_000) return;
+        Interlocked.Exchange(ref lastLogMs, now);
+        _log.LogWarning(ex, message);
+    }
+
+    private static async Task DelayQuietAsync(int ms, CancellationToken ct)
+    {
+        try { await Task.Delay(TimeSpan.FromMilliseconds(ms), ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+    }
+
+    private static int IntSetting(
+        IConfiguration configuration,
+        string key,
+        string env,
+        int fallback,
+        int min,
+        int max)
+    {
+        var value = Environment.GetEnvironmentVariable(env);
+        if (string.IsNullOrWhiteSpace(value)) value = configuration[$"Zeus:Protocol3:Sidecar:{key}"];
+        return IntValue(value, fallback, min, max);
+    }
+
+    private static int IntValue(string? value, int fallback, int min, int max) =>
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            ? Math.Clamp(parsed, min, max)
+            : fallback;
+
+    private static bool BoolSetting(IConfiguration configuration, string key, string env, bool fallback)
+    {
+        var value = Environment.GetEnvironmentVariable(env);
+        if (string.IsNullOrWhiteSpace(value)) value = configuration[$"Zeus:Protocol3:Sidecar:{key}"];
+        if (string.IsNullOrWhiteSpace(value)) return fallback;
+        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool JsonBool(JsonObject obj, string property, bool fallback)
+    {
+        try { return obj[property]?.GetValue<bool>() ?? fallback; }
+        catch { return fallback; }
+    }
+
+    private static int JsonInt(JsonObject obj, string property, int fallback)
+    {
+        try
+        {
+            var node = obj[property];
+            if (node is null) return fallback;
+            if (node is JsonValue value && value.TryGetValue<int>(out var i)) return i;
+            if (node is JsonValue longValue &&
+                longValue.TryGetValue<long>(out var l) &&
+                l >= int.MinValue &&
+                l <= int.MaxValue)
+                return (int)l;
+        }
+        catch { }
+        return fallback;
+    }
+
+    private static long JsonLong(JsonObject obj, string property, long fallback)
+    {
+        try
+        {
+            var node = obj[property];
+            if (node is null) return fallback;
+            if (node is JsonValue intValue && intValue.TryGetValue<int>(out var i)) return i;
+            if (node is JsonValue value && value.TryGetValue<long>(out var l)) return l;
+            if (node is JsonValue uintValue && uintValue.TryGetValue<uint>(out var u)) return u;
+            if (node is JsonValue ulongValue && ulongValue.TryGetValue<ulong>(out var ul))
+                return checked((long)Math.Min(ul, (ulong)long.MaxValue));
+            if (node is JsonValue doubleValue &&
+                doubleValue.TryGetValue<double>(out var d) &&
+                double.IsFinite(d))
+                return (long)Math.Round(d);
+        }
+        catch { }
+        return fallback;
+    }
+
+    private static double JsonDouble(JsonObject obj, string property, double fallback)
+    {
+        try
+        {
+            var value = obj[property]?.GetValue<double>() ?? fallback;
+            return double.IsFinite(value) ? value : fallback;
+        }
+        catch { return fallback; }
+    }
+
+    private static string JsonString(JsonObject obj, string property, string fallback)
+    {
+        try
+        {
+            var value = obj[property]?.GetValue<string>();
+            return string.IsNullOrWhiteSpace(value) ? fallback : value;
+        }
+        catch { return fallback; }
+    }
+
+    private static bool TryParseUtcUnixMs(string value, out long unixMs)
+    {
+        unixMs = 0;
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        if (!DateTimeOffset.TryParse(
+                value,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var dto))
+        {
+            return false;
+        }
+
+        unixMs = dto.ToUnixTimeMilliseconds();
+        return true;
+    }
+
+    private static double JsonArrayDouble(JsonArray array, int index, double fallback)
+    {
+        try
+        {
+            var value = array[index]?.GetValue<double>() ?? fallback;
+            return double.IsFinite(value) ? value : fallback;
+        }
+        catch { return fallback; }
+    }
+}

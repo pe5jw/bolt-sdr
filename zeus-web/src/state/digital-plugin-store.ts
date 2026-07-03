@@ -64,14 +64,18 @@ export const useDigitalPluginStore = create<DigitalPluginState>((set) => ({
   sseConnected: false,
 
   probe: async () => {
+    const installed = usePluginsStore.getState().installed.some((p) => p.id === DIGITAL_PLUGIN_ID);
+    if (!installed) {
+      set({ installed: false, live: false, probed: true });
+      return;
+    }
     const live = await probeDigitalPlugin();
-    set({ live, probed: true });
+    set({ installed: true, live, probed: true });
   },
 
   refresh: async () => {
     await usePluginsStore.getState().refreshInstalled();
-    const live = await probeDigitalPlugin();
-    set({ live, probed: true });
+    await useDigitalPluginStore.getState().probe();
   },
 }));
 

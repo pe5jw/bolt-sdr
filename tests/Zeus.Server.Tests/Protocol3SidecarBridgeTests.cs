@@ -1,4 +1,6 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using Zeus.Contracts;
 using Zeus.Server;
 
 namespace Zeus.Server.Tests;
@@ -67,6 +69,124 @@ public sealed class Protocol3SidecarBridgeTests
                 expectedRxStreams: 10));
 
         Assert.Contains("loopback", ex.Message);
+    }
+
+    [Fact]
+    public void BuildReceiverSettingsJson_ProjectsLiveRxControlsForN9Dsp()
+    {
+        var state = new StateDto(
+            ConnectionStatus.Connected,
+            "192.168.1.25:1030",
+            VfoHz: 7_209_000,
+            Mode: RxMode.LSB,
+            FilterLowHz: -3_900,
+            FilterHighHz: -100,
+            SampleRate: 192_000,
+            AgcTopDb: 66,
+            Agc: new AgcConfig(AgcMode.Med),
+            Squelch: new SquelchConfig(Enabled: true, Level: 30),
+            Nr: new NrConfig(
+                NrMode: NrMode.Sbnr,
+                AnfEnabled: true,
+                SnbEnabled: true,
+                NbpNotchesEnabled: true,
+                NbMode: NbMode.Nb1,
+                NbThreshold: 18,
+                Nr4ReductionAmount: 14),
+            RxAfGainDb: 7,
+            RadioLoHz: 7_205_000,
+            CtunEnabled: true,
+            MaxReceivers: 10);
+
+        using var doc = JsonDocument.Parse(Protocol3SidecarBridge.BuildReceiverSettingsJson(
+            state,
+            rxStreams: 1,
+            sampleRateHz: 192_000));
+        var rx = doc.RootElement[0];
+
+        Assert.True(rx.GetProperty("enabled").GetBoolean());
+        Assert.Equal((int)RxMode.LSB, rx.GetProperty("mode").GetInt32());
+        Assert.Equal(-3_900, rx.GetProperty("passbandLowHz").GetInt32());
+        Assert.Equal(-100, rx.GetProperty("passbandHighHz").GetInt32());
+        Assert.Equal(7_205_000, rx.GetProperty("centerFrequencyHz").GetInt64());
+        Assert.Equal(4_000, rx.GetProperty("tuningOffsetHz").GetInt32());
+        Assert.Equal(7.0, rx.GetProperty("afGainDb").GetDouble(), precision: 6);
+        Assert.Equal(1, rx.GetProperty("enableRxAgc").GetInt32());
+        Assert.Equal(2, rx.GetProperty("rxAgcProfile").GetInt32());
+        Assert.Equal(66.0, rx.GetProperty("agcMaxGainDb").GetDouble(), precision: 6);
+        Assert.Equal(1, rx.GetProperty("enableRxNoiseBlanker").GetInt32());
+        Assert.Equal(1, rx.GetProperty("enableRxSpectralBlanker").GetInt32());
+        Assert.Equal(1, rx.GetProperty("enableRxNotch").GetInt32());
+        Assert.Equal(1, rx.GetProperty("enableRxSquelch").GetInt32());
+        Assert.Equal(-110.0, rx.GetProperty("rxSquelchThresholdDb").GetDouble(), precision: 6);
+        Assert.Equal(0, rx.GetProperty("enableRxAnr").GetInt32());
+        Assert.Equal(1, rx.GetProperty("enableRxEmnr").GetInt32());
+        Assert.Equal(2, rx.GetProperty("enableRxMultiNotch").GetInt32());
+    }
+
+    [Fact]
+    public void BuildReceiverSettingsJson_DisablesAgcOnlyForFixedMode()
+    {
+        var state = new StateDto(
+            ConnectionStatus.Connected,
+            "192.168.1.25:1030",
+            VfoHz: 7_209_000,
+            Mode: RxMode.LSB,
+            FilterLowHz: -3_900,
+            FilterHighHz: -100,
+            SampleRate: 192_000,
+            Agc: new AgcConfig(AgcMode.Fixed),
+            MaxReceivers: 1);
+
+        using var doc = JsonDocument.Parse(Protocol3SidecarBridge.BuildReceiverSettingsJson(
+            state,
+            rxStreams: 1,
+            sampleRateHz: 192_000));
+        var rx = doc.RootElement[0];
+
+        Assert.Equal(0, rx.GetProperty("enableRxAgc").GetInt32());
+        Assert.Equal(0, rx.GetProperty("rxAgcProfile").GetInt32());
+    }
+
+    [Fact]
+    public void TryParseSidecarPidRecord_AcceptsOwnedLoopbackDiagnosticsRecord()
+    {
+        var text = """
+            pid=12345
+            startUnixMs=1783095000123
+            diagnosticsUrl=http://127.0.0.1:49737/api/diagnostics/v2
+            """;
+
+        Assert.True(Protocol3SidecarBridge.TryParseSidecarPidRecord(text, out var record));
+        Assert.Equal(12345, record.ProcessId);
+        Assert.Equal(1783095000123, record.StartUnixMs);
+        Assert.Equal("http://127.0.0.1:49737/api/diagnostics/v2", record.DiagnosticsUrl);
+    }
+
+    [Fact]
+    public void TryParseSidecarPidRecord_RejectsUnsafeOrMalformedRecords()
+    {
+        Assert.False(Protocol3SidecarBridge.TryParseSidecarPidRecord(
+            """
+            pid=12345
+            startUnixMs=1783095000123
+            diagnosticsUrl=http://192.168.1.25:49737/api/diagnostics/v2
+            """,
+            out _));
+
+        Assert.False(Protocol3SidecarBridge.TryParseSidecarPidRecord(
+            """
+            pid=12345
+            diagnosticsUrl=http://127.0.0.1:49737/api/diagnostics/v2
+            """,
+            out _));
+    }
+
+    [Fact]
+    public void StartUnixMsMatches_AllowsSmallProcessTimestampRoundingOnly()
+    {
+        Assert.True(Protocol3SidecarBridge.StartUnixMsMatches(1783095000123, 1783095001000));
+        Assert.False(Protocol3SidecarBridge.StartUnixMsMatches(1783095000123, 1783095002000));
     }
 
     private static JsonObject Diagnostics(int streams, string engine, string status) => new()
