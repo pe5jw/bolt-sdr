@@ -586,23 +586,6 @@ public static class ZeusHost
         // Per-radio frequency calibration (issue #325). Stateless coordinator —
         // owns no resources, just a SemaphoreSlim to prevent re-entry.
         builder.Services.AddSingleton<FrequencyCalibrationService>();
-        // FreeDV digital-voice modem (Codec2/freedv_api via P/Invoke). Singleton
-        // owns the one modem instance; DspPipelineService taps RX (post-demod)
-        // and TxAudioIngest taps TX (pre-WDSP), both gated on FreeDV being the
-        // active RX0 mode. No-op when the codec2 native library is absent.
-        builder.Services.AddSingleton<FreeDvService>();
-        // FreeDvNativeInstaller — the in-app "Install FreeDV" downloader. codec2
-        // can't be built on a stock operator machine, so when the bundled binary
-        // is missing (older build / unshipped platform) this fetches the prebuilt
-        // lib Zeus committed for the running platform straight from the repo and
-        // stages it at the managed path, then reloads the modem live. The named
-        // HttpClient carries a User-Agent and a generous timeout.
-        builder.Services.AddHttpClient("ZeusFreeDvNative", c =>
-        {
-            c.Timeout = TimeSpan.FromMinutes(5);
-            c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus");
-        });
-        builder.Services.AddSingleton<FreeDvNativeInstaller>();
         builder.Services.AddSingleton<TxService>();
         builder.Services.AddSingleton<TxAudioIngest>();
         // Resolve at startup so the MicPcmReceived subscription attaches before the
@@ -829,6 +812,17 @@ public static class ZeusHost
         // mounted below via PluginEndpoints.MapAll under /api/plugins/...
         builder.Services.AddZeusPlugins(prefsDbPathProvider: PrefsDbPath.Get);
 
+        // AudioModemPluginBridge publishes the one active IAudioModemPlugin
+        // (FreeDV today) to the existing RX/TX insertion points. It also
+        // follows live plugin activation/deactivation so uninstall cannot leave
+        // a dangling modem reference on the audio path.
+        builder.Services.AddSingleton(sp => new AudioModemPluginBridge(
+            sp.GetRequiredService<PluginManager>(),
+            sp.GetRequiredService<RadioService>(),
+            sp.GetRequiredService<ILogger<AudioModemPluginBridge>>(),
+            () => sp.GetService<DspPipelineService>()));
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioModemPluginBridge>());
+
         // ChainOrderService — owns the canonical Audio Suite plugin
         // chain order (drag-droppable tile sequence in the Audio Suite
         // window). Persists to zeus-prefs.db via ChainOrderStore so the
@@ -987,15 +981,6 @@ public static class ZeusHost
         builder.Services.AddSingleton<ActivationSpotsService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<ActivationSpotsService>());
 
-        // FreeDvReporterService — holds a persistent read-only Socket.IO link to
-        // the FreeDV Reporter network (qso.freedv.org) and mirrors the live
-        // station roster for the Stations panel (GET /api/freedv/stations). Same
-        // singleton + hosted-service shape as ActivationSpotsService; streaming
-        // Socket.IO instead of HTTP polling. Touches nothing on the radio / DSP /
-        // TX path — outbound TLS WebSocket in, station snapshot out.
-        // Persists the operator's FreeDV Reporter "report mode" opt-in (default
-        // OFF). Reporting only broadcasts the operator's callsign/grid/TX activity
-        // to the public map after an explicit opt-in — see FreeDvReporterService.
         // Shared operator identity (callsign + Maidenhead grid). One store, read
         // first by every operator resolver (FreeDV Reporter / log broadcasters)
         // via OperatorIdentityResolver, with the QRZ home station as the
@@ -1003,13 +988,10 @@ public static class ZeusHost
         // Replaces the per-store identity duplication and the frontend's
         // port-scoped localStorage that lost the call on every desktop restart.
         builder.Services.AddSingleton<OperatorIdentityStore>();
+        builder.Services.AddSingleton<Zeus.Plugins.Contracts.IOperatorIdentityProvider, PluginOperatorIdentityProvider>();
         // Persisted FT8/FT4 workspace behaviour preferences (auto-seq, decode
         // depth, macros, logging). Behaviour/UI knobs only — none transmit.
         builder.Services.AddSingleton<Ft8SettingsStore>();
-
-        builder.Services.AddSingleton<FreeDvReporterSettingsStore>();
-        builder.Services.AddSingleton<FreeDvReporterService>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<FreeDvReporterService>());
 
         // TCI (Transceiver Control Interface) — ExpertSDR3-compatible WebSocket server
         // for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),

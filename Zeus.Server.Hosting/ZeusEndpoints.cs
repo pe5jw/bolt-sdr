@@ -1847,10 +1847,12 @@ public static class ZeusEndpoints
             return r.SetCtunEnabled(req.Enabled);
         });
 
-        app.MapPost("/api/mode", (ModeSetRequest req, RadioService r) =>
+        app.MapPost("/api/mode", (ModeSetRequest req, RadioService r, AudioModemPluginBridge modemBridge) =>
         {
             if (req.Receiver is not (0 or 1))
                 return Results.BadRequest(new { error = $"unknown receiver {req.Receiver}" });
+            if (req.Mode == RxMode.FreeDv && !modemBridge.HasActiveModem)
+                return Results.Conflict(new { error = "FreeDV plugin is not installed or active." });
             var receiver = req.Receiver == 1 ? TxVfo.B : TxVfo.A;
             log.LogInformation("api.mode mode={Mode} receiver={Receiver}", req.Mode, receiver);
             return Results.Ok(r.SetMode(req.Mode, receiver));
@@ -1860,81 +1862,6 @@ public static class ZeusEndpoints
         {
             log.LogInformation("api.bandwidth low={L} high={H}", req.Low, req.High);
             return r.SetFilter(req.Low, req.High);
-        });
-
-        // FreeDV digital-voice telemetry + config. The mode itself is selected
-        // via /api/mode (RxMode.FreeDv); these surface the live modem state
-        // (sync/SNR/submode) polled by the FreeDV panel and apply submode /
-        // squelch / TX-text changes. No-op-safe when the codec2 native library
-        // is missing (NativeAvailable=false).
-        app.MapGet("/api/freedv/status", (FreeDvService fd) => Results.Ok(fd.Status()));
-
-        // FreeDV Reporter stations — live roster mirrored from qso.freedv.org by
-        // FreeDvReporterService (persistent read-only Socket.IO link). Returns the
-        // current snapshot (connection state + stations sorted by frequency);
-        // empty until the first bulk_update arrives. The Stations panel polls this
-        // and offers click-to-tune.
-        app.MapGet("/api/freedv/stations",
-            (FreeDvReporterService svc) => Results.Ok(svc.GetSnapshot()));
-
-        // FreeDV Reporter "report mode" — strictly opt-in (default OFF). When
-        // enabled with a callsign + Maidenhead grid, Zeus connects to the reporter
-        // in "report" role and broadcasts the operator's callsign / grid / freq /
-        // TX activity to the public qso.freedv.org map. GET returns the current
-        // (normalized) settings; POST saves them and forces a reconnect so the new
-        // role / identity takes effect.
-        app.MapGet("/api/freedv/reporter/settings",
-            (FreeDvReporterService svc) => Results.Ok(svc.GetSettings()));
-        app.MapPost("/api/freedv/reporter/settings",
-            (FreeDvReporterSettings req, FreeDvReporterService svc) =>
-            {
-                var saved = svc.SaveSettings(req);
-                log.LogInformation(
-                    "api.freedv.reporter.settings report={Enabled} call={Call} grid={Grid}",
-                    saved.ReportEnabled, saved.Callsign, saved.GridSquare);
-                return Results.Ok(saved);
-            });
-
-        // QSY request — ask the station identified by {sid} to move to the
-        // operator's current VFO frequency. Requires report mode active and a
-        // known sid; 400 otherwise.
-        app.MapPost("/api/freedv/stations/{sid}/qsy",
-            (string sid, FreeDvReporterService svc) =>
-                svc.RequestQsy(sid)
-                    ? Results.Ok(new { ok = true })
-                    : Results.BadRequest(new { error = "Not reporting, or station unknown." }));
-        app.MapPut("/api/freedv/config", (FreeDvConfigRequest req, FreeDvService fd) =>
-        {
-            log.LogInformation(
-                "api.freedv.config submode={Submode} squelch={Sq} thresh={Th}",
-                req.Submode, req.SquelchEnabled, req.SnrSquelchThreshDb);
-            return Results.Ok(fd.ApplyConfig(req));
-        });
-
-        // FreeDV codec2 library install. codec2 can't be built on an operator's
-        // machine, so when the bundled binary is missing this fetches the prebuilt
-        // lib Zeus committed for the running platform from the repo and stages it,
-        // reloading the modem live (see FreeDvNativeInstaller). GET reports install
-        // progress + whether codec2 is already present; POST starts a background
-        // download (idempotent — no-op if already installed/running). The panel
-        // polls GET until phase is "done" / "failed".
-        static object FreeDvInstallDto(FreeDvNativeInstaller installer)
-        {
-            var s = installer.Current;
-            return new
-            {
-                phase = s.Phase.ToString().ToLowerInvariant(),
-                percent = s.Percent,
-                message = s.Message,
-                installed = installer.Installed,
-            };
-        }
-        app.MapGet("/api/freedv/install", (FreeDvNativeInstaller installer) =>
-            Results.Ok(FreeDvInstallDto(installer)));
-        app.MapPost("/api/freedv/install", (FreeDvNativeInstaller installer) =>
-        {
-            installer.Start();
-            return Results.Ok(FreeDvInstallDto(installer));
         });
 
         // TX bandpass filter — signed Hz pair (LSB negative, DSB symmetric). Per-mode

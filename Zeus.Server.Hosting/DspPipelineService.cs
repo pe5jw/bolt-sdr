@@ -1281,10 +1281,10 @@ public class DspPipelineService : BackgroundService,
     // to register a stub. See CwSidetoneSource for the keying contract.
     private readonly CwSidetoneSource? _sidetone;
     private readonly FrontendDspSceneDiagnosticsService? _frontendDspScene;
-    // FreeDV digital-voice modem coordinator. Null in test constructions.
+    // Plugin-provided audio modem coordinator. Null in test constructions.
     // When FreeDV is the active RX0 mode, the post-demod insert below replaces
     // the received modem audio with decoded speech.
-    private readonly FreeDvService? _freeDv;
+    private readonly AudioModemPluginBridge? _audioModem;
 
     public DspPipelineService(
         RadioService radio,
@@ -1294,7 +1294,7 @@ public class DspPipelineService : BackgroundService,
         CwSidetoneSource? sidetone = null,
         FrontendDspSceneDiagnosticsService? frontendDspScene = null,
         DisplaySettingsStore? displaySettings = null,
-        FreeDvService? freeDv = null,
+        AudioModemPluginBridge? audioModem = null,
         Func<TxAudioIngest?>? txIngestFactory = null,
         Nr3ModelStore? nr3ModelStore = null,
         IKiwiAudioBus? kiwiAudioBus = null,
@@ -1305,7 +1305,7 @@ public class DspPipelineService : BackgroundService,
         _radio = radio;
         _hub = hub;
         _txIqRing = txIqRing;
-        _freeDv = freeDv;
+        _audioModem = audioModem;
         _kiwiAudioBus = kiwiAudioBus;
         _rxAudioMute = rxAudioMute;
         _p3Sidecar = p3Sidecar;
@@ -1397,10 +1397,12 @@ public class DspPipelineService : BackgroundService,
     /// </summary>
     public void DrainFreeDvTxTail() => ResolveTxIngest()?.DrainFreeDvTxTail();
 
+    public bool IsFreeDvTailDraining => ResolveTxIngest()?.IsFreeDvTailDraining ?? false;
+
     /// <summary>True while FreeDV is the active TX modem. Used by
     /// <see cref="TxService"/> to skip the plain voice-mode TX tail delay
     /// (issue #1294) — FreeDV runs its own bounded end-of-over drain instead.</summary>
-    public bool IsFreeDvActive => _freeDv?.Active ?? false;
+    public bool IsFreeDvActive => _audioModem?.Current?.Active ?? false;
 
     /// <summary>
     /// Old-school roger beep tail. Called by TxService on an accepted local
@@ -4961,7 +4963,7 @@ public class DspPipelineService : BackgroundService,
         // un-key — an end-of-over garble in Zeus's own audio, on both RADE and
         // codec2. Key-down drops any pre-TX residual; key-up clears anything
         // decoded from TX bleed. No-op when FreeDV isn't engaged.
-        _freeDv?.FlushRx();
+        _audioModem?.Current?.FlushRx();
         // Falling edge: pick up any PS knob changes that OnRadioStateChanged
         // deferred while we were keyed (HwPeak / Ptol / Advanced / Control).
         // Without this re-trigger a deferred change would sit unapplied until
@@ -6331,12 +6333,13 @@ public class DspPipelineService : BackgroundService,
                 // demodulates+decodes it back to speech in place (same sample
                 // count, internally buffered, silence until sync). Runs BEFORE
                 // the RX audio plugin + squelch so those shape decoded speech.
-                if (_freeDv is not null)
+                var modem = _audioModem?.Current;
+                if (modem is not null)
                 {
-                    _freeDv.SyncMode(state.Mode);
-                    if (_freeDv.Active && audioSampleCount > 0)
+                    modem.SyncMode((byte)state.Mode);
+                    if (modem.Active && audioSampleCount > 0)
                     {
-                        _freeDv.ProcessRx(audioBuf.AsSpan(0, audioSampleCount));
+                        modem.ProcessRx(audioBuf.AsSpan(0, audioSampleCount));
                         // AF (listening) volume for FreeDV is applied HERE, on the
                         // decoded speech. WDSP's panel gain ran on the pre-decode
                         // modem audio that ProcessRx just discarded, so without

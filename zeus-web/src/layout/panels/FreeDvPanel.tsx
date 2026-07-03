@@ -16,8 +16,8 @@
 
 // Native FreeDV digital-voice panel. Reproduces the freedv-gui essentials —
 // submode selector, SYNC lamp + SNR readout, SNR squelch, and the RX/TX text
-// sidechannel — driven by GET /api/freedv/status (polled ~4 Hz) and
-// PUT /api/freedv/config. FreeDV is a normal RxMode ('FREEDV'); selecting it
+// sidechannel — driven by the FreeDV plugin status/config endpoints. FreeDV is
+// a normal RxMode ('FREEDV'); selecting it
 // from the mode row engages the modem (backend runs the SSB demod underneath on
 // the FreeDV band-convention sideband — LSB < 10 MHz, USB ≥, with 60 m as the
 // regulatory USB-only exception). This panel is telemetry/config only — it does
@@ -146,7 +146,7 @@ export function FreeDvPanel() {
     sendConfig({ txText: ownCallsign });
   }, [ownCallsign, status, sendConfig]);
 
-  // Library missing — offer the one-click install instead of dead controls.
+  // Native support missing — the backend plugin is live, but codec2 did not load.
   if (status && !status.nativeAvailable) {
     return (
       <div className="dsp-cfg" style={{ gap: 8, padding: '10px 12px', overflowY: 'auto' }}>
@@ -162,8 +162,8 @@ export function FreeDvPanel() {
             lineHeight: 1.5,
           }}
         >
-          The codec2 modem isn't installed yet, so FreeDV decode/encode can't run.
-          Install it once and FreeDV works every time you pick the mode.
+          The FreeDV plugin is active, but the codec2 native modem did not load
+          from the plugin package for this platform.
         </div>
         <FreeDvInstallSection />
       </div>
@@ -299,7 +299,7 @@ export function FreeDvPanel() {
                 className={`btn sm ${cls}`}
                 title={
                   radeUnavailable
-                    ? 'RADEV1 — neural Radio Autoencoder (native decoder not installed for this platform)'
+                    ? 'RADEV1 — neural Radio Autoencoder (native decoder not packaged for this platform)'
                     : m.rade === true
                       ? 'RADEV1 — neural Radio Autoencoder (RX + TX, LDPC callsign)'
                       : `FreeDV ${m.label}${isCurrent && status.autoDetect && !status.synced ? ' (scanning)' : ''}`
@@ -336,7 +336,7 @@ export function FreeDvPanel() {
           }}
         >
           <strong>RADEV1</strong> is FreeDV's neural (Radio Autoencoder) mode. Its
-          native decoder isn't installed for this platform yet, so this mode won't
+          native decoder isn't packaged for this platform yet, so this mode won't
           produce audio. Use <strong>700D / 700E / 1600</strong> here — RADE ships
           on Windows today; other platforms follow.
         </div>
@@ -577,11 +577,8 @@ function FreeDvBandModeIndicator({
   );
 }
 
-// One-click codec2 install. The backend downloads the prebuilt modem Zeus
-// committed for this platform and reloads it live (see FreeDvNativeInstaller);
-// once it reports installed, the panel's status poll flips nativeAvailable and
-// this whole branch is replaced by the live controls — so the "done" state here
-// is only ever momentary.
+// Native-package status check. The plugin ships its natives in the zip, so the
+// backend reports an already-ready shape for UI parity.
 function FreeDvInstallSection() {
   const [install, setInstall] = useState<FreeDvInstallStatusDto | null>(null);
   const stopPollingRef = useRef<(() => void) | null>(null);
@@ -602,7 +599,7 @@ function FreeDvInstallSection() {
         const s = await getFreeDvInstallStatus(signal);
         if (signal.aborted) return;
         setInstall(s);
-        // Terminal phase (or already installed) — stop polling.
+        // Terminal phase (or native support already ready) — stop polling.
         if (s.installed || (s.phase !== 'downloading' && s.phase !== 'staging')) stopPolling();
       } catch {
         if (signal.aborted) return;
@@ -628,7 +625,7 @@ function FreeDvInstallSection() {
           startPolling();
         }
       })
-      .catch(() => setInstall({ phase: 'failed', percent: 0, message: 'Could not reach the install service.', installed: false }));
+      .catch(() => setInstall({ phase: 'failed', percent: 0, message: 'Could not reach the plugin native support status.', installed: false }));
   }, [startPolling]);
 
   useEffect(
@@ -639,12 +636,12 @@ function FreeDvInstallSection() {
   );
 
   const label = busy
-    ? `Installing… ${install?.percent ?? 0}%`
+    ? `Checking native support… ${install?.percent ?? 0}%`
     : failed
-      ? 'Retry install'
+      ? 'Retry native check'
       : done
-        ? 'Starting modem…'
-        : 'Install FreeDV';
+        ? 'Native support ready'
+        : 'Check native support';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -655,7 +652,7 @@ function FreeDvInstallSection() {
         onClick={() => {
           if (!busy && !done) start();
         }}
-        title="Download the FreeDV (codec2) modem for this platform and enable it"
+        title="Refresh the FreeDV plugin native support status"
         style={{ whiteSpace: 'nowrap', alignSelf: 'flex-start' }}
       >
         {label}

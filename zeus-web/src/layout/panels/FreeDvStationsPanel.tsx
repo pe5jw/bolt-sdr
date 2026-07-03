@@ -2,7 +2,7 @@
 //
 // FreeDvStationsPanel — workspace tile listing live FreeDV stations from the
 // FreeDV Reporter network (qso.freedv.org), with click-to-tune into the Zeus
-// VFO. Backed by freedv-stations-store, which polls GET /api/freedv/stations
+// VFO. Backed by freedv-stations-store, which polls the FreeDV plugin stations endpoint
 // and tunes via setVfo + setMode + setFreeDvConfig.
 
 import { useEffect, useMemo, useState } from 'react';

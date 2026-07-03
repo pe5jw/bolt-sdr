@@ -178,7 +178,8 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
             // operator's stored credentials + rate-limit gate (no second login).
             qrz: granted.HasFlag(PluginCapabilities.NetworkAccess)
                 ? _services.GetService<IQrzLookup>()
-                : null);
+                : null,
+            operatorIdentity: _services.GetService<IOperatorIdentityProvider>());
 
         using (var initCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {

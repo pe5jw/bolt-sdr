@@ -22,6 +22,11 @@ import {
   toggleDigital,
 } from '../../state/enter-digital';
 import { useDigitalPluginStore } from '../../state/digital-plugin-store';
+import {
+  freeDvPluginUnavailableReason,
+  isFreeDvPluginReady,
+  useFreeDvPluginStore,
+} from '../../state/freedv-plugin-store';
 import { useFt8Store } from '../../state/ft8-store';
 import { useWsprStore } from '../../state/wspr-store';
 import { ToolbarFavorites, type ToolbarOption } from './ToolbarFavorites';
@@ -60,9 +65,17 @@ export function ModeFavorites() {
   // re-enable live when the Zeus Digital plugin gate opens; the tooltip
   // distinguishes not-installed / restart-pending / WSPR's coming-soon.
   const digitalReady = useDigitalPluginStore((s) => s.installed && s.live);
+  const freeDvReady = useFreeDvPluginStore((s) => s.installed && s.live);
   const modeOptions = useMemo<readonly ToolbarOption[]>(
     () => [
-      ...WDSP_MODE_OPTIONS,
+      ...WDSP_MODE_OPTIONS.map<ToolbarOption>((option) => {
+        if (option.key !== 'FREEDV' || isFreeDvPluginReady()) return option;
+        return {
+          ...option,
+          disabled: true,
+          title: freeDvPluginUnavailableReason() ?? 'FreeDV plugin is unavailable',
+        };
+      }),
       ...DIGITAL_ENTRY_KEYS.map<ToolbarOption>((key) => {
         const available = isDigitalEntryAvailable(key);
         return available
@@ -78,7 +91,7 @@ export function ModeFavorites() {
     // digitalReady is the reactive input; the availability/reason helpers read
     // the same store imperatively.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [digitalReady],
+    [digitalReady, freeDvReady],
   );
 
   const onSelect = useCallback(
@@ -89,6 +102,7 @@ export function ModeFavorites() {
         toggleDigital(key);
         return;
       }
+      if (key === 'FREEDV' && !isFreeDvPluginReady()) return;
       const m = key as RxMode;
       if (m === activeMode) return;
       gangedReceiverAction({

@@ -79,6 +79,18 @@ public sealed class CatCommandHandlerTests : IDisposable
     }
 
     [Fact]
+    public void Md_Query_AfterGuardedFreeDvSet_ReportsUsb()
+    {
+        var (h, radio, _, o) = Build();
+
+        radio.SetMode(RxMode.FreeDv);
+        h.Dispatch("MD");
+
+        Assert.Equal(RxMode.USB, radio.Snapshot().Mode);
+        Assert.Equal(new[] { "MD2;" }, o);
+    }
+
+    [Fact]
     public void If_Is38CharFramedResponse()
     {
         var (h, radio, _, o) = Build();

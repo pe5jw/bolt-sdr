@@ -21,7 +21,8 @@ internal sealed class PluginContext : IPluginContext
         IRadioStateReader? radio,
         IRadioController? radioController,
         IAudioPlaybackSink? playback = null,
-        IQrzLookup? qrz = null)
+        IQrzLookup? qrz = null,
+        IOperatorIdentityProvider? operatorIdentity = null)
     {
         PluginId = pluginId;
         Manifest = manifest;
@@ -33,6 +34,7 @@ internal sealed class PluginContext : IPluginContext
         RadioController = radioController;
         Playback = playback;
         Qrz = qrz;
+        OperatorIdentity = operatorIdentity;
     }
 
     public string PluginId { get; }
@@ -45,4 +47,5 @@ internal sealed class PluginContext : IPluginContext
     public IRadioController? RadioController { get; }
     public IAudioPlaybackSink? Playback { get; }
     public IQrzLookup? Qrz { get; }
+    public IOperatorIdentityProvider? OperatorIdentity { get; }
 }

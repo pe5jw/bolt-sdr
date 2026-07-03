@@ -148,6 +148,8 @@ public sealed class TxAudioIngest : IDisposable
 
     private long _totalMicSamples;
     private long _totalTxBlocks;
+
+    internal bool IsFreeDvTailDraining => Volatile.Read(ref _tailDraining) != 0;
     private long _droppedFrames;
     // Tracks the last-seen MOX state so Clear() fires exactly once per MOX
     // falling edge instead of on every mic frame that happens to arrive while
@@ -282,13 +284,13 @@ public sealed class TxAudioIngest : IDisposable
         TxService tx,
         StreamingHub hub,
         ILogger<TxAudioIngest> log,
-        FreeDvService? freeDv = null)
+        AudioModemPluginBridge? audioModem = null)
         : this(ring, () => pipeline.CurrentEngine, () => tx.IsMoxOn, hub, log,
                forwardP2: iq => pipeline.ForwardTxIqToP2(iq.Span),
                drainTxTransport: pipeline.DrainTxIqTransportTail,
                txOwnedByTuneDriver: () => tx.IsTunOn || tx.IsTwoToneOn,
                preKeyOpenAtTicks: () => tx.PreKeyOpenAtTicks,
-               freeDv: freeDv)
+               audioModem: audioModem)
     {
     }
 
@@ -308,12 +310,12 @@ public sealed class TxAudioIngest : IDisposable
         Action<int>? onWdspConsumed = null,
         Func<bool>? txOwnedByTuneDriver = null,
         Func<long>? preKeyOpenAtTicks = null,
-        FreeDvService? freeDv = null)
+        AudioModemPluginBridge? audioModem = null)
     {
         _ring = ring;
         _engineProvider = engineProvider;
         _isMoxOn = isMoxOn;
-        _freeDv = freeDv;
+        _audioModem = audioModem;
         _forwardP2 = forwardP2;
         _drainTxTransport = drainTxTransport;
         _onWdspConsumed = onWdspConsumed;
@@ -341,7 +343,7 @@ public sealed class TxAudioIngest : IDisposable
     /// </summary>
     public void DrainFreeDvTxTail()
     {
-        var freeDv = _freeDv;
+        var freeDv = _audioModem?.Current;
         if (freeDv is null || !freeDv.Active) return;
         if (_txOwnedByTuneDriver()) return;        // TUN/two-tone owns TX
         var engine = _engineProvider();
@@ -447,7 +449,7 @@ public sealed class TxAudioIngest : IDisposable
     /// </summary>
     public bool DrainRogerBeepTail()
     {
-        if (_freeDv?.Active == true) return false;
+        if (_audioModem?.Current?.Active == true) return false;
         if (_txOwnedByTuneDriver()) return false;
 
         var engine = _engineProvider();
@@ -554,7 +556,7 @@ public sealed class TxAudioIngest : IDisposable
     /// </summary>
     public bool PrimeTxDspForKeyDown()
     {
-        if (_freeDv?.Active == true) return false;
+        if (_audioModem?.Current?.Active == true) return false;
         if (_txOwnedByTuneDriver()) return false;
 
         var engine = _engineProvider();
@@ -626,7 +628,7 @@ public sealed class TxAudioIngest : IDisposable
     // mic speech is replaced (in place, pre-WDSP) with the transmitted modem
     // signal so WDSP's USB TXA modulates the modem audio onto the carrier.
     // Null in unit tests.
-    private readonly FreeDvService? _freeDv;
+    private readonly AudioModemPluginBridge? _audioModem;
 
     private readonly Action<ReadOnlyMemory<float>>? _forwardP2;
     private readonly Func<TimeSpan, bool>? _drainTxTransport;
@@ -808,7 +810,7 @@ public sealed class TxAudioIngest : IDisposable
                     // MOX fell since our last frame — drain the IQ ring so the
                     // next keyed TX starts clean, without the tail of this one.
                     _ring.Clear();
-                    _freeDv?.FlushTx();
+                    _audioModem?.Current?.FlushTx();
                     _lastSeenMox = false;
                 }
             }
@@ -822,7 +824,7 @@ public sealed class TxAudioIngest : IDisposable
             lock (_sync)
             {
                 _ring.Clear();
-                _freeDv?.FlushTx();
+                _audioModem?.Current?.FlushTx();
                 _lastSeenMox = false;
             }
         }
@@ -938,8 +940,9 @@ public sealed class TxAudioIngest : IDisposable
                 // FreeDV modem signal (in place, same count, internally
                 // buffered). WDSP's USB TXA then SSB-modulates the modem audio.
                 // No-op unless FreeDV is the active mode.
-                if (_freeDv is not null && _freeDv.Active)
-                    _freeDv.ProcessTx(new Span<float>(_scratchMic, 0, blockSize));
+                var modem = _audioModem?.Current;
+                if (modem is not null && modem.Active)
+                    modem.ProcessTx(new Span<float>(_scratchMic, 0, blockSize));
                 int produced = engine.ProcessTxBlock(
                     new ReadOnlySpan<float>(_scratchMic, 0, blockSize),
                     new Span<float>(_scratchIq, 0, 2 * iqOut));

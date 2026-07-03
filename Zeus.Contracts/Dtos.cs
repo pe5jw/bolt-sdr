@@ -54,7 +54,7 @@ public enum RxMode : byte
     // FreeDV digital voice (Codec2 / freedv_api). Zeus-level mode only — it
     // is NOT a WDSP demod mode. At the WDSP layer FreeDV runs as USB; the
     // FreeDV modem is inserted as a streaming filter in the RX/TX audio path
-    // (see FreeDvService). Append-only: byte value 10 is fixed for prefs
+    // through the audio-modem plugin seam. Append-only: byte value 10 is fixed for prefs
     // persistence — never reorder this enum.
     FreeDv,
 }
