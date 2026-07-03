@@ -96,9 +96,15 @@ export function startOrUpdateSignalJammer(
 
   const cfg = normalizeSignalJammerConfig(config);
   const master = audio.createGain();
+  const limiter = audio.createDynamicsCompressor();
   master.gain.value = levelToGain(cfg.level);
-  master.connect(audio.destination);
-  graph = { master, nodes: [master], sources: [] };
+  limiter.threshold.value = -8;
+  limiter.knee.value = 9;
+  limiter.ratio.value = 14;
+  limiter.attack.value = 0.002;
+  limiter.release.value = 0.08;
+  master.connect(limiter).connect(audio.destination);
+  graph = { master, nodes: [master, limiter], sources: [] };
 
   switch (cfg.preset) {
     case 'heterodyne':
@@ -118,7 +124,7 @@ export function startOrUpdateSignalJammer(
 
 function levelToGain(level: number): number {
   const normalized = Math.max(0, Math.min(1, level / 100));
-  return Math.pow(normalized, 1.35) * 0.32;
+  return Math.pow(normalized, 1.18) * 0.52;
 }
 
 function trackNode<T extends AudioNode>(node: T): T {
@@ -191,41 +197,58 @@ function addTone(
 }
 
 function addBarrageJammer(audio: AudioContext, destination: AudioNode, cfg: SignalJammerConfig): void {
-  addNoise(audio, destination, 0.72, 520, 0.45);
-  addNoise(audio, destination, 0.86, 1450, 0.52);
-  addNoise(audio, destination, 0.58, 2550, 0.72);
-  addSweptTone(audio, destination, 340, 3020, 0.31, 0.18, 'triangle');
+  addNoise(audio, destination, 1.05, 360, 0.28);
+  addNoise(audio, destination, 1.16, 880, 0.34);
+  addNoise(audio, destination, 1.08, 1650, 0.38);
+  addNoise(audio, destination, 0.94, 2620, 0.46);
+  addSweptTone(audio, destination, 280, 3180, 0.33, 0.38, 'sawtooth');
+  addSweptTone(audio, destination, 420, 2860, 0.71, 0.20, 'triangle');
   addComb(
     audio,
     destination,
-    [300, 530, 760, 990, 1220, 1450, 1680, 1910, 2140, 2370, 2600],
-    0.068,
+    [
+      280, 425, 570, 715, 860, 1005, 1150, 1295, 1440, 1585, 1730, 1875, 2020, 2165,
+      2310, 2455, 2600, 2745, 2890, 3035,
+    ],
+    0.24,
     cfg.driftHz,
   );
-  addTone(audio, destination, Math.round(cfg.toneHz * 1.73), 0.08, 'sawtooth', Math.round(cfg.driftHz * 0.4));
+  addImpulseTrain(audio, destination, 0.34, 46);
+  addTone(audio, destination, Math.round(cfg.toneHz * 1.73), 0.20, 'sawtooth', Math.round(cfg.driftHz * 0.4));
 }
 
 function addCarrierRake(audio: AudioContext, destination: AudioNode, cfg: SignalJammerConfig): void {
-  addNoise(audio, destination, 0.18, 1500, 0.85);
+  addNoise(audio, destination, 0.34, 1500, 0.62);
   addComb(
     audio,
     destination,
-    [-584, -273, -182, -91, 0, 91, 182, 273, 584]
+    [-1066, -884, -703, -521, -339, -248, -157, -91, 0, 91, 157, 248, 339, 521, 703, 884, 1066]
       .map((offset) => Math.max(250, Math.min(3200, cfg.toneHz + offset))),
-    0.12,
+    0.36,
     cfg.driftHz,
   );
-  addTone(audio, destination, cfg.toneHz + 43, 0.18, 'square', Math.round(cfg.driftHz * 0.35));
-  addSweptTone(audio, destination, 520, 2900, 0.17, 0.13, 'sine');
+  addTone(audio, destination, cfg.toneHz + 43, 0.32, 'square', Math.round(cfg.driftHz * 0.35));
+  addTone(audio, destination, cfg.toneHz - 43, 0.22, 'square', Math.round(cfg.driftHz * 0.28));
+  addSweptTone(audio, destination, 360, 3140, 0.21, 0.22, 'sine');
+  addSweptTone(audio, destination, 520, 2860, 0.56, 0.12, 'triangle');
 }
 
 function addBurstJammer(audio: AudioContext, destination: AudioNode, cfg: SignalJammerConfig): void {
-  const gate = addSquareGate(audio, destination, cfg.pulseRateHz, 0.48, 0.46);
-  addNoise(audio, gate, 0.95, 850, 0.62);
-  addNoise(audio, gate, 0.74, 2200, 0.86);
-  addTone(audio, gate, cfg.toneHz, 0.28, 'square', cfg.driftHz);
-  addSweptTone(audio, gate, 360, 3180, 0.78, 0.18, 'sawtooth');
-  addComb(audio, gate, [420, 760, 1100, 1440, 1780, 2120, 2460, 2800], 0.052, Math.round(cfg.driftHz * 0.35));
+  const gate = addSquareGate(audio, destination, cfg.pulseRateHz, 0.51, 0.49);
+  addNoise(audio, gate, 1.25, 520, 0.34);
+  addNoise(audio, gate, 1.10, 1320, 0.42);
+  addNoise(audio, gate, 0.98, 2470, 0.54);
+  addTone(audio, gate, cfg.toneHz, 0.44, 'square', cfg.driftHz);
+  addSweptTone(audio, gate, 300, 3200, 0.92, 0.36, 'sawtooth');
+  addSweptTone(audio, gate, 460, 2800, 1.71, 0.20, 'square');
+  addComb(
+    audio,
+    gate,
+    [320, 540, 760, 980, 1200, 1420, 1640, 1860, 2080, 2300, 2520, 2740, 2960],
+    0.20,
+    Math.round(cfg.driftHz * 0.35),
+  );
+  addImpulseTrain(audio, gate, 0.56, 72);
 }
 
 function addComb(
@@ -271,6 +294,38 @@ function addSweptTone(
   osc.connect(gain).connect(destination);
   lfo.start();
   osc.start();
+}
+
+function addImpulseTrain(
+  audio: AudioContext,
+  destination: AudioNode,
+  amount: number,
+  densityHz: number,
+): void {
+  const frameCount = Math.max(1, Math.floor(audio.sampleRate * 2.25));
+  const buffer = audio.createBuffer(1, frameCount, audio.sampleRate);
+  const samples = buffer.getChannelData(0);
+  const probability = Math.max(0, densityHz) / audio.sampleRate;
+
+  for (let i = 0; i < samples.length; i += 1) {
+    samples[i] = (samples[i] ?? 0) + (Math.random() * 2 - 1) * 0.08;
+    if (Math.random() >= probability) continue;
+
+    const length = 12 + Math.floor(Math.random() * 130);
+    const polarity = Math.random() < 0.5 ? -1 : 1;
+    for (let j = 0; j < length && i + j < samples.length; j += 1) {
+      const envelope = 1 - j / length;
+      samples[i + j] = (samples[i + j] ?? 0) + polarity * envelope;
+    }
+  }
+
+  const source = trackSource(audio.createBufferSource());
+  const gain = trackNode(audio.createGain());
+  source.buffer = buffer;
+  source.loop = true;
+  gain.gain.value = amount;
+  source.connect(gain).connect(destination);
+  source.start();
 }
 
 function addSquareGate(

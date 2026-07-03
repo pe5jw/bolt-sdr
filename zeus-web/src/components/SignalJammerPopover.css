@@ -187,23 +187,27 @@
   outline-offset: 0;
 }
 
-.sj-text-preview {
-  display: grid;
-  grid-auto-rows: 7px;
-  gap: 1px;
+.sj-text-preview-window {
   width: 100%;
-  max-height: 62px;
+  max-height: 154px;
   margin-bottom: 7px;
   padding: 5px;
-  overflow: hidden;
+  overflow: auto;
   border: 1px solid color-mix(in srgb, var(--fg-0) 10%, transparent);
   border-radius: 6px;
   background: var(--bg-1);
 }
 
+.sj-text-preview {
+  display: grid;
+  gap: 0;
+  align-content: start;
+}
+
 .sj-text-preview span {
-  min-width: 2px;
-  border-radius: 1px;
+  width: 3px;
+  height: 3px;
+  border-radius: 0;
   background: color-mix(in srgb, var(--fg-0) 5%, transparent);
 }
 

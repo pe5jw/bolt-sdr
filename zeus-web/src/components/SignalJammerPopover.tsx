@@ -180,14 +180,20 @@ export function SignalJammerPopover() {
             aria-label="Text to write as sound"
           />
         </label>
-        <div
-          className="sj-text-preview"
-          style={{ gridTemplateColumns: `repeat(${textSpectrogram.columns}, minmax(2px, 1fr))` }}
-          aria-hidden
-        >
-          {Array.from(textSpectrogram.pixels).map((pixel, index) => (
-            <span key={`${textSpectrogram.text}-${index}`} className={pixel ? 'is-on' : ''} />
-          ))}
+        <div className="sj-text-preview-window" aria-hidden>
+          <div
+            className="sj-text-preview"
+            style={{
+              width: `${textSpectrogram.columns * 3}px`,
+              height: `${textSpectrogram.rows * 3}px`,
+              gridTemplateColumns: `repeat(${textSpectrogram.columns}, 3px)`,
+              gridTemplateRows: `repeat(${textSpectrogram.rows}, 3px)`,
+            }}
+          >
+            {Array.from(textSpectrogram.pixels).map((pixel, index) => (
+              <span key={`${textSpectrogram.text}-${index}`} className={pixel ? 'is-on' : ''} />
+            ))}
+          </div>
         </div>
         <div className="sj-text-actions">
           <button
@@ -225,8 +231,8 @@ export function SignalJammerPopover() {
         <SliderRow
           label="Speed"
           value={`${Math.round(textPixelsPerSecond)} px/s`}
-          min={5}
-          max={30}
+          min={2}
+          max={15}
           step={1}
           sliderValue={textPixelsPerSecond}
           onChange={setTextPixelsPerSecond}

@@ -28,11 +28,11 @@ type SinkSelectableAudioContext = AudioContext & {
 const GLYPH_ROWS = 7;
 const GLYPH_WIDTH = 5;
 const GLYPH_ADVANCE = 6;
-const RENDER_SCALE_X = 4;
-const RENDER_SCALE_Y = 4;
+const RENDER_SCALE_X = 5;
+const RENDER_SCALE_Y = 6;
 const ROWS = GLYPH_ROWS * RENDER_SCALE_Y;
 const DEFAULT_TEXT = 'CQ QRM';
-const DEFAULT_PIXELS_PER_SECOND = 6;
+const DEFAULT_PIXELS_PER_SECOND = 3;
 const DEFAULT_MIN_HZ = 300;
 const DEFAULT_MAX_HZ = 2600;
 const TAU = Math.PI * 2;
@@ -198,7 +198,7 @@ export function playTextSpectrogram(
 
 function normalizedPixelsPerSecond(value: number | undefined): number {
   if (!Number.isFinite(value)) return DEFAULT_PIXELS_PER_SECOND;
-  return Math.max(5, Math.min(30, value as number));
+  return Math.max(2, Math.min(15, value as number));
 }
 
 function normalizedHz(value: number | undefined, fallback: number): number {

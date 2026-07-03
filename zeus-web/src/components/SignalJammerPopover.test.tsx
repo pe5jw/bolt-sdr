@@ -70,6 +70,21 @@ describe('SignalJammerPopover', () => {
     unmount();
   });
 
+  it('renders typed spectrogram preview in a scrollable fixed-size window', () => {
+    const { container, unmount } = render(createElement(SignalJammerPopover));
+    const frame = container.querySelector<HTMLDivElement>('.sj-text-preview-window');
+    const preview = container.querySelector<HTMLDivElement>('.sj-text-preview');
+
+    expect(frame).toBeTruthy();
+    expect(preview).toBeTruthy();
+    expect(preview?.style.gridTemplateRows).toContain('42');
+    expect(preview?.style.gridTemplateColumns).toContain('175');
+    expect(preview?.style.width).toBe('525px');
+    expect(preview?.style.height).toBe('126px');
+
+    unmount();
+  });
+
   it('queues typed spectrogram audio for TX when WRITE is clicked', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(
