@@ -28,6 +28,11 @@ export type WidebandZoomResult = {
   anchorHz: number;
 };
 
+function trimFixed(value: number, decimals: number): string {
+  const fixed = value.toFixed(decimals);
+  return fixed.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+}
+
 export function sourceSpanHz(width: number, hzPerPixel: number): number {
   return width > 0 && hzPerPixel > 0 ? width * hzPerPixel : 0;
 }
@@ -122,4 +127,20 @@ export function zoomWidebandViewport(i: {
       ? WIDEBAND_CENTER_HZ
       : clampWidebandCenter(anchorHz - (pointerFraction - 0.5) * nextSpanHz, nextSpanHz);
   return { centerHz, hzPerPixel, anchorHz };
+}
+
+export function formatWidebandRangeLabel(startHz: number, endHz: number): string {
+  const loHz = Math.max(WIDEBAND_MIN_HZ, Math.min(startHz, endHz));
+  const hiHz = Math.min(WIDEBAND_MAX_HZ, Math.max(startHz, endHz));
+  const spanHz = Math.max(0, hiHz - loHz);
+  const decimals = spanHz >= 10_000_000 ? 0 : spanHz >= 1_000_000 ? 2 : spanHz >= 100_000 ? 3 : 4;
+  return `${trimFixed(loHz / 1e6, decimals)}-${trimFixed(hiHz / 1e6, decimals)} MHz`;
+}
+
+export function formatWidebandZoomRatio(sourceHzPerPixel: number, hzPerPixel: number): string {
+  if (!(sourceHzPerPixel > 0) || !(hzPerPixel > 0)) return '1x';
+  const ratio = Math.max(1, sourceHzPerPixel / hzPerPixel);
+  if (ratio >= 100) return `${Math.round(ratio)}x`;
+  if (ratio >= 10) return `${trimFixed(ratio, 1)}x`;
+  return `${trimFixed(ratio, 2)}x`;
 }

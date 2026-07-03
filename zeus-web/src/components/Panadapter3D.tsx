@@ -37,6 +37,7 @@ import { ChatRosterOverlay } from './ChatRosterOverlay';
 import { PeakMarkerOverlay } from './PeakMarkerOverlay';
 import { NotchOverlay } from './NotchOverlay';
 import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
+import { WidebandViewportControls } from './WidebandViewportControls';
 
 type Panadapter3DProps = {
   receiver?: ReceiverKey;
@@ -77,6 +78,17 @@ export function Panadapter3D({
   const popActive = popEnabled && !moxOn && !tunOn;
   const popIntensityCss = Math.max(0, Math.min(1, popRenderIntensity / 100)).toFixed(2);
   const receiverFilterColor = spectrumReceiverFilterColor(receiver);
+  const displayWidth = useDisplayStore((s) => {
+    const slice = selectDisplaySlice(s, receiver);
+    return slice.width || slice.panDb?.length || slice.wfDb?.length || 0;
+  });
+  const displayHzPerPixel = useDisplayStore((s) => selectDisplaySlice(s, receiver).hzPerPixel);
+  const displayCenterHz = useDisplayStore((s) => Number(selectDisplaySlice(s, receiver).centerHz));
+  const widebandDisplay = isWidebandDisplayGeometry({
+    width: displayWidth,
+    hzPerPixel: displayHzPerPixel,
+    centerHz: displayCenterHz,
+  });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -465,24 +477,26 @@ export function Panadapter3D({
       } as CSSProperties}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
-      {rxIndex === 0 && !multiRx && <BandOverlay receiver={receiver} />}
-      <div
-        className="pointer-events-none absolute z-[25] rounded-sm px-2 py-0.5 font-mono text-[10px]"
-        style={{
-          top: 24,
-          left: 8,
-          background: 'rgba(8, 10, 14, 0.78)',
-          color: receiverFilterColor,
-          border: '1px solid rgba(255,255,255,0.16)',
-        }}
-      >
-        {rxLabel} · {(vfoHz / 1e6).toFixed(6)}
-        {stitched && foreground ? ' · FOCUS' : ''}
-        {status === 'ready' ? ' · 3D' : ''}
-      </div>
-      <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
+      {rxIndex === 0 && !multiRx && !widebandDisplay && <BandOverlay receiver={receiver} />}
+      {!widebandDisplay && (
+        <div
+          className="pointer-events-none absolute z-[25] rounded-sm px-2 py-0.5 font-mono text-[10px]"
+          style={{
+            top: 24,
+            left: 8,
+            background: 'rgba(8, 10, 14, 0.78)',
+            color: receiverFilterColor,
+            border: '1px solid rgba(255,255,255,0.16)',
+          }}
+        >
+          {rxLabel} · {(vfoHz / 1e6).toFixed(6)}
+          {stitched && foreground ? ' · FOCUS' : ''}
+          {status === 'ready' ? ' · 3D' : ''}
+        </div>
+      )}
+      {!widebandDisplay && <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />}
       <FilterCursorOverlay containerRef={containerRef} receiver={receiver} />
-      {rxIndex === 0 && (!stitched || foreground) && (
+      {rxIndex === 0 && !widebandDisplay && (!stitched || foreground) && (
         <>
           <SpotOverlay />
           <ChatRosterOverlay />
@@ -492,7 +506,8 @@ export function Panadapter3D({
         </>
       )}
       <FreqAxis receiver={receiver} stitched={stitched} />
-      {rxIndex === 0 && <DbScale />}
+      {widebandDisplay && <WidebandViewportControls containerRef={containerRef} receiver={receiver} />}
+      {rxIndex === 0 && !widebandDisplay && <DbScale />}
       {status === 'unsupported' && (
         <div
           role="status"
