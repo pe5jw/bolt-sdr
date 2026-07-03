@@ -12,6 +12,7 @@ import { ConnectPanel } from './ConnectPanel';
 const apiMocks = vi.hoisted(() => ({
   connectP3: vi.fn(),
   fetchRadios: vi.fn(),
+  fetchProtocol3SidecarStatus: vi.fn(),
   fetchState: vi.fn(),
   listPrefsDatabases: vi.fn(),
 }));
@@ -26,6 +27,7 @@ vi.mock('../api/client', async () => {
     ...actual,
     connectP3: apiMocks.connectP3,
     fetchRadios: apiMocks.fetchRadios,
+    fetchProtocol3SidecarStatus: apiMocks.fetchProtocol3SidecarStatus,
     fetchState: apiMocks.fetchState,
     listPrefsDatabases: apiMocks.listPrefsDatabases,
   };
@@ -77,6 +79,12 @@ describe('ConnectPanel', () => {
       },
     });
     apiMocks.connectP3.mockResolvedValue({});
+    apiMocks.fetchProtocol3SidecarStatus.mockResolvedValue({
+      configured: true,
+      running: false,
+      diagnosticsUrl: null,
+      sidecarOutput: null,
+    });
     apiMocks.fetchState.mockImplementation(async () => stateSnapshot());
     apiMocks.listPrefsDatabases.mockResolvedValue({
       activeRelativePath: 'zeus-prefs.db',
@@ -125,6 +133,46 @@ describe('ConnectPanel', () => {
       sampleRate: 1_536_000,
     });
     expect(audioMocks.start).toHaveBeenCalled();
+    unmount();
+  });
+
+  it('blocks a Protocol 3 discovery row when the local sidecar is unconfigured', async () => {
+    const p3Radio: RadioInfoDto = {
+      macAddress: '',
+      ipAddress: '192.168.1.25',
+      boardId: 'G2',
+      firmwareVersion: '0x024001BF',
+      busy: false,
+      details: {
+        protocol: 'P3',
+        protocol3Available: 'true',
+        protocol3Port: '1030',
+      },
+    };
+    apiMocks.fetchRadios.mockResolvedValue([p3Radio]);
+    apiMocks.fetchProtocol3SidecarStatus.mockResolvedValue({
+      configured: false,
+      running: false,
+      diagnosticsUrl: null,
+      sidecarOutput: null,
+    });
+
+    const { container, unmount } = render(createElement(ConnectPanel));
+    await flushEffects();
+
+    const connect = exactButtons(container, 'Connect')[0];
+    if (!connect) throw new Error('expected a Connect button for the Protocol 3 row');
+    expect(connect.disabled).toBe(false);
+    expect(connect.title).toContain('local N9DSP sidecar configuration');
+
+    await act(async () => {
+      connect.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.connectP3).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('local N9DSP sidecar configuration');
     unmount();
   });
 });

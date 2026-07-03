@@ -671,6 +671,13 @@ export type Protocol3PresenceDto = {
   gatewareVersion: number | null;
 };
 
+export type Protocol3SidecarStatusDto = {
+  configured: boolean;
+  running: boolean;
+  diagnosticsUrl: string | null;
+  sidecarOutput: string | null;
+};
+
 export type HardwareDiagnosticItemDto = {
   field: string;
   source?: string;
@@ -2787,6 +2794,20 @@ function normalizeProtocol3Presence(raw: unknown): Protocol3PresenceDto {
     capabilityFlags: typeof r.capabilityFlags === 'string' ? r.capabilityFlags : null,
     firmwareVersion: typeof r.firmwareVersion === 'number' ? r.firmwareVersion : null,
     gatewareVersion: typeof r.gatewareVersion === 'number' ? r.gatewareVersion : null,
+  };
+}
+
+function normalizeProtocol3SidecarStatus(raw: unknown): Protocol3SidecarStatusDto {
+  const root = (raw ?? {}) as Record<string, unknown>;
+  const bridge =
+    root.bridge && typeof root.bridge === 'object'
+      ? (root.bridge as Record<string, unknown>)
+      : root;
+  return {
+    configured: Boolean(bridge.configured),
+    running: Boolean(bridge.running),
+    diagnosticsUrl: typeof bridge.diagnosticsUrl === 'string' ? bridge.diagnosticsUrl : null,
+    sidecarOutput: typeof bridge.sidecarOutput === 'string' ? bridge.sidecarOutput : null,
   };
 }
 
@@ -4907,6 +4928,16 @@ export function fetchProtocol3Presence(
     `/api/protocol3/presence?ip=${encodeURIComponent(ip)}`,
     { signal },
     normalizeProtocol3Presence,
+  );
+}
+
+export function fetchProtocol3SidecarStatus(
+  signal?: AbortSignal,
+): Promise<Protocol3SidecarStatusDto> {
+  return jsonFetch(
+    '/api/protocol3/sidecar',
+    { signal },
+    normalizeProtocol3SidecarStatus,
   );
 }
 
