@@ -599,6 +599,8 @@ public static class ZeusHost
         // Resolve at startup so the MicPcmReceived subscription attaches before the
         // first client connects (lazy resolution would leave early frames unhandled).
         builder.Services.AddHostedService<TxAudioIngestStartup>();
+        builder.Services.AddSingleton<SignalJammerTxSource>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<SignalJammerTxSource>());
         builder.Services.AddSingleton<TxMetersService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<TxMetersService>());
         // TxTuneDriver pumps silent mic blocks through WDSP TXA while TUN is on so

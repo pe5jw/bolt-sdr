@@ -6,6 +6,7 @@
 //                         Christian Suarez (N9WAR), and contributors.
 
 import { useEffect } from 'react';
+import { setSignalJammerTx } from '../api/signal-jammer';
 import { startOrUpdateSignalJammer, stopSignalJammer } from '../audio/signal-jammer';
 import { useAudioDeviceStore } from '../state/audio-device-store';
 import { useSignalJammerStore } from '../state/signal-jammer-store';
@@ -18,17 +19,48 @@ export function SignalJammerRuntime() {
   const toneHz = useSignalJammerStore((s) => s.toneHz);
   const driftHz = useSignalJammerStore((s) => s.driftHz);
   const pulseRateHz = useSignalJammerStore((s) => s.pulseRateHz);
-  const setActive = useSignalJammerStore((s) => s.setActive);
   const setRuntimeStatus = useSignalJammerStore((s) => s.setRuntimeStatus);
   const outputDeviceId = useAudioDeviceStore((s) => s.browserOutputDeviceId);
 
-  useEffect(() => () => stopSignalJammer(), []);
+  useEffect(
+    () => () => {
+      const s = useSignalJammerStore.getState();
+      stopSignalJammer();
+      void setSignalJammerTx({
+        enabled: false,
+        preset: s.preset,
+        level: s.level,
+        toneHz: s.toneHz,
+        driftHz: s.driftHz,
+        pulseRateHz: s.pulseRateHz,
+      }).catch(() => {});
+    },
+    [],
+  );
 
   useEffect(() => {
+    const controller = new AbortController();
+    const txEnabled = enabled && active;
+    void setSignalJammerTx(
+      {
+        enabled: txEnabled,
+        preset,
+        level,
+        toneHz,
+        driftHz,
+        pulseRateHz,
+      },
+      controller.signal,
+    ).catch((err) => {
+      if (controller.signal.aborted) return;
+      console.warn('signal-jammer.tx.update failed', err);
+      if (txEnabled) setRuntimeStatus('unavailable', 'TX QRM unavailable');
+    });
+
     if (!enabled) {
       stopSignalJammer();
       setRuntimeStatus('idle');
-      return;
+      return () => controller.abort();
     }
 
     if (!active) {
@@ -36,7 +68,7 @@ export function SignalJammerRuntime() {
       if (useSignalJammerStore.getState().runtimeStatus === 'running') {
         setRuntimeStatus('idle');
       }
-      return;
+      return () => controller.abort();
     }
 
     const started = startOrUpdateSignalJammer(
@@ -45,11 +77,11 @@ export function SignalJammerRuntime() {
     );
     if (started) {
       setRuntimeStatus('running');
-      return;
+      return () => controller.abort();
     }
 
-    setActive(false);
-    setRuntimeStatus('unavailable', 'Web Audio unavailable');
+    setRuntimeStatus('running', 'Local monitor unavailable');
+    return () => controller.abort();
   }, [
     active,
     driftHz,
@@ -58,7 +90,6 @@ export function SignalJammerRuntime() {
     outputDeviceId,
     preset,
     pulseRateHz,
-    setActive,
     setRuntimeStatus,
     toneHz,
   ]);

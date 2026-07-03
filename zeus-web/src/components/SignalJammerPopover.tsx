@@ -7,10 +7,12 @@
 
 import { useMemo, useState } from 'react';
 import { Play, X } from 'lucide-react';
+import { sendSignalJammerText } from '../api/signal-jammer';
 import {
   estimateTextSpectrogramDurationSec,
   playTextSpectrogram,
   renderTextSpectrogram,
+  synthesizeTextSpectrogramSamples,
 } from '../audio/text-spectrogram';
 import { useAudioDeviceStore } from '../state/audio-device-store';
 import { useEasterEggStore } from '../state/easter-egg-store';
@@ -192,17 +194,21 @@ export function SignalJammerPopover() {
             type="button"
             className="btn sm"
             onClick={() => {
-              const ok = playTextSpectrogram(
-                textSoundText,
-                {
-                  pixelsPerSecond: textPixelsPerSecond,
-                  minHz: 300,
-                  maxHz: 2600,
-                  level,
-                },
-                outputDeviceId,
-              );
+              const options = {
+                pixelsPerSecond: textPixelsPerSecond,
+                minHz: 300,
+                maxHz: 2600,
+                level,
+              };
+              const rendered = synthesizeTextSpectrogramSamples(textSoundText, options, 48000);
+              const ok = playTextSpectrogram(textSoundText, options, outputDeviceId);
               setTextPlayStatus(ok ? 'playing' : 'unavailable');
+              void sendSignalJammerText(rendered.samples, rendered.sampleRate)
+                .then(() => setTextPlayStatus('playing'))
+                .catch((err) => {
+                  console.warn('signal-jammer.text.tx failed', err);
+                  setTextPlayStatus('unavailable');
+                });
             }}
           >
             <Play size={13} strokeWidth={2.4} aria-hidden />

@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { createElement } from 'react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useEasterEggStore } from '../state/easter-egg-store';
 import { useSignalJammerStore } from '../state/signal-jammer-store';
@@ -23,6 +23,7 @@ describe('SignalJammerPopover', () => {
     });
     useSignalJammerStore.getState().__resetForTests();
   });
+  afterEach(() => vi.restoreAllMocks());
 
   it('enables the hidden QRM control from the popout', () => {
     const { container, unmount } = render(createElement(SignalJammerPopover));
@@ -65,6 +66,47 @@ describe('SignalJammerPopover', () => {
 
     expect(input).toBeTruthy();
     expect(useSignalJammerStore.getState().textSoundText).toBe('N9WAR');
+
+    unmount();
+  });
+
+  it('queues typed spectrogram audio for TX when WRITE is clicked', () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          enabled: false,
+          preset: 'hash',
+          level: 28,
+          toneHz: 980,
+          driftHz: 80,
+          pulseRateHz: 3.5,
+          textQueued: true,
+          textPendingSamples: 960,
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const { container, unmount } = render(createElement(SignalJammerPopover));
+    const writeButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('WRITE'));
+
+    act(() => {
+      writeButton?.click();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/tx/qrm/text',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string) as {
+      samplesBase64?: string;
+      sampleRate?: number;
+    };
+    expect(body.sampleRate).toBe(48000);
+    expect(body.samplesBase64).toEqual(expect.any(String));
 
     unmount();
   });
