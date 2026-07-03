@@ -53,22 +53,26 @@ public sealed class Protocol3SidecarFrameForwarderTests
     {
         var oldDisplay = Environment.GetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_POLL_MS");
         var oldDisplayMaxWidth = Environment.GetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_MAX_WIDTH");
+        var oldDisplayEdgeGuard = Environment.GetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_EDGE_GUARD_HZ");
         var oldAudio = Environment.GetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_AUDIO_POLL_MS");
         try
         {
             Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_POLL_MS", null);
             Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_MAX_WIDTH", null);
+            Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_EDGE_GUARD_HZ", null);
             Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_AUDIO_POLL_MS", null);
             var configuration = new ConfigurationBuilder().Build();
 
             Assert.Equal(20, Protocol3SidecarFrameForwarder.ResolveDisplayPollMs(configuration));
             Assert.Equal(4096, Protocol3SidecarFrameForwarder.ResolveDisplayMaxWidth(configuration));
+            Assert.Equal(6000.0, Protocol3SidecarFrameForwarder.ResolveDisplayEdgeGuardHz(configuration));
             Assert.Equal(10, Protocol3SidecarFrameForwarder.ResolveAudioPollMs(configuration));
         }
         finally
         {
             Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_POLL_MS", oldDisplay);
             Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_MAX_WIDTH", oldDisplayMaxWidth);
+            Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_EDGE_GUARD_HZ", oldDisplayEdgeGuard);
             Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_AUDIO_POLL_MS", oldAudio);
         }
     }
@@ -78,28 +82,33 @@ public sealed class Protocol3SidecarFrameForwarderTests
     {
         var oldDisplay = Environment.GetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_POLL_MS");
         var oldDisplayMaxWidth = Environment.GetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_MAX_WIDTH");
+        var oldDisplayEdgeGuard = Environment.GetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_EDGE_GUARD_HZ");
         var oldAudio = Environment.GetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_AUDIO_POLL_MS");
         try
         {
             Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_POLL_MS", "8");
             Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_MAX_WIDTH", null);
+            Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_EDGE_GUARD_HZ", null);
             Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_AUDIO_POLL_MS", null);
             var configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["Zeus:Protocol3:Sidecar:DisplayMaxWidth"] = "1024",
+                    ["Zeus:Protocol3:Sidecar:DisplayEdgeGuardHz"] = "2400",
                     ["Zeus:Protocol3:Sidecar:AudioPollMs"] = "2",
                 })
                 .Build();
 
             Assert.Equal(8, Protocol3SidecarFrameForwarder.ResolveDisplayPollMs(configuration));
             Assert.Equal(1024, Protocol3SidecarFrameForwarder.ResolveDisplayMaxWidth(configuration));
+            Assert.Equal(2400.0, Protocol3SidecarFrameForwarder.ResolveDisplayEdgeGuardHz(configuration));
             Assert.Equal(2, Protocol3SidecarFrameForwarder.ResolveAudioPollMs(configuration));
         }
         finally
         {
             Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_POLL_MS", oldDisplay);
             Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_MAX_WIDTH", oldDisplayMaxWidth);
+            Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_DISPLAY_EDGE_GUARD_HZ", oldDisplayEdgeGuard);
             Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_AUDIO_POLL_MS", oldAudio);
         }
     }
@@ -270,6 +279,40 @@ public sealed class Protocol3SidecarFrameForwarderTests
         Assert.Equal(50.0f, frame.HzPerPixel);
         Assert.Equal(new[] { -95.0f, -75.0f }, frame.PanDb.ToArray());
         Assert.Equal(new[] { -105.0f, -85.0f }, frame.WfDb.ToArray());
+    }
+
+    [Fact]
+    public void ApplyDisplayEdgeGuard_FloorsAndTapersUnreliableDdcEdges()
+    {
+        var pan = new[]
+        {
+            -50.0f, -60.0f, -70.0f, -80.0f, -90.0f,
+            -92.0f, -94.0f, -96.0f, -98.0f, -100.0f,
+            -100.0f, -98.0f, -96.0f, -94.0f, -92.0f,
+            -90.0f, -80.0f, -70.0f, -60.0f, -50.0f
+        };
+        var wf = new[]
+        {
+            -55.0f, -65.0f, -75.0f, -85.0f, -95.0f,
+            -97.0f, -99.0f, -101.0f, -103.0f, -105.0f,
+            -105.0f, -103.0f, -101.0f, -99.0f, -97.0f,
+            -95.0f, -85.0f, -75.0f, -65.0f, -55.0f
+        };
+
+        Protocol3SidecarFrameForwarder.ApplyDisplayEdgeGuard(
+            pan,
+            wf,
+            hzPerPixel: 1000.0f,
+            edgeGuardHz: 2000.0);
+
+        Assert.Equal(-140.0f, pan[0]);
+        Assert.Equal(-140.0f, pan[1]);
+        Assert.Equal(-140.0f, pan[^1]);
+        Assert.Equal(-140.0f, pan[^2]);
+        Assert.InRange(pan[2], -140.0f, -70.0f);
+        Assert.InRange(pan[^3], -140.0f, -60.0f);
+        Assert.Equal(-90.0f, pan[4]);
+        Assert.Equal(-95.0f, wf[4]);
     }
 
     [Fact]
