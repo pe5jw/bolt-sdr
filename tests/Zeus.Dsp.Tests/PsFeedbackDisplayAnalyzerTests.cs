@@ -94,12 +94,21 @@ public class PsFeedbackDisplayAnalyzerTests
             engine.SetPsEnabled(true);
             FeedToneBlocks(engine, 64);
 
+            // WDSP's analyzer computes FFTs on its own worker thread, so pixel
+            // freshness lags the Spectrum0 feed by wall-clock — poll with a
+            // real sleep or a loaded CI runner finishes the loop before the
+            // first FFT lands (observed: pass locally, fail on the macos-arm64
+            // runner with a tight no-sleep loop).
             bool gotPan = false, gotWf = false;
-            for (int attempt = 0; attempt < 20 && !(gotPan && gotWf); attempt++)
+            for (int attempt = 0; attempt < 100 && !(gotPan && gotWf); attempt++)
             {
                 gotPan |= engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Panadapter, px);
                 gotWf |= engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Waterfall, px);
-                if (!(gotPan && gotWf)) FeedToneBlocks(engine, 8);
+                if (!(gotPan && gotWf))
+                {
+                    FeedToneBlocks(engine, 8);
+                    Thread.Sleep(25);
+                }
             }
             Assert.True(gotPan, "PS-feedback panadapter pixels never became fresh at 192k RX");
             Assert.True(gotWf, "PS-feedback waterfall pixels never became fresh at 192k RX");
@@ -132,11 +141,16 @@ public class PsFeedbackDisplayAnalyzerTests
             FeedToneBlocks(engine, 64);
 
             var px = new float[Width];
+            // Same async-FFT polling contract as the 192k test above.
             bool got = false;
-            for (int attempt = 0; attempt < 20 && !got; attempt++)
+            for (int attempt = 0; attempt < 100 && !got; attempt++)
             {
                 got = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Panadapter, px);
-                if (!got) FeedToneBlocks(engine, 8);
+                if (!got)
+                {
+                    FeedToneBlocks(engine, 8);
+                    Thread.Sleep(25);
+                }
             }
             Assert.True(got, "PS-feedback pixels never became fresh at 48k RX (TX-geometry path)");
 
