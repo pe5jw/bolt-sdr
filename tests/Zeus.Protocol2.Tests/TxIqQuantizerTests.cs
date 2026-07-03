@@ -103,4 +103,34 @@ public class TxIqQuantizerTests
         Assert.Equal(1, after.QueuedPackets);
         Assert.Equal(1u, after.NextSequence);
     }
+
+    [Fact]
+    public void SetMox_On_DropsStaleQueuedTxIqBeforeKeyDown()
+    {
+        var client = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
+        using var sock = new System.Net.Sockets.Socket(
+            System.Net.Sockets.AddressFamily.InterNetwork,
+            System.Net.Sockets.SocketType.Dgram,
+            System.Net.Sockets.ProtocolType.Udp);
+        var sockField = typeof(Protocol2Client)
+            .GetField("_sock", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var rxTaskField = typeof(Protocol2Client)
+            .GetField("_rxTask", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        sockField.SetValue(client, sock);
+        rxTaskField.SetValue(client, Task.CompletedTask);
+        var iq = new float[(240 + 100) * 2];
+        Array.Fill(iq, 0.1f);
+        client.SendTxIq(iq);
+        var before = client.TxIqDiagnosticsSnapshot();
+
+        rxTaskField.SetValue(client, null);
+        client.SetMox(true);
+        var after = client.TxIqDiagnosticsSnapshot();
+
+        Assert.Equal(100, before.ScratchComplexSamples);
+        Assert.Equal(1, before.QueuedPackets);
+        Assert.Equal(0, after.ScratchComplexSamples);
+        Assert.Equal(0, after.QueuedPackets);
+        Assert.Equal(1, after.ResetDrainedPackets);
+    }
 }

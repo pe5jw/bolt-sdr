@@ -1256,7 +1256,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public void SetMox(bool on)
     {
         _moxOn = on;
-        if (!on) ResetTxIq();
+        ResetTxIq();
         // Unkey edge: apply any antenna selection deferred while keyed before the
         // HighPriority re-push, so the relay matrix switches at idle and the very
         // next HP frame carries the operator's new antenna. Only flush when fully
@@ -1268,7 +1268,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public void SetTune(bool on)
     {
         _tuneActive = on;
-        if (!on) ResetTxIq();
+        ResetTxIq();
         if (!on && !_moxOn) FlushPendingAntennas();
         if (_rxTask is not null) PushTransmitEdge(on);
     }
@@ -1476,9 +1476,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private void ResetTxIq()
     {
         lock (_txIqGate) _txIqScratchCount = 0;
-        // Drain any queued-but-unsent packets so a fresh key-down starts
-        // from an empty FIFO model and the radio isn't playing 10 ms of
-        // the previous transmission's IQ when PTT re-engages.
+        // Drain queued-but-unsent packets on BOTH transmit edges so a fresh
+        // key-down starts from an empty client-side FIFO model and the radio
+        // isn't fed the previous transmission's IQ when PTT re-engages.
         long drained = 0;
         while (_txIqQueue.Reader.TryRead(out _))
         {
