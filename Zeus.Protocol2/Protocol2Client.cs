@@ -258,13 +258,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // PA settings — pushed from RadioService when PaSettingsStore changes or
     // the VFO crosses a band edge. _paEnabled is the global toggle that lands
     // in CmdGeneral[58]; _driveByte is the pre-calibrated drive level for
-    // CmdHighPriority[345]; _ocTxMask/_ocRxMask drive CmdHighPriority[1401].
-    // The piHPSDR-style global "OCtune" override was removed in #124 for
-    // hardware-safety: OC during TUN follows OcTx, identical to TX.
+    // CmdHighPriority[345]; _ocTxMask/_ocRxMask/_ocTuneMask drive
+    // CmdHighPriority[1401].
+    //
+    // _ocTuneMask (issue #1325) is a per-band additive mask ORed on top of
+    // _ocTxMask while _tuneActive is set (Wire = OcTx | OcTune during TUN).
+    // Distinct from the removed piHPSDR-style global "OCtune" override (#124):
+    // that override REPLACED the per-band OcTx byte and could hand an external
+    // amp a confused band-select state during a steady tune carrier. The
+    // additive shape here can only ADD bits — never replace the band-select
+    // bits already in OcTx — so filter selection stays intact under TUN.
     private bool _paEnabled = true;
     private byte _driveByte;
     private byte _ocTxMask;
     private byte _ocRxMask;
+    private byte _ocTuneMask;
     // Anvelina-PRO3 DX OC extension (issue #407, EU2AV
     // Open_Collector_Anvelina_DX spec). 4-bit masks (bits 0..3 -> DX OUT
     // 7..10). Wire-encoded into CmdHighPriority[1397] bits [4:1] only when
@@ -1117,10 +1125,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
-    public void SetOcMasks(byte txMask, byte rxMask)
+    public void SetOcMasks(byte txMask, byte rxMask, byte tuneMask = 0)
     {
         _ocTxMask = (byte)(txMask & 0x7F);
         _ocRxMask = (byte)(rxMask & 0x7F);
+        _ocTuneMask = (byte)(tuneMask & 0x7F);
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
@@ -2729,13 +2738,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         p[345] = _driveByte;
 
         // OC outputs (7-bit mask) shifted left by 1 into byte 1401. The TX
-        // mask applies whenever MOX is on (whether keyed by the operator or
-        // by TUN) and the RX mask applies otherwise. The piHPSDR-style global
-        // "OCtune" override was removed in #124 for hardware-safety reasons:
-        // a global override layered on top of the per-band OC TX mask could
+        // mask applies whenever MOX or TUN is on and the RX mask applies
+        // otherwise. Additionally, when TUN is active the per-band OcTune mask
+        // is ORed on top of OcTx (Wire = OcTx | OcTune during TUN — issue
+        // #1325). The additive shape only ADDS bits on top of the band's
+        // already-correct OcTx mask, so the band-select state stays intact —
+        // distinct from the removed piHPSDR-style global "OCtune" override
+        // (#124), which layered a single override across all bands and could
         // hand an external amp a confused band-select state during a steady
-        // tune carrier and damage the finals. Thetis behaves this way too.
-        byte ocBits = (_moxOn || _tuneActive) ? _ocTxMask : _ocRxMask;
+        // tune carrier.
+        byte ocBits;
+        if (_tuneActive)      ocBits = (byte)(_ocTxMask | _ocTuneMask);
+        else if (_moxOn)       ocBits = _ocTxMask;
+        else                   ocBits = _ocRxMask;
         p[1401] = (byte)((ocBits & 0x7F) << 1);
 
         // Anvelina-PRO3 DX OC extension (USEROUT7..10) at byte 1397, bits
@@ -2853,9 +2868,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1027));
 
         _log.LogInformation(
-            "p2.cmd_hp.tx run={Run} mox={Mox} tun={Tun} board={Board} variant={Variant} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocDxTx=0x{OcDxTx:X2} ocDxRx=0x{OcDxRx:X2} -> p[1401]=0x{B1401:X2} p[1397]=0x{B1397:X2}",
+            "p2.cmd_hp.tx run={Run} mox={Mox} tun={Tun} board={Board} variant={Variant} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocTune=0x{OcTune:X2} ocDxTx=0x{OcDxTx:X2} ocDxRx=0x{OcDxRx:X2} -> p[1401]=0x{B1401:X2} p[1397]=0x{B1397:X2}",
             run, _moxOn, _tuneActive, _boardKind, _variant,
-            _ocTxMask, _ocRxMask, _ocDxTxMask, _ocDxRxMask,
+            _ocTxMask, _ocRxMask, _ocTuneMask, _ocDxTxMask, _ocDxRxMask,
             p[1401], p[1397]);
     }
 

@@ -4589,7 +4589,7 @@ public class DspPipelineService : BackgroundService,
         var p2 = _p2Client;
         if (p2 is null) return;
         p2.SetDriveByte(snap.DriveByte);
-        p2.SetOcMasks(snap.OcTxMask, snap.OcRxMask);
+        p2.SetOcMasks(snap.OcTxMask, snap.OcRxMask, snap.OcTuneMask);
         // Anvelina-PRO3 DX OC masks (#407). Always forwarded; Protocol2Client
         // gates whether they hit byte 1397 on the wire by checking the
         // connected board+variant. Non-Anvelina P2 boards see byte 1397

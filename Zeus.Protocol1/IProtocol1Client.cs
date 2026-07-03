@@ -128,6 +128,25 @@ public interface IProtocol1Client : IDisposable
     void SetOcMasks(byte txMask, byte rxMask);
 
     /// <summary>
+    /// Per-band OC-TUNE additive mask (7 bits, issue #1325). Asserted ON TOP
+    /// OF the TX mask while TUN is active (Wire = OcTx | OcTune); ignored
+    /// during regular MOX and RX. Default 0x00 preserves pre-#1325 behaviour.
+    /// P1 tracks TUN separately from MOX for this compose step — see
+    /// <see cref="SetTune"/>.
+    /// </summary>
+    void SetOcTuneMask(byte tuneMask);
+
+    /// <summary>
+    /// Latch the TUN flag used by the OC-mask composition path (issue #1325).
+    /// On Protocol 1 the wire MOX bit rises for both TUN and regular TX; this
+    /// separate flag lets ControlFrame OR in the OcTune mask only during TUN
+    /// so extra bits (amplifier bypass, external tuner start) don't leak onto
+    /// voice / CW / digital transmissions. Called from RadioService's
+    /// TunActiveChanged pipeline right after <see cref="SetMox"/>.
+    /// </summary>
+    void SetTune(bool on);
+
+    /// <summary>
     /// Raised once from the RX loop when consecutive receive timeouts exhaust the
     /// <c>ConsecutiveTimeoutsBeforeGiveUp</c> threshold — the radio has stopped
     /// sending. Fires at most once per <see cref="StartAsync"/> / <see cref="StopAsync"/>

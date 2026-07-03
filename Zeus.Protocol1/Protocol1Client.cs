@@ -120,6 +120,10 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _boardKind = (int)HpsdrBoardKind.HermesLite2;
     private int _hasN2adr;      // 0 / 1
     private int _mox;           // 0 / 1
+    // Separate TUN latch (issue #1325). P1's wire MOX bit rises for both TUN
+    // and regular TX, so this internal flag is what ControlFrame consults to
+    // OR the per-band OcTune mask on top of OcTx only during TUN.
+    private int _tune;          // 0 / 1
     private int _drivePct;      // 0..100 UI percent; mapped to 0..255 on snapshot
     // When >= 0, RadioService has pushed a fully-computed drive byte (post PA
     // calibration) and we send that instead of the percent mapping. Legacy
@@ -127,6 +131,9 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _driveByteOverride = -1;
     private int _ocTxMask;      // user OC pin mask for TX (low 7 bits)
     private int _ocRxMask;      // user OC pin mask for RX (low 7 bits)
+    // Per-band OC-TUNE additive mask (issue #1325). Low 7 bits; ORed on top
+    // of _ocTxMask by ControlFrame's OC composition only when _tune is set.
+    private int _ocTuneMask;
     // ATU auto-tune deadline (Environment.TickCount64). While now < this, the
     // DriveFilter frame asserts the auto-tune-start bit (C2[4]). 0 = idle.
     // Momentary so the tune request auto-releases without a second API call.
@@ -756,6 +763,12 @@ public sealed class Protocol1Client : IProtocol1Client
         Interlocked.Exchange(ref _ocRxMask, rxMask & 0x7F);
     }
 
+    public void SetOcTuneMask(byte tuneMask) =>
+        Interlocked.Exchange(ref _ocTuneMask, tuneMask & 0x7F);
+
+    public void SetTune(bool on) =>
+        Interlocked.Exchange(ref _tune, on ? 1 : 0);
+
     /// <summary>Request an ATU tune cycle: assert the Apollo/Alex auto-tune-start
     /// bit (DriveFilter C2[4]) on every outgoing frame for <paramref name="durationMs"/>
     /// milliseconds, then auto-release. The C&amp;C round-robin picks the new
@@ -912,6 +925,8 @@ public sealed class Protocol1Client : IProtocol1Client
             DriveLevel: drive,
             UserOcTxMask: (byte)Volatile.Read(ref _ocTxMask),
             UserOcRxMask: (byte)Volatile.Read(ref _ocRxMask),
+            UserOcTuneMask: (byte)Volatile.Read(ref _ocTuneMask),
+            TuneActive: Volatile.Read(ref _tune) != 0,
             PsEnabled: psOn,
             PsPredistortionValue: (byte)Volatile.Read(ref _psPredistortionValue),
             PsPredistortionSubindex: (byte)Volatile.Read(ref _psPredistortionSubindex),
@@ -1356,12 +1371,12 @@ public sealed class Protocol1Client : IProtocol1Client
                 if (elapsed >= TimeSpan.FromSeconds(1))
                 {
                     _log.LogInformation(
-                        "p1.tx.rate pkts={Pkts} in {Ms:F0}ms = {Rate:F0} pkt/s (target 381) | wire: peak={Peak}/32767 mean={Mean} firstI={I} firstQ={Q} drv={Drv} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} mox={Mox}",
+                        "p1.tx.rate pkts={Pkts} in {Ms:F0}ms = {Rate:F0} pkt/s (target 381) | wire: peak={Peak}/32767 mean={Mean} firstI={I} firstQ={Q} drv={Drv} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocTune=0x{OcTune:X2} mox={Mox} tun={Tun}",
                         rateWindowPkts, elapsed.TotalMilliseconds, rateWindowPkts / elapsed.TotalSeconds,
                         ControlFrame.LastPeakAbs, ControlFrame.LastMeanAbs,
                         ControlFrame.LastFirstI, ControlFrame.LastFirstQ, ControlFrame.LastDriveByte,
-                        (byte)Volatile.Read(ref _ocTxMask), (byte)Volatile.Read(ref _ocRxMask),
-                        Volatile.Read(ref _mox) != 0);
+                        (byte)Volatile.Read(ref _ocTxMask), (byte)Volatile.Read(ref _ocRxMask), (byte)Volatile.Read(ref _ocTuneMask),
+                        Volatile.Read(ref _mox) != 0, Volatile.Read(ref _tune) != 0);
                     rateWindowStart = nowUtc;
                     rateWindowPkts = 0;
                 }

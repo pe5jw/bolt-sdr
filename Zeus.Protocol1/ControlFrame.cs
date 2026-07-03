@@ -219,6 +219,17 @@ internal static class ControlFrame
         // (piHPSDR `old_protocol.c:1884-1904`).
         byte UserOcTxMask = 0,
         byte UserOcRxMask = 0,
+        // Per-band OC-TUNE additive mask (7-bit, issue #1325). OR'd on top of
+        // UserOcTxMask when TuneActive is set (Wire = OcTx | OcTune during TUN);
+        // ignored during regular MOX and RX. Distinct from the removed piHPSDR-
+        // style global "OCtune" override (#124) — this one adds bits per-band,
+        // never replaces the band-select bits already in OcTx.
+        byte UserOcTuneMask = 0,
+        // True while the host has TUN engaged (as distinct from the wire MOX
+        // bit, which rises for both TUN and regular TX on P1). Selects whether
+        // UserOcTuneMask contributes to the OC pin composition. Latched via
+        // Protocol1Client.SetTune from RadioService's TunActiveChanged path.
+        bool TuneActive = false,
         // PureSignal enable for HL2 — wire-side bit 0x0a[22] = C2 bit 6 of
         // the C0=0x14 (Attenuator) frame, and a duplicate copy at the
         // Predistortion subindex. Set when the operator arms PS via
@@ -603,16 +614,29 @@ internal static class ControlFrame
 
         // C2: class-E PA at bit 0; OC pins (N2ADR filter board on HL2, user-
         // configured OC outputs on Orion-class) at bits 1..7. Class-E stays 0
-        // for RX-only MVP. We OR three sources so stock behavior holds when
-        // the user hasn't touched PA Settings:
+        // for RX-only MVP. We OR up to three sources so stock behavior holds
+        // when the user hasn't touched PA Settings:
         //   1. Board auto-filter mask (N2ADR on HL2) — legacy path
         //   2. User's per-band OC-TX mask when MOX, else OC-RX mask
+        //   3. User's per-band OC-TUNE mask ORed on top of OC-TX during TUN
+        //      (issue #1325). P1's wire MOX bit rises for both TUN and regular
+        //      TX, so we key the additive OcTune off TuneActive — a separate
+        //      host-side flag — to keep extra bits (amp bypass, external tuner
+        //      start) off voice / CW / digital transmissions.
         byte ocPins = 0;
         if (s.Board == HpsdrBoardKind.HermesLite2 && s.HasN2adr)
         {
             ocPins |= N2adrBands.RxOcMask(s.VfoAHz);
         }
-        ocPins |= (byte)((s.Mox ? s.UserOcTxMask : s.UserOcRxMask) & 0x7F);
+        if (s.Mox)
+        {
+            ocPins |= (byte)(s.UserOcTxMask & 0x7F);
+            if (s.TuneActive) ocPins |= (byte)(s.UserOcTuneMask & 0x7F);
+        }
+        else
+        {
+            ocPins |= (byte)(s.UserOcRxMask & 0x7F);
+        }
         byte c2 = (byte)(ocPins << 1);
         c14[1] = c2;
 

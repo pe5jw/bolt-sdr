@@ -3032,6 +3032,12 @@ public sealed class RadioService : IDisposable
     public void NotifyTunActive(bool on)
     {
         lock (_sync) _tunActive = on;
+        // Latch the TUN flag on the P1 client so its ControlFrame OC composition
+        // ORs the OcTune mask on top of OcTx only during TUN (issue #1325). P1's
+        // wire MOX bit rises for both TUN and regular TX, so the client needs a
+        // separate signal to decide. The P2 client picks up TUN through
+        // DspPipelineService's TunActiveChanged subscription.
+        (ActiveClient as Zeus.Protocol1.Protocol1Client)?.SetTune(on);
         RecomputePaAndPush();
         TunActiveChanged?.Invoke(on);
     }
@@ -3463,12 +3469,16 @@ public sealed class RadioService : IDisposable
         bool paEnabled = cfg.Global.PaEnabled && !bandCfg.DisablePa;
 
         _log.LogInformation(
-            "pa.recompute tunActive={Tun} pct={Pct} txVfo={TxVfo} txHz={TxHz} band={Band} gainDb={Gain:F2} maxW={Max} profile={Profile} -> byte={Byte} paEn={PaEn} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocDxTx=0x{OcDxTx:X2} ocDxRx=0x{OcDxRx:X2}",
+            "pa.recompute tunActive={Tun} pct={Pct} txVfo={TxVfo} txHz={TxHz} band={Band} gainDb={Gain:F2} maxW={Max} profile={Profile} -> byte={Byte} paEn={PaEn} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocTune=0x{OcTune:X2} ocDxTx=0x{OcDxTx:X2} ocDxRx=0x{OcDxRx:X2}",
             tunActive, activePct, stateSnap.TxVfo, txHz, bandName ?? "?", bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts, driveProfile.BoardLabel, driveByte, paEnabled,
-            bandCfg.OcTx, bandCfg.OcRx, bandCfg.OcDxTx, bandCfg.OcDxRx);
+            bandCfg.OcTx, bandCfg.OcRx, bandCfg.OcTune, bandCfg.OcDxTx, bandCfg.OcDxRx);
 
         ActiveClient?.SetDriveByte(driveByte);
         ActiveClient?.SetOcMasks(bandCfg.OcTx, bandCfg.OcRx);
+        // OcTune (issue #1325). P1 only — the wire composes OcTx | OcTune
+        // itself when its internal Tune flag is set. Wire-format-neutral on
+        // boards that don't set the flag (default 0x00 = pre-#1325).
+        ActiveClient?.SetOcTuneMask(bandCfg.OcTune);
 
         // ---- External-antenna resolution (antenna slice — #804) ----
         // Server-authoritative: resolve the active band's persisted TX/RX
@@ -3498,6 +3508,7 @@ public sealed class RadioService : IDisposable
             DriveByte: driveByte,
             OcTxMask: bandCfg.OcTx,
             OcRxMask: bandCfg.OcRx,
+            OcTuneMask: bandCfg.OcTune,
             PaEnabled: paEnabled,
             // Anvelina-PRO3 DX OC masks (issue #407) — always emitted in
             // the snapshot so DspPipelineService can forward them to the
