@@ -2779,8 +2779,10 @@ public sealed class RadioService : IDisposable
         // no-ops when CTUN is off. (CW pre-aligns in CwEngine for its baseband
         // calc; AlignLoForTx then finds the LO already on the dial and is a
         // no-op, but the frozen centre it recorded is still restored below.)
-        if (on) AlignLoForTx();
+        // Latch _mox before AlignLoForTx so a concurrent guarded SetRadioLo
+        // (the frontend LO heartbeat) cannot slip between the snap and guard.
         lock (_sync) _mox = on;
+        if (on) AlignLoForTx();
         ActiveClient?.SetMox(on);
         MoxChanged?.Invoke(on);
         if (!on) RestoreLoAfterTx();
