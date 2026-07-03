@@ -643,6 +643,9 @@ public sealed class TciSession : IDisposable
                 case "agc_gain":
                     HandleAgcGain(args);
                     break;
+                case "agc_mode":
+                    HandleAgcMode(args);
+                    break;
 
                 // --- CW keyer / macros (zeus-j3t) ---
                 case "cw_macros_speed":
@@ -763,17 +766,19 @@ public sealed class TciSession : IDisposable
                     HandleRxSmeterQuery(args);
                     break;
 
+                // --- Squelch (wired to RadioService.SetSquelch) ---
+                case "sql_enable":
+                    HandleSqlEnable(args);
+                    break;
+                case "sql_level":
+                    HandleSqlLevel(args);
+                    break;
+
                 // --- Post-handshake state-sync GETs (spec §3.3) ---
                 // Stubs only — these have no backend and exist so the v2.5.1
                 // client's state-sync burst doesn't see "unknown command" log
                 // spam. Real implementations live above (rx_nb_enable,
                 // rx_anf_enable, rx_anc_enable, rx_nr_enable).
-                case "sql_enable":
-                    HandleStubBoolPerRx(command, args, false);
-                    break;
-                case "sql_level":
-                    HandleStubIntPerRx(command, args, 0);
-                    break;
                 case "rx_bin_enable":
                     HandleStubBoolPerRx(command, args, false);
                     break;
@@ -1085,25 +1090,45 @@ public sealed class TciSession : IDisposable
 
     private void HandleMute(string[] args)
     {
-        // mute:<bool> or mute (query)
+        // mute:<bool>  (SET master mute)  or  mute  (GET)
+        // TCI has no "master audio bus" abstraction in Zeus; per convention
+        // the primary receiver (RX1 / index 0) carries the master mute state
+        // for external clients. StateChanged rebroadcasts to all TCI sessions.
         if (args.Length == 0)
         {
-            Send(TciProtocol.Command("mute", false)); // no master mute yet
+            Send(TciProtocol.Command("mute", _radio.Snapshot().Rx1Muted));
+            return;
         }
-        // Ignore set — not implemented
+        if (TciProtocol.TryParseBool(args[0], out bool muted))
+        {
+            _radio.SetReceiverMuted(0, muted);
+        }
     }
 
     private void HandleRxMute(string[] args)
     {
-        // rx_mute:<rx>,<bool> or rx_mute:<rx> (query)
+        // rx_mute:<rx>,<bool>  (SET)  or  rx_mute:<rx>  (GET)
+        // rx maps directly to the RadioService receiver index (0=RX1, 1=RX2).
+        // Out-of-range indices are ignored so a client can safely probe
+        // beyond the current receiver count.
         if (args.Length < 1) return;
         if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
 
         if (args.Length == 1)
         {
-            Send(TciProtocol.Command("rx_mute", rx, false));
+            var state = _radio.Snapshot();
+            bool current = rx switch
+            {
+                0 => state.Rx1Muted,
+                1 => state.Rx2Muted,
+                _ => false,
+            };
+            Send(TciProtocol.Command("rx_mute", rx, current));
+            return;
         }
-        // Ignore set — not implemented
+        if (!TciProtocol.TryParseBool(args[1], out bool muted)) return;
+        try { _radio.SetReceiverMuted(rx, muted); }
+        catch (ArgumentOutOfRangeException) { /* silently drop — client probed past our RX count */ }
     }
 
     private void HandleVolume(string[] args)
@@ -1141,6 +1166,72 @@ public sealed class TciSession : IDisposable
             Send(TciProtocol.Command("mon_volume", -20));
         }
         // Ignore set — sidetone not implemented
+    }
+
+    private void HandleAgcMode(string[] args)
+    {
+        // agc_mode:<rx>,<mode>  (SET)  or  agc_mode:<rx>  (GET)
+        // Wire strings map through TciProtocol.TciToAgcMode. Zeus has no
+        // "OFF" AGC — TCI OFF maps to Fixed (per Thetis convention).
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+
+        if (args.Length == 1)
+        {
+            var state = _radio.Snapshot();
+            var mode = state.Agc?.Mode ?? AgcMode.Med;
+            Send(TciProtocol.Command("agc_mode", rx, TciProtocol.AgcModeToTci(mode)));
+            return;
+        }
+        var parsed = TciProtocol.TciToAgcMode(args[1]);
+        if (!parsed.HasValue)
+        {
+            _log.LogDebug("tci.agc_mode unknown mode string: {Mode}", args[1]);
+            return;
+        }
+        var current = _radio.Snapshot().Agc ?? new AgcConfig();
+        _radio.SetAgc(current with { Mode = parsed.Value });
+    }
+
+    private void HandleSqlEnable(string[] args)
+    {
+        // sql_enable:<rx>,<bool>  (SET)  or  sql_enable:<rx>  (GET)
+        // Squelch is a single global config in Zeus (Adaptive-by-default).
+        // rx is echoed but the underlying config is shared across receivers.
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+
+        if (args.Length == 1)
+        {
+            var current = _radio.Snapshot().Squelch ?? new SquelchConfig();
+            Send(TciProtocol.Command("sql_enable", rx, current.Enabled));
+            return;
+        }
+        if (TciProtocol.TryParseBool(args[1], out bool enabled))
+        {
+            var current = _radio.Snapshot().Squelch ?? new SquelchConfig();
+            _radio.SetSquelch(current with { Enabled = enabled });
+        }
+    }
+
+    private void HandleSqlLevel(string[] args)
+    {
+        // sql_level:<rx>,<level>  (SET)  or  sql_level:<rx>  (GET)
+        // Level range 0..100 — RadioService clamps.
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+
+        if (args.Length == 1)
+        {
+            var current = _radio.Snapshot().Squelch ?? new SquelchConfig();
+            Send(TciProtocol.Command("sql_level", rx, current.Level));
+            return;
+        }
+        if (TciProtocol.TryParseInt(args[1], out int level))
+        {
+            var current = _radio.Snapshot().Squelch ?? new SquelchConfig();
+            _radio.SetSquelch(current with { Level = level });
+        }
     }
 
     private void HandleAgcGain(string[] args)
@@ -1266,54 +1357,66 @@ public sealed class TciSession : IDisposable
 
     private void HandleRitEnable(string[] args)
     {
-        // rit_enable:<rx>,<bool> or rit_enable:<rx> (query)
+        // rit_enable:<rx>,<bool>  (SET)  or  rit_enable:<rx>  (GET)
+        // RIT is a single-VFO offset in RadioService; rx is preserved on the
+        // echo but the underlying state is shared across all TCI receivers.
         if (args.Length < 1) return;
         if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
 
         if (args.Length == 1)
         {
-            Send(TciProtocol.Command("rit_enable", rx, false));
+            Send(TciProtocol.Command("rit_enable", rx, _radio.Snapshot().RitEnabled));
+            return;
         }
-        // Ignore set — RIT not implemented
+        if (TciProtocol.TryParseBool(args[1], out bool enabled))
+            _radio.SetRit(enabled, null);
     }
 
     private void HandleRitOffset(string[] args)
     {
-        // rit_offset:<rx>,<hz> or rit_offset:<rx> (query)
+        // rit_offset:<rx>,<hz>  (SET)  or  rit_offset:<rx>  (GET)
+        // Range ±99999 Hz — RadioService clamps. Echo comes back via
+        // StateChanged so all connected sessions stay in sync.
         if (args.Length < 1) return;
         if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
 
         if (args.Length == 1)
         {
-            Send(TciProtocol.Command("rit_offset", rx, 0));
+            Send(TciProtocol.Command("rit_offset", rx, (int)_radio.Snapshot().RitHz));
+            return;
         }
-        // Ignore set — RIT not implemented
+        if (TciProtocol.TryParseLong(args[1], out long hz))
+            _radio.SetRit(null, hz);
     }
 
     private void HandleXitEnable(string[] args)
     {
-        // xit_enable:<rx>,<bool> or xit_enable:<rx> (query)
+        // xit_enable:<rx>,<bool>  (SET)  or  xit_enable:<rx>  (GET)
         if (args.Length < 1) return;
         if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
 
         if (args.Length == 1)
         {
-            Send(TciProtocol.Command("xit_enable", rx, false));
+            Send(TciProtocol.Command("xit_enable", rx, _radio.Snapshot().XitEnabled));
+            return;
         }
-        // Ignore set — XIT not implemented
+        if (TciProtocol.TryParseBool(args[1], out bool enabled))
+            _radio.SetXit(enabled, null);
     }
 
     private void HandleXitOffset(string[] args)
     {
-        // xit_offset:<rx>,<hz> or xit_offset:<rx> (query)
+        // xit_offset:<rx>,<hz>  (SET)  or  xit_offset:<rx>  (GET)
         if (args.Length < 1) return;
         if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
 
         if (args.Length == 1)
         {
-            Send(TciProtocol.Command("xit_offset", rx, 0));
+            Send(TciProtocol.Command("xit_offset", rx, (int)_radio.Snapshot().XitHz));
+            return;
         }
-        // Ignore set — XIT not implemented
+        if (TciProtocol.TryParseLong(args[1], out long hz))
+            _radio.SetXit(null, hz);
     }
 
     private void HandleLock(string[] args)

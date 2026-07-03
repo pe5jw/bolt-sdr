@@ -308,6 +308,13 @@ public class TciHandshakeTests
             "tune:0,false;",
             "rx_mute:0,false;",
             "rx_filter_band:0,150,2850;",
+            "rit_enable:0,false;",
+            "rit_offset:0,0;",
+            "xit_enable:0,false;",
+            "xit_offset:0,0;",
+            "agc_mode:0,MEDIUM;",
+            "sql_enable:0,false;",
+            "sql_level:0,0;",
             "drive:0,50;",
             "tune_drive:0,50;",
             "tx_frequency:14074000;",
@@ -316,6 +323,62 @@ public class TciHandshakeTests
         };
 
         Assert.Equal(expected, handshake);
+    }
+
+    [Fact]
+    public void BuildHandshake_IncludesLiveRitXitState()
+    {
+        var state = CreateTestState() with
+        {
+            RitEnabled = true,
+            RitHz = 250,
+            XitEnabled = true,
+            XitHz = -180,
+        };
+        var handshake = TciHandshake.BuildHandshake(state, 192000, false, false, 50);
+
+        Assert.Contains("rit_enable:0,true;", handshake);
+        Assert.Contains("rit_offset:0,250;", handshake);
+        Assert.Contains("xit_enable:0,true;", handshake);
+        Assert.Contains("xit_offset:0,-180;", handshake);
+    }
+
+    [Fact]
+    public void BuildHandshake_IncludesLiveMuteState()
+    {
+        var state = CreateTestState() with { Rx1Muted = true };
+        var handshake = TciHandshake.BuildHandshake(state, 192000, false, false, 50);
+
+        Assert.Contains("mute:true;", handshake);
+        Assert.Contains("rx_mute:0,true;", handshake);
+    }
+
+    [Theory]
+    [InlineData(AgcMode.Fixed, "agc_mode:0,FIXED;")]
+    [InlineData(AgcMode.Long, "agc_mode:0,LONG;")]
+    [InlineData(AgcMode.Slow, "agc_mode:0,SLOW;")]
+    [InlineData(AgcMode.Med, "agc_mode:0,MEDIUM;")]
+    [InlineData(AgcMode.Fast, "agc_mode:0,FAST;")]
+    [InlineData(AgcMode.Custom, "agc_mode:0,CUSTOM;")]
+    public void BuildHandshake_IncludesLiveAgcMode(AgcMode mode, string expected)
+    {
+        var state = CreateTestState() with { Agc = new AgcConfig(Mode: mode) };
+        var handshake = TciHandshake.BuildHandshake(state, 192000, false, false, 50);
+
+        Assert.Contains(expected, handshake);
+    }
+
+    [Fact]
+    public void BuildHandshake_IncludesLiveSquelchState()
+    {
+        var state = CreateTestState() with
+        {
+            Squelch = new SquelchConfig(Enabled: true, Level: 40),
+        };
+        var handshake = TciHandshake.BuildHandshake(state, 192000, false, false, 50);
+
+        Assert.Contains("sql_enable:0,true;", handshake);
+        Assert.Contains("sql_level:0,40;", handshake);
     }
 
     private static StateDto CreateTestState(
