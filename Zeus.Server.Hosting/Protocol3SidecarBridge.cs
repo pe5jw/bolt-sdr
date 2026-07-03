@@ -24,6 +24,15 @@ public sealed record Protocol3SidecarSnapshot(
     int RxActiveStreams,
     int DspActiveChannels);
 
+internal sealed record Protocol3SidecarDisplayFrame(
+    byte RxId,
+    DisplayBodyFlags BodyFlags,
+    long CenterHz,
+    float HzPerPixel,
+    float[] PanDb,
+    float[] WfDb,
+    string Source);
+
 public sealed class Protocol3SidecarBridge : IDisposable
 {
     public const string HttpClientName = "Protocol3Sidecar";
@@ -280,6 +289,34 @@ public sealed class Protocol3SidecarBridge : IDisposable
         }
     }
 
+    internal async Task<Protocol3SidecarDisplayFrame?> FetchWidebandDisplayFrameAsync(
+        int targetWidth,
+        CancellationToken ct)
+    {
+        if (targetWidth <= 0) throw new ArgumentOutOfRangeException(nameof(targetWidth));
+
+        Uri? diagnosticsUrl;
+        lock (_sync)
+        {
+            diagnosticsUrl = _diagnosticsUrl ?? _lastSnapshot?.DiagnosticsUrl;
+        }
+        if (diagnosticsUrl is null) return null;
+
+        var displayUrl = DisplayFramesUrlForDiagnostics(diagnosticsUrl);
+        var http = _httpFactory.CreateClient(HttpClientName);
+        using var response = await http.GetAsync(displayUrl, ct).ConfigureAwait(false);
+        if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.ServiceUnavailable)
+            return null;
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException(
+                $"Protocol 3 sidecar display frames returned HTTP {(int)response.StatusCode}.");
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        var root = await JsonNode.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false) as JsonObject
+            ?? throw new InvalidOperationException("Protocol 3 sidecar display frames root is not an object.");
+        return TryParseWidebandDisplayFrame(root, targetWidth, out var frame) ? frame : null;
+    }
+
     public void Dispose()
     {
         try { DisconnectAsync(CancellationToken.None).GetAwaiter().GetResult(); }
@@ -420,6 +457,64 @@ public sealed class Protocol3SidecarBridge : IDisposable
             rxExpected,
             rxActive,
             dspChannels);
+    }
+
+    internal static bool TryParseWidebandDisplayFrame(
+        JsonObject displayFrames,
+        int targetWidth,
+        out Protocol3SidecarDisplayFrame? frame)
+    {
+        ArgumentNullException.ThrowIfNull(displayFrames);
+        if (targetWidth <= 0) throw new ArgumentOutOfRangeException(nameof(targetWidth));
+
+        frame = null;
+        if (displayFrames["frames"] is not JsonArray frames) return false;
+
+        foreach (var node in frames)
+        {
+            if (node is not JsonObject candidate) continue;
+            if (!StringEquals(candidate, "contract", "Zeus.Contracts.DisplayFrame.v1")) continue;
+            if (!BoolValue(candidate, "ready", fallback: true)) continue;
+            if (candidate["panDb"] is not JsonArray pan || candidate["wfDb"] is not JsonArray wf)
+                continue;
+
+            var declaredWidth = IntValue(candidate, "width", Math.Min(pan.Count, wf.Count));
+            var sourceWidth = Math.Min(declaredWidth, Math.Min(pan.Count, wf.Count));
+            if (sourceWidth <= 0) continue;
+
+            var hzPerPixel = DoubleValue(candidate, "hzPerPixel", double.NaN);
+            var spanHz = DoubleValue(candidate, "spanHz",
+                double.IsFinite(hzPerPixel) && hzPerPixel > 0 ? hzPerPixel * sourceWidth : double.NaN);
+            var centerHz = LongValue(candidate, "centerHz",
+                (long)Math.Round(DoubleValue(candidate, "centerFrequencyHz", WidebandSpectrumAnalyzer.DisplayCenterHz)));
+            if (!CoversWidebandDisplay(candidate, centerHz, spanHz, sourceWidth, hzPerPixel))
+                continue;
+
+            var reverse = BoolValue(candidate, "hostShouldReverseDisplayBins", fallback: false) ||
+                !BoolValue(candidate, "lowToHigh", fallback: true);
+            var outputPan = ResampleDbArray(pan, sourceWidth, targetWidth, reverse);
+            var outputWf = ResampleDbArray(wf, sourceWidth, targetWidth, reverse);
+
+            var outputSpanHz = double.IsFinite(spanHz) && spanHz > 0
+                ? spanHz
+                : hzPerPixel * sourceWidth;
+            var outputHzPerPixel = (float)(outputSpanHz / targetWidth);
+            if (!float.IsFinite(outputHzPerPixel) || outputHzPerPixel <= 0)
+                outputHzPerPixel = WidebandSpectrumAnalyzer.HzPerPixel;
+
+            var rxId = (byte)Math.Clamp(IntValue(candidate, "rxId", 0), 0, byte.MaxValue);
+            frame = new Protocol3SidecarDisplayFrame(
+                rxId,
+                ParseDisplayBodyFlags(StringValue(candidate, "bodyFlags", "PanValid|WfValid")),
+                centerHz,
+                outputHzPerPixel,
+                outputPan,
+                outputWf,
+                StringValue(candidate, "source", "p3-wideband"));
+            return true;
+        }
+
+        return false;
     }
 
     private async Task<Protocol3SidecarSnapshot> WaitForReadyAsync(
@@ -1122,6 +1217,9 @@ public sealed class Protocol3SidecarBridge : IDisposable
         }.Uri;
     }
 
+    private static Uri DisplayFramesUrlForDiagnostics(Uri diagnosticsUrl) =>
+        Endpoint(diagnosticsUrl, "/api/diagnostics/v2/p3-display-frames", "zoom=1&center=0");
+
     private static void ValidateDiagnosticsUrl(Uri uri)
     {
         if (!uri.IsAbsoluteUri ||
@@ -1540,6 +1638,142 @@ public sealed class Protocol3SidecarBridge : IDisposable
             if (value.TryGetValue<ulong>(out var ul) && ul <= int.MaxValue) return (int)ul;
         }
         throw new InvalidOperationException($"Protocol 3 sidecar diagnostics property '{property}' is not an int.");
+    }
+
+    private static bool CoversWidebandDisplay(
+        JsonObject frame,
+        long centerHz,
+        double spanHz,
+        int sourceWidth,
+        double hzPerPixel)
+    {
+        if (!double.IsFinite(spanHz) || spanHz <= 0)
+            spanHz = double.IsFinite(hzPerPixel) && hzPerPixel > 0
+                ? hzPerPixel * sourceWidth
+                : 0.0;
+        if (spanHz < 59_000_000.0) return false;
+
+        var rfStart = DoubleValue(frame, "rfStartFrequencyHz", centerHz - (spanHz / 2.0));
+        var rfEnd = DoubleValue(frame, "rfEndFrequencyHz", centerHz + (spanHz / 2.0));
+        if (rfStart > rfEnd) (rfStart, rfEnd) = (rfEnd, rfStart);
+
+        return (rfStart <= 500_000.0 && rfEnd >= 59_500_000.0) ||
+            (Math.Abs(centerHz - WidebandSpectrumAnalyzer.DisplayCenterHz) <= 1_000_000L &&
+             spanHz >= 59_000_000.0);
+    }
+
+    private static float[] ResampleDbArray(JsonArray source, int sourceWidth, int targetWidth, bool reverse)
+    {
+        var output = new float[targetWidth];
+        for (var dst = 0; dst < targetWidth; dst++)
+        {
+            var start = (int)((long)dst * sourceWidth / targetWidth);
+            var end = (int)((long)(dst + 1) * sourceWidth / targetWidth);
+            if (end <= start) end = start + 1;
+
+            var value = float.NegativeInfinity;
+            for (var src = start; src < end && src < sourceWidth; src++)
+            {
+                var sourceIndex = reverse ? sourceWidth - 1 - src : src;
+                var sample = FloatValue(source[sourceIndex], fallback: -200f);
+                if (float.IsFinite(sample) && sample > value) value = sample;
+            }
+            output[dst] = float.IsFinite(value) ? value : -200f;
+        }
+        return output;
+    }
+
+    private static DisplayBodyFlags ParseDisplayBodyFlags(string value)
+    {
+        var flags = DisplayBodyFlags.None;
+        if (value.Contains("PanValid", StringComparison.OrdinalIgnoreCase))
+            flags |= DisplayBodyFlags.PanValid;
+        if (value.Contains("WfValid", StringComparison.OrdinalIgnoreCase))
+            flags |= DisplayBodyFlags.WfValid;
+        return flags == DisplayBodyFlags.None
+            ? DisplayBodyFlags.PanValid | DisplayBodyFlags.WfValid
+            : flags;
+    }
+
+    private static bool StringEquals(JsonObject parent, string property, string expected) =>
+        string.Equals(StringValue(parent, property, string.Empty), expected, StringComparison.Ordinal);
+
+    private static string StringValue(JsonObject parent, string property, string fallback)
+    {
+        try { return parent[property]?.GetValue<string>() ?? fallback; }
+        catch { return fallback; }
+    }
+
+    private static bool BoolValue(JsonObject parent, string property, bool fallback)
+    {
+        try
+        {
+            if (parent[property] is JsonValue value && value.TryGetValue<bool>(out var b)) return b;
+        }
+        catch { }
+        return fallback;
+    }
+
+    private static int IntValue(JsonObject parent, string property, int fallback)
+    {
+        try
+        {
+            if (parent[property] is JsonValue value)
+            {
+                if (value.TryGetValue<int>(out var i)) return i;
+                if (value.TryGetValue<long>(out var l) && l is >= int.MinValue and <= int.MaxValue) return (int)l;
+                if (value.TryGetValue<double>(out var d) && double.IsFinite(d)) return (int)Math.Round(d);
+            }
+        }
+        catch { }
+        return fallback;
+    }
+
+    private static long LongValue(JsonObject parent, string property, long fallback)
+    {
+        try
+        {
+            if (parent[property] is JsonValue value)
+            {
+                if (value.TryGetValue<long>(out var l)) return l;
+                if (value.TryGetValue<int>(out var i)) return i;
+                if (value.TryGetValue<double>(out var d) && double.IsFinite(d)) return (long)Math.Round(d);
+            }
+        }
+        catch { }
+        return fallback;
+    }
+
+    private static double DoubleValue(JsonObject parent, string property, double fallback)
+    {
+        try
+        {
+            if (parent[property] is JsonValue value)
+            {
+                if (value.TryGetValue<double>(out var d)) return d;
+                if (value.TryGetValue<float>(out var f)) return f;
+                if (value.TryGetValue<long>(out var l)) return l;
+                if (value.TryGetValue<int>(out var i)) return i;
+            }
+        }
+        catch { }
+        return fallback;
+    }
+
+    private static float FloatValue(JsonNode? node, float fallback)
+    {
+        try
+        {
+            if (node is JsonValue value)
+            {
+                if (value.TryGetValue<float>(out var f)) return f;
+                if (value.TryGetValue<double>(out var d) && double.IsFinite(d)) return (float)d;
+                if (value.TryGetValue<int>(out var i)) return i;
+                if (value.TryGetValue<long>(out var l)) return l;
+            }
+        }
+        catch { }
+        return fallback;
     }
 
     private sealed class ProcessOutputTail

@@ -16,7 +16,7 @@ export function WidebandDisplayPanel() {
     <section>
       <div style={sectionHead}>
         <h3 style={sectionH3}>Wideband Display</h3>
-        <p style={sectionP}>Full-band Protocol 2 panadapter and waterfall view.</p>
+        <p style={sectionP}>Full-band panadapter and waterfall view.</p>
       </div>
 
       <div style={card}>
@@ -31,7 +31,7 @@ export function WidebandDisplayPanel() {
             ADC0 0-60 MHz
           </label>
           <span style={hint}>
-            Uses bounded wideband ADC snapshots for RX0 while a spectrum display is open.
+            Uses bounded P2 ADC snapshots or P3 sidecar-projected full-band bins while a spectrum display is open.
           </span>
         </div>
       </div>

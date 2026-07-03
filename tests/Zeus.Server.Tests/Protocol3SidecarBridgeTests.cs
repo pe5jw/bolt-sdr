@@ -189,6 +189,31 @@ public sealed class Protocol3SidecarBridgeTests
         Assert.False(Protocol3SidecarBridge.StartUnixMsMatches(1783095000123, 1783095002000));
     }
 
+    [Fact]
+    public void TryParseWidebandDisplayFrame_AcceptsFullSpanProjection()
+    {
+        var root = DisplayFrames(width: 4096, centerHz: 30_000_000, spanHz: 60_000_000);
+
+        Assert.True(Protocol3SidecarBridge.TryParseWidebandDisplayFrame(root, 2048, out var frame));
+
+        Assert.NotNull(frame);
+        Assert.Equal(2048, frame.PanDb.Length);
+        Assert.Equal(2048, frame.WfDb.Length);
+        Assert.Equal(30_000_000, frame.CenterHz);
+        Assert.Equal(60_000_000f / 2048f, frame.HzPerPixel, precision: 3);
+        Assert.Equal(1, frame.PanDb[0]);
+        Assert.Equal(4095, frame.PanDb[^1]);
+    }
+
+    [Fact]
+    public void TryParseWidebandDisplayFrame_RejectsDdcProjection()
+    {
+        var root = DisplayFrames(width: 2048, centerHz: 7_202_000, spanHz: 1_536_000);
+
+        Assert.False(Protocol3SidecarBridge.TryParseWidebandDisplayFrame(root, 2048, out var frame));
+        Assert.Null(frame);
+    }
+
     private static JsonObject Diagnostics(int streams, string engine, string status) => new()
     {
         ["protocol"] = "p3",
@@ -205,4 +230,42 @@ public sealed class Protocol3SidecarBridgeTests
             },
         },
     };
+
+    private static JsonObject DisplayFrames(int width, long centerHz, double spanHz)
+    {
+        var pan = new JsonArray();
+        var wf = new JsonArray();
+        for (var i = 0; i < width; i++)
+        {
+            pan.Add(i);
+            wf.Add(-100);
+        }
+
+        var hzPerPixel = spanHz / width;
+        return new JsonObject
+        {
+            ["schema"] = "n9war.zeus.protocol3.display_frames.v1",
+            ["protocol"] = "p3",
+            ["frames"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["contract"] = "Zeus.Contracts.DisplayFrame.v1",
+                    ["source"] = "n9dsp-sidecar-wideband-displayFrame",
+                    ["ready"] = true,
+                    ["rxId"] = 0,
+                    ["bodyFlags"] = "PanValid|WfValid",
+                    ["width"] = width,
+                    ["centerHz"] = centerHz,
+                    ["hzPerPixel"] = hzPerPixel,
+                    ["spanHz"] = spanHz,
+                    ["rfStartFrequencyHz"] = centerHz - (spanHz / 2.0),
+                    ["rfEndFrequencyHz"] = centerHz + (spanHz / 2.0),
+                    ["lowToHigh"] = true,
+                    ["panDb"] = pan,
+                    ["wfDb"] = wf,
+                },
+            },
+        };
+    }
 }
