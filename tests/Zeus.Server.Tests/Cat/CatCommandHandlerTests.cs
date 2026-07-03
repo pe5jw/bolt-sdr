@@ -128,6 +128,35 @@ public sealed class CatCommandHandlerTests : IDisposable
     }
 
     [Fact]
+    public void EnableAutoInfo_EnablesAiWithoutSendingInitialIf()
+    {
+        // Server-side pre-enable (per-port "Auto Report") is the piHPSDR AutoRprt
+        // equivalent: the port comes up in AI1 mode WITHOUT sending an initial
+        // IF frame — no client asked for one, and the next state event will
+        // drive the first push naturally.
+        var (h, _, _, o) = Build();
+        Assert.False(h.AutoInfoEnabled);
+
+        h.EnableAutoInfo();
+        Assert.True(h.AutoInfoEnabled);
+        Assert.Empty(o);
+
+        // Querying AI now reports level 1, matching a "client typed AI1;" port.
+        h.Dispatch("AI");
+        Assert.Equal(new[] { "AI1;" }, o);
+    }
+
+    [Fact]
+    public void EnableAutoInfo_DoesNotKey_NoAutoKeyContract()
+    {
+        // Same safety contract as AI1;: server-side pre-enable must never key TX.
+        var (h, _, tx, _) = Build();
+        h.EnableAutoInfo();
+        Assert.False(tx.IsMoxOn);
+        Assert.Null(tx.MoxOwner);
+    }
+
+    [Fact]
     public void Ai_Query_ReportsLevel_And_SeedsStateOnEnable()
     {
         var (h, _, _, o) = Build();

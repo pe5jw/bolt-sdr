@@ -1053,6 +1053,10 @@ export function usePanTuneGesture(
         wheelActions.onMapZoom?.(dir);
         return;
       }
+      // In wideband display mode the wheel owns local viewport zoom by default:
+      // a 0-60 MHz surface is a navigation map first, and VFO nudging by a
+      // toolbar step is too small to be visible at full scale.
+      if (tryNudgeWidebandZoom(-dir, e.clientX)) return;
       if (shift) {
         nudgeZoom(-dir, e.clientX);
         return;

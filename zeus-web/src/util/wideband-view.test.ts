@@ -5,6 +5,8 @@ import {
   WIDEBAND_CENTER_HZ,
   WIDEBAND_SPAN_HZ,
   clampWidebandHzPerPixel,
+  formatWidebandRangeLabel,
+  formatWidebandZoomRatio,
   isWidebandDisplayGeometry,
   resolveSpectrumViewport,
   zoomWidebandViewport,
@@ -96,5 +98,13 @@ describe('wideband view geometry', () => {
 
     expect(next?.hzPerPixel).toBe(sourceHzPerPixel);
     expect(next?.centerHz).toBe(WIDEBAND_CENTER_HZ);
+  });
+
+  it('formats full-band and zoomed ranges compactly', () => {
+    const sourceHzPerPixel = WIDEBAND_SPAN_HZ / 2048;
+    expect(formatWidebandRangeLabel(0, WIDEBAND_SPAN_HZ)).toBe('0-60 MHz');
+    expect(formatWidebandRangeLabel(14_074_000, 14_350_000)).toBe('14.074-14.35 MHz');
+    expect(formatWidebandZoomRatio(sourceHzPerPixel, sourceHzPerPixel)).toBe('1x');
+    expect(formatWidebandZoomRatio(sourceHzPerPixel, sourceHzPerPixel / 32)).toBe('32x');
   });
 });

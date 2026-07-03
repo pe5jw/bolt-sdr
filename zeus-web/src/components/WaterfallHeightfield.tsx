@@ -42,10 +42,12 @@ import * as viewZoom from '../state/view-zoom';
 import { usePanTuneGesture, type PanTuneGestureOptions } from '../util/use-pan-tune-gesture';
 import { isWidebandDisplayGeometry, resolveSpectrumViewport } from '../util/wideband-view';
 import { FilterCursorOverlay } from './FilterCursorOverlay';
+import { FreqAxis } from './FreqAxis';
 import { NotchOverlay } from './NotchOverlay';
 import { PassbandOverlay } from './PassbandOverlay';
 import { WfDbScale } from './WfDbScale';
 import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
+import { WidebandViewportControls } from './WidebandViewportControls';
 
 type Props = {
   receiver?: ReceiverKey;
@@ -92,6 +94,17 @@ export function WaterfallHeightfield({
   const [stats, setStats] = useState<{ fps: number; ms: number } | null>(null);
   const rxIndex = rxIndexOf(receiver);
   const receiverFilterColor = spectrumReceiverFilterColor(receiver);
+  const displayWidth = useDisplayStore((s) => {
+    const slice = selectDisplaySlice(s, receiver);
+    return slice.width || slice.panDb?.length || slice.wfDb?.length || 0;
+  });
+  const displayHzPerPixel = useDisplayStore((s) => selectDisplaySlice(s, receiver).hzPerPixel);
+  const displayCenterHz = useDisplayStore((s) => Number(selectDisplaySlice(s, receiver).centerHz));
+  const widebandDisplay = isWidebandDisplayGeometry({
+    width: displayWidth,
+    hzPerPixel: displayHzPerPixel,
+    centerHz: displayCenterHz,
+  });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -531,7 +544,8 @@ export function WaterfallHeightfield({
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
       {/* One global waterfall dB scale — only RX1 (leftmost) renders it. */}
-      {status === 'ready' && dbScale && rxIndex === 0 && <WfDbScale />}
+      {status === 'ready' && dbScale && rxIndex === 0 && !widebandDisplay && <WfDbScale />}
+      {status === 'ready' && widebandDisplay && <FreqAxis receiver={receiver} stitched={stitched} />}
       {/* Dial-position cursor on BOTH halves (RX2) — each tracks its own VFO so
           the stitched pair behaves like one waterfall with two live dials. */}
       {status === 'ready' && (
@@ -539,7 +553,7 @@ export function WaterfallHeightfield({
       )}
       {/* Each half shows its OWN receiver's filter passband, regardless of focus,
           so RX2 displays both bandwidth markers (A on its half, B on its half). */}
-      {status === 'ready' && (
+      {status === 'ready' && !widebandDisplay && (
         <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
       )}
       {/* Hover filter crosshair on BOTH halves — each tracks its own RX
@@ -548,8 +562,11 @@ export function WaterfallHeightfield({
       {status === 'ready' && (
         <FilterCursorOverlay containerRef={containerRef} receiver={receiver} />
       )}
-      {status === 'ready' && rxIndex === 0 && (!stitched || foreground) && (
+      {status === 'ready' && rxIndex === 0 && !widebandDisplay && (!stitched || foreground) && (
         <NotchOverlay resizable containerRef={containerRef} />
+      )}
+      {status === 'ready' && widebandDisplay && (
+        <WidebandViewportControls containerRef={containerRef} receiver={receiver} />
       )}
       {status === 'unsupported' && (
         <div

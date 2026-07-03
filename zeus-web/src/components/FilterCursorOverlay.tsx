@@ -138,7 +138,7 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
       // band off by the bins-to-CSS-pixel ratio.
       const band = bandRef.current;
       if (band) {
-        if (viewport && rectW > 0) {
+        if (viewport && !viewport.wideband && rectW > 0) {
           const mode = getReceiverMode(conn, receiver);
           // FreeDV stores its passband USB-positive; re-sign to the convention
           // sideband (LSB < 10 MHz) so the hover preview matches the real demod
