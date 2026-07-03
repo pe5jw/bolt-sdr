@@ -76,4 +76,9 @@ public enum MoxSource : byte
     /// press; it never arms PureSignal (PureSignal arm is deliberately excluded
     /// from the MIDI command surface) and never auto-keys on connect.</summary>
     Midi = 8,
+    /// <summary>The hidden QRM text spectrogram writer auto-keying TX for a
+    /// single WRITE playback. It only keys from an explicit operator WRITE
+    /// press, releases only the MOX edge it claimed, and rides an already-keyed
+    /// operator transmission without dropping it.</summary>
+    QrmText = 9,
 }

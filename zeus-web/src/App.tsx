@@ -265,7 +265,7 @@ export default function App() {
   const topbarControlsRef = useRef<HTMLDivElement | null>(null);
   const [topbarScroll, setTopbarScroll] = useState({ canLeft: false, canRight: false });
 
-  // Hidden HARDWARE diagnostics + QRM jammer — easter egg. Tapping the
+  // Hidden HARDWARE diagnostics + TX testing tools — easter egg. Tapping the
   // brand-mark lightning bolt unlocks the folder and popout for this session
   // (it re-locks on next launch; counting + threshold live in
   // easter-egg-store). Deliberately exposes no hover, cursor, or title
@@ -1218,7 +1218,7 @@ export default function App() {
             </div>
             {signalJammerEnabled && (
               <div className="ctrl-group topbar-control topbar-control--qrm">
-                <div className="label-xs ctrl-lbl">QRM</div>
+                <div className="label-xs ctrl-lbl">TX TEST</div>
                 <div className="btn-row" style={{ gap: 4, alignItems: 'center' }}>
                   <QrmPanelToggleButton />
                   <QrmButton />

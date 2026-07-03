@@ -6,6 +6,11 @@
 //                         Christian Suarez (N9WAR), and contributors.
 
 import { create } from 'zustand';
+import {
+  SIGNAL_JAMMER_TEXT_MAX_CHARS,
+  SIGNAL_JAMMER_TEXT_MAX_PIXELS_PER_SECOND,
+  SIGNAL_JAMMER_TEXT_MIN_PIXELS_PER_SECOND,
+} from './signal-jammer-limits';
 
 export const SIGNAL_JAMMER_PRESETS = ['hash', 'heterodyne', 'pulse'] as const;
 
@@ -82,14 +87,20 @@ export function normalizeSignalJammerConfig(
     pulseRateHz: Number(clampNumber(config.pulseRateHz ?? SIGNAL_JAMMER_DEFAULTS.pulseRateHz, 0.5, 12).toFixed(1)),
     textSoundText: normalizeTextSoundText(config.textSoundText ?? SIGNAL_JAMMER_DEFAULTS.textSoundText),
     textPixelsPerSecond: Math.round(
-      clampNumber(config.textPixelsPerSecond ?? SIGNAL_JAMMER_DEFAULTS.textPixelsPerSecond, 2, 15),
+      clampNumber(
+        config.textPixelsPerSecond ?? SIGNAL_JAMMER_DEFAULTS.textPixelsPerSecond,
+        SIGNAL_JAMMER_TEXT_MIN_PIXELS_PER_SECOND,
+        SIGNAL_JAMMER_TEXT_MAX_PIXELS_PER_SECOND,
+      ),
     ),
   };
 }
 
 export function normalizeTextSoundText(text: string): string {
   const collapsed = text.replace(/\s+/g, ' ').trimStart();
-  return collapsed.length > 32 ? collapsed.slice(0, 32) : collapsed;
+  return collapsed.length > SIGNAL_JAMMER_TEXT_MAX_CHARS
+    ? collapsed.slice(0, SIGNAL_JAMMER_TEXT_MAX_CHARS)
+    : collapsed;
 }
 
 export const useSignalJammerStore = create<SignalJammerState>((set, get) => ({

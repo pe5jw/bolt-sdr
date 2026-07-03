@@ -19,11 +19,15 @@ internal sealed class SignalJammerTxSource : BackgroundService
     public const int MaxTextSamples = SampleRateHz * 80;
 
     private static readonly TimeSpan IdlePoll = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan AutoTransmitReleaseGuard = TimeSpan.FromMilliseconds(40);
     private const double Tau = Math.PI * 2.0;
 
     private readonly object _sync = new();
     private readonly Action<ReadOnlyMemory<byte>> _emit;
     private readonly Func<bool> _isMoxOn;
+    private readonly Func<string?>? _requestTextMox;
+    private readonly Action? _releaseTextMox;
+    private readonly Func<bool> _ownsTextMox;
     private readonly ILogger<SignalJammerTxSource> _log;
     private readonly SignalJammerGenerator _generator = new();
     private readonly float[] _block = new float[BlockSamples];
@@ -32,6 +36,7 @@ internal sealed class SignalJammerTxSource : BackgroundService
     private SignalJammerTxSettings _settings = SignalJammerTxSettings.Disabled;
     private float[]? _textSamples;
     private int _textIndex;
+    private bool _textAutoReleaseMox;
     private long _lastAppliedVersion = -1;
 
     public SignalJammerTxSource(
@@ -41,6 +46,13 @@ internal sealed class SignalJammerTxSource : BackgroundService
         : this(
             payload => txIngest.OnMicPcmBytesFromWav(payload),
             () => tx.IsMoxOn,
+            () => tx.TrySetMox(true, MoxSource.QrmText, out var err) ? null : err ?? "MOX refused",
+            () =>
+            {
+                if (tx.MoxOwner == MoxSource.QrmText)
+                    tx.TrySetMox(false, MoxSource.QrmText, out _);
+            },
+            () => tx.MoxOwner == MoxSource.QrmText,
             log)
     {
     }
@@ -49,9 +61,23 @@ internal sealed class SignalJammerTxSource : BackgroundService
         Action<ReadOnlyMemory<byte>> emit,
         Func<bool> isMoxOn,
         ILogger<SignalJammerTxSource> log)
+        : this(emit, isMoxOn, null, null, null, log)
+    {
+    }
+
+    internal SignalJammerTxSource(
+        Action<ReadOnlyMemory<byte>> emit,
+        Func<bool> isMoxOn,
+        Func<string?>? requestTextMox,
+        Action? releaseTextMox,
+        Func<bool>? ownsTextMox,
+        ILogger<SignalJammerTxSource> log)
     {
         _emit = emit ?? throw new ArgumentNullException(nameof(emit));
         _isMoxOn = isMoxOn ?? throw new ArgumentNullException(nameof(isMoxOn));
+        _requestTextMox = requestTextMox;
+        _releaseTextMox = releaseTextMox;
+        _ownsTextMox = ownsTextMox ?? (() => false);
         _log = log;
     }
 
@@ -66,7 +92,10 @@ internal sealed class SignalJammerTxSource : BackgroundService
         }
     }
 
-    public SignalJammerTxSnapshot EnqueueText(ReadOnlySpan<float> samples, int sampleRate)
+    public SignalJammerTxSnapshot EnqueueText(
+        ReadOnlySpan<float> samples,
+        int sampleRate,
+        bool autoTransmit = false)
     {
         if (!TxMicBlockResampler.IsSupportedInputSampleRate(sampleRate))
             throw new ArgumentOutOfRangeException(nameof(sampleRate), sampleRate,
@@ -85,10 +114,25 @@ internal sealed class SignalJammerTxSource : BackgroundService
         resampler.Accept(samples, sampleRate);
         resampler.FlushZeroPadded();
 
+        bool autoReleaseMox = false;
+        if (autoTransmit)
+        {
+            if (!_isMoxOn())
+            {
+                string? error = _requestTextMox is null
+                    ? "auto TX unavailable"
+                    : _requestTextMox();
+                if (error is not null)
+                    throw new InvalidOperationException(error);
+            }
+            autoReleaseMox = _ownsTextMox();
+        }
+
         lock (_sync)
         {
             _textSamples = output.ToArray();
             _textIndex = 0;
+            _textAutoReleaseMox = autoReleaseMox;
             return SnapshotLocked();
         }
     }
@@ -169,18 +213,20 @@ internal sealed class SignalJammerTxSource : BackgroundService
         Array.Clear(_block, 0, _block.Length);
         if (settings.Enabled)
             _generator.Fill(_block, settings);
-        MixQueuedText(_block);
+        bool releaseAutoTextAfterEmit = MixQueuedText(_block);
         Limit(_block);
         EncodeF32Le(_block, _payload);
         _emit(new ReadOnlyMemory<byte>(_payload, 0, _payload.Length));
+        if (releaseAutoTextAfterEmit)
+            ReleaseAutoTextMox();
         return true;
     }
 
-    private void MixQueuedText(Span<float> destination)
+    private bool MixQueuedText(Span<float> destination)
     {
         lock (_sync)
         {
-            if (!HasQueuedTextLocked()) return;
+            if (!HasQueuedTextLocked()) return false;
             var text = _textSamples!;
             int take = Math.Min(destination.Length, text.Length - _textIndex);
             for (int i = 0; i < take; i++)
@@ -188,9 +234,27 @@ internal sealed class SignalJammerTxSource : BackgroundService
             _textIndex += take;
             if (_textIndex >= text.Length)
             {
+                bool releaseAutoMox = _textAutoReleaseMox;
                 _textSamples = null;
                 _textIndex = 0;
+                _textAutoReleaseMox = false;
+                return releaseAutoMox;
             }
+            return false;
+        }
+    }
+
+    private void ReleaseAutoTextMox()
+    {
+        if (_releaseTextMox is null) return;
+        try
+        {
+            Thread.Sleep(AutoTransmitReleaseGuard);
+            _releaseTextMox();
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "qrm.text.autoTx.release failed");
         }
     }
 

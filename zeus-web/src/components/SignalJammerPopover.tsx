@@ -9,6 +9,7 @@ import { useMemo, useState } from 'react';
 import { Play, X } from 'lucide-react';
 import { sendSignalJammerText } from '../api/signal-jammer';
 import {
+  estimateTextSpectrogramSampleCount,
   estimateTextSpectrogramDurationSec,
   playTextSpectrogram,
   renderTextSpectrogram,
@@ -21,6 +22,13 @@ import {
   type SignalJammerPreset,
   useSignalJammerStore,
 } from '../state/signal-jammer-store';
+import {
+  SIGNAL_JAMMER_TEXT_MAX_CHARS,
+  SIGNAL_JAMMER_TEXT_MAX_PIXELS_PER_SECOND,
+  SIGNAL_JAMMER_TEXT_MIN_PIXELS_PER_SECOND,
+  SIGNAL_JAMMER_TEXT_TX_MAX_SAMPLES,
+  SIGNAL_JAMMER_TEXT_TX_SAMPLE_RATE,
+} from '../state/signal-jammer-limits';
 import './SignalJammerPopover.css';
 
 const PRESET_LABELS: Record<SignalJammerPreset, string> = {
@@ -53,7 +61,8 @@ export function SignalJammerPopover() {
   const setTextSoundText = useSignalJammerStore((s) => s.setTextSoundText);
   const setTextPixelsPerSecond = useSignalJammerStore((s) => s.setTextPixelsPerSecond);
   const outputDeviceId = useAudioDeviceStore((s) => s.browserOutputDeviceId);
-  const [textPlayStatus, setTextPlayStatus] = useState<'idle' | 'playing' | 'unavailable'>('idle');
+  const [textPlayStatus, setTextPlayStatus] =
+    useState<'idle' | 'playing' | 'too-long' | 'unavailable'>('idle');
   const textSpectrogram = useMemo(
     () => renderTextSpectrogram(textSoundText),
     [textSoundText],
@@ -65,32 +74,42 @@ export function SignalJammerPopover() {
       }),
     [textPixelsPerSecond, textSoundText],
   );
+  const textSampleCount = useMemo(
+    () =>
+      estimateTextSpectrogramSampleCount(
+        textSoundText,
+        { pixelsPerSecond: textPixelsPerSecond },
+        SIGNAL_JAMMER_TEXT_TX_SAMPLE_RATE,
+      ),
+    [textPixelsPerSecond, textSoundText],
+  );
+  const textTooLong = textSampleCount > SIGNAL_JAMMER_TEXT_TX_MAX_SAMPLES;
 
   if (!open) return null;
 
   const statusText = !enabled
     ? 'Locked'
     : active && runtimeStatus === 'running'
-      ? 'Injecting'
+      ? 'Running'
       : runtimeStatus === 'unavailable'
         ? runtimeMessage ?? 'Unavailable'
         : 'Ready';
 
   return (
     <section
-      id="signal-jammer-popout"
-      className="signal-jammer-popout"
+      id="tx-testing-tools-popout"
+      className="tx-testing-tools-popout"
       role="dialog"
-      aria-label="QRM signal jammer"
+      aria-label="TX Testing Tools"
     >
       <div className="sj-head">
         <div>
-          <div className="sj-title">QRM</div>
+          <div className="sj-title">TX Testing Tools</div>
           <div className="sj-status" data-status={runtimeStatus}>
             {statusText}
           </div>
         </div>
-        <button type="button" className="sj-icon-btn" onClick={close} aria-label="Close QRM jammer">
+        <button type="button" className="sj-icon-btn" onClick={close} aria-label="Close TX Testing Tools">
           <X size={15} strokeWidth={2.25} aria-hidden />
         </button>
       </div>
@@ -115,7 +134,7 @@ export function SignalJammerPopover() {
         </button>
       </div>
 
-      <div className="sj-segments" role="group" aria-label="QRM mode">
+      <div className="sj-segments" role="group" aria-label="TX test mode">
         {SIGNAL_JAMMER_PRESETS.map((item) => (
           <button
             key={item}
@@ -172,7 +191,7 @@ export function SignalJammerPopover() {
           <input
             type="text"
             value={textSoundText}
-            maxLength={32}
+            maxLength={SIGNAL_JAMMER_TEXT_MAX_CHARS}
             onChange={(e) => {
               setTextSoundText(e.currentTarget.value);
               setTextPlayStatus('idle');
@@ -199,17 +218,29 @@ export function SignalJammerPopover() {
           <button
             type="button"
             className="btn sm"
+            disabled={textTooLong}
+            title={textTooLong ? 'Increase speed or shorten text' : undefined}
             onClick={() => {
+              if (textTooLong) {
+                setTextPlayStatus('too-long');
+                return;
+              }
               const options = {
                 pixelsPerSecond: textPixelsPerSecond,
                 minHz: 300,
                 maxHz: 2600,
                 level,
               };
-              const rendered = synthesizeTextSpectrogramSamples(textSoundText, options, 48000);
+              const rendered = synthesizeTextSpectrogramSamples(
+                textSoundText,
+                options,
+                SIGNAL_JAMMER_TEXT_TX_SAMPLE_RATE,
+              );
               const ok = playTextSpectrogram(textSoundText, options, outputDeviceId);
               setTextPlayStatus(ok ? 'playing' : 'unavailable');
-              void sendSignalJammerText(rendered.samples, rendered.sampleRate)
+              void sendSignalJammerText(rendered.samples, rendered.sampleRate, {
+                autoTransmit: true,
+              })
                 .then(() => setTextPlayStatus('playing'))
                 .catch((err) => {
                   console.warn('signal-jammer.text.tx failed', err);
@@ -220,8 +251,10 @@ export function SignalJammerPopover() {
             <Play size={13} strokeWidth={2.4} aria-hidden />
             WRITE
           </button>
-          <span className="sj-text-meta" data-status={textPlayStatus}>
-            {textPlayStatus === 'unavailable'
+          <span className="sj-text-meta" data-status={textTooLong ? 'too-long' : textPlayStatus}>
+            {textTooLong || textPlayStatus === 'too-long'
+              ? 'Too long'
+              : textPlayStatus === 'unavailable'
               ? 'Unavailable'
               : textPlayStatus === 'playing'
                 ? 'Playing'
@@ -231,8 +264,8 @@ export function SignalJammerPopover() {
         <SliderRow
           label="Speed"
           value={`${Math.round(textPixelsPerSecond)} px/s`}
-          min={2}
-          max={15}
+          min={SIGNAL_JAMMER_TEXT_MIN_PIXELS_PER_SECOND}
+          max={SIGNAL_JAMMER_TEXT_MAX_PIXELS_PER_SECOND}
           step={1}
           sliderValue={textPixelsPerSecond}
           onChange={setTextPixelsPerSecond}

@@ -25,21 +25,24 @@ describe('SignalJammerPopover', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('enables the hidden QRM control from the popout', () => {
+  it('enables TX Testing Tools from the popout', () => {
     const { container, unmount } = render(createElement(SignalJammerPopover));
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
     const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
 
     act(() => {
       checkbox?.click();
     });
 
+    expect(dialog?.getAttribute('aria-label')).toBe('TX Testing Tools');
+    expect(container.querySelector('.sj-title')?.textContent).toBe('TX Testing Tools');
     expect(checkbox).toBeTruthy();
     expect(useSignalJammerStore.getState().enabled).toBe(true);
 
     unmount();
   });
 
-  it('updates the jammer level from the slider', () => {
+  it('updates the TX test level from the slider', () => {
     const { container, unmount } = render(createElement(SignalJammerPopover));
     const slider = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="range"]'))
       .find((input) => input.min === '0' && input.max === '100');
@@ -117,11 +120,37 @@ describe('SignalJammerPopover', () => {
       }),
     );
     const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string) as {
+      autoTransmit?: boolean;
       samplesBase64?: string;
       sampleRate?: number;
     };
+    expect(body.autoTransmit).toBe(true);
     expect(body.sampleRate).toBe(48000);
     expect(body.samplesBase64).toEqual(expect.any(String));
+
+    unmount();
+  });
+
+  it('does not post oversized typed spectrogram audio', () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{}', { headers: { 'content-type': 'application/json' } }),
+    );
+    useSignalJammerStore.setState({
+      textSoundText: 'A'.repeat(32),
+      textPixelsPerSecond: 2,
+    });
+    const { container, unmount } = render(createElement(SignalJammerPopover));
+    const writeButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('WRITE'));
+
+    expect(container.querySelector('.sj-text-meta')?.textContent).toBe('Too long');
+    expect(writeButton?.disabled).toBe(true);
+
+    act(() => {
+      writeButton?.click();
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
 
     unmount();
   });

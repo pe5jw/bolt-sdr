@@ -6,6 +6,10 @@
 //                         Christian Suarez (N9WAR), and contributors.
 
 import { normalizeTextSoundText } from '../state/signal-jammer-store';
+import {
+  SIGNAL_JAMMER_TEXT_MAX_PIXELS_PER_SECOND,
+  SIGNAL_JAMMER_TEXT_MIN_PIXELS_PER_SECOND,
+} from '../state/signal-jammer-limits';
 
 export type TextSpectrogramOptions = {
   pixelsPerSecond?: number;
@@ -122,6 +126,15 @@ export function estimateTextSpectrogramDurationSec(
   return spectrogram.columns / (normalizedPixelsPerSecond(options.pixelsPerSecond) * RENDER_SCALE_X);
 }
 
+export function estimateTextSpectrogramSampleCount(
+  text: string,
+  options: TextSpectrogramOptions = {},
+  sampleRate = 48000,
+): number {
+  const spectrogram = renderTextSpectrogram(text);
+  return samplesPerTextSpectrogramColumn(sampleRate, options.pixelsPerSecond) * spectrogram.columns;
+}
+
 export function rowToFrequencyHz(
   row: number,
   rows: number,
@@ -143,7 +156,7 @@ export function synthesizeTextSpectrogramSamples(
   const minHz = normalizedHz(options.minHz, DEFAULT_MIN_HZ);
   const maxHz = Math.max(minHz + 100, normalizedHz(options.maxHz, DEFAULT_MAX_HZ));
   const level = normalizedLevel(options.level);
-  const samplesPerColumn = Math.max(16, Math.round(sampleRate / (pixelsPerSecond * RENDER_SCALE_X)));
+  const samplesPerColumn = samplesPerTextSpectrogramColumn(sampleRate, pixelsPerSecond);
   const samples = new Float32Array(samplesPerColumn * spectrogram.columns);
   const rowFreqs = Array.from({ length: spectrogram.rows }, (_, row) =>
     rowToFrequencyHz(row, spectrogram.rows, minHz, maxHz),
@@ -198,7 +211,17 @@ export function playTextSpectrogram(
 
 function normalizedPixelsPerSecond(value: number | undefined): number {
   if (!Number.isFinite(value)) return DEFAULT_PIXELS_PER_SECOND;
-  return Math.max(2, Math.min(15, value as number));
+  return Math.max(
+    SIGNAL_JAMMER_TEXT_MIN_PIXELS_PER_SECOND,
+    Math.min(SIGNAL_JAMMER_TEXT_MAX_PIXELS_PER_SECOND, value as number),
+  );
+}
+
+function samplesPerTextSpectrogramColumn(sampleRate: number, pixelsPerSecond: number | undefined): number {
+  return Math.max(
+    16,
+    Math.round(sampleRate / (normalizedPixelsPerSecond(pixelsPerSecond) * RENDER_SCALE_X)),
+  );
 }
 
 function normalizedHz(value: number | undefined, fallback: number): number {

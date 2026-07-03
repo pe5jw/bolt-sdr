@@ -60,6 +60,99 @@ public sealed class SignalJammerTxSourceTests
         Assert.False(source.TryPumpOnceForTests());
     }
 
+    [Fact]
+    public void TextAudio_AutoTransmit_ClaimsAndReleasesOwnMox()
+    {
+        bool mox = false;
+        bool owned = false;
+        int releaseCount = 0;
+        var emitted = new List<float[]>();
+        var source = new SignalJammerTxSource(
+            payload => emitted.Add(Decode(payload)),
+            () => mox,
+            () =>
+            {
+                mox = true;
+                owned = true;
+                return null;
+            },
+            () =>
+            {
+                releaseCount++;
+                if (!owned) return;
+                owned = false;
+                mox = false;
+            },
+            () => owned,
+            NullLogger<SignalJammerTxSource>.Instance);
+        var samples = new float[SignalJammerTxSource.BlockSamples];
+        Array.Fill(samples, 0.25f);
+
+        var snapshot = source.EnqueueText(samples, SignalJammerTxSource.SampleRateHz, autoTransmit: true);
+
+        Assert.True(snapshot.TextQueued);
+        Assert.True(mox);
+        Assert.True(owned);
+        Assert.True(source.TryPumpOnceForTests());
+        Assert.False(mox);
+        Assert.False(owned);
+        Assert.Equal(1, releaseCount);
+        Assert.Single(emitted);
+    }
+
+    [Fact]
+    public void TextAudio_AutoTransmit_RidesExistingMoxWithoutDroppingIt()
+    {
+        bool mox = true;
+        int requestCount = 0;
+        int releaseCount = 0;
+        var emitted = new List<float[]>();
+        var source = new SignalJammerTxSource(
+            payload => emitted.Add(Decode(payload)),
+            () => mox,
+            () =>
+            {
+                requestCount++;
+                return null;
+            },
+            () => releaseCount++,
+            () => false,
+            NullLogger<SignalJammerTxSource>.Instance);
+        var samples = new float[SignalJammerTxSource.BlockSamples];
+        Array.Fill(samples, 0.25f);
+
+        var snapshot = source.EnqueueText(samples, SignalJammerTxSource.SampleRateHz, autoTransmit: true);
+
+        Assert.True(snapshot.TextQueued);
+        Assert.True(source.TryPumpOnceForTests());
+        Assert.True(mox);
+        Assert.Equal(0, requestCount);
+        Assert.Equal(0, releaseCount);
+        Assert.Single(emitted);
+    }
+
+    [Fact]
+    public void TextAudio_AutoTransmit_RejectsWhenMoxClaimFails()
+    {
+        bool mox = false;
+        var source = new SignalJammerTxSource(
+            _ => { },
+            () => mox,
+            () => "not connected",
+            () => { },
+            () => false,
+            NullLogger<SignalJammerTxSource>.Instance);
+        var samples = new float[SignalJammerTxSource.BlockSamples];
+        Array.Fill(samples, 0.25f);
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            source.EnqueueText(samples, SignalJammerTxSource.SampleRateHz, autoTransmit: true));
+
+        Assert.Contains("not connected", ex.Message);
+        Assert.False(source.Snapshot().TextQueued);
+        Assert.False(mox);
+    }
+
     [Theory]
     [InlineData("hash")]
     [InlineData("heterodyne")]

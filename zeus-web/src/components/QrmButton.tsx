@@ -26,9 +26,9 @@ export function QrmButton() {
       type="button"
       onClick={click}
       className={`btn sm ${active ? 'active' : ''}`}
-      title={active ? 'QRM jammer on' : 'QRM jammer off'}
+      title={active ? 'TX testing audio on' : 'TX testing audio off'}
       aria-pressed={active}
-      aria-label={active ? 'Disable QRM jammer' : 'Enable QRM jammer'}
+      aria-label={active ? 'Disable TX testing audio' : 'Enable TX testing audio'}
     >
       <span className={`led ${active ? 'on' : ''}`} style={{ marginRight: 6 }} />
       {active ? 'ON' : 'OFF'}
@@ -52,10 +52,10 @@ export function QrmPanelToggleButton() {
       type="button"
       onClick={click}
       className={`btn sm ${open ? 'active' : ''}`}
-      title={open ? 'Close QRM panel' : 'Open QRM panel'}
+      title={open ? 'Close TX Testing Tools' : 'Open TX Testing Tools'}
       aria-expanded={open}
-      aria-controls="signal-jammer-popout"
-      aria-label={open ? 'Close QRM panel' : 'Open QRM panel'}
+      aria-controls="tx-testing-tools-popout"
+      aria-label={open ? 'Close TX Testing Tools' : 'Open TX Testing Tools'}
     >
       <SlidersHorizontal size={14} strokeWidth={2.25} aria-hidden />
     </button>

@@ -18,7 +18,7 @@ describe('QrmButton', () => {
     });
   });
 
-  it('stays hidden until the hidden jammer is enabled', () => {
+  it('stays hidden until TX testing tools are enabled', () => {
     const { container, unmount } = render(createElement(QrmButton));
 
     expect(container.querySelector('button')).toBeNull();
@@ -38,11 +38,12 @@ describe('QrmButton', () => {
     expect(button).toBeTruthy();
     expect(useSignalJammerStore.getState().active).toBe(true);
     expect(button?.getAttribute('aria-pressed')).toBe('true');
+    expect(button?.getAttribute('aria-label')).toBe('Disable TX testing audio');
 
     unmount();
   });
 
-  it('toggles the QRM panel from the top bar after the jammer is enabled', () => {
+  it('toggles TX Testing Tools from the top bar after it is enabled', () => {
     useSignalJammerStore.getState().setEnabled(true);
     const { container, unmount } = render(createElement(QrmPanelToggleButton));
     const button = container.querySelector<HTMLButtonElement>('button');
@@ -54,6 +55,7 @@ describe('QrmButton', () => {
     expect(button).toBeTruthy();
     expect(useEasterEggStore.getState().signalJammerPopoverOpen).toBe(true);
     expect(button?.getAttribute('aria-expanded')).toBe('true');
+    expect(button?.getAttribute('aria-controls')).toBe('tx-testing-tools-popout');
 
     unmount();
   });

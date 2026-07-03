@@ -12,7 +12,7 @@ import { create } from 'zustand';
 //
 // The HARDWARE settings folder (board/DSP diagnostics) is hidden by default
 // and unlocked as an easter egg: tapping the header brand-mark lightning bolt
-// HARDWARE_UNLOCK_CLICKS times reveals it and opens the hidden QRM jammer
+// HARDWARE_UNLOCK_CLICKS times reveals it and opens the hidden TX testing tools
 // popout. State is intentionally in-memory only — it re-locks on every launch,
 // so a fresh session never lists the folder and an accidental discovery never
 // permanently exposes it.
@@ -24,7 +24,7 @@ type EasterEggState = {
   signalJammerPopoverOpen: boolean;
   boltClicks: number;
   // Counts a brand-mark bolt tap; unlocks HARDWARE once the click threshold is
-  // reached. Once unlocked, the bolt toggles the QRM jammer popout.
+  // reached. Once unlocked, the bolt toggles the TX testing tools popout.
   registerBoltClick: () => void;
   closeSignalJammerPopover: () => void;
   toggleSignalJammerPopover: () => void;
