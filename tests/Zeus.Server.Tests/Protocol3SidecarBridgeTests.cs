@@ -125,6 +125,112 @@ public sealed class Protocol3SidecarBridgeTests
     }
 
     [Fact]
+    public void BuildReceiverSettingsJson_CanInvertCtunTuningOffsetForP3Dsp()
+    {
+        var state = new StateDto(
+            ConnectionStatus.Connected,
+            "192.168.1.25:1030",
+            VfoHz: 14_243_000,
+            Mode: RxMode.USB,
+            FilterLowHz: 19,
+            FilterHighHz: 2_864,
+            SampleRate: 192_000,
+            RadioLoHz: 14_207_741,
+            CtunEnabled: true,
+            MaxReceivers: 1);
+
+        using var doc = JsonDocument.Parse(Protocol3SidecarBridge.BuildReceiverSettingsJson(
+            state,
+            rxStreams: 1,
+            sampleRateHz: 192_000,
+            invertRxTuningOffset: true));
+        var rx = doc.RootElement[0];
+
+        Assert.Equal(14_207_741, rx.GetProperty("centerFrequencyHz").GetInt64());
+        Assert.Equal(-35_259, rx.GetProperty("tuningOffsetHz").GetInt32());
+    }
+
+    [Fact]
+    public void BuildReceiverSettingsJson_UsesRadioLoOffsetWhenCtunFlagIsFalse()
+    {
+        var state = new StateDto(
+            ConnectionStatus.Connected,
+            "192.168.1.25:1030",
+            VfoHz: 7_209_000,
+            Mode: RxMode.USB,
+            FilterLowHz: 150,
+            FilterHighHz: 2_850,
+            SampleRate: 192_000,
+            RadioLoHz: 7_205_000,
+            CtunEnabled: false,
+            MaxReceivers: 1);
+
+        using var doc = JsonDocument.Parse(Protocol3SidecarBridge.BuildReceiverSettingsJson(
+            state,
+            rxStreams: 1,
+            sampleRateHz: 192_000));
+        var rx = doc.RootElement[0];
+
+        Assert.Equal((int)RxMode.USB, rx.GetProperty("mode").GetInt32());
+        Assert.Equal(150, rx.GetProperty("passbandLowHz").GetInt32());
+        Assert.Equal(2_850, rx.GetProperty("passbandHighHz").GetInt32());
+        Assert.Equal(7_205_000, rx.GetProperty("centerFrequencyHz").GetInt64());
+        Assert.Equal(4_000, rx.GetProperty("tuningOffsetHz").GetInt32());
+    }
+
+    [Fact]
+    public void BuildReceiverSettingsJson_UsesEffectiveCwLoForTuningOffset()
+    {
+        var state = new StateDto(
+            ConnectionStatus.Connected,
+            "192.168.1.25:1030",
+            VfoHz: 14_046_000,
+            Mode: RxMode.CWU,
+            FilterLowHz: 300,
+            FilterHighHz: 700,
+            SampleRate: 192_000,
+            RadioLoHz: 14_045_000,
+            CtunEnabled: true,
+            MaxReceivers: 1);
+
+        using var doc = JsonDocument.Parse(Protocol3SidecarBridge.BuildReceiverSettingsJson(
+            state,
+            rxStreams: 1,
+            sampleRateHz: 192_000));
+        var rx = doc.RootElement[0];
+
+        Assert.Equal((int)RxMode.CWU, rx.GetProperty("mode").GetInt32());
+        Assert.Equal(14_045_000, rx.GetProperty("centerFrequencyHz").GetInt64());
+        Assert.Equal(400, rx.GetProperty("tuningOffsetHz").GetInt32());
+    }
+
+    [Fact]
+    public void BuildReceiverSettingsJson_MapsFreeDvBelowTenMHzToSignedLsbPassband()
+    {
+        var state = new StateDto(
+            ConnectionStatus.Connected,
+            "192.168.1.25:1030",
+            VfoHz: 7_177_000,
+            Mode: RxMode.FreeDv,
+            FilterLowHz: 100,
+            FilterHighHz: 2_850,
+            SampleRate: 192_000,
+            RadioLoHz: 7_177_000,
+            CtunEnabled: true,
+            MaxReceivers: 1);
+
+        using var doc = JsonDocument.Parse(Protocol3SidecarBridge.BuildReceiverSettingsJson(
+            state,
+            rxStreams: 1,
+            sampleRateHz: 192_000));
+        var rx = doc.RootElement[0];
+
+        Assert.Equal((int)RxMode.LSB, rx.GetProperty("mode").GetInt32());
+        Assert.Equal(-2_850, rx.GetProperty("passbandLowHz").GetInt32());
+        Assert.Equal(-100, rx.GetProperty("passbandHighHz").GetInt32());
+    }
+
+    [Fact]
     public void BuildReceiverSettingsJson_DisablesAgcOnlyForFixedMode()
     {
         var state = new StateDto(
