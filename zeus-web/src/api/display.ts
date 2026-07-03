@@ -32,6 +32,7 @@ export type DisplaySettings = {
   txDisplayFftSize: number | null;
   txDisplayWindow: number | null;
   txDisplayAvgTauMs: number | null;
+  widebandDisplayEnabled: boolean;
 };
 
 // Matches backend DisplaySettingsStore.DefaultRxTraceColor.
@@ -55,6 +56,7 @@ type DisplaySettingsDtoRaw = {
   txDisplayFftSize?: number | null;
   txDisplayWindow?: number | null;
   txDisplayAvgTauMs?: number | null;
+  widebandDisplayEnabled?: boolean | null;
 };
 
 function normalizeRxTraceColor(raw: string | null | undefined): string {
@@ -93,6 +95,7 @@ function normalize(raw: DisplaySettingsDtoRaw): DisplaySettings {
     txDisplayFftSize: normalizeDbValue(raw.txDisplayFftSize),
     txDisplayWindow: normalizeDbValue(raw.txDisplayWindow),
     txDisplayAvgTauMs: normalizeDbValue(raw.txDisplayAvgTauMs),
+    widebandDisplayEnabled: raw.widebandDisplayEnabled === true,
   };
 }
 
@@ -120,6 +123,7 @@ export async function updateDisplaySettings(
     window?: number | null;
     avgTauMs?: number | null;
   },
+  widebandDisplayEnabled?: boolean | null,
   signal?: AbortSignal,
 ): Promise<DisplaySettings> {
   const res = await fetch('/api/display-settings', {
@@ -141,6 +145,7 @@ export async function updateDisplaySettings(
       txDisplayFftSize: txDisplay?.fftSize,
       txDisplayWindow: txDisplay?.window,
       txDisplayAvgTauMs: txDisplay?.avgTauMs,
+      widebandDisplayEnabled,
     }),
     signal,
   });

@@ -16,7 +16,7 @@
 // live (no restart). Both uploaders default OFF.
 
 import { ApiError } from './client';
-import { DIGITAL_PLUGIN_BASE } from './digital-plugin';
+import { digitalPluginBase } from './digital-plugin';
 
 export type SpottingStatus = {
   pskReporterEnabled: boolean;
@@ -71,12 +71,12 @@ async function jsonFetch<T>(
 }
 
 export function getSpottingStatus(signal?: AbortSignal): Promise<SpottingStatus> {
-  return jsonFetch(`${DIGITAL_PLUGIN_BASE}/spotting/status`, { signal }, normalizeStatus);
+  return jsonFetch(`${digitalPluginBase()}/spotting/status`, { signal }, normalizeStatus);
 }
 
 export function postSpottingConfig(cfg: SpottingConfig, signal?: AbortSignal): Promise<SpottingStatus> {
   return jsonFetch(
-    `${DIGITAL_PLUGIN_BASE}/config/spotting`,
+    `${digitalPluginBase()}/config/spotting`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

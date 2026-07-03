@@ -161,15 +161,44 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     /// sample counts (the RX crackle, issue #733), rebuffer events, and the
     /// live ring depth vs the prebuffer cushion. Relaxed reads — safe from any
     /// thread, exact-enough for telemetry.</summary>
-    public Diagnostics GetDiagnostics() => new(
-        UnderrunSamplesTotal: Interlocked.Read(ref _underrunSamplesTotal),
-        OverrunSamplesTotal: Interlocked.Read(ref _overrunSamplesTotal),
-        RebufferEvents: Interlocked.Read(ref _rebufferEvents),
-        RingDepthSamples: _ring.Count,
-        RingCapacitySamples: RingCapacity,
-        PrebufferSamples: _effectivePrebufferSamples,
-        SampleRateHz: FrameRateHz,
-        Rebuffering: _rebuffering);
+    public Diagnostics GetDiagnostics()
+    {
+        bool outputOpen;
+        int outputSampleRateHz;
+        int outputChannels;
+        string? configuredOutputDeviceId;
+        string? activeOutputDeviceId;
+
+        lock (_deviceSync)
+        {
+            outputOpen = _output is not null;
+            outputSampleRateHz = _output is null ? 0 : checked((int)_output.SampleRate);
+            outputChannels = _output is null ? 0 : checked((int)_output.Channels);
+            configuredOutputDeviceId = ConfiguredOutputDeviceId;
+            activeOutputDeviceId = _activeOutputDeviceId;
+        }
+
+        return new(
+            UnderrunSamplesTotal: Interlocked.Read(ref _underrunSamplesTotal),
+            OverrunSamplesTotal: Interlocked.Read(ref _overrunSamplesTotal),
+            RebufferEvents: Interlocked.Read(ref _rebufferEvents),
+            RingDepthSamples: _ring.Count,
+            RingCapacitySamples: RingCapacity,
+            PrebufferSamples: _effectivePrebufferSamples,
+            SampleRateHz: FrameRateHz,
+            Rebuffering: _rebuffering,
+            OutputOpen: outputOpen,
+            ConfiguredOutputDeviceId: configuredOutputDeviceId,
+            ActiveOutputDeviceId: activeOutputDeviceId,
+            OutputSampleRateHz: outputSampleRateHz,
+            OutputChannels: outputChannels,
+            TotalSamplesIn: Interlocked.Read(ref _totalSamplesIn),
+            TotalSamplesOut: Interlocked.Read(ref _totalSamplesOut),
+            DroppedFormatSamplesTotal: Interlocked.Read(ref _droppedFormatSamplesTotal),
+            DroppedMutedSamplesTotal: Interlocked.Read(ref _droppedMutedSamplesTotal),
+            LastInputSampleRateHz: Volatile.Read(ref _lastInputSampleRateHz),
+            LastInputChannels: Volatile.Read(ref _lastInputChannels));
+    }
 
     public readonly record struct Diagnostics(
         long UnderrunSamplesTotal,
@@ -179,7 +208,18 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         int RingCapacitySamples,
         int PrebufferSamples,
         int SampleRateHz,
-        bool Rebuffering);
+        bool Rebuffering,
+        bool OutputOpen,
+        string? ConfiguredOutputDeviceId,
+        string? ActiveOutputDeviceId,
+        int OutputSampleRateHz,
+        int OutputChannels,
+        long TotalSamplesIn,
+        long TotalSamplesOut,
+        long DroppedFormatSamplesTotal,
+        long DroppedMutedSamplesTotal,
+        int LastInputSampleRateHz,
+        int LastInputChannels);
 
     public void SetMuted(bool muted) => _muteState.SetMuted(muted);
 
@@ -224,6 +264,10 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     private long _overrunSamples;
     private long _totalSamplesIn;
     private long _totalSamplesOut;
+    private long _droppedFormatSamplesTotal;
+    private long _droppedMutedSamplesTotal;
+    private int _lastInputSampleRateHz;
+    private int _lastInputChannels;
     // Cumulative (never reset by the 5 s log) — surfaced via GetDiagnostics()
     // so output-buffer underruns (the RX crackle, issue #733) are measurable
     // from /api/audio/native rather than only by log-diving.
@@ -455,11 +499,19 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
 
     public void Publish(in AudioFrame frame)
     {
+        var frameSamples = frame.Samples.Length;
+        Volatile.Write(ref _lastInputSampleRateHz, checked((int)frame.SampleRateHz));
+        Volatile.Write(ref _lastInputChannels, frame.Channels);
+
         // Muted at the door: don't enqueue and let the ring drain to silence
         // on the playback callback's underrun path. Cheaper than gating in
         // the audio worker thread and avoids any sample-rate / channel-count
         // negotiation with the producer.
-        if (_muteState.IsMuted) return;
+        if (_muteState.IsMuted)
+        {
+            Interlocked.Add(ref _droppedMutedSamplesTotal, frameSamples);
+            return;
+        }
 
         // The DSP tick produces mono float32 @ 48 kHz. We assert the format
         // softly: anything else is logged and dropped rather than corrupting
@@ -467,6 +519,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         // and the AudioFrame ctor; this is defence in depth.)
         if (frame.Channels != 1 || frame.SampleRateHz != FrameRateHz)
         {
+            Interlocked.Add(ref _droppedFormatSamplesTotal, frameSamples);
             // Don't spam — these fire at frame rate. Log first occurrence
             // only by ANDing against a never-set flag once dropped.
             return;

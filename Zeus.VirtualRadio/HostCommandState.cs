@@ -65,6 +65,36 @@ public sealed class HostCommandState
     /// <summary>Codec mic/line-in select (DriveFilter frame C2[1]).</summary>
     public bool MicLineIn;
 
+    // ---- Protocol-1 PureSignal (populated by the P1 EP2 decoder) ----------
+
+    /// <summary>
+    /// PureSignal receiver-mux enable — register 0x0a bit 22 = wire-0x14
+    /// frame C2[6]. Decoded by the HL2 gateware as <c>puresignal_run</c> and
+    /// by the HermesC10 (ANAN-G2E, P1) classic Hermes v3.3 gateware as
+    /// <c>PureSignal_enable</c> (Hermes.v:2170-2173 — muxes RX4 onto the TX
+    /// DAC samples under FPGA_PTT). Zero on every other P1 board.
+    /// </summary>
+    public bool P1PsRun;
+
+    /// <summary>
+    /// RX-input relay code — Config frame C3[6:5] (<c>IF_RX_relay</c>,
+    /// Hermes.v:2144). 0b01 selects the RX BYPASS relay (Mk2PA Alex SPI
+    /// bit 11) — the HermesC10 external PS feedback route while armed +
+    /// keyed; otherwise the field carries the operator's RX-antenna
+    /// selection (Ant1=00 / Ant2=01… per <c>EncodeRxAntennaC3Bits</c>,
+    /// whose Ant2 code happens to coincide with the bypass value).
+    /// </summary>
+    public byte P1RxRelayCode;
+
+    /// <summary>
+    /// TX-time ADC attenuation in dB — wire-0x1c frame C3[4:0]. On the
+    /// HermesC10 (ANAN-G2E, P1) gateware this is <c>atten_on_Tx</c>
+    /// (Hermes.v:2187, PTT-muxed onto the step attenuator; silicon reset
+    /// 31). On HL2 the same address is the AD9866 FAST_LNA block and Zeus
+    /// sends an all-zero payload, so this decodes 0 there.
+    /// </summary>
+    public byte P1AttenOnTxDb;
+
     // ---- Protocol-2 specific (populated by the P2 decoder) ----------------
 
     /// <summary>
@@ -76,6 +106,23 @@ public sealed class HostCommandState
     /// as the gateware does. Zero on Protocol 1.
     /// </summary>
     public bool PsArmedBurst;
+
+    /// <summary>
+    /// Whether the host has routed the external PureSignal feedback tap into the
+    /// RX ADC for this TX burst — P2 CmdHighPriority alex0 bit 11
+    /// (<c>ALEX_RX_ANTENNA_BYPASS</c> / "RX 1 Out" relay, SPI.v:47). On the
+    /// single-ADC ANAN-G2E (HermesC10) the one ADC has NO internal coupler
+    /// (<c>temp_ADC = INA</c>, Hermes.v:1117-1130), so it can only see the
+    /// post-PA sampler tap through this relay. <see cref="PsArmedBurst"/> (byte
+    /// 1363) makes DDC0 stream the interleaved coupler/reference pair — frames
+    /// flow — but the coupler carries real signal ONLY when this bit is also set;
+    /// with it clear the ADC is on the antenna (disconnected during TX) and the
+    /// coupler is silent, so calcc never converges and the PS meter never moves
+    /// ("as if PS isn't on"). Modelling this is what lets the emulator reproduce
+    /// the G2E-Internal dead-meter bug instead of green-washing over it. Zero on
+    /// Protocol 1.
+    /// </summary>
+    public bool PsCouplerRouted;
 
     /// <summary>
     /// TX-time ADC step-attenuator in dB — P2 CmdTx byte 59

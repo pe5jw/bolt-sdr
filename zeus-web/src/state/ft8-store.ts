@@ -11,7 +11,7 @@
 // control state, push for the live stream.
 
 import { create } from 'zustand';
-import { DIGITAL_PLUGIN_BASE } from '../api/digital-plugin';
+import { digitalPluginBase } from '../api/digital-plugin';
 import { nearestDigitalBand } from '../dsp/digital-segments';
 import {
   configureRadioForDigital,
@@ -182,9 +182,10 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
     }),
 
   refreshStatus: async (signal) => {
+    const base = digitalPluginBase();
     try {
-      const res = await fetch(`${DIGITAL_PLUGIN_BASE}/ft8`, { signal });
-      if (!res.ok) throw new Error(`GET ${DIGITAL_PLUGIN_BASE}/ft8 → ${res.status}`);
+      const res = await fetch(`${base}/ft8`, { signal });
+      if (!res.ok) throw new Error(`GET ${base}/ft8 → ${res.status}`);
       const j = (await res.json()) as Record<string, unknown>;
       set({
         nativeAvailable: j.nativeAvailable === true,
@@ -200,8 +201,9 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
   },
 
   enable: async (opts) => {
+    const base = digitalPluginBase();
     try {
-      const res = await fetch(`${DIGITAL_PLUGIN_BASE}/ft8/enable`, {
+      const res = await fetch(`${base}/ft8/enable`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -210,7 +212,7 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
           passes: opts?.passes ?? get().passes,
         }),
       });
-      if (!res.ok) throw new Error(`POST ${DIGITAL_PLUGIN_BASE}/ft8/enable → ${res.status}`);
+      if (!res.ok) throw new Error(`POST ${base}/ft8/enable → ${res.status}`);
       const j = (await res.json()) as Record<string, unknown>;
       const ok = j.enabled === true;
       set({
@@ -228,8 +230,9 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
   },
 
   disable: async () => {
+    const base = digitalPluginBase();
     try {
-      await fetch(`${DIGITAL_PLUGIN_BASE}/ft8/disable`, { method: 'POST' });
+      await fetch(`${base}/ft8/disable`, { method: 'POST' });
     } catch {
       /* best-effort */
     }

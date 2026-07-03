@@ -45,7 +45,7 @@ public sealed class MidiServiceTests : IDisposable
         }
     }
 
-    private Harness Build()
+    private Harness Build(TimeProvider? timeProvider = null)
     {
         var lf = NullLoggerFactory.Instance;
         var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath);
@@ -58,7 +58,9 @@ public sealed class MidiServiceTests : IDisposable
         var store = new MidiConfigStore(NullLogger<MidiConfigStore>.Instance, _dbPath + ".midi");
         var midi = new NullMidiEngine();
         var sd = new NullStreamDeckEngine();
-        var service = new MidiService(midi, sd, store, radio, tx, hub, lf);
+        var service = timeProvider is null
+            ? new MidiService(midi, sd, store, radio, tx, hub, lf)
+            : new MidiService(midi, sd, store, radio, tx, hub, lf, timeProvider);
         service.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
         return new Harness(service, midi, sd, radio, tx, store);
     }
@@ -148,6 +150,101 @@ public sealed class MidiServiceTests : IDisposable
         Assert.False(h.Service.GetStatus().Learning);
         h.Midi.Inject(new MidiInputMessage("DJ", MidiControlType.Button, "note:0:62", 127, 0));
         Assert.Equal(7_175_000, h.Radio.Snapshot().VfoHz);
+    }
+
+    [Fact]
+    public void LearnMode_ExpiresAndResumesDispatch()
+    {
+        var clock = new TestClock(DateTimeOffset.Parse("2026-07-03T00:00:00Z"));
+        using var h = Build(clock);
+        h.Service.SetConfig(ConfigWith(
+            new MidiMappingDto("DJ", "note:0:62", MidiControlType.Button, ZeusMidiCommand.Band40m)));
+        h.Service.StartLearn();
+        clock.Advance(TimeSpan.FromSeconds(121));
+
+        h.Radio.SetVfo(14_200_000);
+        h.Midi.Inject(new MidiInputMessage("DJ", MidiControlType.Button, "note:0:62", 127, 0));
+
+        Assert.Equal(7_175_000, h.Radio.Snapshot().VfoHz);
+        Assert.False(h.Service.GetStatus().Learning);
+    }
+
+    [Fact]
+    public void StartLearn_RefreshesExpiryDeadline()
+    {
+        var clock = new TestClock(DateTimeOffset.Parse("2026-07-03T00:00:00Z"));
+        using var h = Build(clock);
+        h.Service.SetConfig(ConfigWith(
+            new MidiMappingDto("DJ", "note:0:62", MidiControlType.Button, ZeusMidiCommand.Band40m)));
+
+        h.Service.StartLearn();
+        clock.Advance(TimeSpan.FromSeconds(119));
+        h.Service.StartLearn();
+        clock.Advance(TimeSpan.FromSeconds(119));
+
+        h.Radio.SetVfo(14_200_000);
+        h.Midi.Inject(new MidiInputMessage("DJ", MidiControlType.Button, "note:0:62", 127, 0));
+
+        Assert.Equal(14_200_000, h.Radio.Snapshot().VfoHz);
+        Assert.True(h.Service.GetStatus().Learning);
+    }
+
+    [Fact]
+    public void KeepLearnAlive_RefreshesExpiryDeadline()
+    {
+        var clock = new TestClock(DateTimeOffset.Parse("2026-07-03T00:00:00Z"));
+        using var h = Build(clock);
+        h.Service.SetConfig(ConfigWith(
+            new MidiMappingDto("DJ", "note:0:62", MidiControlType.Button, ZeusMidiCommand.Band40m)));
+
+        h.Service.StartLearn();
+        clock.Advance(TimeSpan.FromSeconds(119));
+        h.Service.KeepLearnAlive();
+        clock.Advance(TimeSpan.FromSeconds(119));
+
+        h.Radio.SetVfo(14_200_000);
+        h.Midi.Inject(new MidiInputMessage("DJ", MidiControlType.Button, "note:0:62", 127, 0));
+
+        Assert.Equal(14_200_000, h.Radio.Snapshot().VfoHz);
+        Assert.True(h.Service.GetStatus().Learning);
+    }
+
+    [Fact]
+    public void KeepLearnAlive_AfterStopLearn_DoesNotReenterLearning()
+    {
+        var clock = new TestClock(DateTimeOffset.Parse("2026-07-03T00:00:00Z"));
+        using var h = Build(clock);
+        h.Service.SetConfig(ConfigWith(
+            new MidiMappingDto("DJ", "note:0:62", MidiControlType.Button, ZeusMidiCommand.Band40m)));
+
+        h.Service.StartLearn();
+        h.Service.StopLearn();
+        clock.Advance(TimeSpan.FromSeconds(60));
+
+        var status = h.Service.KeepLearnAlive();
+
+        Assert.False(status.Learning);
+        h.Radio.SetVfo(14_200_000);
+        h.Midi.Inject(new MidiInputMessage("DJ", MidiControlType.Button, "note:0:62", 127, 0));
+        Assert.Equal(7_175_000, h.Radio.Snapshot().VfoHz);
+    }
+
+    [Fact]
+    public void StopLearn_ResumesDispatchBeforeExpiry()
+    {
+        var clock = new TestClock(DateTimeOffset.Parse("2026-07-03T00:00:00Z"));
+        using var h = Build(clock);
+        h.Service.SetConfig(ConfigWith(
+            new MidiMappingDto("DJ", "note:0:62", MidiControlType.Button, ZeusMidiCommand.Band40m)));
+        h.Service.StartLearn();
+        clock.Advance(TimeSpan.FromSeconds(30));
+        h.Service.StopLearn();
+
+        h.Radio.SetVfo(14_200_000);
+        h.Midi.Inject(new MidiInputMessage("DJ", MidiControlType.Button, "note:0:62", 127, 0));
+
+        Assert.Equal(7_175_000, h.Radio.Snapshot().VfoHz);
+        Assert.False(h.Service.GetStatus().Learning);
     }
 
     [Fact]
@@ -247,5 +344,16 @@ public sealed class MidiServiceTests : IDisposable
         var afterHigh = h.Radio.Snapshot().FilterHighHz;
         Assert.Equal(beforeLow + 50, afterLow);
         Assert.Equal(beforeHigh + 50, afterHigh);
+    }
+
+    // The learn deadline runs on the monotonic timestamp clock, so the fake
+    // drives GetTimestamp (at wall-tick resolution) alongside GetUtcNow.
+    private sealed class TestClock(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+        public override DateTimeOffset GetUtcNow() => _now;
+        public override long GetTimestamp() => _now.UtcTicks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public void Advance(TimeSpan d) => _now += d;
     }
 }

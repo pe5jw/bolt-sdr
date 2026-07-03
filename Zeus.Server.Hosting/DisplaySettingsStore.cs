@@ -115,7 +115,8 @@ public sealed class DisplaySettingsStore : IDisposable
                     TxDisplayCalOffsetDb: null,
                     TxDisplayFftSize: null,
                     TxDisplayWindow: null,
-                    TxDisplayAvgTauMs: null);
+                    TxDisplayAvgTauMs: null,
+                    WidebandDisplayEnabled: false);
             }
             return new DisplaySettingsDto(
                 Mode: NormalizeMode(e.Mode),
@@ -134,7 +135,8 @@ public sealed class DisplaySettingsStore : IDisposable
                 TxDisplayCalOffsetDb: e.TxDisplayCalOffsetDb,
                 TxDisplayFftSize: e.TxDisplayFftSize,
                 TxDisplayWindow: e.TxDisplayWindow,
-                TxDisplayAvgTauMs: e.TxDisplayAvgTauMs);
+                TxDisplayAvgTauMs: e.TxDisplayAvgTauMs,
+                WidebandDisplayEnabled: e.WidebandDisplayEnabled);
         }
     }
 
@@ -147,7 +149,8 @@ public sealed class DisplaySettingsStore : IDisposable
         double? wfDbMin = null, double? wfDbMax = null,
         double? wfTxDbMin = null, double? wfTxDbMax = null,
         double? txDisplayCalOffsetDb = null, int? txDisplayFftSize = null,
-        int? txDisplayWindow = null, double? txDisplayAvgTauMs = null)
+        int? txDisplayWindow = null, double? txDisplayAvgTauMs = null,
+        bool? widebandDisplayEnabled = null)
     {
         lock (_sync)
         {
@@ -170,6 +173,7 @@ public sealed class DisplaySettingsStore : IDisposable
             if (IsValidFftSize(txDisplayFftSize)) e.TxDisplayFftSize = txDisplayFftSize;
             if (IsValidWindow(txDisplayWindow)) e.TxDisplayWindow = txDisplayWindow;
             if (IsValidAvgTauMs(txDisplayAvgTauMs)) e.TxDisplayAvgTauMs = txDisplayAvgTauMs;
+            if (widebandDisplayEnabled.HasValue) e.WidebandDisplayEnabled = widebandDisplayEnabled.Value;
             e.UpdatedUtc = DateTime.UtcNow;
             if (e.Id == 0) _docs.Insert(e);
             else _docs.Update(e);
@@ -283,5 +287,8 @@ public sealed class DisplaySettingsEntry
     public int? TxDisplayFftSize { get; set; }
     public int? TxDisplayWindow { get; set; }
     public double? TxDisplayAvgTauMs { get; set; }
+    // Protocol-2 ADC snapshot display mode. False on legacy rows because bool
+    // defaults to false when LiteDB materialises rows written before this field.
+    public bool WidebandDisplayEnabled { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

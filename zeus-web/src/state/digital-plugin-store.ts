@@ -6,13 +6,13 @@
 //                         Christian Suarez (N9WAR), and contributors.
 //
 // Zeus Digital plugin gate + transport. The FT8/FT4 mode buttons light up ONLY
-// when the com.kb2uka.digital backend plugin is BOTH:
+// when the Zeus Digital backend plugin is BOTH:
 //
 //   installed — its id appears in the installed-plugin list (plugins-store),
-//   live      — GET /api/plugins/com.kb2uka.digital/status answers 2xx, i.e.
-//               its routes are live (the host maps plugin routes dynamically,
-//               so a fresh store install lights up immediately; a shut-down
-//               instance answers 503 and stays grey).
+//   live      — GET /api/plugins/{resolved id}/status answers 2xx, i.e. its
+//               routes are live (the host maps plugin routes dynamically, so a
+//               fresh store install lights up immediately; a shut-down instance
+//               answers 503 and stays grey).
 //
 // The probe re-runs at boot (main.tsx), on every app-WS reconnect (the server
 // may have restarted under the open tab) and whenever the installed list
@@ -24,12 +24,12 @@
 
 import { create } from 'zustand';
 import {
-  DIGITAL_PLUGIN_BASE,
-  DIGITAL_PLUGIN_ID,
+  digitalPluginBase,
   openDigitalEvents,
   postDigitalIdentity,
   postDigitalWsjtxLive,
   probeDigitalPlugin,
+  resolveDigitalPluginId,
   type DigitalWsjtxLiveConfig,
 } from '../api/digital-plugin';
 import { usePluginsStore } from '../plugins/state/plugins-store';
@@ -42,8 +42,10 @@ import { useWsprStore, type WsprSpotBatch } from './wspr-store';
 import { useFt8TxStore, type Ft8TxStatus } from './ft8-tx-store';
 
 interface DigitalPluginState {
-  /** com.kb2uka.digital appears in the installed-plugin list. */
+  /** The preferred or legacy digital plugin id appears in the installed list. */
   installed: boolean;
+  /** The selected installed id, preferring the org.openhpsdr package. */
+  pluginId: string | null;
   /** GET /status answered 2xx — routes are mapped this boot. */
   live: boolean;
   /** First liveness probe has completed (success or failure). */
@@ -59,19 +61,26 @@ interface DigitalPluginState {
 
 export const useDigitalPluginStore = create<DigitalPluginState>((set) => ({
   installed: false,
+  pluginId: null,
   live: false,
   probed: false,
   sseConnected: false,
 
   probe: async () => {
+    const pluginId = resolveDigitalPluginId();
+    if (pluginId == null) {
+      // Neither the org.openhpsdr nor the legacy id is installed — don't
+      // probe (a guaranteed 404 would just be console noise).
+      set({ pluginId: null, installed: false, live: false, probed: true });
+      return;
+    }
     const live = await probeDigitalPlugin();
-    set({ live, probed: true });
+    set({ pluginId, installed: true, live, probed: true });
   },
 
   refresh: async () => {
     await usePluginsStore.getState().refreshInstalled();
-    const live = await probeDigitalPlugin();
-    set({ live, probed: true });
+    await useDigitalPluginStore.getState().probe();
   },
 }));
 
@@ -152,8 +161,9 @@ function warnOnce(key: string, msg: string, err?: unknown): void {
 }
 
 async function refreshTxStatus(): Promise<void> {
+  const base = digitalPluginBase();
   try {
-    const res = await fetch(`${DIGITAL_PLUGIN_BASE}/ft8/tx`);
+    const res = await fetch(`${base}/ft8/tx`);
     if (!res.ok) return;
     const status = (await res.json()) as Ft8TxStatus;
     useFt8TxStore.getState().ingest(status);
@@ -170,13 +180,20 @@ function onEventsOpen(): void {
 }
 
 let closeEvents: (() => void) | null = null;
+let closeEventsPluginId: string | null = null;
 
 function syncEventStream(): void {
   // jsdom (vitest) has no EventSource; the stream is production-only.
   if (typeof EventSource === 'undefined') return;
   const s = useDigitalPluginStore.getState();
-  const want = s.installed && s.live;
+  const want = s.installed && s.live && s.pluginId != null;
+  if (closeEvents != null && (!want || closeEventsPluginId !== s.pluginId)) {
+    closeEvents();
+    closeEvents = null;
+    closeEventsPluginId = null;
+  }
   if (want && closeEvents == null) {
+    closeEventsPluginId = s.pluginId;
     closeEvents = openDigitalEvents({
       onConnectionChange: (connected) => {
         if (useDigitalPluginStore.getState().sseConnected !== connected) {
@@ -206,9 +223,6 @@ function syncEventStream(): void {
         }
       },
     });
-  } else if (!want && closeEvents != null) {
-    closeEvents();
-    closeEvents = null;
   }
 }
 
@@ -221,9 +235,15 @@ if (typeof window !== 'undefined') {
   // change and re-probe when the flag flips (install → probe confirms the
   // freshly-mapped routes; uninstall → probe confirms the routes 404/503).
   usePluginsStore.subscribe((s) => {
-    const installed = s.installed.some((p) => p.id === DIGITAL_PLUGIN_ID);
-    if (installed !== useDigitalPluginStore.getState().installed) {
-      useDigitalPluginStore.setState({ installed });
+    const pluginId = resolveDigitalPluginId(s.installed);
+    const installed = pluginId != null;
+    const current = useDigitalPluginStore.getState();
+    if (installed !== current.installed || pluginId !== current.pluginId) {
+      useDigitalPluginStore.setState({
+        installed,
+        pluginId,
+        live: pluginId === current.pluginId ? current.live : false,
+      });
       void useDigitalPluginStore.getState().probe();
     }
   });
@@ -246,7 +266,7 @@ if (typeof window !== 'undefined') {
   // they change while the plugin is up.
   let opKey = '';
   useOperatorStore.subscribe((s) => {
-    const key = `${s.resolvedCall} ${s.resolvedGrid}`;
+    const key = `${s.resolvedCall}\u0000${s.resolvedGrid}`;
     if (key === opKey) return;
     opKey = key;
     if (isDigitalPluginReady()) pushIdentity();

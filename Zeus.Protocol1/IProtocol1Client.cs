@@ -123,9 +123,20 @@ public interface IProtocol1Client : IDisposable
     /// <summary>
     /// User-configured Open-Collector pin masks (7 bits each). OR'd with the
     /// board's auto-filter output. <paramref name="txMask"/> is asserted when
-    /// MOX is on; <paramref name="rxMask"/> otherwise.
+    /// MOX is on; <paramref name="rxMask"/> otherwise. <paramref name="tuneMask"/>
+    /// is asserted on top of TX only while TUN is active.
     /// </summary>
-    void SetOcMasks(byte txMask, byte rxMask);
+    void SetOcMasks(byte txMask, byte rxMask, byte tuneMask);
+
+    /// <summary>
+    /// Latch the TUN flag used by the OC-mask composition path (issue #1325).
+    /// On Protocol 1 the wire MOX bit rises for both TUN and regular TX; this
+    /// separate flag lets ControlFrame OR in the OcTune mask only during TUN
+    /// so extra bits (amplifier bypass, external tuner start) don't leak onto
+    /// voice / CW / digital transmissions. Called from RadioService's
+    /// TunActiveChanged pipeline right after <see cref="SetMox"/>.
+    /// </summary>
+    void SetTune(bool on);
 
     /// <summary>
     /// Raised once from the RX loop when consecutive receive timeouts exhaust the
@@ -231,10 +242,37 @@ public interface IProtocol1Client : IDisposable
     void SetPsEnabled(bool on);
 
     /// <summary>
+    /// Arm or disarm PureSignal, routing through the HermesC10 (ANAN-G2E, P1)
+    /// safe stop/drain/restart transition when the stream is live (#1302 —
+    /// the P1 receiver count must NEVER change on a live stream: the classic-
+    /// Hermes gateware applies it mid-frame and permanently sync-shifts the
+    /// EP6 byte stream). Idempotent: no transition and no wire traffic when
+    /// the client is already in the requested mode, so the reconnect resync
+    /// path is a no-op after connect-while-armed. On HL2 / other boards, or
+    /// before <see cref="StartAsync"/>, degrades to the plain flag store of
+    /// <see cref="SetPsEnabled"/>. This is the ONLY correct way to change the
+    /// PS arm state on a live HermesC10 connection.
+    /// </summary>
+    Task SetPsEnabledAsync(bool on, CancellationToken ct = default);
+
+    /// <summary>
     /// Current PS arm state, as set by <see cref="SetPsEnabled"/>. Read by
     /// DspPipelineService to gate the P1 PS feedback pump.
     /// </summary>
     bool PsEnabled { get; }
+
+    /// <summary>
+    /// Fires (at most once per stall, on the RX thread) when PS is armed on a
+    /// HermesC10 P1 stream and zero 4-DDC packets have parsed for ~2 s while
+    /// datagrams are still arriving — the misframed-stream fingerprint of
+    /// issue #1302. The subscriber (RadioService) auto-disarms PS through the
+    /// normal StateDto flow. Handlers must not block.
+    /// </summary>
+    event Action? PsFeedbackStalled;
+
+    /// <summary>Monotonic count of PS-armed 4-DDC EP6 packets that failed the
+    /// sync/framing parse since Start (#1302 observability).</summary>
+    long Ps4DdcSyncFailCount { get; }
 
     /// <summary>
     /// Push the latest WDSP <c>calcc</c> predistortion subindex/value to
@@ -265,6 +303,31 @@ public interface IProtocol1Client : IDisposable
     /// which would desync from the radio's sticky ATTOnTX value.
     /// </summary>
     int Hl2TxStepAttenuationDb { get; }
+
+    /// <summary>
+    /// HermesC10 (ANAN-G2E, P1) TX-time ADC attenuation target in dB, range
+    /// 0..31 (out-of-range values are clamped). Written to the gateware's
+    /// <c>atten_on_Tx</c> register — C3[4:0] of the LnaTxGainStable (wire
+    /// 0x1c = register 0x0e) frame, muxed onto the step attenuator only while
+    /// FPGA_PTT — which protects the relay-routed PS feedback tap from
+    /// clipping the ADC while keyed. The register is only scheduled by the
+    /// PS-armed rotation, and the payload writer branches on HermesC10, so no
+    /// other board's wire bytes change. Until this is called the writer emits
+    /// 31, the silicon reset default — never an unrequested 0 dB. Distinct
+    /// from <see cref="SetHl2TxStepAttenuationDb"/> (AD9866 TX PGA, -28..+31,
+    /// different register).
+    /// </summary>
+    void SetPsTxAttenOnTxDb(int db);
+
+    /// <summary>
+    /// Current HermesC10 atten_on_Tx value in dB — the value last written via
+    /// <see cref="SetPsTxAttenOnTxDb"/>, or 31 (the silicon reset default,
+    /// which the payload writer also emits while unset) when nothing has been
+    /// pushed yet. Read by <c>PsAutoAttenuateService</c> on a PS-arm edge so
+    /// the dance baselines its model to ground truth instead of assuming 0 —
+    /// mirrors <see cref="Hl2TxStepAttenuationDb"/>.
+    /// </summary>
+    int PsTxAttenOnTxDb { get; }
 
     /// <summary>
     /// Push the on-board CW keyer config to C&amp;C register 0x0B: speed in

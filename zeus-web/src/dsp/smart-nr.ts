@@ -138,14 +138,15 @@ export function shapeSmartNrRecommendation(rec: SmartNrRecommendation, tuning: S
     const rxWeak = rec.condition.rxAssistedWeakSignal;
     const weak = rec.condition.weakSparse;
     const copyAssist = rec.condition.coherentCopySignal && !weak && !rec.condition.denseNoise;
+    const transparentVoice = rxWeak || weak || copyAssist;
     next.emnrPost2Factor = Math.round(
-      (rxWeak ? 6 : copyAssist ? 7 : weak ? 7 : 8) + gain * (rxWeak ? 8 : copyAssist ? 7 : weak ? 8 : 10),
+      (rxWeak ? 5 : copyAssist ? 6 : weak ? 6 : 8) + gain * (rxWeak ? 5 : copyAssist ? 5 : weak ? 6 : 10),
     );
     next.emnrPost2Nlevel = Math.round(
-      (rxWeak ? 6 : copyAssist ? 7 : weak ? 7 : 8) + gain * (rxWeak ? 6 : copyAssist ? 7 : weak ? 8 : 10),
+      (rxWeak ? 5 : copyAssist ? 6 : weak ? 6 : 8) + gain * (rxWeak ? 4 : copyAssist ? 5 : weak ? 6 : 10),
     );
     next.emnrNpeMethod = rec.condition.denseNoise ? 1 : 0;
-    next.emnrAeRun = gain >= 0.25;
+    next.emnrAeRun = transparentVoice ? gain >= 0.4 : gain >= 0.25;
   }
 
   if (aggressiveness < 25 && !rec.condition.impulsiveNoise && !rec.condition.tonalInterference) {
@@ -534,8 +535,8 @@ function withNr2(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
     emnrNpeMethod: c.denseNoise ? 1 : 0,
     emnrAeRun: true,
     emnrPost2Run: true,
-    emnrPost2Factor: rxWeak ? 10 : copyAssist ? 11 : c.weakSparse ? 12 : 15,
-    emnrPost2Nlevel: rxWeak ? 10 : copyAssist ? 11 : c.weakSparse ? 12 : 15,
+    emnrPost2Factor: rxWeak ? 8 : copyAssist ? 9 : c.weakSparse ? 10 : 15,
+    emnrPost2Nlevel: rxWeak ? 8 : copyAssist ? 9 : c.weakSparse ? 10 : 15,
     emnrPost2Rate: 5,
     emnrPost2Taper: 12,
   };
@@ -606,9 +607,9 @@ export function recommendSmartNr(input: SmartNrInput): SmartNrRecommendation | n
     reason = useNeuralVoice
       ? 'SSB neural speech profile: installed NR3/RNNoise model is ready; use neural post-demod cleanup for speech-like copy.'
       : condition.rxAssistedWeakSignal
-      ? 'Weak-signal assist: AGC/RX telemetry confirms marginal SSB copy; use NR2/EMNR and RX Suite VST cleanup.'
+      ? 'Weak-signal assist: AGC/RX telemetry confirms marginal SSB copy; use transparent NR2/EMNR while preserving speech bandwidth.'
       : condition.coherentSubthresholdSignal
-      ? 'SSB coherent weak-signal profile: temporal confidence confirms a subthreshold ridge; use NR2/EMNR plus RX Suite VST cleanup.'
+      ? 'SSB coherent weak-signal profile: temporal confidence confirms a subthreshold ridge; use transparent NR2/EMNR while preserving speech bandwidth.'
       : condition.weakSparse
       ? 'SSB weak-signal profile: sparse coherent energy above the floor; use low-artifact NR2/EMNR.'
       : condition.coherentCopySignal

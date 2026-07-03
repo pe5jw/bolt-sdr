@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Zeus.Plugins.Contracts;
 using Zeus.Plugins.Contracts.Audio;
 using Zeus.Plugins.Host;
 
@@ -187,6 +188,28 @@ public class PluginManagerTests : IDisposable
         await manager.StopAsync(default);
     }
 
+    [Fact]
+    public async Task ActivateAsync_ProvidesOperatorIdentityProvider()
+    {
+        using var a = WriteFixturePluginToRoot("com.example.a", "A");
+
+        var identity = new FakeOperatorIdentityProvider();
+        var services = new ServiceCollection()
+            .AddSingleton<IOperatorIdentityProvider>(identity)
+            .BuildServiceProvider();
+        var manager = new PluginManager(
+            loader: new PluginLoader(NullLogger<PluginLoader>.Instance),
+            settings: _store,
+            services: services,
+            logFactory: NullLoggerFactory.Instance,
+            options: new PluginManagerOptions { PluginRoot = _root });
+
+        var activated = await manager.ActivateAsync(Path.Combine(_root, "com.example.a"), default);
+
+        Assert.Same(identity, activated.Context.OperatorIdentity);
+        await manager.StopAsync(default);
+    }
+
     private sealed class FakePlaybackSink : IAudioPlaybackSink
     {
         public bool IsMoxOn => false;
@@ -195,6 +218,12 @@ public class PluginManagerTests : IDisposable
         public long LocalMonitorBacklog => 0;
         public void PlayOnAir(ReadOnlySpan<float> samples, int sampleRate) { }
         private sealed class Noop : IDisposable { public void Dispose() { } }
+    }
+
+    private sealed class FakeOperatorIdentityProvider : IOperatorIdentityProvider
+    {
+        public OperatorIdentitySnapshot Resolve(string? secondaryCall = null, string? secondaryGrid = null)
+            => new("N0CALL", "AA00");
     }
 
     [Fact]

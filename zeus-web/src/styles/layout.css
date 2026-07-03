@@ -1223,9 +1223,11 @@
   border: 1px solid rgba(255,255,255,0.06);
   border-radius: var(--r-xs);
   font-size: 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
-.chip .k { color: var(--fg-2); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; font-size: 9px; }
-.chip .v { color: var(--fg-0); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip .k { color: var(--fg-2); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; font-size: 9px; white-space: nowrap; }
+.chip .v { color: var(--fg-0); font-weight: 700; font-variant-numeric: tabular-nums; min-width: 0; white-space: nowrap; }
 .chip.mono .v { font-family: var(--font-mono); }
 .chip.accent .v { color: var(--accent); }
 .chip.tx .v { color: var(--tx); }
@@ -2001,6 +2003,94 @@
     inset 1px 0 0 var(--vfo-overlay-rail),
     inset -1px 0 0 var(--vfo-overlay-rail),
     0 0 13px color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 20%, transparent);
+}
+
+.wideband-view-controls {
+  position: absolute;
+  top: 24px;
+  right: 8px;
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 16px);
+  padding: 3px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  background: rgba(8, 10, 14, 0.84);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  color: var(--fg-0);
+  font-family: 'Archivo Narrow', sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  user-select: none;
+}
+
+.wideband-view-controls__range,
+.wideband-view-controls__zoom {
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.28);
+  white-space: nowrap;
+}
+
+.wideband-view-controls__range {
+  min-width: 82px;
+  max-width: 150px;
+  padding: 0 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
+
+.wideband-view-controls__zoom {
+  min-width: 34px;
+  padding: 0 5px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.wideband-view-controls__button {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 3px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04));
+  color: var(--fg-0);
+  cursor: pointer;
+}
+
+.wideband-view-controls__button:hover:not(:disabled),
+.wideband-view-controls__button:focus-visible:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 70%, white);
+  color: color-mix(in srgb, var(--accent) 75%, white);
+  outline: none;
+}
+
+.wideband-view-controls__button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+@media (max-width: 520px) {
+  .wideband-view-controls {
+    left: 6px;
+    right: 6px;
+  }
+
+  .wideband-view-controls__range {
+    flex: 1;
+    min-width: 0;
+  }
 }
 
 /* ===== Frequency display (panel) ===== */
@@ -4008,6 +4098,45 @@
      the cluster itself, but the readout stays click-to-reset-to-100 % so the
      operator can always return to the default. */
   zoom: var(--zeus-chrome-zoom, 1);
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: hidden;
+}
+.transport-primary,
+.transport-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  white-space: nowrap;
+}
+.transport-primary::-webkit-scrollbar,
+.transport-status::-webkit-scrollbar { height: 0; }
+.transport-primary {
+  flex: 1 1 auto;
+}
+.transport-status {
+  flex: 0 0 auto;
+  max-width: 72%;
+}
+.transport-primary > *,
+.transport-status > * {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.transport .chip {
+  align-items: center;
+}
+.transport-radio-chip .v {
+  display: inline-block;
+  max-width: clamp(96px, 12vw, 170px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
 }
 /* Transport buttons read as flat clickable regions of the toolbar, not raised
    chiclets. TX (MOX-on) is excluded — it keeps its red bevel/pulse for safety. */

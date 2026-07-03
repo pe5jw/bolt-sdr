@@ -91,6 +91,31 @@ public sealed class RadioServicePerBandModeTests : IDisposable
     }
 
     [Fact]
+    public void CrossingIntoBand_WithRememberedFreeDv_WithoutModem_FallsBackToUsb()
+    {
+        using var radio = LandOn40mLsb(_bandMemory);
+        _bandMemory.Upsert("20m", Hz20m, RxMode.FreeDv);
+
+        var after = radio.SetVfo(Hz20m);
+
+        Assert.Equal(Hz20m, after.VfoHz);
+        Assert.Equal(RxMode.USB, after.Mode);
+    }
+
+    [Fact]
+    public void CrossingIntoBand_WithRememberedFreeDv_WithModem_PreservesFreeDv()
+    {
+        using var radio = LandOn40mLsb(_bandMemory);
+        radio.SetModemAvailability(() => true);
+        _bandMemory.Upsert("20m", Hz20m, RxMode.FreeDv);
+
+        var after = radio.SetVfo(Hz20m);
+
+        Assert.Equal(Hz20m, after.VfoHz);
+        Assert.Equal(RxMode.FreeDv, after.Mode);
+    }
+
+    [Fact]
     public void CrossingIntoBand_WithNoEntry_CarriesModeOver()
     {
         using var radio = LandOn40mLsb(_bandMemory);

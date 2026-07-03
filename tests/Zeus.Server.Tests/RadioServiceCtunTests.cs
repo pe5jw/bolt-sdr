@@ -157,6 +157,32 @@ public sealed class RadioServiceCtunTests : IDisposable
     }
 
     [Fact]
+    public void CtunOn_SetRadioLoWhileKeyed_IsSuppressed()
+    {
+        using var radio = BuildRadio();
+        radio.SetMode(RxMode.USB);
+        radio.SetVfo(14_074_000);
+        radio.SetCtunEnabled(true);
+        radio.SetVfo(14_080_000);          // dial off-centre, NCO frozen at 14_074_000
+        radio.SetMox(true);                 // NCO snaps to the dial for TX
+        Assert.Equal(14_080_000, radio.Snapshot().RadioLoHz);
+
+        // Frontend keep-in-view autopan / ruler tween / state-poll reconcile
+        // firing a POST /api/radio/lo(frozen-centre) while keyed used to
+        // overwrite the aligned TX NCO and land the carrier ~5 kHz off dial
+        // (issue #1332). The MOX-guarded setter must ignore it.
+        var after = radio.SetRadioLo(14_074_000);
+
+        Assert.Equal(14_080_000, after.RadioLoHz);
+        Assert.Equal(14_080_000, radio.Snapshot().RadioLoHz);
+
+        // Un-key still restores the pre-TX CTUN centre — the guard didn't
+        // clobber the remembered frozen LO.
+        radio.SetMox(false);
+        Assert.Equal(14_074_000, radio.Snapshot().RadioLoHz);
+    }
+
+    [Fact]
     public void CtunOff_KeyDown_DoesNotTouchRadioLo()
     {
         using var radio = BuildRadio();

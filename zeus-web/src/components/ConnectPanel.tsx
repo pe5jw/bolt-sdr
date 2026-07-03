@@ -66,6 +66,7 @@ import {
   ApiError,
   type PrefsDatabaseInfo,
   type RadioInfoDto,
+  type RadioStateDto,
   type Protocol3SidecarStatusDto,
 } from '../api/client';
 import {
@@ -442,6 +443,26 @@ const prefsDbButtonStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
+const connectErrorBoxStyle: React.CSSProperties = {
+  padding: '6px 10px',
+  background: 'rgba(230,58,43,0.12)',
+  border: '1px solid rgba(230,58,43,0.35)',
+  borderRadius: 0,
+  color: 'var(--tx)',
+  fontSize: 11,
+  minWidth: 0,
+};
+
+const connectErrorTextStyle: React.CSSProperties = {
+  minWidth: 0,
+  maxHeight: 150,
+  overflow: 'auto',
+  whiteSpace: 'pre-wrap',
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
+  lineHeight: 1.35,
+};
+
 // Same set as the Settings RadioSelector, in the same order. Auto first so
 // the default Manual-mode connect behaviour is "let discovery decide".
 // Post-#218 Phase 4: Griffin renamed → HermesII, HermesC10 (G2E) added.
@@ -740,11 +761,24 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         if (p3SidecarUnavailable) {
           throw new Error(PROTOCOL3_SIDECAR_UNCONFIGURED_TITLE);
         }
-        await apiConnectP3({
-          endpoint: ep,
-          sampleRate: 1_536_000,
-        });
-        const fresh = await fetchState();
+        let fresh: RadioStateDto | null = null;
+        try {
+          await apiConnectP3({
+            endpoint: ep,
+            sampleRate: 1_536_000,
+          });
+        } catch (err) {
+          if (!errorMessage(err).includes('Already connected')) throw err;
+          fresh = await fetchState();
+          if (
+            fresh.status !== 'Connected' ||
+            fresh.connectedProtocol !== 'P3' ||
+            fresh.endpoint !== ep
+          ) {
+            throw err;
+          }
+        }
+        fresh ??= await fetchState();
         applyState(fresh);
         hydrateTxFromState(fresh);
       } else if (isP2) {
@@ -1233,19 +1267,15 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
               <div
                 className="mono"
                 style={{
+                  ...connectErrorBoxStyle,
                   display: 'flex',
-                  alignItems: 'center',
+                  alignItems: 'flex-start',
                   justifyContent: 'space-between',
-                  padding: '6px 10px',
-                  background: 'rgba(230,58,43,0.12)',
-                  border: '1px solid rgba(230,58,43,0.35)',
-                  borderRadius: 0,
-                  color: 'var(--tx)',
-                  fontSize: 11,
+                  gap: 8,
                 }}
               >
-                <span>{error}</span>
-                <button type="button" onClick={handleRetry} className="btn sm">
+                <span style={{ ...connectErrorTextStyle, flex: '1 1 auto' }}>{error}</span>
+                <button type="button" onClick={handleRetry} className="btn sm" style={{ flexShrink: 0 }}>
                   Retry
                 </button>
               </div>
@@ -1748,14 +1778,7 @@ function ManualMode(p: ManualModeProps) {
       {p.error && (
         <div
           className="mono"
-          style={{
-            padding: '6px 10px',
-            background: 'rgba(230,58,43,0.12)',
-            border: '1px solid rgba(230,58,43,0.35)',
-            borderRadius: 0,
-            color: 'var(--tx)',
-            fontSize: 11,
-          }}
+          style={{ ...connectErrorBoxStyle, ...connectErrorTextStyle }}
         >
           {p.error}
         </div>

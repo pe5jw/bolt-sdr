@@ -747,21 +747,75 @@ public class PsFeedbackDdcRoutingTests
     }
 
     [Fact]
-    public void SetPsFeedbackEnabled_G2E_SeedsByte59_RestoresOnDisarm()
+    public void SetPsFeedbackEnabled_G2E_Virgin_SeedsByte59_RestoresOnDisarm()
     {
-        // v0.10.8 (#960): arming PS on a G2E now seeds the byte-59 protective
-        // floor (31) — same single-shared-ADC protection the 10E gets — so the
-        // PA coupler can't slam the one RX ADC at 0 dB on first key-down; disarm
-        // restores the operator's prior value verbatim. Default-on, no force.
+        // G2E with NO deliberately-set attenuation (virgin store, no operator
+        // touch, no connect-time restore): arming PS seeds the byte-59
+        // protective floor (31) so the PA coupler can't slam the one RX ADC
+        // at 0 dB on first key-down; disarm restores the prior (power-on 0)
+        // value.
         using var p2 = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
         p2.SetBoardKind(HpsdrBoardKind.HermesC10);
-        p2.SetTxAttenuationDb(3);
+        Assert.Equal((byte)0, p2.TxStepAttnDb); // power-on default, never set
 
         p2.SetPsFeedbackEnabled(true);
         Assert.Equal(Protocol2Client.PsTxAdcProtectFloorDb, p2.TxStepAttnDb); // 31
 
         p2.SetPsFeedbackEnabled(false);
-        Assert.Equal((byte)3, p2.TxStepAttnDb); // restored
+        Assert.Equal((byte)0, p2.TxStepAttnDb); // restored
+    }
+
+    [Fact]
+    public void SetPsFeedbackEnabled_G2E_ExplicitValue_IsHonored_NotSeeded()
+    {
+        // G2E field failure #1248/#1249: the old arm-time seed slammed 31 dB
+        // over ANY deliberate value — on a self-protecting external tap that
+        // starves calcc below its fit floor, and the dance (which only steps
+        // after a completed fit) can never walk down = deadlock. New policy
+        // (Thetis / piHPSDR parity): once the operator, the connect-time
+        // restore of a persisted value, or the auto-attenuate dance has
+        // written the byte, the seed never fires — the deliberate value is
+        // sticky across arm/disarm like Thetis's per-band store.
+        using var p2 = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
+        p2.SetBoardKind(HpsdrBoardKind.HermesC10);
+        p2.SetTxAttenuationDb(3); // e.g. the connect-time persisted restore
+
+        p2.SetPsFeedbackEnabled(true);
+        Assert.Equal((byte)3, p2.TxStepAttnDb); // honored — no 31 dB slam
+
+        p2.SetPsFeedbackEnabled(false);
+        Assert.Equal((byte)3, p2.TxStepAttnDb); // sticky
+
+        // Re-arm still honors it.
+        p2.SetPsFeedbackEnabled(true);
+        Assert.Equal((byte)3, p2.TxStepAttnDb);
+        p2.SetPsFeedbackEnabled(false);
+    }
+
+    [Fact]
+    public void SetPsFeedbackEnabled_HermesII_ExplicitValue_StillForceSeeded()
+    {
+        // The honor-explicit policy is scoped to the G2E (HermesC10) — the
+        // 10E keeps its unconditional force-seed until it has a bench. Guards
+        // against accidentally widening the policy change.
+        bool saved10e = Protocol2Client.Hermes10ePsTimeMuxOnAir;
+        try
+        {
+            Protocol2Client.Hermes10ePsTimeMuxOnAir = true;
+            using var p2 = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
+            p2.SetBoardKind(HpsdrBoardKind.HermesII);
+            p2.SetTxAttenuationDb(3);
+
+            p2.SetPsFeedbackEnabled(true);
+            Assert.Equal(Protocol2Client.PsTxAdcProtectFloorDb, p2.TxStepAttnDb); // 31 — 10E policy unchanged
+
+            p2.SetPsFeedbackEnabled(false);
+            Assert.Equal((byte)3, p2.TxStepAttnDb);
+        }
+        finally
+        {
+            Protocol2Client.Hermes10ePsTimeMuxOnAir = saved10e;
+        }
     }
 
     [Fact]

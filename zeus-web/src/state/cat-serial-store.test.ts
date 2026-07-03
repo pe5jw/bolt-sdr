@@ -60,13 +60,13 @@ describe('cat-serial-store', () => {
 
   it('adopts server config when it differs from the in-hand config', async () => {
     const serverPorts = fourDefaults();
-    serverPorts[0] = { enabled: true, portName: '/dev/ttys9', baudRate: 9600, parity: 'Even', dataBits: 7, stopBits: 'Two' };
+    serverPorts[0] = { enabled: true, portName: '/dev/ttys9', baudRate: 9600, parity: 'Even', dataBits: 7, stopBits: 'Two', autoReport: true };
     mockGet.mockResolvedValueOnce(statusFrom(serverPorts));
 
     await useCatSerialStore.getState().refreshStatus();
 
     const cfg = useCatSerialStore.getState().config;
-    expect(cfg[0]).toMatchObject({ enabled: true, portName: '/dev/ttys9', baudRate: 9600, parity: 'Even', dataBits: 7, stopBits: 'Two' });
+    expect(cfg[0]).toMatchObject({ enabled: true, portName: '/dev/ttys9', baudRate: 9600, parity: 'Even', dataBits: 7, stopBits: 'Two', autoReport: true });
     expect(useCatSerialStore.getState().status?.availablePorts).toEqual([]);
   });
 
@@ -84,7 +84,7 @@ describe('cat-serial-store', () => {
 
   it('saveConfig adopts the posted config and the returned status', async () => {
     const ports = fourDefaults();
-    ports[1] = { enabled: true, portName: 'COM3', baudRate: 115200, parity: 'None', dataBits: 8, stopBits: 'One' };
+    ports[1] = { enabled: true, portName: 'COM3', baudRate: 115200, parity: 'None', dataBits: 8, stopBits: 'One', autoReport: false };
     mockPut.mockResolvedValueOnce(statusFrom(ports));
 
     await useCatSerialStore.getState().saveConfig(ports);

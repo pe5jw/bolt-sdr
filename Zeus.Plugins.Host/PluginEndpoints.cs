@@ -41,6 +41,7 @@ public static class PluginEndpoints
             try
             {
                 var catalog = await registry.FetchAsync(ct);
+                catalog = PluginIdMigrations.FilterSupersededEntries(catalog);
                 return Results.Ok(new RegistryResponse { SourceUrl = registry.SourceUrl, Catalog = catalog });
             }
             catch (RegistryFetchException ex)

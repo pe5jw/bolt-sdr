@@ -40,11 +40,14 @@ import { getReceiverVfoHz, KIWI_RECEIVER_INDEX, rxIndexOf, type ReceiverKey } fr
 import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { usePanTuneGesture, type PanTuneGestureOptions } from '../util/use-pan-tune-gesture';
+import { isWidebandDisplayGeometry, resolveSpectrumViewport } from '../util/wideband-view';
 import { FilterCursorOverlay } from './FilterCursorOverlay';
+import { FreqAxis } from './FreqAxis';
 import { NotchOverlay } from './NotchOverlay';
 import { PassbandOverlay } from './PassbandOverlay';
 import { WfDbScale } from './WfDbScale';
 import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
+import { WidebandViewportControls } from './WidebandViewportControls';
 
 type Props = {
   receiver?: ReceiverKey;
@@ -91,6 +94,17 @@ export function WaterfallHeightfield({
   const [stats, setStats] = useState<{ fps: number; ms: number } | null>(null);
   const rxIndex = rxIndexOf(receiver);
   const receiverFilterColor = spectrumReceiverFilterColor(receiver);
+  const displayWidth = useDisplayStore((s) => {
+    const slice = selectDisplaySlice(s, receiver);
+    return slice.width || slice.panDb?.length || slice.wfDb?.length || 0;
+  });
+  const displayHzPerPixel = useDisplayStore((s) => selectDisplaySlice(s, receiver).hzPerPixel);
+  const displayCenterHz = useDisplayStore((s) => Number(selectDisplaySlice(s, receiver).centerHz));
+  const widebandDisplay = isWidebandDisplayGeometry({
+    width: displayWidth,
+    hzPerPixel: displayHzPerPixel,
+    centerHz: displayCenterHz,
+  });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -101,6 +115,7 @@ export function WaterfallHeightfield({
     let disposed = false;
     let lost = false;
     let lastSeqDrawn = -1;
+    let wasWidebandDisplay = false;
     let frameAccum = 0;
     let frameCount = 0;
     let lastStatsAt = 0;
@@ -356,6 +371,11 @@ export function WaterfallHeightfield({
       // Seed from the last-held frame so a paused-RX mount is not blank.
       const slice0 = selectDisplaySlice(useDisplayStore.getState(), receiver);
       if (slice0.wfValid && slice0.wfDb) {
+        wasWidebandDisplay = isWidebandDisplayGeometry({
+          width: slice0.width,
+          hzPerPixel: slice0.hzPerPixel,
+          centerHz: Number(slice0.centerHz),
+        });
         pushFrame(slice0.wfDb, slice0.centerHz, slice0.hzPerPixel);
         lastSeqDrawn = slice0.lastSeq;
       }
@@ -366,6 +386,13 @@ export function WaterfallHeightfield({
         const slice = selectDisplaySlice(state, receiver);
         if (slice.lastSeq === 0 || slice.lastSeq === lastSeqDrawn) return;
         lastSeqDrawn = slice.lastSeq;
+        const widebandDisplay = isWidebandDisplayGeometry({
+          width: slice.width,
+          hzPerPixel: slice.hzPerPixel,
+          centerHz: Number(slice.centerHz),
+        });
+        if (widebandDisplay && !wasWidebandDisplay) renderer.clearHistory();
+        wasWidebandDisplay = widebandDisplay;
         if (slice.wfValid && slice.wfDb) {
           pushFrame(slice.wfDb, slice.centerHz, slice.hzPerPixel);
         }
@@ -464,7 +491,15 @@ export function WaterfallHeightfield({
         cur.style.left = '50%';
         return;
       }
-      const spanHz = s.width * s.hzPerPixel;
+      const viewport = resolveSpectrumViewport({
+        width: s.width,
+        sourceCenterHz: Number(s.centerHz),
+        sourceHzPerPixel: s.hzPerPixel,
+        viewCenterHz: vc.isInitialized() ? vc.getTargetCenterHz() : undefined,
+        viewHzPerPixel: viewZoom.isInitialized() ? viewZoom.getTargetHzPerPixel() : undefined,
+      });
+      if (!viewport) return;
+      const spanHz = viewport.spanHz;
       const c = useConnectionStore.getState();
       const vfoHz = getReceiverVfoHz(c, receiver);
       // Dial offset from THIS receiver's animated target center, so the cursor
@@ -474,6 +509,7 @@ export function WaterfallHeightfield({
     };
     const schedule = () => requestDrawBusFrame(update);
     const unsubVc = vc.subscribe(schedule);
+    const unsubVz = viewZoom.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
       // RX1 is the flat primary VFO; every secondary (RX2 = index 1, RX3+) lives
       // in the receivers[] array.
@@ -485,6 +521,7 @@ export function WaterfallHeightfield({
     schedule();
     return () => {
       unsubVc();
+      unsubVz();
       unsubConn();
       unsubFrame();
       cancelDrawBusFrame(update);
@@ -507,7 +544,8 @@ export function WaterfallHeightfield({
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
       {/* One global waterfall dB scale — only RX1 (leftmost) renders it. */}
-      {status === 'ready' && dbScale && rxIndex === 0 && <WfDbScale />}
+      {status === 'ready' && dbScale && rxIndex === 0 && !widebandDisplay && <WfDbScale />}
+      {status === 'ready' && widebandDisplay && <FreqAxis receiver={receiver} stitched={stitched} />}
       {/* Dial-position cursor on BOTH halves (RX2) — each tracks its own VFO so
           the stitched pair behaves like one waterfall with two live dials. */}
       {status === 'ready' && (
@@ -515,7 +553,7 @@ export function WaterfallHeightfield({
       )}
       {/* Each half shows its OWN receiver's filter passband, regardless of focus,
           so RX2 displays both bandwidth markers (A on its half, B on its half). */}
-      {status === 'ready' && (
+      {status === 'ready' && !widebandDisplay && (
         <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
       )}
       {/* Hover filter crosshair on BOTH halves — each tracks its own RX
@@ -524,8 +562,11 @@ export function WaterfallHeightfield({
       {status === 'ready' && (
         <FilterCursorOverlay containerRef={containerRef} receiver={receiver} />
       )}
-      {status === 'ready' && rxIndex === 0 && (!stitched || foreground) && (
+      {status === 'ready' && rxIndex === 0 && !widebandDisplay && (!stitched || foreground) && (
         <NotchOverlay resizable containerRef={containerRef} />
+      )}
+      {status === 'ready' && widebandDisplay && (
+        <WidebandViewportControls containerRef={containerRef} receiver={receiver} />
       )}
       {status === 'unsupported' && (
         <div

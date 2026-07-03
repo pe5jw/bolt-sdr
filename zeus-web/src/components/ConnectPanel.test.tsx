@@ -136,6 +136,54 @@ describe('ConnectPanel', () => {
     unmount();
   });
 
+  it('accepts an already-connected Protocol 3 session for the same endpoint', async () => {
+    const p3Radio: RadioInfoDto = {
+      macAddress: '',
+      ipAddress: '192.168.1.25',
+      boardId: 'G2',
+      firmwareVersion: '0x024001BF',
+      busy: false,
+      details: {
+        protocol: 'P3',
+        protocol3Available: 'true',
+        protocol3Port: '1030',
+      },
+    };
+    apiMocks.fetchRadios.mockResolvedValue([p3Radio]);
+    apiMocks.connectP3.mockRejectedValueOnce(new Error('Already connected. Disconnect first.'));
+    apiMocks.fetchState
+      .mockImplementationOnce(async () => stateSnapshot())
+      .mockImplementationOnce(async () => ({
+        ...stateSnapshot(),
+        status: 'Connected',
+        endpoint: '192.168.1.25:1030',
+        connectedProtocol: 'P3',
+      }));
+
+    const { container, unmount } = render(createElement(ConnectPanel));
+    await flushEffects();
+
+    const connect = exactButtons(container, 'Connect')[0];
+    if (!connect) throw new Error('expected a Connect button for the Protocol 3 row');
+
+    await act(async () => {
+      connect.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.connectP3).toHaveBeenCalledWith({
+      endpoint: '192.168.1.25:1030',
+      sampleRate: 1_536_000,
+    });
+    expect(useConnectionStore.getState().status).toBe('Connected');
+    expect(useConnectionStore.getState().endpoint).toBe('192.168.1.25:1030');
+    expect(container.textContent).not.toContain('Already connected. Disconnect first.');
+    expect(audioMocks.start).toHaveBeenCalled();
+    unmount();
+  });
+
   it('blocks a Protocol 3 discovery row when the local sidecar is unconfigured', async () => {
     const p3Radio: RadioInfoDto = {
       macAddress: '',

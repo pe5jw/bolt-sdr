@@ -28,6 +28,8 @@ import {
 } from '../state/receiver-state';
 import { resolvePanTuneTarget } from '../util/use-pan-tune-gesture';
 import * as viewCenter from '../state/view-center';
+import * as viewZoom from '../state/view-zoom';
+import { resolveSpectrumViewport } from '../util/wideband-view';
 
 // Thetis-style click-tune cursor: a vertical guide line tracks the mouse
 // across the spectrum surface and a translucent grey rectangle previews where
@@ -100,10 +102,20 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
       const len = slice.panDb?.length ?? slice.width;
       let cursorX = mouseX;
       let tuneHz: number | null = null;
-      if (hzPerPixel > 0 && len > 0 && rectW > 0) {
-        const spanHz = len * hzPerPixel;
+      const viewport =
+        hzPerPixel > 0 && len > 0
+          ? resolveSpectrumViewport({
+              width: len,
+              sourceCenterHz: Number(slice.centerHz),
+              sourceHzPerPixel: hzPerPixel,
+              viewCenterHz: vc.isInitialized() ? vc.getViewCenterHz() : undefined,
+              viewHzPerPixel: viewZoom.isInitialized() ? viewZoom.getDisplayedHzPerPixel() : undefined,
+            })
+          : null;
+      if (viewport && rectW > 0) {
+        const spanHz = viewport.spanHz;
         const frac = mouseX / rectW;
-        const centerHz = vc.isInitialized() ? vc.getViewCenterHz() : Number(slice.centerHz);
+        const centerHz = viewport.centerHz;
         const rawHz = centerHz + (frac - 0.5) * spanHz;
         const target = resolvePanTuneTarget(rawHz, true, receiver);
         tuneHz = target.tuneHz;
@@ -126,7 +138,7 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
       // band off by the bins-to-CSS-pixel ratio.
       const band = bandRef.current;
       if (band) {
-        if (hzPerPixel > 0 && len > 0 && rectW > 0) {
+        if (viewport && !viewport.wideband && rectW > 0) {
           const mode = getReceiverMode(conn, receiver);
           // FreeDV stores its passband USB-positive; re-sign to the convention
           // sideband (LSB < 10 MHz) so the hover preview matches the real demod
@@ -137,7 +149,7 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
             getReceiverFilterLowHz(conn, receiver),
             getReceiverFilterHighHz(conn, receiver),
           );
-          const hzPerCssPx = (len * hzPerPixel) / rectW;
+          const hzPerCssPx = viewport.spanHz / rectW;
           const lowPx = filterLowHz / hzPerCssPx;
           const highPx = filterHighHz / hzPerCssPx;
           const widthPx = Math.max(1, highPx - lowPx);
@@ -252,6 +264,9 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
     const unsubVc = vc.subscribe(() => {
       if (visible) schedule();
     });
+    const unsubVz = viewZoom.subscribe(() => {
+      if (visible) schedule();
+    });
 
     return () => {
       if (raf !== 0) cancelAnimationFrame(raf);
@@ -261,6 +276,7 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
       unsubDisplay();
       unsubEnhance();
       unsubVc();
+      unsubVz();
     };
   }, [containerRef, receiver]);
 
