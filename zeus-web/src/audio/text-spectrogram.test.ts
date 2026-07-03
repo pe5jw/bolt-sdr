@@ -13,9 +13,17 @@ describe('text-spectrogram', () => {
     const lit = spec.pixels.reduce((sum, value) => sum + value, 0);
 
     expect(spec.text).toBe('HI');
-    expect(spec.rows).toBe(7);
-    expect(spec.columns).toBe(11);
+    expect(spec.rows).toBe(28);
+    expect(spec.columns).toBe(44);
     expect(lit).toBeGreaterThan(0);
+  });
+
+  it('upscales glyph strokes for higher-resolution waterfall text', () => {
+    const spec = renderTextSpectrogram('I');
+
+    expect(spec.rows).toBe(28);
+    expect(spec.columns).toBe(20);
+    expect(spec.pixels.reduce((sum, value) => sum + value, 0)).toBeGreaterThan(7 * 4);
   });
 
   it('maps higher rows to higher frequencies', () => {
@@ -45,5 +53,9 @@ describe('text-spectrogram', () => {
     const fast = estimateTextSpectrogramDurationSec('CQ', { pixelsPerSecond: 48 });
 
     expect(slow).toBeGreaterThan(fast);
+  });
+
+  it('defaults to a slower waterfall-readable writing speed', () => {
+    expect(estimateTextSpectrogramDurationSec('CQ QRM')).toBeGreaterThan(5);
   });
 });

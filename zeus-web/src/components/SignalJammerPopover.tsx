@@ -24,9 +24,9 @@ import {
 import './SignalJammerPopover.css';
 
 const PRESET_LABELS: Record<SignalJammerPreset, string> = {
-  hash: 'Hash',
-  heterodyne: 'Carrier',
-  pulse: 'Pulse',
+  hash: 'Barrage',
+  heterodyne: 'Rake',
+  pulse: 'Burst',
 };
 
 export function SignalJammerPopover() {
@@ -225,8 +225,8 @@ export function SignalJammerPopover() {
         <SliderRow
           label="Speed"
           value={`${Math.round(textPixelsPerSecond)} px/s`}
-          min={6}
-          max={80}
+          min={5}
+          max={30}
           step={1}
           sliderValue={textPixelsPerSecond}
           onChange={setTextPixelsPerSecond}

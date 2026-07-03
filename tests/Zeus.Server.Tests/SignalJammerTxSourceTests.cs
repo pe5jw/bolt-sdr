@@ -60,6 +60,37 @@ public sealed class SignalJammerTxSourceTests
         Assert.False(source.TryPumpOnceForTests());
     }
 
+    [Theory]
+    [InlineData("hash")]
+    [InlineData("heterodyne")]
+    [InlineData("pulse")]
+    public void Presets_EmitDenseStressBlocks(string preset)
+    {
+        var emitted = new List<float[]>();
+        var source = new SignalJammerTxSource(
+            payload => emitted.Add(Decode(payload)),
+            () => true,
+            NullLogger<SignalJammerTxSource>.Instance);
+
+        source.Configure(new SignalJammerSetRequest(
+            Enabled: true,
+            Preset: preset,
+            Level: 100,
+            ToneHz: 980,
+            DriftHz: 160,
+            PulseRateHz: 5.0));
+
+        Assert.True(source.TryPumpOnceForTests());
+
+        var block = Assert.Single(emitted);
+        double rms = Math.Sqrt(block.Average(sample => sample * sample));
+        int activeSamples = block.Count(sample => Math.Abs(sample) > 0.01f);
+        int zeroCrossings = CountZeroCrossings(block);
+        Assert.InRange(rms, 0.035, 0.80);
+        Assert.True(activeSamples > 650, $"active sample count was {activeSamples}");
+        Assert.True(zeroCrossings > 30, $"zero crossings were {zeroCrossings}");
+    }
+
     private static float[] Decode(ReadOnlyMemory<byte> payload)
     {
         var bytes = payload.Span;
@@ -67,5 +98,19 @@ public sealed class SignalJammerTxSourceTests
         for (int i = 0; i < samples.Length; i++)
             samples[i] = BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(i * sizeof(float), sizeof(float)));
         return samples;
+    }
+
+    private static int CountZeroCrossings(ReadOnlySpan<float> samples)
+    {
+        int crossings = 0;
+        float previous = samples[0];
+        for (int i = 1; i < samples.Length; i++)
+        {
+            float current = samples[i];
+            if ((previous < 0 && current >= 0) || (previous >= 0 && current < 0))
+                crossings++;
+            previous = current;
+        }
+        return crossings;
     }
 }

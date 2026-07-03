@@ -52,7 +52,7 @@ export const SIGNAL_JAMMER_DEFAULTS: SignalJammerConfig = {
   driftHz: 80,
   pulseRateHz: 3.5,
   textSoundText: 'CQ QRM',
-  textPixelsPerSecond: 24,
+  textPixelsPerSecond: 6,
 };
 
 const initialState = {
@@ -82,7 +82,7 @@ export function normalizeSignalJammerConfig(
     pulseRateHz: Number(clampNumber(config.pulseRateHz ?? SIGNAL_JAMMER_DEFAULTS.pulseRateHz, 0.5, 12).toFixed(1)),
     textSoundText: normalizeTextSoundText(config.textSoundText ?? SIGNAL_JAMMER_DEFAULTS.textSoundText),
     textPixelsPerSecond: Math.round(
-      clampNumber(config.textPixelsPerSecond ?? SIGNAL_JAMMER_DEFAULTS.textPixelsPerSecond, 6, 80),
+      clampNumber(config.textPixelsPerSecond ?? SIGNAL_JAMMER_DEFAULTS.textPixelsPerSecond, 5, 30),
     ),
   };
 }

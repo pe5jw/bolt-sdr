@@ -234,19 +234,35 @@ internal sealed class SignalJammerTxSource : BackgroundService
     private sealed class SignalJammerGenerator
     {
         private readonly Random _random = new(0x51524d);
+        private readonly double[] _combPhases = new double[11];
+        private readonly double[] _rakePhases = new double[9];
         private double _phase1;
         private double _phase2;
         private double _driftPhase;
         private double _pulsePhase;
+        private double _sweepPhase;
+        private double _chirpPhase;
         private float _noiseState;
+        private float _fastNoiseState;
+        private int _burstSamplesRemaining;
+        private int _burstSamplesTotal;
+        private float _burstPolarity = 1f;
 
         public void Reset()
         {
+            Array.Clear(_combPhases, 0, _combPhases.Length);
+            Array.Clear(_rakePhases, 0, _rakePhases.Length);
             _phase1 = 0;
             _phase2 = 0;
             _driftPhase = 0;
             _pulsePhase = 0;
+            _sweepPhase = 0;
+            _chirpPhase = 0;
             _noiseState = 0;
+            _fastNoiseState = 0;
+            _burstSamplesRemaining = 0;
+            _burstSamplesTotal = 0;
+            _burstPolarity = 1f;
         }
 
         public void Fill(Span<float> destination, SignalJammerTxSettings settings)
@@ -256,50 +272,103 @@ internal sealed class SignalJammerTxSource : BackgroundService
             {
                 float sample = settings.Preset switch
                 {
-                    "heterodyne" => Heterodyne(settings),
-                    "pulse" => Pulse(settings),
-                    _ => Hash(settings),
+                    "heterodyne" => CarrierRake(settings),
+                    "pulse" => Burst(settings),
+                    _ => Barrage(settings),
                 };
                 destination[i] += sample * levelGain;
             }
         }
 
-        private float Hash(SignalJammerTxSettings settings)
+        private float Barrage(SignalJammerTxSettings settings)
         {
-            float noise = ColoredNoise() * 0.55f;
-            float tone1 = Tone(ref _phase1, DriftedHz(settings.ToneHz, settings.DriftHz), "sine") * 0.16f;
-            float tone2 = Tone(ref _phase2, settings.ToneHz * 1.41, "triangle") * 0.10f;
-            return noise + tone1 + tone2;
+            AdvancePhase(ref _driftPhase, 0.27);
+            double drift = Math.Sin(_driftPhase) * settings.DriftHz;
+            float noise = ColoredNoise(0.76f) * 0.66f + FastNoise() * 0.26f;
+            float comb = FixedComb(drift) * 0.78f;
+            float sweep = Tone(ref _phase1, SweptHz(340.0, 3020.0, 0.31), "triangle") * 0.20f;
+            float impulse = RandomBurst(0.0025, 0.62f);
+            return noise + comb + sweep + impulse;
         }
 
-        private float Heterodyne(SignalJammerTxSettings settings)
+        private float CarrierRake(SignalJammerTxSettings settings)
         {
-            float noise = ColoredNoise() * 0.10f;
-            float tone1 = Tone(ref _phase1, DriftedHz(settings.ToneHz, settings.DriftHz), "sine") * 0.80f;
-            float tone2 = Tone(ref _phase2, settings.ToneHz + 43.0, "sine") * 0.28f;
-            return noise + tone1 + tone2;
+            AdvancePhase(ref _driftPhase, 0.19);
+            double drift = Math.Sin(_driftPhase) * settings.DriftHz;
+            float rake = 0f;
+            int middle = _rakePhases.Length / 2;
+            for (int i = 0; i < _rakePhases.Length; i++)
+            {
+                double offset = (i - middle) * (i % 2 == 0 ? 146.0 : 91.0);
+                double hz = Math.Clamp(settings.ToneHz + offset + drift * (0.20 + i * 0.055), 250.0, 3200.0);
+                rake += Tone(ref _rakePhases[i], hz, i % 3 == 0 ? "triangle" : "sine");
+            }
+
+            float beat = Tone(ref _phase1, Math.Clamp(settings.ToneHz + 43.0 + drift * 0.35, 250.0, 3200.0), "square") * 0.18f;
+            float sweep = Tone(ref _phase2, SweptHz(520.0, 2900.0, 0.17), "sine") * 0.14f;
+            float noise = ColoredNoise(0.62f) * 0.20f;
+            return rake * 0.125f + beat + sweep + noise;
         }
 
-        private float Pulse(SignalJammerTxSettings settings)
+        private float Burst(SignalJammerTxSettings settings)
         {
             AdvancePhase(ref _pulsePhase, settings.PulseRateHz);
-            float gate = _pulsePhase < Math.PI ? 0.88f : 0.12f;
-            float noise = ColoredNoise() * 0.54f;
-            float tone = Tone(ref _phase1, DriftedHz(settings.ToneHz, settings.DriftHz), "square") * 0.24f;
-            return (noise + tone) * gate;
+            AdvancePhase(ref _driftPhase, 0.41);
+            double drift = Math.Sin(_driftPhase) * settings.DriftHz;
+            float gate = _pulsePhase < Math.PI * 1.12 ? 1.0f : 0.035f;
+            float noise = (ColoredNoise(0.82f) * 0.86f + FastNoise() * 0.18f) * gate;
+            float tone = Tone(ref _phase1, Math.Clamp(settings.ToneHz + drift, 250.0, 3200.0), "square") * 0.28f * gate;
+            float chirp = Tone(ref _chirpPhase, SweptHz(360.0, 3180.0, 0.78), "saw") * 0.18f * gate;
+            float comb = FixedComb(drift * 0.35) * 0.26f * gate;
+            float burst = RandomBurst(0.006, 0.78f);
+            return noise + tone + chirp + comb + burst;
         }
 
-        private double DriftedHz(int toneHz, int driftHz)
+        private float FixedComb(double drift)
         {
-            AdvancePhase(ref _driftPhase, 0.18);
-            return Math.Max(80.0, toneHz + Math.Sin(_driftPhase) * driftHz);
+            float sum = 0f;
+            for (int i = 0; i < _combPhases.Length; i++)
+            {
+                double hz = Math.Clamp(300.0 + i * 230.0 + drift * (0.08 + i * 0.02), 250.0, 3200.0);
+                sum += Tone(ref _combPhases[i], hz, i % 4 == 0 ? "triangle" : "sine");
+            }
+            return sum * 0.075f;
         }
 
-        private float ColoredNoise()
+        private float ColoredNoise(float whiteMix)
         {
             float white = (float)(_random.NextDouble() * 2.0 - 1.0);
-            _noiseState = white * 0.72f + _noiseState * 0.28f;
+            _noiseState = white * whiteMix + _noiseState * (1f - whiteMix);
             return _noiseState;
+        }
+
+        private float FastNoise()
+        {
+            float white = (float)(_random.NextDouble() * 2.0 - 1.0);
+            _fastNoiseState = white * 0.92f + _fastNoiseState * 0.08f;
+            return _fastNoiseState;
+        }
+
+        private float RandomBurst(double probability, float magnitude)
+        {
+            if (_burstSamplesRemaining <= 0 && _random.NextDouble() < probability)
+            {
+                _burstSamplesTotal = _random.Next(18, 130);
+                _burstSamplesRemaining = _burstSamplesTotal;
+                _burstPolarity = _random.Next(2) == 0 ? -1f : 1f;
+            }
+
+            if (_burstSamplesRemaining <= 0 || _burstSamplesTotal <= 0) return 0f;
+            float envelope = _burstSamplesRemaining / (float)_burstSamplesTotal;
+            _burstSamplesRemaining--;
+            return _burstPolarity * magnitude * envelope;
+        }
+
+        private double SweptHz(double lowHz, double highHz, double rateHz)
+        {
+            AdvancePhase(ref _sweepPhase, rateHz);
+            double position = (Math.Sin(_sweepPhase) + 1.0) * 0.5;
+            return lowHz + (highHz - lowHz) * position;
         }
 
         private static float Tone(ref double phase, double frequencyHz, string type)
@@ -308,6 +377,7 @@ internal sealed class SignalJammerTxSource : BackgroundService
             return type switch
             {
                 "square" => phase < Math.PI ? 1f : -1f,
+                "saw" => (float)(phase / Math.PI - 1.0),
                 "triangle" => (float)(2.0 / Math.PI * Math.Asin(Math.Sin(phase))),
                 _ => (float)Math.Sin(phase),
             };
@@ -322,7 +392,7 @@ internal sealed class SignalJammerTxSource : BackgroundService
         private static float LevelToGain(int level)
         {
             double normalized = Math.Clamp(level / 100.0, 0.0, 1.0);
-            return (float)(Math.Pow(normalized, 1.35) * 0.24);
+            return (float)(Math.Pow(normalized, 1.35) * 0.32);
         }
     }
 }

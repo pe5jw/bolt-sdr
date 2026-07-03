@@ -25,11 +25,14 @@ type SinkSelectableAudioContext = AudioContext & {
   setSinkId?: (sinkId: string) => Promise<void>;
 };
 
-const ROWS = 7;
+const GLYPH_ROWS = 7;
 const GLYPH_WIDTH = 5;
 const GLYPH_ADVANCE = 6;
+const RENDER_SCALE_X = 4;
+const RENDER_SCALE_Y = 4;
+const ROWS = GLYPH_ROWS * RENDER_SCALE_Y;
 const DEFAULT_TEXT = 'CQ QRM';
-const DEFAULT_PIXELS_PER_SECOND = 24;
+const DEFAULT_PIXELS_PER_SECOND = 6;
 const DEFAULT_MIN_HZ = 300;
 const DEFAULT_MAX_HZ = 2600;
 const TAU = Math.PI * 2;
@@ -84,16 +87,25 @@ const GLYPHS: Record<string, readonly string[]> = {
 
 export function renderTextSpectrogram(text: string): TextSpectrogram {
   const normalized = (normalizeTextSoundText(text) || DEFAULT_TEXT).toUpperCase();
-  const columns = Math.max(1, normalized.length * GLYPH_ADVANCE - 1);
+  const logicalColumns = Math.max(1, normalized.length * GLYPH_ADVANCE - 1);
+  const columns = logicalColumns * RENDER_SCALE_X;
   const pixels = new Uint8Array(columns * ROWS);
 
   let x = 0;
   for (const char of normalized) {
     const glyph = (GLYPHS[char] ?? GLYPHS['?'])!;
-    for (let row = 0; row < ROWS; row += 1) {
+    for (let row = 0; row < GLYPH_ROWS; row += 1) {
       const line = glyph[row] ?? '00000';
       for (let col = 0; col < GLYPH_WIDTH; col += 1) {
-        if (line[col] === '1') pixels[row * columns + x + col] = 1;
+        if (line[col] !== '1') continue;
+        const scaledX = (x + col) * RENDER_SCALE_X;
+        const scaledY = row * RENDER_SCALE_Y;
+        for (let dy = 0; dy < RENDER_SCALE_Y; dy += 1) {
+          const outRow = scaledY + dy;
+          for (let dx = 0; dx < RENDER_SCALE_X; dx += 1) {
+            pixels[outRow * columns + scaledX + dx] = 1;
+          }
+        }
       }
     }
     x += GLYPH_ADVANCE;
@@ -107,7 +119,7 @@ export function estimateTextSpectrogramDurationSec(
   options: TextSpectrogramOptions = {},
 ): number {
   const spectrogram = renderTextSpectrogram(text);
-  return spectrogram.columns / normalizedPixelsPerSecond(options.pixelsPerSecond);
+  return spectrogram.columns / (normalizedPixelsPerSecond(options.pixelsPerSecond) * RENDER_SCALE_X);
 }
 
 export function rowToFrequencyHz(
@@ -131,11 +143,12 @@ export function synthesizeTextSpectrogramSamples(
   const minHz = normalizedHz(options.minHz, DEFAULT_MIN_HZ);
   const maxHz = Math.max(minHz + 100, normalizedHz(options.maxHz, DEFAULT_MAX_HZ));
   const level = normalizedLevel(options.level);
-  const samplesPerColumn = Math.max(64, Math.round(sampleRate / pixelsPerSecond));
+  const samplesPerColumn = Math.max(16, Math.round(sampleRate / (pixelsPerSecond * RENDER_SCALE_X)));
   const samples = new Float32Array(samplesPerColumn * spectrogram.columns);
   const rowFreqs = Array.from({ length: spectrogram.rows }, (_, row) =>
     rowToFrequencyHz(row, spectrogram.rows, minHz, maxHz),
   );
+  const rowIncrements = rowFreqs.map((hz) => TAU * hz / sampleRate);
 
   for (let col = 0; col < spectrogram.columns; col += 1) {
     const litRows: number[] = [];
@@ -148,11 +161,10 @@ export function synthesizeTextSpectrogramSamples(
     const start = col * samplesPerColumn;
     for (let i = 0; i < samplesPerColumn; i += 1) {
       const sampleIndex = start + i;
-      const time = sampleIndex / sampleRate;
-      const envelope = columnEnvelope(i, samplesPerColumn);
+      const envelope = clipEnvelope(sampleIndex, samples.length, sampleRate);
       let sample = 0;
       for (const row of litRows) {
-        sample += Math.sin(TAU * rowFreqs[row]! * time);
+        sample += Math.sin(rowIncrements[row]! * sampleIndex);
       }
       samples[sampleIndex] = samples[sampleIndex]! + sample * columnGain * envelope;
     }
@@ -186,7 +198,7 @@ export function playTextSpectrogram(
 
 function normalizedPixelsPerSecond(value: number | undefined): number {
   if (!Number.isFinite(value)) return DEFAULT_PIXELS_PER_SECOND;
-  return Math.max(6, Math.min(80, value as number));
+  return Math.max(5, Math.min(30, value as number));
 }
 
 function normalizedHz(value: number | undefined, fallback: number): number {
@@ -199,9 +211,9 @@ function normalizedLevel(value: number | undefined): number {
   return Math.max(0, Math.min(1, (value as number) / 100));
 }
 
-function columnEnvelope(offset: number, samplesPerColumn: number): number {
-  const edge = Math.min(offset, samplesPerColumn - 1 - offset);
-  const ramp = Math.max(8, Math.floor(samplesPerColumn * 0.12));
+function clipEnvelope(sampleIndex: number, totalSamples: number, sampleRate: number): number {
+  const edge = Math.min(sampleIndex, totalSamples - 1 - sampleIndex);
+  const ramp = Math.max(16, Math.round(sampleRate * 0.006));
   return Math.min(1, Math.max(0, edge / ramp));
 }
 

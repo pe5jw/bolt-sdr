@@ -55,7 +55,7 @@ describe('signal-jammer-store', () => {
       driftHz: 500,
       pulseRateHz: 0.5,
       textSoundText: 'CQ QRM',
-      textPixelsPerSecond: 24,
+      textPixelsPerSecond: 6,
     });
   });
 
@@ -66,6 +66,6 @@ describe('signal-jammer-store', () => {
 
     const next = useSignalJammerStore.getState();
     expect(next.textSoundText).toBe('HELLO QRM');
-    expect(next.textPixelsPerSecond).toBe(80);
+    expect(next.textPixelsPerSecond).toBe(30);
   });
 });
