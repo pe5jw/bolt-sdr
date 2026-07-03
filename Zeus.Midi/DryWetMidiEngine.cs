@@ -56,15 +56,27 @@ public sealed class DryWetMidiEngine : IMidiEngine
     {
         try
         {
+            var count = InputDevice.GetDevicesCount();
             var list = new List<MidiDeviceDto>();
-            foreach (var d in InputDevice.GetAll())
-                list.Add(new MidiDeviceDto(d.Name, Connected: true));
+            for (var i = 0; i < count; i++)
+            {
+                try
+                {
+                    using var d = InputDevice.GetByIndex(i);
+                    list.Add(new MidiDeviceDto(d.Name, Connected: true));
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "midi.enumerate device skipped index={Index}", i);
+                }
+            }
+            _available = true;
             return list;
         }
         catch (Exception ex)
         {
             _available = false;
-            _log.LogDebug(ex, "midi.enumerate failed; engine unavailable");
+            _log.LogWarning(ex, "midi.enumerate failed; engine unavailable");
             return Array.Empty<MidiDeviceDto>();
         }
     }
@@ -89,15 +101,16 @@ public sealed class DryWetMidiEngine : IMidiEngine
                     }
                     catch (Exception ex)
                     {
-                        _log.LogDebug(ex, "midi.device.open failed name={Name}", dev.Name);
+                        _log.LogWarning(ex, "midi.device.open failed name={Name}", dev.Name);
                         dev.Dispose();
                     }
                 }
+                _available = true;
             }
             catch (Exception ex)
             {
                 _available = false;
-                _log.LogDebug(ex, "midi.start failed; engine unavailable");
+                _log.LogWarning(ex, "midi.start failed; engine unavailable");
             }
         }
     }

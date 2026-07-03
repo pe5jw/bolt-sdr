@@ -4254,6 +4254,8 @@ public static class ZeusEndpoints
 
         app.MapPost("/api/midi/learn/start", (Midi.MidiService midi) => Results.Ok(midi.StartLearn()));
 
+        app.MapPost("/api/midi/learn/keepalive", (Midi.MidiService midi) => Results.Ok(midi.KeepLearnAlive()));
+
         app.MapPost("/api/midi/learn/stop", (Midi.MidiService midi) => Results.Ok(midi.StopLearn()));
 
         app.MapGet("/api/midi/streamdeck/devices",

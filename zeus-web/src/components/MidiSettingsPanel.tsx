@@ -8,7 +8,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMidiStore } from '../state/midi-store';
 import type { MidiCommandInfo, MidiControlType, MidiMapping } from '../api/midi';
 
@@ -37,6 +37,8 @@ const INPUT: React.CSSProperties = {
   borderRadius: 'var(--r-sm)',
   color: 'var(--fg-0)',
 };
+
+let pendingLearnStopTimer: number | null = null;
 
 // Human-readable control-type badge shown beside each command so the operator
 // knows which physical control the command expects before binding (fader/pot
@@ -109,12 +111,15 @@ export function MidiSettingsPanel() {
   const upsertStreamDeckMapping = useMidiStore((s) => s.upsertStreamDeckMapping);
   const removeStreamDeckMapping = useMidiStore((s) => s.removeStreamDeckMapping);
   const startLearn = useMidiStore((s) => s.startLearn);
+  const keepLearnAlive = useMidiStore((s) => s.keepLearnAlive);
   const stopLearn = useMidiStore((s) => s.stopLearn);
 
   const [search, setSearch] = useState('');
   const [learnCommand, setLearnCommand] = useState('');
   const [sdCommand, setSdCommand] = useState('');
   const [selectedKey, setSelectedKey] = useState<{ serial: string; index: number } | null>(null);
+  const learningRef = useRef(false);
+  const stopLearnRef = useRef(stopLearn);
 
   useEffect(() => {
     void refreshStatus();
@@ -129,6 +134,36 @@ export function MidiSettingsPanel() {
   const sdAvailable = status?.streamDeckEngineAvailable ?? false;
   const midiDevices = status?.midiDevices ?? [];
   const sdDevices = status?.streamDeckDevices ?? [];
+
+  useEffect(() => {
+    learningRef.current = learning;
+  }, [learning]);
+
+  useEffect(() => {
+    stopLearnRef.current = stopLearn;
+  }, [stopLearn]);
+
+  useEffect(() => {
+    if (!learning) return;
+    const id = window.setInterval(() => void keepLearnAlive(), 60_000);
+    return () => window.clearInterval(id);
+  }, [learning, keepLearnAlive]);
+
+  useEffect(() => {
+    if (pendingLearnStopTimer !== null) {
+      window.clearTimeout(pendingLearnStopTimer);
+      pendingLearnStopTimer = null;
+    }
+
+    return () => {
+      if (!learningRef.current) return;
+      if (pendingLearnStopTimer !== null) window.clearTimeout(pendingLearnStopTimer);
+      pendingLearnStopTimer = window.setTimeout(() => {
+        pendingLearnStopTimer = null;
+        void stopLearnRef.current().catch(() => {});
+      }, 0);
+    };
+  }, []);
 
   const commandLabel = useMemo(() => {
     const m = new Map<string, MidiCommandInfo>();
