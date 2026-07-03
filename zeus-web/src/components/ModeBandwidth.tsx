@@ -51,6 +51,11 @@ import {
   toggleDigital,
 } from '../state/enter-digital';
 import { useDigitalPluginStore } from '../state/digital-plugin-store';
+import {
+  freeDvPluginUnavailableReason,
+  isFreeDvPluginReady,
+  useFreeDvPluginStore,
+} from '../state/freedv-plugin-store';
 import { useFt8Store } from '../state/ft8-store';
 import { useWsprStore } from '../state/wspr-store';
 import { useConnectionStore } from '../state/connection-store';
@@ -97,10 +102,12 @@ export function ModeBandwidth() {
   // Subscribe to the plugin gate so FT8/FT4 light up the moment the Zeus
   // Digital plugin goes installed+live (isDigitalEntryAvailable reads it).
   useDigitalPluginStore((s) => s.installed && s.live);
+  useFreeDvPluginStore((s) => s.installed && s.live);
 
   const selectMode = useCallback(
     (m: RxMode) => {
       if (m === activeMode) return;
+      if (m === 'FREEDV' && !isFreeDvPluginReady()) return;
       // Ganged: apply to every selected receiver; the focused one reconciles.
       gangedReceiverAction({
         optimistic: (k) => optimisticSetReceiverMode(k, m),
@@ -123,20 +130,36 @@ export function ModeBandwidth() {
       <div className="ctrl-group hide-mobile" style={{ width: '100%' }}>
         <div className="btn-row wrap" style={{ width: '100%' }}>
           {MODES.map((m) => (
-            <button
-              key={m.value}
-              type="button"
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.setData(toolbarFavDragMime('mode'), m.value);
-                e.dataTransfer.effectAllowed = 'move';
-              }}
-              onClick={() => selectMode(m.value)}
-              className={`btn sm ${activeMode === m.value ? 'active' : ''}`}
-              title={`${m.label} — drag onto a toolbar favorite slot to pin`}
-            >
-              {m.label}
-            </button>
+            (() => {
+              const freeDvBlocked = m.value === 'FREEDV' && !isFreeDvPluginReady();
+              return (
+                <button
+                  key={m.value}
+                  type="button"
+                  draggable={!freeDvBlocked}
+                  disabled={freeDvBlocked}
+                  onDragStart={(e) => {
+                    if (freeDvBlocked) return;
+                    e.dataTransfer.setData(toolbarFavDragMime('mode'), m.value);
+                    e.dataTransfer.effectAllowed = 'move';
+                  }}
+                  onClick={() => selectMode(m.value)}
+                  className={`btn sm ${activeMode === m.value ? 'active' : ''}`}
+                  style={
+                    freeDvBlocked
+                      ? { opacity: 0.4, cursor: 'not-allowed', borderColor: 'var(--line)', color: 'var(--fg-3)' }
+                      : undefined
+                  }
+                  title={
+                    freeDvBlocked
+                      ? (freeDvPluginUnavailableReason() ?? 'FreeDV plugin is unavailable')
+                      : `${m.label} — drag onto a toolbar favorite slot to pin`
+                  }
+                >
+                  {m.label}
+                </button>
+              );
+            })()
           ))}
           {/* Digital modes are Zeus-level modes (like FreeDV), not WDSP demods —
               they open the dedicated FT8/FT4/WSPR workspace and auto-configure
@@ -194,7 +217,7 @@ export function ModeBandwidth() {
           }}
         >
           {MODES.map((m) => (
-            <option key={m.value} value={m.value}>
+            <option key={m.value} value={m.value} disabled={m.value === 'FREEDV' && !isFreeDvPluginReady()}>
               {m.label}
             </option>
           ))}

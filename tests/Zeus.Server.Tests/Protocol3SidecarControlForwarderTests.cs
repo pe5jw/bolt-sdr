@@ -5,6 +5,12 @@ namespace Zeus.Server.Tests;
 public sealed class Protocol3SidecarControlForwarderTests
 {
     [Fact]
+    public void ReceiverSettingsDebounceMs_MatchesP3DisplayCadence()
+    {
+        Assert.Equal(20, Protocol3SidecarControlForwarder.ReceiverSettingsDebounceMs);
+    }
+
+    [Fact]
     public void ShouldRefreshPaSnapshotForTxControl_RefreshesActiveMoxWhenDriveByteIsStaleZero()
     {
         Assert.True(Protocol3SidecarControlForwarder.ShouldRefreshPaSnapshotForTxControl(

@@ -64,6 +64,12 @@ public interface IPluginContext
     /// hosts / test doubles need no change.
     /// </summary>
     IQrzLookup? Qrz => null;
+
+    /// <summary>
+    /// Shared operator callsign/grid resolver. Default implementation returns
+    /// null so existing hosts and test doubles remain source-compatible.
+    /// </summary>
+    IOperatorIdentityProvider? OperatorIdentity => null;
 }
 
 /// <summary>Key/value persistence scoped to one plugin id.</summary>

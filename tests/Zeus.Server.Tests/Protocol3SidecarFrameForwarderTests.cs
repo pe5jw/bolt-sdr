@@ -10,7 +10,7 @@ namespace Zeus.Server.Tests;
 public sealed class Protocol3SidecarFrameForwarderTests
 {
     [Fact]
-    public void ResolveReverseDisplayBins_DefaultsToNativeSidecarAxis()
+    public void ResolveReverseDisplayBins_DefaultsToZeusLowToHighAxis()
     {
         var old = Environment.GetEnvironmentVariable("ZEUS_PROTOCOL3_REVERSE_DISPLAY_BINS");
         try
@@ -18,7 +18,7 @@ public sealed class Protocol3SidecarFrameForwarderTests
             Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_REVERSE_DISPLAY_BINS", null);
             var configuration = new ConfigurationBuilder().Build();
 
-            Assert.False(Protocol3SidecarFrameForwarder.ResolveReverseDisplayBins(configuration));
+            Assert.True(Protocol3SidecarFrameForwarder.ResolveReverseDisplayBins(configuration));
         }
         finally
         {
@@ -61,8 +61,8 @@ public sealed class Protocol3SidecarFrameForwarderTests
             Environment.SetEnvironmentVariable("ZEUS_PROTOCOL3_FRAME_AUDIO_POLL_MS", null);
             var configuration = new ConfigurationBuilder().Build();
 
-            Assert.Equal(33, Protocol3SidecarFrameForwarder.ResolveDisplayPollMs(configuration));
-            Assert.Equal(2048, Protocol3SidecarFrameForwarder.ResolveDisplayMaxWidth(configuration));
+            Assert.Equal(20, Protocol3SidecarFrameForwarder.ResolveDisplayPollMs(configuration));
+            Assert.Equal(4096, Protocol3SidecarFrameForwarder.ResolveDisplayMaxWidth(configuration));
             Assert.Equal(10, Protocol3SidecarFrameForwarder.ResolveAudioPollMs(configuration));
         }
         finally
@@ -118,7 +118,7 @@ public sealed class Protocol3SidecarFrameForwarderTests
                 })
                 .Build();
 
-            Assert.Equal(33, Protocol3SidecarFrameForwarder.ResolveDisplayPollMs(configuration));
+            Assert.Equal(20, Protocol3SidecarFrameForwarder.ResolveDisplayPollMs(configuration));
         }
         finally
         {

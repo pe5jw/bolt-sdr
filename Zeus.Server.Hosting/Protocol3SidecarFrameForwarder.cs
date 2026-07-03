@@ -16,15 +16,15 @@ namespace Zeus.Server;
 public sealed class Protocol3SidecarFrameForwarder : BackgroundService
 {
     private const float DisplayFloorDb = -140.0f;
-    private const int DefaultDisplayPollMs = 33;
-    private const int DefaultDisplayMaxWidth = 2048;
+    private const int DefaultDisplayPollMs = 20;
+    private const int DefaultDisplayMaxWidth = 4096;
     private const int DefaultAudioPollMs = 10;
     private const int MaxDisplayWidth = ushort.MaxValue;
     private const int MaxAudioFramesPerPoll = 64;
     private const int MaxRadioMicPacketsPerPoll = 128;
     private const int MaxAudioPayloadBytes = 2 * 1024 * 1024;
     private const int MaxRadioMicPayloadBytes = RadioMicReceiver.PacketBytes * MaxRadioMicPacketsPerPoll;
-    private const bool DefaultReverseDisplayBins = false;
+    private const bool DefaultReverseDisplayBins = true;
     private const int HealthPollMs = 1000;
     private const int IncompleteRxRestartPolls = 150;
     private const int StaleAudioRestartMs = 2500;

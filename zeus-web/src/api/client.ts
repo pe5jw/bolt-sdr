@@ -48,6 +48,7 @@ import {
   parseBoardCapabilities,
   type BoardCapabilities,
 } from './board-capabilities';
+import { FREEDV_PLUGIN_BASE } from './freedv-plugin';
 
 export type ConnectionStatus =
   | 'Disconnected'
@@ -7301,9 +7302,9 @@ export function setMicGain(
 
 // ---- FreeDV digital-voice telemetry / config ----
 // FreeDV is a normal selectable RxMode ('FREEDV', byte 10); selecting it goes
-// through setMode like any other mode. The backend forces USB underneath and
-// runs the codec2/FreeDV modem. These endpoints carry the modem telemetry +
-// config that drive the native FreeDV panel — they are NOT part of StateDto.
+// through setMode like any other mode. The plugin runs the codec2/FreeDV modem.
+// These endpoints carry the modem telemetry + config that drive the native
+// FreeDV panel — they are NOT part of StateDto.
 
 export type FreeDvSubmode =
   | 'RadeV1'
@@ -7328,7 +7329,7 @@ export const FREEDV_SUBMODES: ReadonlyArray<{
   { value: 'Mode1600', label: '1600' },
 ];
 
-// Mirrors the server-side FreeDvStatusDto (GET /api/freedv/status).
+// Mirrors the plugin-side FreeDvStatusDto (GET /api/plugins/org.openhpsdr.freedv/status).
 export type FreeDvStatusDto = {
   nativeAvailable: boolean;
   active: boolean;
@@ -7350,7 +7351,7 @@ export type FreeDvStatusDto = {
   radeAvailable: boolean;
 };
 
-// PUT /api/freedv/config body — all fields optional, null = leave unchanged.
+// PUT /config body — all fields optional, null = leave unchanged.
 export type FreeDvConfigRequest = {
   submode?: FreeDvSubmode;
   squelchEnabled?: boolean;
@@ -7418,20 +7419,20 @@ function normalizeFreeDvStatus(raw: unknown): FreeDvStatusDto {
   };
 }
 
-// GET /api/freedv/status. Callers should catch and fall back to an
-// "unavailable" UI state — the backend may 404 transiently while it's wired.
+// GET /status. Callers should catch and fall back to an unavailable UI state
+// while the plugin is absent or inactive.
 export function getFreeDvStatus(signal?: AbortSignal): Promise<FreeDvStatusDto> {
-  return jsonFetch('/api/freedv/status', { signal }, normalizeFreeDvStatus);
+  return jsonFetch(`${FREEDV_PLUGIN_BASE}/status`, { signal }, normalizeFreeDvStatus);
 }
 
-// PUT /api/freedv/config. Only the supplied fields change; returns the updated
+// PUT /config. Only the supplied fields change; returns the updated
 // status so the panel can reconcile in one round-trip.
 export function setFreeDvConfig(
   req: FreeDvConfigRequest,
   signal?: AbortSignal,
 ): Promise<FreeDvStatusDto> {
   return jsonFetch(
-    '/api/freedv/config',
+    `${FREEDV_PLUGIN_BASE}/config`,
     {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
@@ -7448,11 +7449,8 @@ export function setFreeDvConfig(
   );
 }
 
-// FreeDV codec2-library install (GET status / POST start). Mirrors the server
-// FreeDvInstallDto. codec2 can't be built on an operator's machine, so when the
-// bundled binary is missing the backend downloads the prebuilt one Zeus
-// committed for this platform and reloads the modem live. The panel polls the
-// GET while installing until `phase` is 'done' or 'failed'.
+// FreeDV native status compatibility endpoint. Natives are bundled inside the
+// plugin zip; the backend returns an already-installed shape for UI parity.
 export type FreeDvInstallPhase = 'idle' | 'downloading' | 'staging' | 'done' | 'failed';
 
 export type FreeDvInstallStatusDto = {
@@ -7485,15 +7483,15 @@ function normalizeFreeDvInstallStatus(raw: unknown): FreeDvInstallStatusDto {
 }
 
 export function getFreeDvInstallStatus(signal?: AbortSignal): Promise<FreeDvInstallStatusDto> {
-  return jsonFetch('/api/freedv/install', { signal }, normalizeFreeDvInstallStatus);
+  return jsonFetch(`${FREEDV_PLUGIN_BASE}/install`, { signal }, normalizeFreeDvInstallStatus);
 }
 
 export function startFreeDvInstall(signal?: AbortSignal): Promise<FreeDvInstallStatusDto> {
-  return jsonFetch('/api/freedv/install', { method: 'POST', signal }, normalizeFreeDvInstallStatus);
+  return jsonFetch(`${FREEDV_PLUGIN_BASE}/install`, { method: 'POST', signal }, normalizeFreeDvInstallStatus);
 }
 
-// ---- FreeDV Reporter — live station list (GET /api/freedv/stations) ----
-// Mirrors the server-side FreeDvStationDto / FreeDvStationsResponseDto records
+// ---- FreeDV Reporter — live station list (GET /stations) ----
+// Mirrors the plugin-side FreeDvStationDto / FreeDvStationsResponseDto records
 // (System.Text.Json camelCase serialisation).
 
 export type FreeDvStationDto = {
@@ -7521,8 +7519,8 @@ export type FreeDvStationsResponseDto = {
   mySid: string | null;    // operator's own session id while reporting
 };
 
-// ---- FreeDV Reporter "report mode" settings (GET/POST /api/freedv/reporter/settings) ----
-// Mirrors the server-side FreeDvReporterSettings record. Strictly opt-in:
+// ---- FreeDV Reporter "report mode" settings (GET/POST /reporter/settings) ----
+// Mirrors the plugin-side FreeDvReporterSettings record. Strictly opt-in:
 // reportEnabled defaults false and the backend only joins the public map in
 // "report" role when enabled AND callsign + grid are present.
 export type FreeDvReporterSettings = {
@@ -7575,24 +7573,24 @@ function normalizeFreeDvStationsResponse(raw: unknown): FreeDvStationsResponseDt
   };
 }
 
-// GET /api/freedv/stations — live FreeDV Reporter station list.
+// GET /stations — live FreeDV Reporter station list.
 export function fetchFreeDvStations(signal?: AbortSignal): Promise<FreeDvStationsResponseDto> {
-  return jsonFetch('/api/freedv/stations', { signal }, normalizeFreeDvStationsResponse);
+  return jsonFetch(`${FREEDV_PLUGIN_BASE}/stations`, { signal }, normalizeFreeDvStationsResponse);
 }
 
-// GET /api/freedv/reporter/settings — current report-mode opt-in settings.
+// GET /reporter/settings — current report-mode opt-in settings.
 export function getFreeDvReporterSettings(signal?: AbortSignal): Promise<FreeDvReporterSettings> {
-  return jsonFetch('/api/freedv/reporter/settings', { signal }, normalizeFreeDvReporterSettings);
+  return jsonFetch(`${FREEDV_PLUGIN_BASE}/reporter/settings`, { signal }, normalizeFreeDvReporterSettings);
 }
 
-// POST /api/freedv/reporter/settings — save report-mode settings (the backend
+// POST /reporter/settings — save report-mode settings (the backend
 // normalizes, persists, and reconnects in the new role). Returns what was saved.
 export function setFreeDvReporterSettings(
   settings: FreeDvReporterSettings,
   signal?: AbortSignal,
 ): Promise<FreeDvReporterSettings> {
   return jsonFetch(
-    '/api/freedv/reporter/settings',
+    `${FREEDV_PLUGIN_BASE}/reporter/settings`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -7608,12 +7606,12 @@ export function setFreeDvReporterSettings(
   );
 }
 
-// POST /api/freedv/stations/{sid}/qsy — ask that station to QSY to my current
+// POST /stations/{sid}/qsy — ask that station to QSY to my current
 // VFO frequency. Resolves on success; rejects (jsonFetch throws on non-2xx) when
 // not reporting or the sid is unknown.
 export function freeDvStationQsy(sid: string, signal?: AbortSignal): Promise<void> {
   return jsonFetch(
-    `/api/freedv/stations/${encodeURIComponent(sid)}/qsy`,
+    `${FREEDV_PLUGIN_BASE}/stations/${encodeURIComponent(sid)}/qsy`,
     { method: 'POST', signal },
     () => undefined,
   );

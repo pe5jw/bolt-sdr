@@ -595,7 +595,11 @@ public sealed class Protocol3SidecarBridge : IDisposable
         }
         if (diagnosticsUrl is null) return;
 
-        var payload = BuildReceiverSettingsJson(state, rxStreams, sampleRateHz);
+        var payload = BuildReceiverSettingsJson(
+            state,
+            rxStreams,
+            sampleRateHz,
+            invertRxTuningOffset: InvertRxTuningOffset());
         var url = Endpoint(diagnosticsUrl, "/api/control/receivers");
         var http = _httpFactory.CreateClient(HttpClientName);
         using var content = new StringContent(payload, Encoding.UTF8, "application/json");
@@ -805,12 +809,16 @@ public sealed class Protocol3SidecarBridge : IDisposable
             psi.ArgumentList.Add("--analyzer-process-every");
             psi.ArgumentList.Add(analyzerProcessEvery.ToString(CultureInfo.InvariantCulture));
         }
-        if (BoolSetting("RxIqConjugate", "ZEUS_PROTOCOL3_RX_IQ_CONJUGATE", fallback: true))
+        if (BoolSetting("RxIqConjugate", "ZEUS_PROTOCOL3_RX_IQ_CONJUGATE", fallback: false))
             psi.ArgumentList.Add("--rx-iq-conjugate");
         else
             psi.ArgumentList.Add("--rx-iq-normal");
         psi.ArgumentList.Add("--rx-settings-json");
-        psi.ArgumentList.Add(BuildReceiverSettingsJson(initialState, rxStreams, sampleRateHz));
+        psi.ArgumentList.Add(BuildReceiverSettingsJson(
+            initialState,
+            rxStreams,
+            sampleRateHz,
+            invertRxTuningOffset: InvertRxTuningOffset()));
         psi.ArgumentList.Add("--n9dsp-library");
         psi.ArgumentList.Add(n9dspLibrary);
         psi.Environment["N9DSP_NATIVE_LIBRARY"] = n9dspLibrary;
@@ -818,7 +826,11 @@ public sealed class Protocol3SidecarBridge : IDisposable
         return psi;
     }
 
-    internal static string BuildReceiverSettingsJson(StateDto state, int rxStreams, int sampleRateHz)
+    internal static string BuildReceiverSettingsJson(
+        StateDto state,
+        int rxStreams,
+        int sampleRateHz,
+        bool invertRxTuningOffset = false)
     {
         ArgumentNullException.ThrowIfNull(state);
         if (rxStreams is < 1 or > WireContract.MaxReceivers)
@@ -826,14 +838,16 @@ public sealed class Protocol3SidecarBridge : IDisposable
         if (sampleRateHz <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRateHz));
 
         var receivers = state.Receivers ?? Array.Empty<ReceiverDto>();
-        var ctunCenterHz = state.RadioLoHz > 0 ? state.RadioLoHz : state.VfoHz;
         var array = new JsonArray();
         for (var index = 0; index < rxStreams; index++)
         {
             var rx = ReceiverFor(state, receivers, index);
             var enabled = rx.Enabled && index < state.MaxReceivers;
-            var centerHz = state.CtunEnabled ? ctunCenterHz : rx.VfoHz;
-            var tuningOffsetHz = state.CtunEnabled ? ClampInt64(rx.VfoHz - centerHz) : 0;
+            var (engineMode, passbandLowHz, passbandHighHz) = Protocol3EngineFilterFor(rx);
+            var effectiveLoHz = CwOffset.EffectiveLoHz(engineMode, rx.VfoHz);
+            var centerHz = state.RadioLoHz > 0 ? state.RadioLoHz : effectiveLoHz;
+            var tuningOffsetHz = ClampInt64(effectiveLoHz - centerHz);
+            if (invertRxTuningOffset) tuningOffsetHz = -tuningOffsetHz;
             var muted = rx.Muted ||
                 (index == 0 && state.Rx1Muted) ||
                 (index == 1 && state.Rx2Muted);
@@ -848,9 +862,9 @@ public sealed class Protocol3SidecarBridge : IDisposable
                 ["adcSource"] = rx.AdcSource,
                 ["centerFrequencyHz"] = centerHz,
                 ["tuningOffsetHz"] = tuningOffsetHz,
-                ["mode"] = (int)rx.Mode,
-                ["passbandLowHz"] = rx.FilterLowHz,
-                ["passbandHighHz"] = rx.FilterHighHz,
+                ["mode"] = (int)engineMode,
+                ["passbandLowHz"] = passbandLowHz,
+                ["passbandHighHz"] = passbandHighHz,
                 ["afGainDb"] = enabled && !muted ? rx.AfGainDb : -120.0,
                 ["sampleRateHz"] = sampleRateHz,
                 ["enableRxAgc"] = state.Agc?.Mode == AgcMode.Fixed ? 0 : 1,
@@ -889,6 +903,18 @@ public sealed class Protocol3SidecarBridge : IDisposable
         }
 
         return array.ToJsonString();
+    }
+
+    private static (RxMode mode, int lowHz, int highHz) Protocol3EngineFilterFor(ReceiverDto rx)
+    {
+        var engineMode = RadioService.EffectiveEngineMode(rx.Mode, rx.VfoHz);
+        if (rx.Mode != RxMode.FreeDv)
+            return (engineMode, rx.FilterLowHz, rx.FilterHighHz);
+
+        int loAbs = Math.Min(Math.Abs(rx.FilterLowHz), Math.Abs(rx.FilterHighHz));
+        int hiAbs = Math.Max(Math.Abs(rx.FilterLowHz), Math.Abs(rx.FilterHighHz));
+        var (lowHz, highHz) = RadioService.SignedFilterForMode(engineMode, loAbs, hiAbs);
+        return (engineMode, lowHz, highHz);
     }
 
     private static ReceiverDto ReceiverFor(StateDto state, IReadOnlyList<ReceiverDto> receivers, int index)
@@ -1275,6 +1301,9 @@ public sealed class Protocol3SidecarBridge : IDisposable
             string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase);
     }
+
+    private bool InvertRxTuningOffset() =>
+        BoolSetting("InvertRxTuningOffset", "ZEUS_PROTOCOL3_INVERT_RX_TUNING_OFFSET", fallback: true);
 
     private void RememberConnection(
         IPEndPoint radioEndpoint,

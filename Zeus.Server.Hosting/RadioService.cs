@@ -107,6 +107,7 @@ public sealed class RadioService : IDisposable
     // Phase 5; re-ported in the external-port parity audit). Pushed via
     // PushHl2Gpio on store edit + connect. HL2-only on the wire.
     private readonly Hl2GpioSettingsStore? _hl2GpioStore;
+    private Func<bool>? _modemAvailable;
     // Cached PS board key for the currently-connected radio. Set by
     // ApplyPsHwPeakForConnection (P1 or P2 connect path) and read by
     // PersistPsState to route HW Peak writes to the correct per-board slot.
@@ -1934,12 +1935,33 @@ public sealed class RadioService : IDisposable
     private FamilyFilter _freeDvFilter = new(300, 2700);
     private FamilyFilter _freeDvTxFilter = new(300, 2700);
 
+    public void SetModemAvailability(Func<bool>? provider)
+        => Volatile.Write(ref _modemAvailable, provider);
+
+    private bool FreeDvModemAvailable()
+    {
+        var provider = Volatile.Read(ref _modemAvailable);
+        if (provider is null) return false;
+        try { return provider(); }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "FreeDV modem availability check failed.");
+            return false;
+        }
+    }
+
     public StateDto SetMode(RxMode mode) => SetMode(mode, TxVfo.A);
 
     public StateDto SetMode(RxMode mode, TxVfo receiver)
     {
         if (!Enum.IsDefined(receiver))
             throw new ArgumentOutOfRangeException(nameof(receiver), receiver, "Unknown VFO receiver");
+
+        if (mode == RxMode.FreeDv && !FreeDvModemAvailable())
+        {
+            _log.LogWarning("FreeDV plugin not active — falling back to USB");
+            mode = RxMode.USB;
+        }
 
         RxMode departingMode = default;
         string? departingPreset = null;

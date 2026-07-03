@@ -12,6 +12,8 @@ namespace Zeus.Server;
 
 public sealed class Protocol3SidecarControlForwarder : IHostedService, IDisposable
 {
+    public const int ReceiverSettingsDebounceMs = 20;
+
     private readonly RadioService _radio;
     private readonly TxService _tx;
     private readonly Protocol3SidecarBridge _sidecar;
@@ -330,6 +332,12 @@ public sealed class Protocol3SidecarControlForwarder : IHostedService, IDisposab
         await foreach (var first in _updates.Reader.ReadAllAsync(ct).ConfigureAwait(false))
         {
             var latest = first;
+            while (_updates.Reader.TryRead(out var newer))
+            {
+                latest = newer;
+            }
+
+            await Task.Delay(ReceiverSettingsDebounceMs, ct).ConfigureAwait(false);
             while (_updates.Reader.TryRead(out var newer))
             {
                 latest = newer;
