@@ -75,7 +75,12 @@ export function SignalJammerPopover() {
         : 'Ready';
 
   return (
-    <section className="signal-jammer-popout" role="dialog" aria-label="QRM signal jammer">
+    <section
+      id="signal-jammer-popout"
+      className="signal-jammer-popout"
+      role="dialog"
+      aria-label="QRM signal jammer"
+    >
       <div className="sj-head">
         <div>
           <div className="sj-title">QRM</div>

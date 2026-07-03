@@ -80,7 +80,7 @@ import { PsToggleButton } from './components/PsToggleButton';
 import { PaTempChip } from './components/PaTempChip';
 import { WorkspaceZoomControls } from './components/WorkspaceZoomControls';
 import { QrzStatusPill } from './components/QrzStatusPill';
-import { QrmButton } from './components/QrmButton';
+import { QrmButton, QrmPanelToggleButton } from './components/QrmButton';
 import { RogerBeepButton } from './components/RogerBeepButton';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
 import ReportProblemButton from './components/report-problem/ReportProblemButton';
@@ -1219,7 +1219,10 @@ export default function App() {
             {signalJammerEnabled && (
               <div className="ctrl-group topbar-control topbar-control--qrm">
                 <div className="label-xs ctrl-lbl">QRM</div>
-                <QrmButton />
+                <div className="btn-row" style={{ gap: 4, alignItems: 'center' }}>
+                  <QrmPanelToggleButton />
+                  <QrmButton />
+                </div>
               </div>
             )}
           </div>

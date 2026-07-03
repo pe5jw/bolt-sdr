@@ -27,6 +27,7 @@ type EasterEggState = {
   // reached. Once unlocked, the bolt toggles the QRM jammer popout.
   registerBoltClick: () => void;
   closeSignalJammerPopover: () => void;
+  toggleSignalJammerPopover: () => void;
 };
 
 export const useEasterEggStore = create<EasterEggState>((set) => ({
@@ -44,4 +45,6 @@ export const useEasterEggStore = create<EasterEggState>((set) => ({
         : { boltClicks };
     }),
   closeSignalJammerPopover: () => set({ signalJammerPopoverOpen: false }),
+  toggleSignalJammerPopover: () =>
+    set((s) => ({ signalJammerPopoverOpen: !s.signalJammerPopoverOpen })),
 }));

@@ -49,4 +49,18 @@ describe('easter-egg-store — hidden HARDWARE and QRM unlock', () => {
     expect(useEasterEggStore.getState().hardwareUnlocked).toBe(true);
     expect(useEasterEggStore.getState().signalJammerPopoverOpen).toBe(false);
   });
+
+  it('lets the top-bar QRM control reopen the popout after it was closed', () => {
+    const s = useEasterEggStore.getState();
+    s.registerBoltClick();
+    s.registerBoltClick();
+    s.registerBoltClick();
+    s.registerBoltClick();
+
+    useEasterEggStore.getState().closeSignalJammerPopover();
+    expect(useEasterEggStore.getState().signalJammerPopoverOpen).toBe(false);
+
+    useEasterEggStore.getState().toggleSignalJammerPopover();
+    expect(useEasterEggStore.getState().signalJammerPopoverOpen).toBe(true);
+  });
 });
