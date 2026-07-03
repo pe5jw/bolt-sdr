@@ -3474,11 +3474,7 @@ public sealed class RadioService : IDisposable
             bandCfg.OcTx, bandCfg.OcRx, bandCfg.OcTune, bandCfg.OcDxTx, bandCfg.OcDxRx);
 
         ActiveClient?.SetDriveByte(driveByte);
-        ActiveClient?.SetOcMasks(bandCfg.OcTx, bandCfg.OcRx);
-        // OcTune (issue #1325). P1 only — the wire composes OcTx | OcTune
-        // itself when its internal Tune flag is set. Wire-format-neutral on
-        // boards that don't set the flag (default 0x00 = pre-#1325).
-        ActiveClient?.SetOcTuneMask(bandCfg.OcTune);
+        ActiveClient?.SetOcMasks(bandCfg.OcTx, bandCfg.OcRx, bandCfg.OcTune);
 
         // ---- External-antenna resolution (antenna slice — #804) ----
         // Server-authoritative: resolve the active band's persisted TX/RX

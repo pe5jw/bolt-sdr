@@ -94,6 +94,8 @@ public sealed class TxService
         _hub = hub;
         _bandPlan = bandPlan;
         _log = log;
+        _radio.Disconnected += OnRadioDisconnected;
+        _radio.P2Disconnected += OnRadioDisconnected;
     }
 
     public bool IsMoxOn { get { lock (_sync) return _moxOn; } }
@@ -147,6 +149,34 @@ public sealed class TxService
         catch (Exception ex)
         {
             _log.LogWarning(ex, "tx.txActiveChanged subscriber threw");
+        }
+    }
+
+    private void OnRadioDisconnected()
+    {
+        bool wasMoxOn;
+        bool wasTunOn;
+        bool? txActiveCaptured;
+        lock (_sync)
+        {
+            wasMoxOn = _moxOn;
+            wasTunOn = _tunOn;
+            _moxOn = false;
+            _tunOn = false;
+            _moxStartedAt = null;
+            _tunStartedAt = null;
+            _moxOwner = null;
+            Interlocked.Exchange(ref _preKeyOpenAtTicks, 0);
+            txActiveCaptured = CaptureTxActiveChangeUnderLock();
+        }
+
+        RaiseTxActiveChanged(txActiveCaptured);
+        _radio.NotifyTunActive(false);
+
+        if (wasMoxOn || wasTunOn)
+        {
+            _log.LogInformation("tx.disconnect.clear mox={Mox} tun={Tun}", wasMoxOn, wasTunOn);
+            _hub.Broadcast(new MoxStateFrame(MoxOn: false, TunOn: false));
         }
     }
 

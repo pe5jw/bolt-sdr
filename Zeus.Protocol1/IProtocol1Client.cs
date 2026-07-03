@@ -123,18 +123,10 @@ public interface IProtocol1Client : IDisposable
     /// <summary>
     /// User-configured Open-Collector pin masks (7 bits each). OR'd with the
     /// board's auto-filter output. <paramref name="txMask"/> is asserted when
-    /// MOX is on; <paramref name="rxMask"/> otherwise.
+    /// MOX is on; <paramref name="rxMask"/> otherwise. <paramref name="tuneMask"/>
+    /// is asserted on top of TX only while TUN is active.
     /// </summary>
-    void SetOcMasks(byte txMask, byte rxMask);
-
-    /// <summary>
-    /// Per-band OC-TUNE additive mask (7 bits, issue #1325). Asserted ON TOP
-    /// OF the TX mask while TUN is active (Wire = OcTx | OcTune); ignored
-    /// during regular MOX and RX. Default 0x00 preserves pre-#1325 behaviour.
-    /// P1 tracks TUN separately from MOX for this compose step — see
-    /// <see cref="SetTune"/>.
-    /// </summary>
-    void SetOcTuneMask(byte tuneMask);
+    void SetOcMasks(byte txMask, byte rxMask, byte tuneMask);
 
     /// <summary>
     /// Latch the TUN flag used by the OC-mask composition path (issue #1325).
