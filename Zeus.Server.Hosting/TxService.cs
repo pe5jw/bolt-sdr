@@ -373,6 +373,7 @@ public sealed class TxService
         {
             // Engine handles the RXA/TXA pair atomically under its own lock.
             _pipeline.SetMox(true);
+            _pipeline.PrimeTxDspForKeyDown();
             _log.LogInformation("tx.mox.on.recv ts={Ts}",
                 System.Diagnostics.Stopwatch.GetTimestamp());
             _radio.SetMox(true);

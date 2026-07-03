@@ -1,4 +1,4 @@
-.signal-jammer-popout {
+.tx-testing-tools-popout {
   position: fixed;
   top: calc(60px * var(--zeus-chrome-zoom, 1) + 8px);
   left: 12px;
@@ -241,5 +241,9 @@
 }
 
 .sj-text-meta[data-status="unavailable"] {
+  color: var(--tx);
+}
+
+.sj-text-meta[data-status="too-long"] {
   color: var(--tx);
 }

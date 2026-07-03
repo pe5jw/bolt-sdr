@@ -44,8 +44,8 @@
 // License for details.
 
 import { SMeter } from './SMeter';
+import { getReceiverFloorDb } from '../dsp/floor-normalization';
 import { preferredRxSignalDbm } from '../dsp/rx-chain-health';
-import { useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { useRxMetersStore } from '../state/rx-meters-store';
 import { useTxStore } from '../state/tx-store';
 
@@ -72,7 +72,6 @@ export function SMeterLive({ hideChips = false }: { hideChips?: boolean } = {}) 
   const fallbackRxDbm = useTxStore((s) => s.rxDbm);
   const signalPk = useRxMetersStore((s) => s.signalPk);
   const signalAv = useRxMetersStore((s) => s.signalAv);
-  const sceneSnrDb = useSignalEnhanceStore((s) => s.sceneStatus?.maxSnrDb ?? null);
   const transmitting = moxOn || tunOn;
 
   const swrColor = swr >= 3 ? 'var(--tx)' : swr >= 2 ? 'var(--power)' : 'var(--fg-0)';
@@ -82,9 +81,10 @@ export function SMeterLive({ hideChips = false }: { hideChips?: boolean } = {}) 
     fallbackDbm: fallbackRxDbm,
   });
   const rxDbm = rxSignal.dbm ?? fallbackRxDbm;
+  const rxNoiseFloorDbm = getReceiverFloorDb(0);
   const rxNoiseDeltaDb =
-    sceneSnrDb !== null && Number.isFinite(sceneSnrDb) && sceneSnrDb > 0
-      ? sceneSnrDb
+    rxNoiseFloorDbm !== null && Number.isFinite(rxDbm) && Number.isFinite(rxNoiseFloorDbm)
+      ? Math.max(0, rxDbm - rxNoiseFloorDbm)
       : null;
 
   return (

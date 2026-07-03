@@ -54,6 +54,7 @@ import {
   reclaimRadio,
   fetchRadios,
   fetchProtocol3Presence,
+  fetchProtocol3SidecarStatus,
   fetchState,
   listPrefsDatabases,
   setActivePrefsDatabase,
@@ -65,6 +66,7 @@ import {
   ApiError,
   type PrefsDatabaseInfo,
   type RadioInfoDto,
+  type Protocol3SidecarStatusDto,
 } from '../api/client';
 import {
   BOARD_LABELS,
@@ -457,6 +459,9 @@ const MANUAL_BOARD_OPTIONS: ReadonlyArray<BoardKind> = [
 
 const PROTOCOL3_UNAVAILABLE_TITLE = 'Protocol 3 requires p3app running on the selected radio.';
 const PROTOCOL3_CONNECT_TITLE = 'Connect through Protocol 3 using the local N9DSP sidecar.';
+const PROTOCOL3_SIDECAR_CHECK_TITLE = 'Checking local Protocol 3 sidecar status.';
+const PROTOCOL3_SIDECAR_UNCONFIGURED_TITLE =
+  'Protocol 3 p3app is running, but this Zeus backend is missing the local N9DSP sidecar configuration.';
 
 function hasProtocol3App(r: RadioInfoDto): boolean {
   return r.details?.protocol3Available === 'true';
@@ -472,6 +477,19 @@ function discoveredP3AvailableForIp(radios: RadioInfoDto[] | null, ip: string): 
   const needle = ip.trim();
   if (!needle || radios === null) return false;
   return radios.some((r) => r.ipAddress === needle && hasProtocol3App(r));
+}
+
+function protocol3ConnectTitle(
+  p3Available: boolean,
+  p3Checking: boolean,
+  sidecarConfigured: boolean | null,
+  sidecarChecking = false,
+): string {
+  if (p3Checking) return 'Checking for p3app on this radio...';
+  if (!p3Available) return PROTOCOL3_UNAVAILABLE_TITLE;
+  if (sidecarChecking) return PROTOCOL3_SIDECAR_CHECK_TITLE;
+  if (sidecarConfigured === false) return PROTOCOL3_SIDECAR_UNCONFIGURED_TITLE;
+  return PROTOCOL3_CONNECT_TITLE;
 }
 
 function endpointFor(r: RadioInfoDto): string {
@@ -586,14 +604,35 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   const [manualError, setManualError] = useState<string | null>(null);
   const [manualP3ProbeAvailable, setManualP3ProbeAvailable] = useState(false);
   const [manualP3Checking, setManualP3Checking] = useState(false);
+  const [p3SidecarStatus, setP3SidecarStatus] = useState<Protocol3SidecarStatusDto | null>(null);
+  const [p3SidecarChecking, setP3SidecarChecking] = useState(false);
   const manualMaxRateHz = sampleRateCeiling(manualProtocol, boardMaxRateHz);
   const manualP3Available =
     discoveredP3AvailableForIp(radios, manualIp) || manualP3ProbeAvailable;
+  const p3SidecarConfigured = p3SidecarStatus?.configured ?? null;
+  const p3SidecarUnavailable = p3SidecarConfigured === false;
 
   useEffect(() => {
     if (manualSampleRate <= manualMaxRateHz) return;
     setManualSampleRate(highestAllowedSampleRate(manualMaxRateHz));
   }, [manualMaxRateHz, manualSampleRate]);
+
+  useEffect(() => {
+    if (status === 'Connected') return;
+    const ctrl = new AbortController();
+    setP3SidecarChecking(true);
+    fetchProtocol3SidecarStatus(ctrl.signal)
+      .then((next) => setP3SidecarStatus(next))
+      .catch((err) => {
+        if ((err as { name?: string })?.name !== 'AbortError') {
+          setP3SidecarStatus(null);
+        }
+      })
+      .finally(() => {
+        if (!ctrl.signal.aborted) setP3SidecarChecking(false);
+      });
+    return () => ctrl.abort();
+  }, [status, retryNonce]);
 
   useEffect(() => {
     const ip = manualIp.trim();
@@ -695,6 +734,12 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       const isP3 = protocol === 'P3';
       const isP2 = protocol === 'P2';
       if (isP3) {
+        if (p3SidecarChecking) {
+          throw new Error(PROTOCOL3_SIDECAR_CHECK_TITLE);
+        }
+        if (p3SidecarUnavailable) {
+          throw new Error(PROTOCOL3_SIDECAR_UNCONFIGURED_TITLE);
+        }
         await apiConnectP3({
           endpoint: ep,
           sampleRate: 1_536_000,
@@ -738,7 +783,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       setLastConnectedEndpoint(ep || null);
       applyPostConnectEffects();
     },
-    [applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setLastConnectedEndpoint],
+    [applyState, hydrateTxFromState, p3SidecarChecking, p3SidecarUnavailable, setBoardId, setConnectedProtocol, setLastConnectedEndpoint],
   );
 
   const handleConnect = useCallback(
@@ -746,6 +791,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       if (inflightRef.current) return;
       setInflight(true);
       setError(null);
+      setFailureCount(0);
       try {
         await performConnect(r, false, protocolOverride);
       } catch (err) {
@@ -768,6 +814,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       const isP2 = protocol === 'P2';
       setInflight(true);
       setError(null);
+      setFailureCount(0);
       try {
         await reclaimRadio(ep, isP2 ? 'P2' : 'P1');
         await performConnect(r, /* force */ true);
@@ -802,6 +849,10 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
 
       const ep = `${ip}:${port}`;
       const effectiveSampleRate: SampleRate = protocol === 'P3' ? 1_536_000 : sampleRate;
+      if (protocol === 'P3' && p3SidecarUnavailable) {
+        setManualError(PROTOCOL3_SIDECAR_UNCONFIGURED_TITLE);
+        return;
+      }
       setInflight(true);
       setManualError(null);
       try {
@@ -861,7 +912,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
     },
     [
       manualIp, manualPort, manualProtocol, manualSampleRate, manualBoard,
-      manualSave, applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setInflight,
+      manualSave, applyState, hydrateTxFromState, p3SidecarUnavailable, setBoardId, setConnectedProtocol, setInflight,
       setLastConnectedEndpoint, saveEndpoint, setManualFormDefaults,
     ],
   );
@@ -984,7 +1035,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
     );
   }, [savedEndpoints]);
 
-  const showError = error !== null && failureCount >= RETRY_THRESHOLD;
+  const showError = error !== null && (failureCount === 0 || failureCount >= RETRY_THRESHOLD);
 
   if (status === 'Connected') {
     return (
@@ -1217,6 +1268,13 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                   const isP3 = protocol === 'P3';
                   const showP3Preview = hasProtocol3App(r);
                   const showP3Chip = showP3Preview && !isP3;
+                  const p3Blocked = isP3 && (p3SidecarChecking || p3SidecarUnavailable);
+                  const p3Title = protocol3ConnectTitle(
+                    showP3Preview || isP3,
+                    false,
+                    p3SidecarConfigured,
+                    p3SidecarChecking,
+                  );
                   return (
                     <li
                       key={r.macAddress || r.ipAddress}
@@ -1248,7 +1306,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                             <span
                               className="chip"
                               style={{ marginLeft: 6, opacity: 0.75 }}
-                              title={PROTOCOL3_CONNECT_TITLE}
+                              title={p3Title}
                             >
                               <span className="v">P3</span>
                             </span>
@@ -1290,12 +1348,16 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                             disabled={inflight}
                             title={
                               isP3
-                                ? PROTOCOL3_CONNECT_TITLE
+                                ? p3Title
                                 : isP2
                                   ? 'Protocol 2 path — experimental, RX only'
                                   : undefined
                             }
-                            className="btn sm active"
+                            className={`btn sm ${p3Blocked ? '' : 'active'}`}
+                            style={{
+                              opacity: p3Blocked ? 0.45 : 1,
+                              cursor: p3Blocked ? 'help' : 'pointer',
+                            }}
                           >
                             {inflight ? 'Connecting…' : 'Connect'}
                           </button>
@@ -1317,6 +1379,8 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
             setProtocol={setManualProtocol}
             p3Available={manualP3Available}
             p3Checking={manualP3Checking}
+            p3SidecarConfigured={p3SidecarConfigured}
+            p3SidecarChecking={p3SidecarChecking}
             sampleRate={manualSampleRate}
             setSampleRate={setManualSampleRate}
             maxSampleRateHz={manualMaxRateHz}
@@ -1496,6 +1560,8 @@ interface ManualModeProps {
   protocol: ProtocolChoice; setProtocol: (v: ProtocolChoice) => void;
   p3Available: boolean;
   p3Checking: boolean;
+  p3SidecarConfigured: boolean | null;
+  p3SidecarChecking: boolean;
   sampleRate: SampleRate; setSampleRate: (v: SampleRate) => void;
   maxSampleRateHz: number;
   board: BoardKind; setBoard: (v: BoardKind) => void;
@@ -1528,8 +1594,15 @@ const fieldLabelStyle: React.CSSProperties = {
 };
 
 function ManualMode(p: ManualModeProps) {
-  const p3Disabled = !p.p3Available || p.p3Checking || p.inflight;
+  const p3SidecarUnavailable = p.p3SidecarConfigured === false;
+  const p3Disabled = !p.p3Available || p.p3Checking || p.p3SidecarChecking || p3SidecarUnavailable || p.inflight;
   const canConnect = !p.inflight && (p.protocol !== 'P3' || (!p3Disabled && p.p3Available));
+  const p3Title = protocol3ConnectTitle(
+    p.p3Available,
+    p.p3Checking,
+    p.p3SidecarConfigured,
+    p.p3SidecarChecking,
+  );
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div
@@ -1604,11 +1677,7 @@ function ManualMode(p: ManualModeProps) {
                 cursor: p3Disabled ? 'not-allowed' : 'pointer',
               }}
               title={
-                p.p3Checking
-                  ? 'Checking for p3app on this radio...'
-                  : p.p3Available
-                    ? PROTOCOL3_CONNECT_TITLE
-                    : PROTOCOL3_UNAVAILABLE_TITLE
+                p3Title
               }
             >
               P3
@@ -1696,7 +1765,7 @@ function ManualMode(p: ManualModeProps) {
         type="button"
         onClick={p.onConnect}
         disabled={!canConnect}
-        title={p.protocol === 'P3' ? PROTOCOL3_CONNECT_TITLE : undefined}
+        title={p.protocol === 'P3' ? p3Title : undefined}
         className={`btn lg ${canConnect ? 'active' : ''}`}
         style={{ alignSelf: 'stretch' }}
       >

@@ -2299,11 +2299,15 @@ public static class ZeusEndpoints
 
             try
             {
-                var snapshot = qrm.EnqueueText(samples, req.SampleRate);
+                var snapshot = qrm.EnqueueText(samples, req.SampleRate, req.AutoTransmit);
                 log.LogInformation(
-                    "api.tx.qrm.text samples={Samples} rate={Rate} queued={Queued}",
-                    samples.Length, req.SampleRate, snapshot.TextQueued);
+                    "api.tx.qrm.text samples={Samples} rate={Rate} autoTx={AutoTx} queued={Queued}",
+                    samples.Length, req.SampleRate, req.AutoTransmit, snapshot.TextQueued);
                 return Results.Ok(snapshot);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Conflict(new { error = ex.Message });
             }
             catch (ArgumentOutOfRangeException ex)
             {

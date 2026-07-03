@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  estimateTextSpectrogramSampleCount,
   estimateTextSpectrogramDurationSec,
   renderTextSpectrogram,
   rowToFrequencyHz,
   synthesizeTextSpectrogramSamples,
 } from './text-spectrogram';
+import {
+  SIGNAL_JAMMER_TEXT_TX_MAX_SAMPLES,
+  SIGNAL_JAMMER_TEXT_TX_SAMPLE_RATE,
+} from '../state/signal-jammer-limits';
 
 describe('text-spectrogram', () => {
   it('renders typed letters into a non-empty spectrogram grid', () => {
@@ -57,5 +62,15 @@ describe('text-spectrogram', () => {
 
   it('defaults to a slower waterfall-readable writing speed', () => {
     expect(estimateTextSpectrogramDurationSec('CQ QRM')).toBeGreaterThan(10);
+  });
+
+  it('reports sample counts for frontend TX limit checks', () => {
+    const samples = estimateTextSpectrogramSampleCount(
+      'A'.repeat(32),
+      { pixelsPerSecond: 2 },
+      SIGNAL_JAMMER_TEXT_TX_SAMPLE_RATE,
+    );
+
+    expect(samples).toBeGreaterThan(SIGNAL_JAMMER_TEXT_TX_MAX_SAMPLES);
   });
 });

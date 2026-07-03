@@ -564,6 +564,28 @@ public class TxAudioIngestTests
     }
 
     [Fact]
+    public void PrimeTxDspForKeyDown_ProcessesZeroBlocksAndDiscardsIq()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        var p2Blocks = new List<float[]>();
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>(),
+            forwardP2: iq => p2Blocks.Add(iq.ToArray()));
+        ring.Write(new float[] { 0.5f, -0.5f, 0.25f, -0.25f });
+
+        bool primed = ingest.PrimeTxDspForKeyDown();
+
+        Assert.True(primed);
+        Assert.Equal(12, engine.ProcessedBlocks);
+        Assert.NotNull(engine.LastMicBlock);
+        Assert.All(engine.LastMicBlock!, sample => Assert.Equal(0f, sample));
+        Assert.Equal(0, ring.Count);
+        Assert.Empty(p2Blocks);
+    }
+
+    [Fact]
     public void RogerBeepTail_WaitsForTransportDrainBeforeClearingRing()
     {
         var engine = new StubEngine { BlockSize = 1024 };

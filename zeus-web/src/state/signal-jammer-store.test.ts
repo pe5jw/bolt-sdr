@@ -15,7 +15,7 @@ describe('signal-jammer-store', () => {
     expect(s.active).toBe(false);
   });
 
-  it('does not let QRM become active until the jammer is enabled', () => {
+  it('does not let QRM become active until TX testing tools are enabled', () => {
     useSignalJammerStore.getState().setActive(true);
     expect(useSignalJammerStore.getState().active).toBe(false);
 
@@ -24,7 +24,7 @@ describe('signal-jammer-store', () => {
     expect(useSignalJammerStore.getState().active).toBe(true);
   });
 
-  it('disabling the jammer stops active QRM and hides runtime errors', () => {
+  it('disabling TX testing tools stops active QRM and hides runtime errors', () => {
     const s = useSignalJammerStore.getState();
     s.setEnabled(true);
     s.setActive(true);
@@ -67,5 +67,8 @@ describe('signal-jammer-store', () => {
     const next = useSignalJammerStore.getState();
     expect(next.textSoundText).toBe('HELLO QRM');
     expect(next.textPixelsPerSecond).toBe(15);
+
+    s.setTextPixelsPerSecond(1);
+    expect(useSignalJammerStore.getState().textPixelsPerSecond).toBe(2);
   });
 });

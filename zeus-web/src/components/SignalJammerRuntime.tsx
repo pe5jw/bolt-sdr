@@ -54,7 +54,7 @@ export function SignalJammerRuntime() {
     ).catch((err) => {
       if (controller.signal.aborted) return;
       console.warn('signal-jammer.tx.update failed', err);
-      if (txEnabled) setRuntimeStatus('unavailable', 'TX QRM unavailable');
+      if (txEnabled) setRuntimeStatus('unavailable', 'TX test unavailable');
     });
 
     if (!enabled) {

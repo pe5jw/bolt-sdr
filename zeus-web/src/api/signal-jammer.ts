@@ -6,6 +6,7 @@
 //                         Christian Suarez (N9WAR), and contributors.
 
 import type { SignalJammerConfig } from '../state/signal-jammer-store';
+import { SIGNAL_JAMMER_TEXT_TX_MAX_SAMPLES } from '../state/signal-jammer-limits';
 
 export type SignalJammerTxSnapshot = {
   enabled: boolean;
@@ -25,6 +26,11 @@ type SignalJammerTxConfig = Pick<
   enabled: boolean;
 };
 
+type SignalJammerTextOptions = {
+  autoTransmit?: boolean;
+  signal?: AbortSignal;
+};
+
 export async function setSignalJammerTx(
   config: SignalJammerTxConfig,
   signal?: AbortSignal,
@@ -40,16 +46,21 @@ export async function setSignalJammerTx(
 export async function sendSignalJammerText(
   samples: Float32Array,
   sampleRate: number,
-  signal?: AbortSignal,
+  options: SignalJammerTextOptions = {},
 ): Promise<SignalJammerTxSnapshot> {
+  if (samples.length > SIGNAL_JAMMER_TEXT_TX_MAX_SAMPLES) {
+    throw new Error(`text audio may not exceed ${SIGNAL_JAMMER_TEXT_TX_MAX_SAMPLES} samples`);
+  }
+
   return jsonFetch('/api/tx/qrm/text', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       samplesBase64: float32ToBase64(samples),
       sampleRate,
+      autoTransmit: options.autoTransmit === true,
     }),
-    signal,
+    signal: options.signal,
   });
 }
 
