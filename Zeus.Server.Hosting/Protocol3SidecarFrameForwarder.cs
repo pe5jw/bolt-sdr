@@ -18,6 +18,7 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
     private const float DisplayFloorDb = -140.0f;
     private const int DefaultDisplayPollMs = 20;
     private const int DefaultDisplayMaxWidth = 4096;
+    private const double DefaultDisplayEdgeGuardHz = 6000.0;
     private const int DefaultAudioPollMs = 10;
     private const int MaxDisplayWidth = ushort.MaxValue;
     private const int MaxAudioFramesPerPoll = 64;
@@ -42,6 +43,7 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
     private readonly ILogger<Protocol3SidecarFrameForwarder> _log;
     private readonly int _displayPollMs;
     private readonly int _displayMaxWidth;
+    private readonly double _displayEdgeGuardHz;
     private readonly int _audioPollMs;
     private readonly bool _reverseDisplayBins;
 
@@ -95,6 +97,7 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
         _log = log;
         _displayPollMs = ResolveDisplayPollMs(configuration);
         _displayMaxWidth = ResolveDisplayMaxWidth(configuration);
+        _displayEdgeGuardHz = ResolveDisplayEdgeGuardHz(configuration);
         _audioPollMs = ResolveAudioPollMs(configuration);
         _reverseDisplayBins = ResolveReverseDisplayBins(configuration);
     }
@@ -120,6 +123,7 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
                     lastWidth = Volatile.Read(ref _lastDisplayWidth),
                     maxWidth = _displayMaxWidth,
                     lastHzPerPixel = BitConverter.Int32BitsToSingle(Volatile.Read(ref _lastDisplayHzPerPixelBits)),
+                    edgeGuardHz = _displayEdgeGuardHz,
                     reverseDisplayBins = _reverseDisplayBins,
                     pollMs = _displayPollMs,
                 },
@@ -294,6 +298,13 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
                 continue;
             }
 
+            if (_displayEdgeGuardHz > 0.0)
+            {
+                var panDb = frame.PanDb.ToArray();
+                var wfDb = frame.WfDb.ToArray();
+                ApplyDisplayEdgeGuard(panDb, wfDb, frame.HzPerPixel, _displayEdgeGuardHz);
+                frame = frame with { PanDb = panDb, WfDb = wfDb };
+            }
             _hub.Broadcast(frame);
             Interlocked.Increment(ref _displayFramesForwarded);
             Interlocked.Exchange(ref _lastDisplayFrameUnixMs, nowMs);
@@ -588,6 +599,15 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
             256,
             MaxDisplayWidth);
 
+    internal static double ResolveDisplayEdgeGuardHz(IConfiguration configuration) =>
+        DoubleSetting(
+            configuration,
+            "DisplayEdgeGuardHz",
+            "ZEUS_PROTOCOL3_FRAME_DISPLAY_EDGE_GUARD_HZ",
+            DefaultDisplayEdgeGuardHz,
+            0.0,
+            48000.0);
+
     internal static int ResolveAudioPollMs(IConfiguration configuration) =>
         IntSetting(
             configuration,
@@ -744,6 +764,57 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
         return values;
     }
 
+    internal static void ApplyDisplayEdgeGuard(
+        float[] panDb,
+        float[] wfDb,
+        float hzPerPixel,
+        double edgeGuardHz)
+    {
+        if (panDb.Length == 0 || wfDb.Length == 0) return;
+        if (!float.IsFinite(hzPerPixel) || hzPerPixel <= 0.0f) return;
+        if (!double.IsFinite(edgeGuardHz) || edgeGuardHz <= 0.0) return;
+
+        var width = Math.Min(panDb.Length, wfDb.Length);
+        if (width < 4) return;
+
+        var floorBins = (int)Math.Ceiling(edgeGuardHz / hzPerPixel);
+        floorBins = Math.Clamp(floorBins, 1, Math.Max(1, width / 10));
+        var fadeBins = Math.Min(floorBins, Math.Max(0, (width / 2) - floorBins));
+        ApplyDisplayEdgeGuard(panDb, floorBins, fadeBins);
+        ApplyDisplayEdgeGuard(wfDb, floorBins, fadeBins);
+    }
+
+    private static void ApplyDisplayEdgeGuard(float[] values, int floorBins, int fadeBins)
+    {
+        var width = values.Length;
+        var clampedFloorBins = Math.Min(floorBins, width / 2);
+        for (var offset = 0; offset < clampedFloorBins; offset++)
+        {
+            values[offset] = DisplayFloorDb;
+            values[width - 1 - offset] = DisplayFloorDb;
+        }
+
+        for (var offset = 0; offset < fadeBins; offset++)
+        {
+            var left = clampedFloorBins + offset;
+            var right = width - 1 - left;
+            if (left > right) break;
+
+            var t = (offset + 1.0) / (fadeBins + 1.0);
+            var gain = t * t * (3.0 - (2.0 * t));
+            values[left] = EdgeGuardBlend(values[left], gain);
+            if (right != left) {
+                values[right] = EdgeGuardBlend(values[right], gain);
+            }
+        }
+    }
+
+    private static float EdgeGuardBlend(float value, double gain)
+    {
+        if (!float.IsFinite(value)) return DisplayFloorDb;
+        return (float)(DisplayFloorDb + ((value - DisplayFloorDb) * gain));
+    }
+
     private static Uri Endpoint(Uri diagnosticsUrl, string path, string query)
     {
         return new UriBuilder(diagnosticsUrl)
@@ -786,6 +857,22 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
         int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
             ? Math.Clamp(parsed, min, max)
             : fallback;
+
+    private static double DoubleSetting(
+        IConfiguration configuration,
+        string key,
+        string env,
+        double fallback,
+        double min,
+        double max)
+    {
+        var value = Environment.GetEnvironmentVariable(env);
+        if (string.IsNullOrWhiteSpace(value)) value = configuration[$"Zeus:Protocol3:Sidecar:{key}"];
+        return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) &&
+            double.IsFinite(parsed)
+            ? Math.Clamp(parsed, min, max)
+            : fallback;
+    }
 
     private static bool BoolSetting(IConfiguration configuration, string key, string env, bool fallback)
     {
