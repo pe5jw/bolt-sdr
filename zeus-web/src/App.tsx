@@ -80,17 +80,21 @@ import { PsToggleButton } from './components/PsToggleButton';
 import { PaTempChip } from './components/PaTempChip';
 import { WorkspaceZoomControls } from './components/WorkspaceZoomControls';
 import { QrzStatusPill } from './components/QrzStatusPill';
+import { QrmButton } from './components/QrmButton';
 import { RogerBeepButton } from './components/RogerBeepButton';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
 import ReportProblemButton from './components/report-problem/ReportProblemButton';
 import ReportProblemModal from './components/report-problem/ReportProblemModal';
 import type { SettingsTabId } from './components/SettingsMenu';
 import { SignalIntelligenceController } from './components/SignalIntelligenceController';
+import { SignalJammerPopover } from './components/SignalJammerPopover';
+import { SignalJammerRuntime } from './components/SignalJammerRuntime';
 import { SmartNrController } from './components/SmartNrController';
 import { DspSceneDiagnosticsPublisher } from './components/DspSceneDiagnosticsPublisher';
 import { AudioPlaybackDiagnosticsPublisher } from './components/AudioPlaybackDiagnosticsPublisher';
 import { useTxAudioProfileDirtyTracker } from './state/tx-audio-profile-tracker';
 import { useEasterEggStore } from './state/easter-egg-store';
+import { useSignalJammerStore } from './state/signal-jammer-store';
 import { ThemeApplier } from './components/ThemeApplier';
 import { StartupUpdatePrompt } from './components/StartupUpdatePrompt';
 import { StepFavorites } from './components/toolbar/StepFavorites';
@@ -261,11 +265,13 @@ export default function App() {
   const topbarControlsRef = useRef<HTMLDivElement | null>(null);
   const [topbarScroll, setTopbarScroll] = useState({ canLeft: false, canRight: false });
 
-  // Hidden HARDWARE diagnostics folder — easter egg. Tapping the brand-mark
-  // lightning bolt unlocks the folder for this session (it re-locks on the next
-  // launch; counting + threshold live in easter-egg-store). Deliberately exposes
-  // no hover, cursor, or title affordance so the bolt never advertises itself.
+  // Hidden HARDWARE diagnostics + QRM jammer — easter egg. Tapping the
+  // brand-mark lightning bolt unlocks the folder and popout for this session
+  // (it re-locks on next launch; counting + threshold live in
+  // easter-egg-store). Deliberately exposes no hover, cursor, or title
+  // affordance so the bolt never advertises itself.
   const registerBoltClick = useEasterEggStore((s) => s.registerBoltClick);
+  const signalJammerEnabled = useSignalJammerStore((s) => s.enabled);
   const syncTopbarScroll = useCallback(() => {
     const el = topbarControlsRef.current;
     if (!el) return;
@@ -1210,6 +1216,12 @@ export default function App() {
               <div className="label-xs ctrl-lbl">ROGER</div>
               <RogerBeepButton />
             </div>
+            {signalJammerEnabled && (
+              <div className="ctrl-group topbar-control topbar-control--qrm">
+                <div className="label-xs ctrl-lbl">QRM</div>
+                <QrmButton />
+              </div>
+            )}
           </div>
           <button
             type="button"
@@ -1274,6 +1286,8 @@ export default function App() {
           state in the store is the single source of truth. */}
       <AudioSuiteWindow route="tx" />
       <AudioSuiteWindow route="rx" />
+      <SignalJammerPopover />
+      <SignalJammerRuntime />
 
       {/* FreeDV modem popup — floating overlay that opens when the operator
           selects FreeDV mode (see the mode-transition effect above). Mounted

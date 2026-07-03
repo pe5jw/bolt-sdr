@@ -11,15 +11,20 @@ import {
 } from './easter-egg-store';
 
 function reset() {
-  useEasterEggStore.setState({ hardwareUnlocked: false, boltClicks: 0 });
+  useEasterEggStore.setState({
+    hardwareUnlocked: false,
+    signalJammerPopoverOpen: false,
+    boltClicks: 0,
+  });
 }
 
-describe('easter-egg-store — hidden HARDWARE unlock', () => {
+describe('easter-egg-store — hidden HARDWARE and QRM unlock', () => {
   beforeEach(reset);
   afterEach(reset);
 
   it('starts locked', () => {
     expect(useEasterEggStore.getState().hardwareUnlocked).toBe(false);
+    expect(useEasterEggStore.getState().signalJammerPopoverOpen).toBe(false);
   });
 
   it('stays locked until the click threshold is reached', () => {
@@ -31,11 +36,17 @@ describe('easter-egg-store — hidden HARDWARE unlock', () => {
     // The threshold-th click unlocks.
     registerBoltClick();
     expect(useEasterEggStore.getState().hardwareUnlocked).toBe(true);
+    expect(useEasterEggStore.getState().signalJammerPopoverOpen).toBe(true);
   });
 
-  it('stays unlocked on further clicks (idempotent)', () => {
+  it('stays unlocked and toggles the QRM popout on further clicks', () => {
     const { registerBoltClick } = useEasterEggStore.getState();
-    for (let i = 0; i < HARDWARE_UNLOCK_CLICKS + 3; i++) registerBoltClick();
+    for (let i = 0; i < HARDWARE_UNLOCK_CLICKS; i++) registerBoltClick();
     expect(useEasterEggStore.getState().hardwareUnlocked).toBe(true);
+    expect(useEasterEggStore.getState().signalJammerPopoverOpen).toBe(true);
+
+    registerBoltClick();
+    expect(useEasterEggStore.getState().hardwareUnlocked).toBe(true);
+    expect(useEasterEggStore.getState().signalJammerPopoverOpen).toBe(false);
   });
 });

@@ -8,33 +8,40 @@
 
 import { create } from 'zustand';
 
-// Hidden HARDWARE diagnostics surface.
+// Hidden HARDWARE diagnostics surface and QRM test tools.
 //
 // The HARDWARE settings folder (board/DSP diagnostics) is hidden by default
 // and unlocked as an easter egg: tapping the header brand-mark lightning bolt
-// HARDWARE_UNLOCK_CLICKS times reveals it. State is intentionally in-memory
-// only — it re-locks on every launch, so a fresh session never lists the
-// folder and an accidental discovery never permanently exposes it.
+// HARDWARE_UNLOCK_CLICKS times reveals it and opens the hidden QRM jammer
+// popout. State is intentionally in-memory only — it re-locks on every launch,
+// so a fresh session never lists the folder and an accidental discovery never
+// permanently exposes it.
 
 export const HARDWARE_UNLOCK_CLICKS = 4;
 
 type EasterEggState = {
   hardwareUnlocked: boolean;
+  signalJammerPopoverOpen: boolean;
   boltClicks: number;
   // Counts a brand-mark bolt tap; unlocks HARDWARE once the click threshold is
-  // reached. No-op once already unlocked.
+  // reached. Once unlocked, the bolt toggles the QRM jammer popout.
   registerBoltClick: () => void;
+  closeSignalJammerPopover: () => void;
 };
 
 export const useEasterEggStore = create<EasterEggState>((set) => ({
   hardwareUnlocked: false,
+  signalJammerPopoverOpen: false,
   boltClicks: 0,
   registerBoltClick: () =>
     set((s) => {
-      if (s.hardwareUnlocked) return s;
+      if (s.hardwareUnlocked) {
+        return { signalJammerPopoverOpen: !s.signalJammerPopoverOpen };
+      }
       const boltClicks = s.boltClicks + 1;
       return boltClicks >= HARDWARE_UNLOCK_CLICKS
-        ? { boltClicks: 0, hardwareUnlocked: true }
+        ? { boltClicks: 0, hardwareUnlocked: true, signalJammerPopoverOpen: true }
         : { boltClicks };
     }),
+  closeSignalJammerPopover: () => set({ signalJammerPopoverOpen: false }),
 }));
