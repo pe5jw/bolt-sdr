@@ -21,4 +21,17 @@ namespace Zeus.Server;
 public interface IRxAudioSink
 {
     void Publish(in AudioFrame frame);
+
+    /// <summary>
+    /// Publish a frame that is EXEMPT from the operator's RX master mute
+    /// (<see cref="RxAudioMuteState"/>). Used ONLY for the local-monitor lane —
+    /// the Recorder plugin playing a clip back — so a muted radio still lets the
+    /// operator hear their own playback on the PC output. The DEFAULT is a no-op
+    /// so exempt audio never leaks to the WebSocket fan-out or the onboard-speaker
+    /// sinks; only <see cref="NativeAudioSink"/> (the desktop PC output the
+    /// operator hears) overrides it. Real RX audio never travels this lane — the
+    /// pipeline keeps it on <see cref="Publish"/>, which stays muted. Runs on the
+    /// DSP tick thread under the same cost model as <see cref="Publish"/>.
+    /// </summary>
+    void PublishExempt(in AudioFrame frame) { }
 }

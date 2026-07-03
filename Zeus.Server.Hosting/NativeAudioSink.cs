@@ -485,6 +485,31 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         MaybeLog();
     }
 
+    // Mute-EXEMPT publish: byte-for-byte identical to Publish EXCEPT it omits the
+    // RX master-mute early-return. DspPipelineService routes ONLY the local-monitor
+    // lane (the Recorder plugin's local clip playback) here, and ONLY while the
+    // operator is muted — so a muted radio still plays the operator's own recording
+    // on the PC output. Real RX audio is never handed to this method; it stays on
+    // Publish, which the master mute still drops. Shares the same playback ring and
+    // overrun/throughput accounting as Publish so diagnostics stay coherent.
+    public void PublishExempt(in AudioFrame frame)
+    {
+        if (frame.Channels != 1 || frame.SampleRateHz != FrameRateHz)
+            return;
+
+        var src = frame.Samples.Span;
+        int written = _ring.Write(src);
+        if (written < src.Length)
+        {
+            int dropped = src.Length - written;
+            Interlocked.Add(ref _overrunSamples, dropped);
+            Interlocked.Add(ref _overrunSamplesTotal, dropped);
+        }
+        Interlocked.Add(ref _totalSamplesIn, src.Length);
+
+        MaybeLog();
+    }
+
     // Effective prebuffer/refill cushion for a device callback of
     // <paramref name="totalFrames"/> frames: the larger of the 120 ms floor and
     // four callbacks deep, capped to leave one callback of ring headroom (a

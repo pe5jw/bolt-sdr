@@ -69,6 +69,10 @@ public class DspPipelineService : BackgroundService,
     private readonly RadioService _radio;
     private readonly StreamingHub _hub;
     private readonly IRxAudioSink[] _audioSinks;
+    // Operator RX master mute (desktop "Mute" button, issue #1252). Read once per
+    // tick so the local-monitor lane (Recorder playback) can stay audible while
+    // real RX audio is muted. Null in unit tests / non-desktop hosts => never muted.
+    private readonly RxAudioMuteState? _rxAudioMute;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<DspPipelineService> _log;
 
@@ -1267,12 +1271,14 @@ public class DspPipelineService : BackgroundService,
         FreeDvService? freeDv = null,
         Func<TxAudioIngest?>? txIngestFactory = null,
         Nr3ModelStore? nr3ModelStore = null,
-        IKiwiAudioBus? kiwiAudioBus = null)
+        IKiwiAudioBus? kiwiAudioBus = null,
+        RxAudioMuteState? rxAudioMute = null)
     {
         _radio = radio;
         _hub = hub;
         _freeDv = freeDv;
         _kiwiAudioBus = kiwiAudioBus;
+        _rxAudioMute = rxAudioMute;
         // Materialise once at construction so the per-tick fan-out is an
         // array-index loop (no enumerator allocation, no LINQ on the hot path).
         _audioSinks = audioSinks.ToArray();
@@ -1438,6 +1444,16 @@ public class DspPipelineService : BackgroundService,
     {
         for (int i = 0; i < _audioSinks.Length; i++)
             _audioSinks[i].Publish(in frame);
+    }
+
+    // Fan out a mute-EXEMPT frame (the local-monitor / Recorder-playback lane).
+    // Only NativeAudioSink honours it; every other sink inherits the interface's
+    // default no-op, so exempt playback reaches the desktop PC output but never
+    // the WebSocket fan-out or the onboard radio speakers.
+    private void PublishExemptAudio(in AudioFrame frame)
+    {
+        for (int i = 0; i < _audioSinks.Length; i++)
+            _audioSinks[i].PublishExempt(in frame);
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -5874,6 +5890,15 @@ public class DspPipelineService : BackgroundService,
         audioSampleCount = MixRxAudioN(
             audioBuf, audioSampleCount, _mixSlices.AsSpan(0, mixSliceCount),
             rx1Muted: IsReceiverMuted(state, 0));
+
+        // Operator RX master mute, read ONCE this tick so every branch below agrees.
+        // While muted, real RX audio (and CW sidetone) is published normally and the
+        // sinks drop it — the mute is preserved. The Recorder's local-monitor lane is
+        // the sole exception: it must stay audible on the PC output, so when muted we
+        // do NOT mix it into the RX frame here and instead route it, recorder-only,
+        // through the mute-exempt lane after the RX-publish block (see below).
+        bool rxAudioMuted = _rxAudioMute?.IsMuted ?? false;
+
         if (audioSampleCount > 0)
         {
             SanitizeAudioBuffer(audioBuf.AsSpan(0, audioSampleCount));
@@ -5985,7 +6010,12 @@ public class DspPipelineService : BackgroundService,
                 // plugin playing a clip back while not transmitting) into the RX
                 // block, so it reaches every sink in browser and desktop modes
                 // alike. No-op (one volatile read) when nothing is queued.
-                MixMonitorInject(audioBuf.AsSpan(0, audioSampleCount));
+                // Skipped while master-muted: the RX frame must stay pure so the
+                // mute still silences it, and the recorder is instead drained onto
+                // the mute-exempt lane below. Not skipping here would sum recorder
+                // into the RX frame that the sink then drops => recorder inaudible.
+                if (!rxAudioMuted)
+                    MixMonitorInject(audioBuf.AsSpan(0, audioSampleCount));
                 LimitRxAudioBuffer(audioBuf.AsSpan(0, audioSampleCount));
                 double finalAudioRms = Rms(audioBuf.AsSpan(0, audioSampleCount));
                 double finalAudioPeak = PeakAbs(audioBuf.AsSpan(0, audioSampleCount));
@@ -6003,7 +6033,7 @@ public class DspPipelineService : BackgroundService,
                 RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
             }
         }
-        else if (!txMonitorOn && MonitorBacklog > 0)
+        else if (!txMonitorOn && !rxAudioMuted && MonitorBacklog > 0)
         {
             // FIX 4: RX produced no audio this tick (RX1 muted, or no band audio)
             // yet a local clip is playing back through the monitor-inject ring.
@@ -6031,6 +6061,36 @@ public class DspPipelineService : BackgroundService,
                 Samples: new ReadOnlyMemory<float>(audioBuf, 0, monBlock));
             PublishAudio(in injectFrame);
         }
+
+        // RX master mute + Recorder local playback. The RX-publish block above kept
+        // the RX frame PURE (recorder was not mixed in while muted), so the sinks
+        // dropped it and the radio is genuinely muted — RX and CW sidetone silenced
+        // on the PC output and both onboard speakers, exactly as before. Now drain
+        // the monitor-inject ring into a recorder-ONLY block and publish it on the
+        // mute-EXEMPT lane so the operator still hears their own playback on the PC
+        // output. This is the SOLE monitor-ring consumer while muted (the in-frame
+        // mix and the FIX-4 drain are both gated off by rxAudioMuted), so the ring
+        // is drained exactly once per tick — no double-drain, no starvation. Like
+        // FIX 4 it deliberately does NOT fire RxAudioAvailable: the RX-capture tap
+        // (TCI / Recorder RX capture) must stay recorder-free and byte-identical.
+        if (rxAudioMuted && !txMonitorOn && MonitorBacklog > 0)
+        {
+            int monBlock = Math.Min(audioBuf.Length, MonitorInjectSilentBlockSamples);
+            Array.Clear(audioBuf, 0, monBlock);
+            MixMonitorInject(audioBuf.AsSpan(0, monBlock));
+            LimitRxAudioBuffer(audioBuf.AsSpan(0, monBlock));
+
+            var exemptFrame = new AudioFrame(
+                Seq: ++_audioSeq,
+                TsUnixMs: nowMs,
+                RxId: 0,
+                Channels: 1,
+                SampleRateHz: (uint)AudioOutputRateHz,
+                SampleCount: (ushort)monBlock,
+                Samples: new ReadOnlyMemory<float>(audioBuf, 0, monBlock));
+            PublishExemptAudio(in exemptFrame);
+        }
+
         if (txMonitorOn)
         {
             // Drain whatever the monitor RXA produced this tick. The buffer
