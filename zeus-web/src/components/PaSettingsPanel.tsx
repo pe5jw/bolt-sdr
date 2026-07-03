@@ -754,7 +754,9 @@ function OcPane(props: {
         const b = settings.bands.find((x) => x.band === bandName);
         if (!b) return null;
         const stdMask = side === 'tx' ? b.ocTx : side === 'rx' ? b.ocRx : b.ocTune;
-        const extMask = side === 'tx' ? b.ocDxTx : b.ocDxRx;
+        // Anvelina DX ext bar is TX/RX-only — there is no TUN-specific DX wire
+        // slot, so the tune tab must never read or write the DX masks.
+        const extMask = side === 'tx' ? b.ocDxTx : side === 'rx' ? b.ocDxRx : 0;
         const stdKey = side === 'tx' ? ('ocTx' as const) : side === 'rx' ? ('ocRx' as const) : ('ocTune' as const);
         const extKey = side === 'tx' ? ('ocDxTx' as const) : ('ocDxRx' as const);
         return (
