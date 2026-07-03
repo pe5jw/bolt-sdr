@@ -113,8 +113,14 @@ export function CatSerialPortsPanel() {
         a logger or digimode app at a virtual serial pair — <strong>com0com</strong> on Windows,{' '}
         <strong>socat</strong> on macOS/Linux — and enter Zeus's end of the pair below. The port
         name is free-form (<span style={{ fontFamily: 'monospace' }}>COM5</span>,{' '}
-        <span style={{ fontFamily: 'monospace' }}>/dev/cu.usbserial-1</span>); virtual pairs aren't
-        auto-listed. Changes apply immediately — no restart.
+        <span style={{ fontFamily: 'monospace' }}>/dev/cu.usbserial-1</span>,{' '}
+        <span style={{ fontFamily: 'monospace' }}>/dev/KPA500</span>) — Linux udev symlinks under{' '}
+        <span style={{ fontFamily: 'monospace' }}>/dev/</span> and{' '}
+        <span style={{ fontFamily: 'monospace' }}>/dev/serial/by-id/</span> are listed as
+        suggestions; virtual pairs aren't auto-listed. Turn on <strong>Auto Report</strong> for a
+        port when the connected device expects unsolicited frequency updates but never sends{' '}
+        <span style={{ fontFamily: 'monospace' }}>AI1;</span> (piHPSDR AutoRprt parity). Changes
+        apply immediately — no restart.
       </div>
 
       <form onSubmit={onSave} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -232,6 +238,23 @@ export function CatSerialPortsPanel() {
                   </select>
                 </label>
               </div>
+
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                title="Pre-enable AI1 when the port opens, so devices that expect unsolicited frequency updates but never send AI1; still get them (piHPSDR AutoRprt parity)."
+              >
+                <input
+                  type="checkbox"
+                  checked={port.autoReport}
+                  onChange={(e) => updatePort(i, { autoReport: e.target.checked })}
+                  style={{ accentColor: 'var(--accent)' }}
+                />
+                <span style={{ fontSize: 12, color: 'var(--fg-1)' }}>Auto Report</span>
+                <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+                  (send unsolicited frequency/state updates without waiting for{' '}
+                  <span style={{ fontFamily: 'monospace' }}>AI1;</span>)
+                </span>
+              </label>
 
               {live?.error && port.enabled && (
                 <div style={{ fontSize: 11, color: 'var(--tx)' }}>{live.error}</div>

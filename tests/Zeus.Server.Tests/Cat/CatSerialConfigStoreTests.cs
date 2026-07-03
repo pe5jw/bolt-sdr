@@ -117,4 +117,36 @@ public sealed class CatSerialConfigStoreTests : IDisposable
         store.Set(new[] { new CatSerialPortConfig(true, "COM1") });
         Assert.Equal(1, fired);
     }
+
+    [Fact]
+    public void AutoReport_RoundTripsPerPort()
+    {
+        // Per-port "Auto Report" (piHPSDR AutoRprt parity) must persist
+        // independently for each of the four slots.
+        using (var store = NewStore())
+        {
+            store.Set(new[]
+            {
+                new CatSerialPortConfig(true,  "/dev/ttys001", 115200, "None", 8, "One", AutoReport: true),
+                new CatSerialPortConfig(true,  "COM3",         115200, "None", 8, "One", AutoReport: false),
+                new CatSerialPortConfig(false, "",             115200, "None", 8, "One", AutoReport: true),
+                new CatSerialPortConfig(true,  "/dev/KPA500",  115200, "None", 8, "One", AutoReport: false),
+            });
+        }
+
+        using var reopened = NewStore();
+        var ports = reopened.Get();
+        Assert.True(ports[0].AutoReport);
+        Assert.False(ports[1].AutoReport);
+        Assert.True(ports[2].AutoReport);
+        Assert.False(ports[3].AutoReport);
+    }
+
+    [Fact]
+    public void Get_OnFreshDb_AutoReportDefaultsFalse()
+    {
+        // Default off preserves current behaviour for existing configs.
+        using var store = NewStore();
+        Assert.All(store.Get(), p => Assert.False(p.AutoReport));
+    }
 }
