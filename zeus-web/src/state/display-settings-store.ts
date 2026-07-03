@@ -477,6 +477,10 @@ export type DisplaySettingsState = {
   // full-scale (the WDSP TX analyzer reads far hotter than the RX one). On by
   // default; a manual TX window edit or scale-drag switches it off.
   txAutoRange: boolean;
+  // Protocol-2 ADC snapshot display mode. When enabled, the backend requests
+  // the bounded wideband ADC stream only while a display client is mounted and
+  // renders RX0 panadapter/waterfall as a 0-60 MHz view.
+  widebandDisplayEnabled: boolean;
   colormap: ColormapId;
   waterfallScrollSpeed: number;
   // Panadapter background overlay mode + (optional) user image. See the
@@ -536,6 +540,7 @@ export type DisplaySettingsState = {
   // Toggle TX auto-range. Turning it off restores the operator's saved TX
   // windows (mirrors setAutoRange for RX).
   setTxAutoRange: (v: boolean) => void;
+  setWidebandDisplayEnabled: (v: boolean) => Promise<void>;
   // Fit the TX windows to a frame of live TX pixels (no-op when off / empty).
   // Driven from the waterfall ingest while keyed.
   updateTxAutoRange: (pixels: Float32Array) => void;
@@ -626,6 +631,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   // fall back to the Thetis-parity fixed TX_FIXED_DB_MIN/MAX (-80..+20) window
   // via restoreSavedTxWindows().
   txAutoRange: DEFAULT_TX_AUTO_RANGE,
+  widebandDisplayEnabled: false,
   colormap: 'blue',
   waterfallScrollSpeed: initialWaterfallScrollSpeed,
   // Defaults until the server-side fetch lands (see hydrateFromServer at the
@@ -818,6 +824,33 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
       // Off restores the operator's saved TX windows (mirrors setAutoRange).
       set({ txAutoRange: false });
       get().restoreSavedTxWindows();
+    }
+  },
+  setWidebandDisplayEnabled: async (widebandDisplayEnabled) => {
+    const prev = get().widebandDisplayEnabled;
+    set({ widebandDisplayEnabled });
+    try {
+      const s = get();
+      const result = await updateDisplaySettings(
+        s.panBackground,
+        s.backgroundImageFit,
+        s.rxTraceColor,
+        s.dbMin,
+        s.dbMax,
+        s.txDbMin,
+        s.txDbMax,
+        s.wfDbMin,
+        s.wfDbMax,
+        s.wfTxDbMin,
+        s.wfTxDbMax,
+        undefined,
+        widebandDisplayEnabled,
+      );
+      if (result.widebandDisplayEnabled !== widebandDisplayEnabled) {
+        set({ widebandDisplayEnabled: result.widebandDisplayEnabled });
+      }
+    } catch {
+      set({ widebandDisplayEnabled: prev });
     }
   },
   restoreSavedTxWindows: () => {
@@ -1064,6 +1097,7 @@ async function hydrateFromServer(): Promise<void> {
     backgroundImage: server.hasImage ? displayImageUrl(Date.now()) : null,
     backgroundImageFit: server.fit,
     rxTraceColor: server.rxTraceColor,
+    widebandDisplayEnabled: server.widebandDisplayEnabled,
     ...(serverHasDbRange
       ? {
           dbMin: panRange!.min,

@@ -19,6 +19,7 @@ import { PanadapterOverlaySettingsPanel } from './PanadapterOverlaySettingsPanel
 import { SpectrumScaleSettingsPanel } from './SpectrumScaleSettingsPanel';
 import { ThemeSettingsPanel } from './ThemeSettingsPanel';
 import { TraceColorPanel } from './TraceColorPanel';
+import { WidebandDisplayPanel } from './WidebandDisplayPanel';
 
 export function DisplayPanel() {
   return (
@@ -27,6 +28,7 @@ export function DisplayPanel() {
       <BackgroundSettingsPanel />
       <TraceColorPanel />
       <PanadapterOverlaySettingsPanel />
+      <WidebandDisplayPanel />
       <SpectrumScaleSettingsPanel />
     </div>
   );

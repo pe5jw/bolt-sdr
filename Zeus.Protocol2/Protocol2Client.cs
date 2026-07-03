@@ -119,6 +119,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // 1035 (DDC0) .. 1035 + MaxRxDdc - 1 (DDC7).
     private const int RxDataPortBase = 1035;
 
+    // Protocol-2 wideband ADC snapshots arrive on source ports 1027..1034.
+    // CmdGeneral below enables ADC0 only for the display mode; the firmware
+    // emits frame-local sequence numbers 0..WidebandPacketsPerFrame-1.
+    private const int WidebandDataPortBase = 1027;
+    private const int WidebandAdcCount = 8;
+    public const int WidebandSamplesPerPacket = 512;
+    public const int WidebandPacketsPerFrame = 32;
+    public const int WidebandFrameSamples = WidebandSamplesPerPacket * WidebandPacketsPerFrame;
+    public const int WidebandAdcSampleRateHz = 122_880_000;
+    private const int WidebandPayloadBytes = WidebandSamplesPerPacket * sizeof(short);
+    private const byte WidebandUpdateRateMs = 100;
+
     // Hermes-class radios (Brick2 is the live consumer) use a single ADC
     // and have no PureSignal feedback DDCs reserved at the front of the pool.
     // The user-visible RX maps to DDC0 directly. Radio sends DDC0 IQ from
@@ -557,6 +569,17 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // source switch is a full fence against the RX thread.
     private volatile RadioMicPacketHandler? _radioMicHandler;
 
+    // ---- Wideband ADC snapshot stream (UDP 1027) --------------------------
+    // Disabled by default. When enabled, the radio sends bounded raw ADC
+    // snapshots for a full-band display; we assemble a configured group and
+    // hand it off synchronously. The handler must copy before returning.
+    private volatile WidebandFrameHandler? _widebandFrameHandler;
+    private volatile bool _widebandDisplayEnabled;
+    private readonly short[] _widebandFrameSamples = new short[WidebandFrameSamples];
+    private int _widebandPacketIndex;
+    private uint _widebandExpectedSeq;
+    private bool _widebandCollecting;
+
     /// <summary>
     /// Synchronous handler for one decoded UDP-1026 radio-mic packet. Invoked on
     /// the RX loop thread with a span over the live receive buffer — copy before
@@ -564,6 +587,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// 64 × int16 BE @ 48 kHz); decoding/re-blocking is the handler's job.
     /// </summary>
     public delegate void RadioMicPacketHandler(ReadOnlySpan<byte> packet);
+
+    /// <summary>
+    /// Synchronous handler for one assembled Protocol-2 wideband ADC snapshot.
+    /// Invoked on the RX loop thread with a span over the client's reusable
+    /// buffer — copy before returning.
+    /// </summary>
+    public delegate void WidebandFrameHandler(int adcIndex, ReadOnlySpan<short> samples, int sampleRateHz);
 
     /// <summary>
     /// Attach the radio-mic (UDP 1026) handler. Until this is set the 1026
@@ -579,6 +609,33 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     /// <summary>Detach the radio-mic handler, reverting to drop-on-RX.</summary>
     public void DetachRadioMicHandler() => _radioMicHandler = null;
+
+    public void AttachWidebandFrameHandler(WidebandFrameHandler handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        _widebandFrameHandler = handler;
+    }
+
+    public void DetachWidebandFrameHandler()
+    {
+        _widebandFrameHandler = null;
+        ResetWidebandAssembler();
+    }
+
+    public void SetWidebandDisplayEnabled(bool enabled)
+    {
+        if (_widebandDisplayEnabled == enabled) return;
+        _widebandDisplayEnabled = enabled;
+        ResetWidebandAssembler();
+        if (_rxTask is not null) SendCmdGeneral();
+    }
+
+    private void ResetWidebandAssembler()
+    {
+        _widebandPacketIndex = 0;
+        _widebandExpectedSeq = 0;
+        _widebandCollecting = false;
+    }
 
     /// <summary>
     /// Attach a synchronous RX sink. While non-null, the RX loop calls the
@@ -1724,12 +1781,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         WriteBeU16(p, 15, 1029);
         WriteBeU16(p, 17, 1035);
         WriteBeU16(p, 19, 1026);
-        WriteBeU16(p, 21, 1027);
-        p[23] = 0x00;
-        BinaryPrimitives.WriteUInt16BigEndian(p.AsSpan(24), 512);
+        WriteBeU16(p, 21, WidebandDataPortBase);
+        p[23] = _widebandDisplayEnabled ? (byte)0x01 : (byte)0x00;
+        BinaryPrimitives.WriteUInt16BigEndian(p.AsSpan(24), WidebandSamplesPerPacket);
         p[26] = 16;
-        p[27] = 0;
-        p[28] = 32;
+        p[27] = _widebandDisplayEnabled ? WidebandUpdateRateMs : (byte)0;
+        p[28] = WidebandPacketsPerFrame;
         // Matches pihpsdr new_protocol_general for ORION2/SATURN hardware.
         //
         // [37] = 0x08: pihpsdr writes this on ORION2/SATURN. The upstream
@@ -3536,14 +3593,61 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                     if (radioMic is not null && n >= 132)
                         radioMic(new ReadOnlySpan<byte>(buf, 0, n));
                 }
-                // wideband ADC0..7 (1027..1034) intentionally ignored — a
-                // separate feature.
+                else if (srcPort >= WidebandDataPortBase && srcPort < WidebandDataPortBase + WidebandAdcCount)
+                {
+                    if (_widebandDisplayEnabled && _widebandFrameHandler is not null)
+                        HandleWidebandPacket(buf, n, srcPort - WidebandDataPortBase);
+                }
             }
         }
         finally
         {
             _iqFrames.Writer.TryComplete();
         }
+    }
+
+    private void HandleWidebandPacket(byte[] buf, int n, int adcIndex)
+    {
+        // Zeus enables ADC0 only for now. Multi-ADC wideband would need either
+        // separate display panes or an explicit source selector; silently ignore
+        // any unexpected source so one radio quirk cannot corrupt ADC0 frames.
+        if (adcIndex != 0) return;
+
+        var handler = _widebandFrameHandler;
+        if (!_widebandDisplayEnabled || handler is null) return;
+        if (n < 4 + WidebandPayloadBytes)
+        {
+            ResetWidebandAssembler();
+            return;
+        }
+
+        uint seq = BinaryPrimitives.ReadUInt32BigEndian(buf.AsSpan(0, 4));
+        if (seq == 0)
+        {
+            _widebandPacketIndex = 0;
+            _widebandExpectedSeq = 0;
+            _widebandCollecting = true;
+        }
+
+        if (!_widebandCollecting || seq != _widebandExpectedSeq)
+        {
+            ResetWidebandAssembler();
+            return;
+        }
+
+        int dst = _widebandPacketIndex * WidebandSamplesPerPacket;
+        int src = 4;
+        for (int i = 0; i < WidebandSamplesPerPacket; i++, src += 2)
+            _widebandFrameSamples[dst + i] = BinaryPrimitives.ReadInt16BigEndian(buf.AsSpan(src, 2));
+
+        _widebandPacketIndex++;
+        _widebandExpectedSeq++;
+        if (_widebandPacketIndex < WidebandPacketsPerFrame) return;
+
+        _widebandCollecting = false;
+        _widebandPacketIndex = 0;
+        _widebandExpectedSeq = 0;
+        handler(adcIndex, _widebandFrameSamples, WidebandAdcSampleRateHz);
     }
 
     private void HandleDdcPacket(byte[] buf, int ddcIndex)

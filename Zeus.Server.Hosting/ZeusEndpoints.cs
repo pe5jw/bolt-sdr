@@ -2768,11 +2768,12 @@ public static class ZeusEndpoints
                 req.DbMin, req.DbMax, req.TxDbMin, req.TxDbMax,
                 req.WfDbMin, req.WfDbMax, req.WfTxDbMin, req.WfTxDbMax,
                 req.TxDisplayCalOffsetDb, req.TxDisplayFftSize,
-                req.TxDisplayWindow, req.TxDisplayAvgTauMs);
+                req.TxDisplayWindow, req.TxDisplayAvgTauMs,
+                req.WidebandDisplayEnabled);
             var saved = store.Get();
-            // Push the (validated, merged) TX display config to the running
-            // engine so the change is live without a reconnect. Display-only.
-            dsp.ApplyTxDisplaySettings(saved);
+            // Push the (validated, merged) display config to the running
+            // engine/client so the change is live without a reconnect.
+            dsp.ApplyDisplaySettings(saved);
             return Results.Ok(saved);
         });
 

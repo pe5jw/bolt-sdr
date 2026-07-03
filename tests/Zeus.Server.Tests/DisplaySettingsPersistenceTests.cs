@@ -51,6 +51,7 @@ public class DisplaySettingsPersistenceTests : IDisposable
         Assert.Null(dto.WfDbMax);
         Assert.Null(dto.WfTxDbMin);
         Assert.Null(dto.WfTxDbMax);
+        Assert.False(dto.WidebandDisplayEnabled);
     }
 
     [Fact]
@@ -121,6 +122,26 @@ public class DisplaySettingsPersistenceTests : IDisposable
         var dto = store.Get();
         Assert.Equal(-120, dto.DbMin);
         Assert.Equal(-40, dto.DbMax);
+    }
+
+    [Fact]
+    public void SaveMode_WidebandDisplayEnabled_PersistsAndNullPreserves()
+    {
+        using (var store = BuildStore())
+        {
+            store.SaveMode("basic", "fill", "#FFA028", widebandDisplayEnabled: true);
+        }
+
+        using (var update = BuildStore())
+        {
+            update.SaveMode("beam-map", "fit", "#FF8800");
+        }
+
+        using var check = BuildStore();
+        var dto = check.Get();
+        Assert.True(dto.WidebandDisplayEnabled);
+        Assert.Equal("beam-map", dto.Mode);
+        Assert.Equal("fit", dto.Fit);
     }
 
     // Regression for the "white waterfall" symptom: dragging the waterfall dB

@@ -75,6 +75,7 @@ function resetStore() {
     wfTxDbMin: TX_FIXED_DB_MIN,
     wfTxDbMax: TX_FIXED_DB_MAX,
     waterfallScrollSpeed: DEFAULT_WF_SCROLL_SPEED,
+    widebandDisplayEnabled: false,
   });
 }
 
@@ -94,6 +95,22 @@ describe('display-settings-store', () => {
     const { dbMin, dbMax } = useDisplaySettingsStore.getState();
     expect(dbMin).toBe(FIXED_DB_MIN);
     expect(dbMax).toBe(FIXED_DB_MAX);
+  });
+
+  it('persists the wideband display toggle', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({ widebandDisplayEnabled: true }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await useDisplaySettingsStore.getState().setWidebandDisplayEnabled(true);
+      expect(useDisplaySettingsStore.getState().widebandDisplayEnabled).toBe(true);
+      const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? '{}'));
+      expect(body.widebandDisplayEnabled).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('snaps back to fixed range when turned off', () => {

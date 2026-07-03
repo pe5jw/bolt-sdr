@@ -2306,7 +2306,8 @@ public sealed record DisplaySettingsDto(
     double? TxDisplayCalOffsetDb = null,
     int? TxDisplayFftSize = null,
     int? TxDisplayWindow = null,
-    double? TxDisplayAvgTauMs = null);
+    double? TxDisplayAvgTauMs = null,
+    bool WidebandDisplayEnabled = false);
 
 public sealed record DisplaySettingsSetRequest(
     string Mode,
@@ -2323,7 +2324,8 @@ public sealed record DisplaySettingsSetRequest(
     double? TxDisplayCalOffsetDb = null,
     int? TxDisplayFftSize = null,
     int? TxDisplayWindow = null,
-    double? TxDisplayAvgTauMs = null);
+    double? TxDisplayAvgTauMs = null,
+    bool? WidebandDisplayEnabled = null);
 
 // Server-side mirror of the frontend Signal Intelligence weak-signal display
 // controls. The DSP math remains in zeus-web's signal-estimator; this DTO lets
