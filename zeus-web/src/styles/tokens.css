@@ -260,6 +260,15 @@ html[data-fonts="geist"] { --font-sans: 'Inter', sans-serif; --font-mono: 'JetBr
    the runtime <style> tag injected by ThemeApplier, so per-token
    tweaks survive a theme flip. */
 :root[data-theme="light"] {
+  /* Flip the UA color-scheme so native controls (native <select>
+     dropdowns, scrollbars, etc.) render against the light palette.
+     Without this, Firefox on Linux hands <select> painting to GTK
+     which uses the dark palette from `:root { color-scheme: dark }`
+     even when our CSS sets a light `background` — result was black
+     background + dark text on the Variant / Connect / AGC selects
+     under Light Theme. */
+  color-scheme: light;
+
   /* Chassis surfaces — cool silver, never washed-out white */
   --bg-app:       #b8bcc3;
   --bg-workspace: #b8bcc3;
