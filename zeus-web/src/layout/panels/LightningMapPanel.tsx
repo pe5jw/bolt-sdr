@@ -34,6 +34,11 @@ import 'leaflet/dist/leaflet.css';
 import './LightningMapPanel.css';
 import { useWorkspace } from '../WorkspaceContext';
 import { distanceKm } from '../../components/design/geo';
+import {
+  countLightningAlertStrikes,
+  pruneLightningAlertHistory,
+  type LightningAlertStrike,
+} from './lightning-alert';
 
 // CARTO dark basemap — free, no key, near-black land/ocean that lets the
 // amber strikes pop. Same family of tiles the public lightning viewers use.
@@ -238,9 +243,9 @@ export function LightningMapPanel() {
   const rateRef = useRef<number[]>([]);
   const homeLayerRef = useRef<L.LayerGroup | null>(null);
   const alertLayerRef = useRef<L.LayerGroup | null>(null);
-  // Receipt timestamps for in-radius strikes — drives the proximity alert,
-  // pruned to the configured window each stats tick.
-  const nearRef = useRef<number[]>([]);
+  // Recent alert candidate strikes. Coordinates are kept so a radius/QTH change
+  // re-counts against the current settings instead of stale wider settings.
+  const nearRef = useRef<LightningAlertStrike[]>([]);
   const prevAlertingRef = useRef(false);
 
   const [conn, setConn] = useState<ConnState>('connecting');
@@ -382,7 +387,7 @@ export function LightningMapPanel() {
       const cfg = alertCfgRef.current;
       const home = homeRef.current;
       if (cfg.enabled && home && distanceKm(home.lat, home.lon, lat, lon) <= cfg.radiusKm) {
-        nearRef.current.push(now);
+        nearRef.current.push({ lat, lon, t: now });
       }
     };
 
@@ -554,15 +559,16 @@ export function LightningMapPanel() {
         // the count to the threshold. Latches on/off purely from the live count
         // so it clears on its own once the cell moves off or quiets down.
         const cfg = alertCfgRef.current;
-        const near = nearRef.current;
         const winMs = cfg.windowMin * 60_000;
         const winCutoff = now - winMs;
-        let nDrop = 0;
-        while (nDrop < near.length && near[nDrop]! < winCutoff) nDrop += 1;
-        if (nDrop > 0) near.splice(0, nDrop);
+        const near = nearRef.current;
+        pruneLightningAlertHistory(near, winCutoff);
         const active = cfg.enabled && !!homeRef.current;
-        setNearCount(active ? near.length : 0);
-        setAlerting(active && near.length >= cfg.threshold);
+        const currentNear = active
+          ? countLightningAlertStrikes(near, homeRef.current, cfg.radiusKm)
+          : 0;
+        setNearCount(currentNear);
+        setAlerting(active && currentNear >= cfg.threshold);
       }
     };
     raf = window.requestAnimationFrame(frame);
