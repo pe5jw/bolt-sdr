@@ -6018,6 +6018,31 @@ public class DspPipelineService : BackgroundService,
                 if (wf) wfSource = "rx";
             }
 
+            // Last-resort keyed source (#960 G2E freeze): on a single-ADC
+            // time-mux board (HermesC10 / ANAN-G2E) a keyed PS burst diverts
+            // the board's ONLY DDC to feedback, starving the RX analyzer, and
+            // at RX rates ≥ 192k the TX display analyzer never opened (TXA DSP
+            // rate below the span) — so every source above returns stale and
+            // the panadapter/waterfall freeze for the whole transmission. The
+            // PS-feedback analyzer is fed by the burst itself (the actual
+            // post-PA on-air signal), making it the board's one live spectrum
+            // while keyed. Ordering keeps every other board byte-identical: a
+            // dual-ADC radio's RX analyzer stays fresh during TX and wins
+            // above; this fires only when nothing else produced pixels.
+            if (_keyed && _appliedPsEnabled)
+            {
+                if (!pan)
+                {
+                    pan = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Panadapter, panBuf);
+                    if (pan) { panSource = "ps-feedback"; psFbPanUsed = true; }
+                }
+                if (!wf)
+                {
+                    wf = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+                    if (wf) { wfSource = "ps-feedback"; psFbWfUsed = true; }
+                }
+            }
+
             // TX display calibration offset (Thetis TXDisplayCalOffset). Pure
             // dB shift of the transmitted-signal trace/waterfall so the operator
             // can sit the in-passband level where they want it — display-only,
