@@ -607,6 +607,36 @@ internal static class PacketParser
     }
 
     /// <summary>
+    /// Extract the 72 codec mic / line-in samples (int16 big-endian) from a
+    /// standard 2-DDC EP6 packet. The mic bytes live at offsets 12..13 of every
+    /// 14-byte sample slot.
+    /// </summary>
+    public static int ExtractMicSamples2Ddc(ReadOnlySpan<byte> packet, Span<short> micOut)
+    {
+        if (packet.Length != PacketLength) return 0;
+        if (packet[0] != MetisMagic0 || packet[1] != MetisMagic1) return 0;
+        if (packet[2] != MetisTypeDataFrame) return 0;
+        if (packet[3] != MetisEp6) return 0;
+        if (micOut.Length < TwoDdcSamplesPerPacket) return 0;
+
+        int written = 0;
+        for (int frame = 0; frame < 2; frame++)
+        {
+            int frameStart = MetisHeaderLength + frame * UsbFrameLength;
+            ReadOnlySpan<byte> usb = packet.Slice(frameStart, UsbFrameLength);
+            if (usb[0] != Sync || usb[1] != Sync || usb[2] != Sync) return 0;
+
+            ReadOnlySpan<byte> payload = usb[UsbHeaderLength..];
+            for (int g = 0; g < TwoDdcSamplesPerUsbFrame; g++)
+            {
+                int off = g * TwoDdcBytesPerSlot;
+                micOut[written++] = BinaryPrimitives.ReadInt16BigEndian(payload.Slice(off + 12, 2));
+            }
+        }
+        return written;
+    }
+
+    /// <summary>
     /// Sequence gap counter state; zero-initialized.
     /// </summary>
     public struct SequenceTracker

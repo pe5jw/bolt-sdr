@@ -219,6 +219,9 @@ public sealed class PsAutoAttenuateService : BackgroundService
     private const long AutoCalMinIntervalMs = 1000;        // ≤ 1 push per second
     private long _lastAutoCalTickMs;
 
+    private static bool UsesHardenedSingleAdcPsPolicy(HpsdrBoardKind board) =>
+        board is HpsdrBoardKind.HermesC10 or HpsdrBoardKind.HermesII;
+
     public PsAutoAttenuateService(
         RadioService radio,
         TxService tx,
@@ -542,14 +545,14 @@ public sealed class PsAutoAttenuateService : BackgroundService
             return;
         }
 
-        // HermesC10 (ANAN-G2E) P1 branch — the plain P2-shaped walk with the
+        // Single-ADC Hermes-family P1 branch — the plain P2-shaped walk with the
         // P1 atten_on_Tx wire write (0..31; 0x1c C3[4:0], PTT-muxed). The
-        // G2E's native P2 side has no P1 ActiveClient and falls through to
-        // the P2 branch below. Other P1 boards have no PS feedback path and
-        // still land on skip=p2-null.
-        if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesC10 && p1 is not null)
+        // G2E's native P2 side has no P1 ActiveClient and falls through to the
+        // P2 branch below. Other P1 boards have no PS feedback path and still
+        // land on skip=p2-null.
+        if (UsesHardenedSingleAdcPsPolicy(_radio.ConnectedBoardKind) && p1 is not null)
         {
-            Tick1HermesC10P1(s, engine, p1);
+            Tick1SingleAdcP1(s, engine, p1);
             return;
         }
 
@@ -608,7 +611,7 @@ public sealed class PsAutoAttenuateService : BackgroundService
             int hl2 = _radio.ActiveClient?.Hl2TxStepAttenuationDb ?? 0;
             return Math.Clamp(hl2, Hl2TxAttnMinDb, Hl2TxAttnMaxDb);
         }
-        if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesC10
+        if (UsesHardenedSingleAdcPsPolicy(_radio.ConnectedBoardKind)
             && _radio.ActiveClient is { } c10)
         {
             return Math.Clamp(c10.PsTxAttenOnTxDb, TxAttnMinDb, TxAttnMaxDb);
@@ -829,10 +832,10 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 // runs on voice with the calibrated value; only attenuator
                 // WRITES are two-tone-scoped. Dual-ADC boards keep their
                 // shipped behaviour.
-                bool isC10 = _radio.ConnectedBoardKind == HpsdrBoardKind.HermesC10;
-                if (isC10 && !_tx.IsTwoToneOn)
+                bool hardenedSingleAdc = UsesHardenedSingleAdcPsPolicy(_radio.ConnectedBoardKind);
+                if (hardenedSingleAdc && !_tx.IsTwoToneOn)
                 {
-                    LogGate("p2.skip=c10-not-twotone (G2E servo is two-tone-only)");
+                    LogGate("p2.skip=single-adc-not-twotone (servo is two-tone-only)");
                     return;
                 }
 
@@ -865,14 +868,14 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 // shipped skip.
                 if (feedback <= 0)
                 {
-                    if (isC10 && psm.CalibrationAttempts > 0 && _currentAttnDb > TxAttnMinDb)
+                    if (hardenedSingleAdc && psm.CalibrationAttempts > 0 && _currentAttnDb > TxAttnMinDb)
                     {
                         _p2DeltaDb = -10;
                         _p2SavedAuto = s.PsAuto;
                         _p2SavedSingle = s.PsSingle;
                         engine.SetPsControl(autoCal: false, singleCal: false);
                         _log.LogInformation(
-                            "psAutoAttn.p2.monitor c10 cold-fit fb=0 info5={Cal} delta={Delta} attn={Db} — walking attenuation down (Thetis −10 dB rail)",
+                            "psAutoAttn.p2.monitor singleAdc cold-fit fb=0 info5={Cal} delta={Delta} attn={Db} — walking attenuation down (Thetis −10 dB rail)",
                             psm.CalibrationAttempts, _p2DeltaDb, _currentAttnDb);
                         _p2State = P2AutoAttState.SetNewValues;
                         return;
@@ -899,14 +902,14 @@ public sealed class PsAutoAttenuateService : BackgroundService
                     // feedback in [128,181] at _currentAttnDb — the definition
                     // of a good calibration. Dual-ADC boards keep their
                     // shipped per-step persist.
-                    if (isC10
+                    if (hardenedSingleAdc
                         && feedback >= FeedbackLowThreshold
                         && _currentAttnDb != _lastPersistedAttnDb)
                     {
                         _lastPersistedAttnDb = _currentAttnDb;
                         _radio.SetPsTxAttenuationDb(_currentAttnDb);
                         _log.LogInformation(
-                            "psAutoAttn.p2.persist c10 attn={Db} fb={Fb} — in-window calibration result persisted",
+                            "psAutoAttn.p2.persist singleAdc attn={Db} fb={Fb} — in-window calibration result persisted",
                             _currentAttnDb, feedback);
                     }
                     LogGate($"p2.skip=in-window fb={feedback} attn={_currentAttnDb}");
@@ -966,7 +969,7 @@ public sealed class PsAutoAttenuateService : BackgroundService
                     // fresh fit lands feedback in-window at this value (a
                     // completed calibration); mid-walk it surfaces the live
                     // value to the UI without touching the store.
-                    if (_radio.ConnectedBoardKind != HpsdrBoardKind.HermesC10)
+                    if (!UsesHardenedSingleAdcPsPolicy(_radio.ConnectedBoardKind))
                         _radio.SetPsTxAttenuationDb(newAttn);
                     else
                         _radio.SetPsTxAttenuationDbStateOnly(newAttn);
@@ -1007,7 +1010,7 @@ public sealed class PsAutoAttenuateService : BackgroundService
     // Once we're past Monitor we MUST complete the cycle so PS gets re-enabled —
     // the early gates at the top of Tick1 honour that by only running while
     // in Monitor.
-    private void Tick1HermesC10P1(StateDto s, IDspEngine engine, IProtocol1Client p1)
+    private void Tick1SingleAdcP1(StateDto s, IDspEngine engine, IProtocol1Client p1)
     {
         switch (_c10State)
         {

@@ -140,6 +140,7 @@ public class Protocol1ClientPsTransitionTests
     // Same framing as 1-DDC at the header level — the layouts differ only in
     // the payload below the USB header, and zero payload decodes fine.
     private static byte[] BuildValid4DdcEp6(uint seq) => BuildValid1DdcEp6(seq);
+    private static byte[] BuildValid2DdcEp6(uint seq) => BuildValid1DdcEp6(seq);
 
     private static byte[] BuildGarbageDatagram()
     {
@@ -240,6 +241,66 @@ public class Protocol1ClientPsTransitionTests
         Assert.Equal(0, client.DroppedFrames);
         // The transition window itself (drain, discard, tick re-seed) must
         // never trip the F4 stall watchdog.
+        Assert.Equal(0, Volatile.Read(ref stalls));
+
+        await client.StopAsync(CancellationToken.None);
+        await client.DisconnectAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task ArmOnLiveHermesII_StopsDrainsPreannouncesTwoDdcThenStarts()
+    {
+        using var radio = new FakeRadio();
+        using var client = new Protocol1Client { PsTransitionDrainMs = 50 };
+        client.SetBoardKind(HpsdrBoardKind.HermesII);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        int stalls = 0;
+        client.PsFeedbackStalled += () => Interlocked.Increment(ref stalls);
+
+        var (_, clientEp) = await ConnectAndStartAsync(radio, client, cts.Token);
+
+        using var feeder = new CancellationTokenSource();
+        uint preSeq = 1000;
+        var feedTask = Task.Run(async () =>
+        {
+            while (!feeder.IsCancellationRequested)
+            {
+                radio.Socket.SendTo(BuildValid1DdcEp6(preSeq++), clientEp);
+                await Task.Delay(40);
+            }
+        });
+        await WaitUntilAsync(() => client.TotalFrames > 0, TimeSpan.FromSeconds(5), "pre-arm EP6 parsed");
+
+        feeder.Cancel();
+        await feedTask;
+        int mark = radio.Count;
+
+        await client.SetPsEnabledAsync(true, cts.Token);
+        Assert.True(client.PsEnabled);
+
+        await WaitUntilAsync(
+            () => radio.Snapshot().Skip(mark).Any(p => p.Kind == PacketKind.Start),
+            TimeSpan.FromSeconds(5), "start command after transition");
+
+        var window = radio.Snapshot().Skip(mark).ToList();
+        int firstStop = window.FindIndex(p => p.Kind == PacketKind.Stop);
+        int preAnnounce = window.FindIndex(p =>
+            p.Kind == PacketKind.Ep2Data && ConfigNumRxMinusOne(p.Raw).Contains(1));
+        int firstStart = window.FindIndex(p => p.Kind == PacketKind.Start);
+        Assert.True(firstStop >= 0, "no stop observed");
+        Assert.True(preAnnounce > firstStop,
+            $"numRx=1 pre-announce must follow the stop (stop@{firstStop}, preannounce@{preAnnounce})");
+        Assert.True(firstStart > preAnnounce,
+            $"start must follow the pre-announce (preannounce@{preAnnounce}, start@{firstStart})");
+        Assert.DoesNotContain(
+            window.Skip(preAnnounce).Take(firstStart - preAnnounce).Where(p => p.Kind == PacketKind.Ep2Data),
+            p => ConfigNumRxMinusOne(p.Raw).Contains(0));
+
+        for (uint s = 2000; s < 2005; s++)
+            radio.Socket.SendTo(BuildValid2DdcEp6(s), clientEp);
+        await WaitUntilAsync(() => client.PsPairedPacketCount >= 3, TimeSpan.FromSeconds(5), "post-arm 2-DDC parsed");
+        Assert.Equal(0, client.DroppedFrames);
         Assert.Equal(0, Volatile.Read(ref stalls));
 
         await client.StopAsync(CancellationToken.None);
@@ -397,6 +458,39 @@ public class Protocol1ClientPsTransitionTests
             $"pre-announce must precede the first start (preannounce@{preAnnounce}, start@{firstStart})");
         // No restart transition on a connect-while-armed: never a stop after
         // the stream started.
+        int lastStop = all.FindLastIndex(p => p.Kind == PacketKind.Stop);
+        Assert.True(lastStop < firstStart,
+            $"no stop may follow the start — that would be a live transition (start@{firstStart}, stop@{lastStop})");
+
+        await client.StopAsync(CancellationToken.None);
+        await client.DisconnectAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task ConnectWhileArmed_HermesII_PreannouncesTwoDdcBeforeStart_NoTransition()
+    {
+        using var radio = new FakeRadio();
+        using var client = new Protocol1Client { PsTransitionDrainMs = 50 };
+        client.SetBoardKind(HpsdrBoardKind.HermesII);
+        client.SetPsEnabled(true);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var (_, clientEp) = await ConnectAndStartAsync(radio, client, cts.Token);
+        radio.Socket.SendTo(BuildValid2DdcEp6(0), clientEp);
+        radio.Socket.SendTo(BuildValid2DdcEp6(1), clientEp);
+        await WaitUntilAsync(() => client.PsPairedPacketCount >= 2, TimeSpan.FromSeconds(5),
+            "2-DDC packets parsed from the first packet");
+
+        var all = radio.Snapshot();
+        int hygieneStop = all.FindIndex(p => p.Kind == PacketKind.Stop);
+        int preAnnounce = all.FindIndex(p =>
+            p.Kind == PacketKind.Ep2Data && ConfigNumRxMinusOne(p.Raw).Contains(1));
+        int firstStart = all.FindIndex(p => p.Kind == PacketKind.Start);
+        Assert.True(preAnnounce >= 0, "no numRx=1 pre-announce before start");
+        Assert.True(hygieneStop >= 0 && hygieneStop < preAnnounce,
+            $"connect-hygiene stop must precede the pre-announce (stop@{hygieneStop}, preannounce@{preAnnounce})");
+        Assert.True(firstStart > preAnnounce,
+            $"pre-announce must precede the first start (preannounce@{preAnnounce}, start@{firstStart})");
         int lastStop = all.FindLastIndex(p => p.Kind == PacketKind.Stop);
         Assert.True(lastStop < firstStart,
             $"no stop may follow the start — that would be a live transition (start@{firstStart}, stop@{lastStop})");
@@ -711,6 +805,46 @@ public class Protocol1ClientPsTransitionTests
         Assert.True(client.Ps4DdcSyncFailCount > 0, "sync-fail counter must be visible");
 
         // Latched: keep flooding well past another stall window — no re-fire.
+        await Task.Delay(700, cts.Token);
+        Assert.Equal(1, Volatile.Read(ref stalls));
+
+        feeder.Cancel();
+        await feedTask;
+        await client.StopAsync(CancellationToken.None);
+        await client.DisconnectAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Watchdog_HermesII_FiresOnce_WhenDatagramsArriveButNothingParses()
+    {
+        using var radio = new FakeRadio();
+        using var client = new Protocol1Client
+        {
+            PsStallTimeoutMs = 300,
+            StartHandshakeTimeoutMs = 100,
+        };
+        client.SetBoardKind(HpsdrBoardKind.HermesII);
+        client.SetPsEnabled(true);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        int stalls = 0;
+        client.PsFeedbackStalled += () => Interlocked.Increment(ref stalls);
+
+        var (_, clientEp) = await ConnectAndStartAsync(radio, client, cts.Token);
+
+        using var feeder = new CancellationTokenSource();
+        var feedTask = Task.Run(async () =>
+        {
+            while (!feeder.IsCancellationRequested)
+            {
+                radio.Socket.SendTo(BuildGarbageDatagram(), clientEp);
+                await Task.Delay(20);
+            }
+        });
+
+        await WaitUntilAsync(() => Volatile.Read(ref stalls) >= 1, TimeSpan.FromSeconds(5), "watchdog fired");
+        Assert.True(client.Ps4DdcSyncFailCount > 0, "sync-fail counter must be visible");
+
         await Task.Delay(700, cts.Token);
         Assert.Equal(1, Volatile.Read(ref stalls));
 

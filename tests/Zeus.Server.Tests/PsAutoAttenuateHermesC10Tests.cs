@@ -16,20 +16,23 @@
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Reflection;
 using Zeus.Contracts;
 using Zeus.Dsp;
 using Zeus.Protocol1;
+using Zeus.Protocol2;
 using Zeus.Server;
 
 namespace Zeus.Server.Tests;
 
 /// <summary>
-/// HermesC10 (ANAN-G2E) P1 auto-attenuate — the <c>Tick1HermesC10P1</c>
+/// Single-ADC P1 auto-attenuate — the single-ADC P1
 /// dance driven through the REAL <see cref="PsAutoAttenuateService.Tick1"/>
 /// gate + dispatch chain, against a real (constructed, never connected — no
 /// socket I/O) <see cref="Protocol1Client"/> so the wire value lands in the
-/// same atten_on_Tx plumbing the radio reads. Covers: board dispatch (C10
-/// dances, every other P1 board still skips), the plain mi0bot walk math
+/// same atten_on_Tx plumbing the radio reads. Covers: board dispatch (the
+/// supported single-ADC P1 boards dance, every other P1 board still skips),
+/// the plain mi0bot walk math
 /// (tooHot / tooQuiet, full-ddB step), the 0..31 clamps, the
 /// AutoAttenuate-off skip, the fb-zero skip (deliberately NO
 /// stall-acquisition walk — fb-zero recovery is the operator's manual
@@ -39,7 +42,7 @@ namespace Zeus.Server.Tests;
 ///
 /// Also pins the GH #426 engine-arm guard
 /// (<see cref="DspPipelineService.P1PsEngineArmSupported"/>) board-by-board:
-/// HermesC10 now arms the engine; every other P1 board still skips.
+/// HermesC10 and HermesII now arm the engine; every other P1 board still skips.
 /// </summary>
 public class PsAutoAttenuateHermesC10Tests : IDisposable
 {
@@ -80,6 +83,21 @@ public class PsAutoAttenuateHermesC10Tests : IDisposable
         }
     }
 
+    private sealed class P2Harness : IDisposable
+    {
+        public RadioService Radio = null!;
+        public TxService Tx = null!;
+        public Protocol2Client Client = null!;
+        public FakePsEngine Engine = null!;
+        public PsAutoAttenuateService Svc = null!;
+
+        public void Dispose()
+        {
+            Client.Dispose();
+            Radio.Dispose();
+        }
+    }
+
     private Harness Build(HpsdrBoardKind board)
     {
         var loggerFactory = NullLoggerFactory.Instance;
@@ -108,12 +126,45 @@ public class PsAutoAttenuateHermesC10Tests : IDisposable
         return new Harness { Radio = radio, Tx = tx, Client = client, Engine = engine, Svc = svc };
     }
 
+    private P2Harness BuildP2(HpsdrBoardKind board)
+    {
+        var loggerFactory = NullLoggerFactory.Instance;
+        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath);
+        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath + ".pa");
+        var psStore = new PsSettingsStore(NullLogger<PsSettingsStore>.Instance, _dbPath + ".ps");
+        var radio = new RadioService(
+            loggerFactory, dspStore, paStore,
+            filterPresetStore: null, txIqSource: null,
+            preferredRadioStore: null, psStore: psStore);
+
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        var engine = new FakePsEngine();
+        var pipe = new TestPipeline(radio, hub, loggerFactory, engine);
+        var tx = new TxService(radio, pipe, hub, NullBandPlanService.Instance, new NullLogger<TxService>());
+        var svc = new PsAutoAttenuateService(radio, tx, pipe, NullLogger<PsAutoAttenuateService>.Instance);
+        var p2 = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
+        p2.SetBoardKind(board);
+        pipe.SetP2ClientForTest(p2);
+        radio.MarkProtocol2Connected("127.0.0.1:1024", 48_000, p2, board);
+        radio.ApplyPsHwPeakForConnection(isProtocol2: true, board);
+
+        return new P2Harness { Radio = radio, Tx = tx, Client = p2, Engine = engine, Svc = svc };
+    }
+
     // Arm PS (auto-cal mode, the operator default), key MOX, and start the
     // two-tone generator — the G2E servo is two-tone-only (piHPSDR parity),
     // so every dance test must run inside the deliberate calibration window.
     // Then clear any engine calls the arm path recorded so the assertions
     // see the dance bracket alone.
     private static void ArmAndKey(Harness h)
+    {
+        h.Radio.SetPs(new PsControlSetRequest(Enabled: true, Auto: true, Single: false));
+        Assert.True(h.Tx.TrySetMox(true, out var err), $"TrySetMox failed: {err}");
+        h.Tx.SetTwoToneOn(true);
+        h.Engine.PsControlCalls.Clear();
+    }
+
+    private static void ArmAndKey(P2Harness h)
     {
         h.Radio.SetPs(new PsControlSetRequest(Enabled: true, Auto: true, Single: false));
         Assert.True(h.Tx.TrySetMox(true, out var err), $"TrySetMox failed: {err}");
@@ -143,15 +194,31 @@ public class PsAutoAttenuateHermesC10Tests : IDisposable
         Assert.Equal(new[] { (false, false), (true, false) }, h.Engine.PsControlCalls);
     }
 
+    [Fact]
+    public void HermesIIBoard_HotFeedback_DancesAndWiresAttenOnTx()
+    {
+        using var h = Build(HpsdrBoardKind.HermesII);
+        h.Client.SetPsTxAttenOnTxDb(10);
+        ArmAndKey(h);
+        h.Engine.Meters = Meters(250, calibrationAttempts: 1);
+
+        h.Svc.Tick1();
+        h.Svc.Tick1();
+        h.Svc.Tick1();
+
+        Assert.Equal(14, h.Client.PsTxAttenOnTxDb);
+        Assert.Equal(14, h.Radio.Snapshot().PsTxFeedbackAttenuationDb);
+        Assert.Equal(new[] { (false, false), (true, false) }, h.Engine.PsControlCalls);
+    }
+
     [Theory]
     [InlineData(HpsdrBoardKind.Metis)]
     [InlineData(HpsdrBoardKind.Hermes)]
-    [InlineData(HpsdrBoardKind.HermesII)]
     [InlineData(HpsdrBoardKind.Angelia)]
     [InlineData(HpsdrBoardKind.Orion)]
-    public void NonC10P1Board_HotFeedback_StillSkips(HpsdrBoardKind board)
+    public void UnsupportedP1Board_HotFeedback_StillSkips(HpsdrBoardKind board)
     {
-        // Every other P1 board has no PS feedback attenuator: the dispatch
+        // Every unsupported P1 board has no PS feedback attenuator: the dispatch
         // must fall through to the P2 branch and land on skip=p2-null (no
         // P2 client here) — no engine bracket, no wire write, no persist.
         using var h = Build(board);
@@ -376,6 +443,60 @@ public class PsAutoAttenuateHermesC10Tests : IDisposable
         Assert.Equal(6, h.Radio.GetPersistedPsTxAttnDb());
     }
 
+    [Fact]
+    public void P2HermesII_VoiceMoxWithoutTwoTone_SkipsDance()
+    {
+        using var h = BuildP2(HpsdrBoardKind.HermesII);
+        h.Client.SetTxAttenuationDb(10);
+        ArmAndKey(h);
+        h.Tx.SetTwoToneOn(false);
+        h.Engine.Meters = Meters(250, calibrationAttempts: 1);
+
+        h.Svc.Tick1();
+        h.Svc.Tick1();
+
+        Assert.Equal((byte)10, h.Client.TxStepAttnDb);
+        Assert.Empty(h.Engine.PsControlCalls);
+    }
+
+    [Fact]
+    public void P2HermesII_ColdFits_WalkDownTheMinusTenRail()
+    {
+        using var h = BuildP2(HpsdrBoardKind.HermesII);
+        h.Client.SetTxAttenuationDb(31);
+        ArmAndKey(h);
+
+        h.Engine.Meters = Meters(0, calibrationAttempts: 1);
+        h.Svc.Tick1();
+        h.Svc.Tick1();
+        h.Svc.Tick1();
+
+        Assert.Equal((byte)21, h.Client.TxStepAttnDb);
+        Assert.Equal(21, h.Radio.Snapshot().PsTxFeedbackAttenuationDb);
+        Assert.Null(h.Radio.GetPersistedPsTxAttnDb());
+        Assert.Equal(new[] { (false, false), (true, false) }, h.Engine.PsControlCalls);
+    }
+
+    [Fact]
+    public void P2HermesII_PersistsOnlyInWindowCalibrationResults_NeverMidWalk()
+    {
+        using var h = BuildP2(HpsdrBoardKind.HermesII);
+        h.Client.SetTxAttenuationDb(10);
+        ArmAndKey(h);
+
+        h.Engine.Meters = Meters(100, calibrationAttempts: 1);
+        h.Svc.Tick1();
+        h.Svc.Tick1();
+        h.Svc.Tick1();
+        Assert.Equal((byte)6, h.Client.TxStepAttnDb);
+        Assert.Equal(6, h.Radio.Snapshot().PsTxFeedbackAttenuationDb);
+        Assert.Null(h.Radio.GetPersistedPsTxAttnDb());
+
+        h.Engine.Meters = Meters(150, calibrationAttempts: 2);
+        h.Svc.Tick1();
+        Assert.Equal(6, h.Radio.GetPersistedPsTxAttnDb());
+    }
+
     // ---- Mid-dance recovery ---------------------------------------------------
 
     [Fact]
@@ -405,17 +526,17 @@ public class PsAutoAttenuateHermesC10Tests : IDisposable
     [Theory]
     [InlineData(HpsdrBoardKind.HermesLite2, true)]
     [InlineData(HpsdrBoardKind.HermesC10, true)]    // the G2E carve-out under test
+    [InlineData(HpsdrBoardKind.HermesII, true)]     // ANAN-10E two-DDC PS path
     [InlineData(HpsdrBoardKind.Metis, false)]
     [InlineData(HpsdrBoardKind.Hermes, false)]
-    [InlineData(HpsdrBoardKind.HermesII, false)]
     [InlineData(HpsdrBoardKind.Angelia, false)]
     [InlineData(HpsdrBoardKind.Orion, false)]
     [InlineData(HpsdrBoardKind.OrionMkII, false)]
-    public void P1PsEngineArmSupported_CarvesOutOnlyHl2AndC10(HpsdrBoardKind board, bool expected)
+    public void P1PsEngineArmSupported_CarvesOutOnlySupportedP1Boards(HpsdrBoardKind board, bool expected)
     {
         // GH #426: arming WDSP PS on a P1 board with no feedback path parks
-        // calcc in COLLECT and freezes RX audio + waterfall. Only HL2 and
-        // HermesC10 deliver the 4-DDC paired layout; everyone else skips.
+        // calcc in COLLECT and freezes RX audio + waterfall. Only boards with
+        // a proven paired feedback layout arm WDSP PS.
         Assert.Equal(expected, DspPipelineService.P1PsEngineArmSupported(p1Connected: true, board));
     }
 
@@ -428,6 +549,26 @@ public class PsAutoAttenuateHermesC10Tests : IDisposable
             p1Connected: false, HpsdrBoardKind.OrionMkII));
         Assert.True(DspPipelineService.P1PsEngineArmSupported(
             p1Connected: false, HpsdrBoardKind.Hermes));
+    }
+
+    [Theory]
+    [InlineData(HpsdrBoardKind.HermesC10, 48_000, true)]
+    [InlineData(HpsdrBoardKind.HermesII, 96_000, true)]
+    [InlineData(HpsdrBoardKind.HermesLite2, 48_000, false)]
+    [InlineData(HpsdrBoardKind.Hermes, 384_000, false)]
+    public void P1PsFeedbackRateOverride_ScopedToHermesFamilySingleAdcBoards(
+        HpsdrBoardKind board,
+        int wireRateHz,
+        bool expectedCall)
+    {
+        var calls = new List<int>();
+
+        DspPipelineService.ApplyP1PsFeedbackRateOverride(board, wireRateHz, calls.Add);
+
+        if (expectedCall)
+            Assert.Equal(new[] { wireRateHz }, calls);
+        else
+            Assert.Empty(calls);
     }
 
     // ---- Test doubles ----------------------------------------------------------
@@ -514,5 +655,12 @@ public class PsAutoAttenuateHermesC10Tests : IDisposable
         FakePsEngine engine) : DspPipelineService(radio, hub, Array.Empty<IRxAudioSink>(), logs)
     {
         public override IDspEngine CurrentEngine => engine;
+
+        public void SetP2ClientForTest(Protocol2Client client)
+        {
+            var field = typeof(DspPipelineService).GetField("_p2Client", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(field);
+            field!.SetValue(this, client);
+        }
     }
 }

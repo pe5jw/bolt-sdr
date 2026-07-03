@@ -3534,18 +3534,15 @@ public class DspPipelineService : BackgroundService,
             _radio.ActiveClient?.SetHl2TxStepAttenuationDb(clamped);
             _radio.SetPsTxAttenuationDb(clamped);
         }
-        else if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesC10
-                 && _radio.ActiveClient is { } c10P1)
+        else if ((_radio.ConnectedBoardKind is HpsdrBoardKind.HermesC10 or HpsdrBoardKind.HermesII)
+                 && _radio.ActiveClient is { } singleAdcP1)
         {
-            // HermesC10 (ANAN-G2E) on Protocol 1: the classic-Hermes gateware
+            // HermesC10 / HermesII on Protocol 1: the Hermes-family gateware
             // muxes atten_on_Tx (0..31 dB) onto the step attenuator while
-            // FPGA_PTT, protecting the relay-routed PS feedback tap from
-            // clipping the ADC. Carried in C3[4:0] of the PS-armed rotation's
-            // 0x1c frame (board-branched in ControlFrame). The G2E's P2 side
-            // (native Saturn path) has no P1 ActiveClient and falls through
-            // to the P2 branch below.
+            // FPGA_PTT. Carried in C3[4:0] of the PS-armed rotation's 0x1c
+            // frame (board-branched in ControlFrame).
             int clamped = Math.Clamp(db, 0, 31);
-            c10P1.SetPsTxAttenOnTxDb(clamped);
+            singleAdcP1.SetPsTxAttenOnTxDb(clamped);
             _radio.SetPsTxAttenuationDb(clamped);
         }
         else
@@ -3587,16 +3584,16 @@ public class DspPipelineService : BackgroundService,
         // Seed the operator's persisted TX display config before TXA opens so
         // the analyzer comes up at their FFT/window/smoothing. Display-only.
         SeedTxDisplayConfig(wdsp);
-        // G2E (HermesC10) P1: PS feedback rides the 4-DDC EP6 stream at the
-        // WIRE rate — all P1 DDCs share the single global rate — not the
-        // fixed 192 kHz of the P2 paired-DDC scheme. Tell WDSP the truth
+        // Hermes-family single-ADC P1 boards feed PS back at the WIRE rate:
+        // G2E (HermesC10) via its 4-DDC EP6 stream, ANAN-10E (HermesII) via
+        // its 2-DDC EP6 stream. All P1 DDCs share the single global rate, not
+        // the fixed 192 kHz of the P2 paired-DDC scheme. Tell WDSP the truth
         // BEFORE TXA opens (SetPSFeedbackRate latches at open) or calcc's
-        // delay/sample math runs 4× off at 48 kHz and the fit never
+        // delay/sample math runs 4x off at 48 kHz and the fit never
         // converges. piHPSDR model (receiver.c:1590-1596). P1 rate changes
         // rebuild the engine through this same path, so the value tracks.
         // HL2 keeps the shipped 192 kHz default untouched.
-        if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesC10)
-            wdsp.SetPsFeedbackRateHz(rate);
+        ApplyP1PsFeedbackRateOverride(_radio.ConnectedBoardKind, rate, wdsp.SetPsFeedbackRateHz);
         // P1 DAC runs at 48 kHz; keep TXA at the 48/48/48 profile Hermes is
         // calibrated against.
         wdsp.OpenTxChannel(outputRateHz: 48_000);
@@ -3651,7 +3648,7 @@ public class DspPipelineService : BackgroundService,
         {
             _radio.ActiveClient?.SetHl2TxStepAttenuationDb(hl2Attn);
         }
-        else if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesC10
+        else if ((_radio.ConnectedBoardKind is HpsdrBoardKind.HermesC10 or HpsdrBoardKind.HermesII)
             && _radio.GetPersistedPsTxAttnDb() is int c10Attn)
         {
             _radio.ActiveClient?.SetPsTxAttenOnTxDb(c10Attn);
@@ -4265,7 +4262,17 @@ public class DspPipelineService : BackgroundService,
     internal static bool P1PsEngineArmSupported(bool p1Connected, HpsdrBoardKind board) =>
         !p1Connected
         || board == HpsdrBoardKind.HermesLite2
-        || board == HpsdrBoardKind.HermesC10;
+        || board == HpsdrBoardKind.HermesC10
+        || board == HpsdrBoardKind.HermesII;
+
+    internal static void ApplyP1PsFeedbackRateOverride(
+        HpsdrBoardKind board,
+        int wireRateHz,
+        Action<int> setPsFeedbackRateHz)
+    {
+        if (board is HpsdrBoardKind.HermesC10 or HpsdrBoardKind.HermesII)
+            setPsFeedbackRateHz(wireRateHz);
+    }
 
     // ---- PS arm/disarm worker (#1302 F1/F6) --------------------------------
     // Single-flight FIFO chain: each request runs strictly after the previous

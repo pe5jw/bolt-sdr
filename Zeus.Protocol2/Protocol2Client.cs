@@ -269,12 +269,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private byte? _txAttnBeforePsSeed;
     // True once ANY caller has explicitly written the TX step attenuation via
     // SetTxAttenuationDb — operator control, the auto-attenuate dance, or the
-    // connect-time restore of a persisted per-board value. The HermesC10
-    // (ANAN-G2E) PS-arm protective seed only fires while this is false: a
+    // connect-time restore of a persisted per-board value. The single-ADC
+    // PS-arm protective seed only fires while this is false: a
     // deliberate value is never overridden (Thetis / piHPSDR parity — the
     // stored per-band attenuation is sticky and 31 dB is only the
-    // virgin-store default). The 10E (HermesII) keeps the unconditional
-    // force-seed until it has a bench. See SetPsFeedbackEnabled.
+    // virgin-store default). See SetPsFeedbackEnabled.
     private bool _txAttnExplicitlySet;
     // PA settings — pushed from RadioService when PaSettingsStore changes or
     // the VFO crosses a band edge. _paEnabled is the global toggle that lands
@@ -518,16 +517,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private int _psBlockFill;
     private ulong _psBlockStartSeq;
 
-    // ---- HermesC10 (ANAN-G2E) PS wire instrumentation (issue #960) ----
+    // ---- Single-ADC time-mux PS wire instrumentation ----
     // Read-only ~1 Hz diagnostic of the single-ADC time-mux PS feedback burst,
-    // gated on _boardKind == HermesC10 (see ShouldLogG2ePsWireDiag) so it is
-    // inert for every other board. It logs the byte-59 attenuation actually on
-    // the wire, the DDC0 feedback frame count on port 1035, and the peak coupler
-    // (rx_I[0]) and reference (rx_I[NR]) sample magnitudes from the de-interleaved
-    // pair — the numbers that make the next real-G2E bench (lb5va, #960) decisive
-    // on whether feedback is flowing and at what level. Pure logging: no wire
+    // gated on TimeMuxesPsFeedbackOnDdc0 so it is inert for dual-ADC and
+    // non-time-mux boards. It logs the byte-59 attenuation actually on the wire,
+    // the DDC0 feedback frame count on port 1035, and the peak coupler/reference
+    // sample magnitudes from the de-interleaved pair. Pure logging: no wire
     // write, no socket I/O, no hot-path allocation. Touched only from the RX
-    // thread inside HandlePsPairedPacket, so no synchronisation is needed.
+    // thread inside HandlePsPairedPacket, so no synchronization is needed.
     private long _g2ePsDiagWindowStartMs;
     private long _g2ePsDiagFramesInWindow;
     private float _g2ePsDiagPeakCoupler;
@@ -1509,9 +1506,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // only walks after a fit — so PS could never converge. Thetis keeps
         // the per-band stored value sticky (31 is only the fresh default,
         // console.cs:1748) and piHPSDR writes the persisted operator value;
-        // this matches both. The 10E (HermesII) keeps the unconditional seed
-        // until it has a bench.
-        bool honorExplicit = _boardKind == HpsdrBoardKind.HermesC10 && _txAttnExplicitlySet;
+        // this matches both single-ADC time-mux boards.
+        bool honorExplicit = HonorsExplicitTxAdcProtection(_boardKind) && _txAttnExplicitlySet;
         bool seededTxAttn = false;
         if (SeedsTxAdcProtection(_boardKind) && !honorExplicit)
         {
@@ -2202,6 +2198,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     internal static bool SeedsTxAdcProtection(HpsdrBoardKind board)
         => (board == HpsdrBoardKind.HermesII && Hermes10ePsTimeMuxOnAir)
             || (board == HpsdrBoardKind.HermesC10 && G2ePsTimeMuxOnAir);
+
+    internal static bool HonorsExplicitTxAdcProtection(HpsdrBoardKind board) =>
+        TimeMuxesPsFeedbackOnDdc0(board);
 
     /// <summary>
     /// True iff this board does Orion-style PureSignal on a SINGLE ADC by
@@ -3701,10 +3700,10 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                         // not forming, wrong rate, or reverted to plain RX), still tick
                         // the ~1 Hz diagnostic so the bench sees an explicit frames=0
                         // line instead of silence. Inert on every other board.
-                        if (ddcIndex == 0 && ShouldLogG2ePsWireDiag(
+                        if (ddcIndex == 0 && ShouldLogSingleAdcPsWireDiag(
                                 _boardKind, _psFeedbackEnabled, _moxOn || _tuneActive))
                         {
-                            MaybeEmitG2ePsDiag();
+                            MaybeEmitSingleAdcPsDiag();
                         }
                     }
                 }
@@ -4028,12 +4027,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             samplesPerPacket = 119;
         }
 
-        // HermesC10 (ANAN-G2E) PS wire instrumentation gate — computed once per
-        // packet (see field block near _psBlockStartSeq). When true we track the
-        // peak coupler/reference magnitudes in the decode loop below and emit a
-        // ~1 Hz diagnostic. Inert (false) for every other board — dual-ADC boards
-        // also reach this method but are excluded by ShouldLogG2ePsWireDiag.
-        bool g2eDiag = ShouldLogG2ePsWireDiag(
+        // Single-ADC PS wire instrumentation gate — computed once per packet
+        // (see field block near _psBlockStartSeq). When true we track the peak
+        // coupler/reference magnitudes in the decode loop below and emit a ~1 Hz
+        // diagnostic. Dual-ADC boards also reach this method but are excluded by
+        // ShouldLogSingleAdcPsWireDiag.
+        bool g2eDiag = ShouldLogSingleAdcPsWireDiag(
             _boardKind, _psFeedbackEnabled, _moxOn || _tuneActive);
 
         for (int i = 0; i < samplesPerPacket; i++)
@@ -4091,7 +4090,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (g2eDiag)
         {
             _g2ePsDiagFramesInWindow++;
-            MaybeEmitG2ePsDiag();
+            MaybeEmitSingleAdcPsDiag();
         }
     }
 
@@ -4108,7 +4107,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// With it the tester always gets a line, and <c>frames=0</c> vs <c>frames=N,
     /// peakFb≈0</c> is the one-line discriminator (see the #1249 bench notes).
     /// </summary>
-    private void MaybeEmitG2ePsDiag()
+    private void MaybeEmitSingleAdcPsDiag()
     {
         long nowMs = Environment.TickCount64;
         if (_g2ePsDiagWindowStartMs == 0) _g2ePsDiagWindowStartMs = nowMs;
@@ -4130,7 +4129,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                           _boardKind, _psFeedbackEnabled, _psFeedbackExternal)
                       && (_moxOn || _tuneActive);
         _log.LogInformation(
-            "p2.ps.g2e arm={Arm} external={External} bypass={Bypass} atten={Atten} frames={Frames} peakFb={PeakFb:F4} peakRef={PeakRef:F4}",
+            "p2.ps.singleAdc arm={Arm} external={External} bypass={Bypass} atten={Atten} frames={Frames} peakFb={PeakFb:F4} peakRef={PeakRef:F4}",
             1, _psFeedbackExternal, bypass, _txStepAttnDb, _g2ePsDiagFramesInWindow,
             _g2ePsDiagPeakCoupler, _g2ePsDiagPeakReference);
         _g2ePsDiagWindowStartMs = nowMs;
@@ -4143,16 +4142,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// Gate for the read-only HermesC10 (ANAN-G2E) PS wire instrumentation
     /// (<c>p2.ps.g2e</c>): emit ONLY on the ANAN-G2E, and only while PS feedback
     /// is armed AND transmit is asserted (the single-ADC time-mux burst is the
-    /// only time DDC0 carries feedback). Deliberately excludes the sibling 10E
-    /// (<see cref="HpsdrBoardKind.HermesII"/>) — the diagnostic is scoped to the
-    /// G2E bench (#960, lb5va) — and every dual-ADC board (which also reaches the
-    /// paired-packet decoder via <see cref="ReservesPsFeedbackDdcs"/>), so it is
-    /// inert everywhere else. Pure predicate, no side effects — unit-testable
-    /// without sockets.
+    /// only time DDC0 carries feedback). Deliberately excludes dual-ADC boards
+    /// (which also reach the paired-packet decoder via
+    /// <see cref="ReservesPsFeedbackDdcs"/>), so it is inert everywhere else.
+    /// Pure predicate, no side effects — unit-testable without sockets.
     /// </summary>
+    internal static bool ShouldLogSingleAdcPsWireDiag(
+        HpsdrBoardKind board, bool psFeedbackEnabled, bool txKeyed)
+        => TimeMuxesPsFeedbackOnDdc0(board) && psFeedbackEnabled && txKeyed;
+
     internal static bool ShouldLogG2ePsWireDiag(
         HpsdrBoardKind board, bool psFeedbackEnabled, bool txKeyed)
-        => board == HpsdrBoardKind.HermesC10 && psFeedbackEnabled && txKeyed;
+        => ShouldLogSingleAdcPsWireDiag(board, psFeedbackEnabled, txKeyed);
 
     private static int SignExtend24(int raw)
     {
