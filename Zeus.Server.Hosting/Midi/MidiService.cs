@@ -33,6 +33,7 @@ namespace Zeus.Server.Midi;
 public sealed class MidiService : IHostedService, IDisposable
 {
     private const byte MidiLearnMsgType = (byte)MsgType.MidiLearn;
+    private static readonly TimeSpan LearnTimeout = TimeSpan.FromSeconds(120);
 
     // Learn frames are decoded by the same frontend that consumes the REST
     // endpoints, so they must match those options: camelCase properties + string
@@ -49,6 +50,7 @@ public sealed class MidiService : IHostedService, IDisposable
     private readonly MidiCommandDispatcher _dispatcher;
     private readonly StreamingHub _hub;
     private readonly ILogger<MidiService> _log;
+    private readonly TimeProvider _time;
 
     private readonly object _sync = new();
     private Dictionary<(string Device, string ControlId), MidiMappingDto> _midiMap = new();
@@ -56,6 +58,8 @@ public sealed class MidiService : IHostedService, IDisposable
     private MidiBindingsDoc _bindings = MidiBindingsDoc.Empty;
     private volatile bool _enabled;
     private volatile bool _learning;
+    private long _learnExpiresAtTimestamp;
+    private int _learnExpiryCleanupQueued;
     private bool _started;
     private bool _disposed;
 
@@ -67,12 +71,26 @@ public sealed class MidiService : IHostedService, IDisposable
         TxService tx,
         StreamingHub hub,
         ILoggerFactory loggerFactory)
+        : this(midi, streamDeck, store, radio, tx, hub, loggerFactory, TimeProvider.System)
+    {
+    }
+
+    public MidiService(
+        IMidiEngine midi,
+        IStreamDeckEngine streamDeck,
+        MidiConfigStore store,
+        RadioService radio,
+        TxService tx,
+        StreamingHub hub,
+        ILoggerFactory loggerFactory,
+        TimeProvider timeProvider)
     {
         _midi = midi;
         _streamDeck = streamDeck;
         _store = store;
         _hub = hub;
         _log = loggerFactory.CreateLogger<MidiService>();
+        _time = timeProvider;
 
         var dispatchState = new MidiDispatchState(radio.Snapshot);
         _dispatcher = new MidiCommandDispatcher(
@@ -111,6 +129,7 @@ public sealed class MidiService : IHostedService, IDisposable
         lock (_sync)
         {
             _learning = false;
+            Volatile.Write(ref _learnExpiresAtTimestamp, 0);
             StopEnginesLocked();
             _started = false;
         }
@@ -121,13 +140,14 @@ public sealed class MidiService : IHostedService, IDisposable
 
     public MidiStatusDto GetStatus()
     {
+        var learning = IsLearningEffective();
         return new MidiStatusDto(
             Enabled: _enabled,
             MidiEngineAvailable: _midi.IsAvailable,
             StreamDeckEngineAvailable: _streamDeck.IsAvailable,
             MidiDevices: _midi.EnumerateDevices(),
             StreamDeckDevices: _streamDeck.EnumerateDevices(),
-            Learning: _learning);
+            Learning: learning);
     }
 
     public MidiConfigDto GetConfig()
@@ -165,10 +185,20 @@ public sealed class MidiService : IHostedService, IDisposable
     {
         lock (_sync)
         {
+            RefreshLearnDeadlineLocked();
             _learning = true;
             if (_started && !_enabled) StartEnginesLocked();
         }
         _log.LogInformation("midi.learn.start");
+        return GetStatus();
+    }
+
+    public MidiStatusDto KeepLearnAlive()
+    {
+        lock (_sync)
+        {
+            if (IsLearningEffectiveLocked()) RefreshLearnDeadlineLocked();
+        }
         return GetStatus();
     }
 
@@ -177,6 +207,7 @@ public sealed class MidiService : IHostedService, IDisposable
         lock (_sync)
         {
             _learning = false;
+            Volatile.Write(ref _learnExpiresAtTimestamp, 0);
             // If MIDI is globally disabled, the engines were only running for
             // learn — idle them again.
             if (_started && !_enabled) StopEnginesLocked();
@@ -199,6 +230,70 @@ public sealed class MidiService : IHostedService, IDisposable
     {
         try { _midi.Stop(); } catch (Exception ex) { _log.LogDebug(ex, "midi.engine.stop threw"); }
         try { _streamDeck.Stop(); } catch (Exception ex) { _log.LogDebug(ex, "streamdeck.engine.stop threw"); }
+    }
+
+    private bool IsLearningEffective()
+    {
+        lock (_sync) return IsLearningEffectiveLocked();
+    }
+
+    private bool IsLearningEffectiveLocked()
+    {
+        if (!_learning) return false;
+        if (NowTimestamp() < Volatile.Read(ref _learnExpiresAtTimestamp)) return true;
+
+        _learning = false;
+        Volatile.Write(ref _learnExpiresAtTimestamp, 0);
+        _log.LogInformation("midi.learn.expired");
+        QueueLearnExpiryCleanup();
+        return false;
+    }
+
+    private bool IsLearningEffectiveForEvent()
+    {
+        if (!_learning) return false;
+        if (NowTimestamp() < Volatile.Read(ref _learnExpiresAtTimestamp)) return true;
+
+        QueueLearnExpiryCleanup();
+        return false;
+    }
+
+    // Monotonic timestamps (TimeProvider.GetTimestamp), not wall-clock: an NTP
+    // step while Learn is armed must not stretch or shrink the 120 s window.
+    private void RefreshLearnDeadlineLocked()
+        => Volatile.Write(ref _learnExpiresAtTimestamp,
+            _time.GetTimestamp() + (long)(LearnTimeout.TotalSeconds * _time.TimestampFrequency));
+
+    private long NowTimestamp() => _time.GetTimestamp();
+
+    private void QueueLearnExpiryCleanup()
+    {
+        if (Interlocked.Exchange(ref _learnExpiryCleanupQueued, 1) == 1) return;
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                lock (_sync)
+                {
+                    Interlocked.Exchange(ref _learnExpiryCleanupQueued, 0);
+                    if (_learning)
+                    {
+                        if (NowTimestamp() < Volatile.Read(ref _learnExpiresAtTimestamp)) return;
+                        _learning = false;
+                        Volatile.Write(ref _learnExpiresAtTimestamp, 0);
+                        _log.LogInformation("midi.learn.expired");
+                    }
+
+                    if (_started && !_enabled && !_learning) StopEnginesLocked();
+                }
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Exchange(ref _learnExpiryCleanupQueued, 0);
+                _log.LogDebug(ex, "midi.learn.expiry cleanup failed");
+            }
+        });
     }
 
     private void RebuildMapsLocked()
@@ -246,7 +341,7 @@ public sealed class MidiService : IHostedService, IDisposable
 
     private void OnMidiMessage(MidiInputMessage msg)
     {
-        if (_learning)
+        if (IsLearningEffectiveForEvent())
         {
             PublishLearnFrame(new MidiLearnFrame(
                 msg.DeviceName, msg.ControlId, msg.ControlType, msg.Value, msg.Delta));
@@ -290,7 +385,7 @@ public sealed class MidiService : IHostedService, IDisposable
 
     private void OnStreamDeckInput(StreamDeckInput input)
     {
-        if (_learning)
+        if (IsLearningEffectiveForEvent())
         {
             PublishLearnFrame(new MidiLearnFrame(
                 input.DeviceName, $"sd:{input.Serial}:{input.ButtonIndex}",
@@ -311,7 +406,8 @@ public sealed class MidiService : IHostedService, IDisposable
         {
             // Re-open to pick up the (un)plugged device. Only while engines
             // should be live (enabled or learning).
-            if (_started && (_enabled || _learning))
+            var learning = IsLearningEffectiveLocked();
+            if (_started && (_enabled || learning))
                 try { _midi.Start(); } catch (Exception ex) { _log.LogDebug(ex, "midi.reopen threw"); }
         }
     }
@@ -320,7 +416,8 @@ public sealed class MidiService : IHostedService, IDisposable
     {
         lock (_sync)
         {
-            if (_started && (_enabled || _learning))
+            var learning = IsLearningEffectiveLocked();
+            if (_started && (_enabled || learning))
                 try { _streamDeck.Start(); } catch (Exception ex) { _log.LogDebug(ex, "streamdeck.reopen threw"); }
         }
     }

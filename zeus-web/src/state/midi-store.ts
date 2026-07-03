@@ -14,6 +14,7 @@ import {
   getMidiCommands,
   getMidiConfig,
   getMidiStatus,
+  keepAliveMidiLearn,
   putMidiConfig,
   startMidiLearn,
   stopMidiLearn,
@@ -53,6 +54,7 @@ export type MidiStoreState = {
   upsertStreamDeckMapping: (mapping: StreamDeckMapping) => Promise<void>;
   removeStreamDeckMapping: (serial: string, buttonIndex: number) => Promise<void>;
   startLearn: () => Promise<void>;
+  keepLearnAlive: () => Promise<void>;
   stopLearn: () => Promise<void>;
   ingestLearn: (frame: MidiLearnFrame) => void;
 };
@@ -137,6 +139,15 @@ export const useMidiStore = create<MidiStoreState>((set, get) => ({
   startLearn: async () => {
     const status = await startMidiLearn();
     set({ status, lastLearn: null });
+  },
+
+  keepLearnAlive: async () => {
+    try {
+      const status = await keepAliveMidiLearn();
+      set({ status });
+    } catch {
+      /* transient — next keepalive or status poll recovers */
+    }
   },
 
   stopLearn: async () => {
