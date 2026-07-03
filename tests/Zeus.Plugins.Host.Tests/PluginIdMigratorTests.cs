@@ -231,7 +231,13 @@ public sealed class PluginIdMigratorTests : IAsyncLifetime
 
         Assert.Null(second.Find(OldDigitalId));
         Assert.NotNull(second.Find(NewDigitalId));
-        Assert.False(Directory.Exists(oldDir));
+        // On Windows the first boot's ALC keeps the old plugin dll file-locked
+        // in-process even after StopAsync, so the migrator's delete legitimately
+        // falls back to the .pending-delete marker (swept on a later boot).
+        // Either outcome means the old install is retired.
+        Assert.True(
+            !Directory.Exists(oldDir)
+            || File.Exists(Path.Combine(oldDir, PluginManager.PendingDeleteMarker)));
         Assert.True(File.Exists(Path.Combine(newDir, "plugin.json")));
         Assert.False(File.Exists(Path.Combine(newDir, PluginManager.PendingDeleteMarker)));
         Assert.Equal(1, secondRegistry.FetchCount);
