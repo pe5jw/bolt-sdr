@@ -47,6 +47,7 @@ function paSettingsFixture() {
       autoOcMask: 0,
       ocDxTx: 0,
       ocDxRx: 0,
+      ocTune: 0,
     })),
   };
 }

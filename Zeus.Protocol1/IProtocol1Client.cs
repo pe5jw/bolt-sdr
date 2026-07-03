@@ -123,9 +123,20 @@ public interface IProtocol1Client : IDisposable
     /// <summary>
     /// User-configured Open-Collector pin masks (7 bits each). OR'd with the
     /// board's auto-filter output. <paramref name="txMask"/> is asserted when
-    /// MOX is on; <paramref name="rxMask"/> otherwise.
+    /// MOX is on; <paramref name="rxMask"/> otherwise. <paramref name="tuneMask"/>
+    /// is asserted on top of TX only while TUN is active.
     /// </summary>
-    void SetOcMasks(byte txMask, byte rxMask);
+    void SetOcMasks(byte txMask, byte rxMask, byte tuneMask);
+
+    /// <summary>
+    /// Latch the TUN flag used by the OC-mask composition path (issue #1325).
+    /// On Protocol 1 the wire MOX bit rises for both TUN and regular TX; this
+    /// separate flag lets ControlFrame OR in the OcTune mask only during TUN
+    /// so extra bits (amplifier bypass, external tuner start) don't leak onto
+    /// voice / CW / digital transmissions. Called from RadioService's
+    /// TunActiveChanged pipeline right after <see cref="SetMox"/>.
+    /// </summary>
+    void SetTune(bool on);
 
     /// <summary>
     /// Raised once from the RX loop when consecutive receive timeouts exhaust the

@@ -2037,6 +2037,14 @@ public sealed record ImportDatabaseRequest(string SourcePath, string? Name);
 // are OR'd with the board's auto-filter logic so stock HL2 filter switching
 // keeps working when the user hasn't set anything.
 //
+// OcTune is a 7-bit per-band additive mask asserted ON TOP OF OcTx while TUN
+// is active (Wire = OcTx | OcTune). Because it only ADDS bits on top of the
+// band's already-correct OcTx mask (never replacing them), the band-select
+// state stays intact under TUN — a distinct-and-safer shape than the global
+// "OCtune" override removed in #124, which layered a single override across
+// all bands and could hand an external amp a confused band-select state.
+// Default 0x00 preserves pre-#1325 behaviour byte-for-byte.
+//
 // AutoOcMask is informational only — the read-only N2ADR board mask the
 // firmware will OR onto OcRx/OcTx when HasN2adr is on (HL2). PUT requests
 // ignore it; the server recomputes from the connected board on the next GET.
@@ -2055,16 +2063,16 @@ public sealed record PaBandSettingsDto(
     byte OcRx = 0,
     byte AutoOcMask = 0,
     byte OcDxTx = 0,
-    byte OcDxRx = 0);
+    byte OcDxRx = 0,
+    byte OcTune = 0);
 
 // Globals shared across bands. PaMaxPowerWatts=0 disables the watts
 // conversion path and falls back to the legacy "drive% = raw 0-255 byte"
 // behavior so existing installs behave identically until the user runs
-// a calibration. OC bits during TUN follow the per-band OcTx mask (same
-// as TX) — Thetis behaves this way and the inherited piHPSDR-style
-// "OcTune" override was removed in #124 for hardware-safety reasons (a
-// global override can hand an external amp a confused band-select state
-// during a steady tune carrier and damage finals).
+// a calibration. During TUN the wire OC mask is OcTx | OcTune (per band,
+// issue #1325). The removed global "OCtune" override (#124) was a single
+// override across all bands and could hand an external amp a confused
+// band-select state; the per-band additive mask sidesteps that shape.
 public sealed record PaGlobalSettingsDto(
     bool PaEnabled = true,
     int PaMaxPowerWatts = 0);

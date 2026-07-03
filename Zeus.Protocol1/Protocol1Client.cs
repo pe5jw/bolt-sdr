@@ -120,13 +120,18 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _boardKind = (int)HpsdrBoardKind.HermesLite2;
     private int _hasN2adr;      // 0 / 1
     private int _mox;           // 0 / 1
+    // Separate TUN latch (issue #1325). P1's wire MOX bit rises for both TUN
+    // and regular TX, so this internal flag is what ControlFrame consults to
+    // OR the per-band OcTune mask on top of OcTx only during TUN.
+    private int _tune;          // 0 / 1
     private int _drivePct;      // 0..100 UI percent; mapped to 0..255 on snapshot
     // When >= 0, RadioService has pushed a fully-computed drive byte (post PA
     // calibration) and we send that instead of the percent mapping. Legacy
     // callers that only call SetDrive(percent) keep working untouched.
     private int _driveByteOverride = -1;
-    private int _ocTxMask;      // user OC pin mask for TX (low 7 bits)
-    private int _ocRxMask;      // user OC pin mask for RX (low 7 bits)
+    // Packed OC masks: bits 0..6 TX, 8..14 RX, 16..22 TUN additive. Written as
+    // one int so the TX loop never observes a new-band OcTx with old-band OcTune.
+    private int _ocMasksPacked;
     // ATU auto-tune deadline (Environment.TickCount64). While now < this, the
     // DriveFilter frame asserts the auto-tune-start bit (C2[4]). 0 = idle.
     // Momentary so the tune request auto-releases without a second API call.
@@ -172,6 +177,18 @@ public sealed class Protocol1Client : IProtocol1Client
     private Task? _txTask;
     private CancellationTokenSource? _loopCts;
     private bool _disposed;
+
+    private static int PackOcMasks(byte txMask, byte rxMask, byte tuneMask) =>
+        (txMask & 0x7F)
+        | ((rxMask & 0x7F) << 8)
+        | ((tuneMask & 0x7F) << 16);
+
+    private static void UnpackOcMasks(int packed, out byte txMask, out byte rxMask, out byte tuneMask)
+    {
+        txMask = (byte)(packed & 0x7F);
+        rxMask = (byte)((packed >> 8) & 0x7F);
+        tuneMask = (byte)((packed >> 16) & 0x7F);
+    }
 
     // TX IQ source: WDSP-TXA-driven ring in the live path (task #7/#8), or
     // the built-in test-tone when caller wants a bring-up carrier. Default is
@@ -614,6 +631,8 @@ public sealed class Protocol1Client : IProtocol1Client
         }
         catch (ObjectDisposedException) { }
 
+        Interlocked.Exchange(ref _mox, 0);
+        Interlocked.Exchange(ref _tune, 0);
         SendStartStop(start: false);
 
         if (_txTask is not null)
@@ -750,11 +769,11 @@ public sealed class Protocol1Client : IProtocol1Client
     public void SetDriveByte(byte value) =>
         Interlocked.Exchange(ref _driveByteOverride, value);
 
-    public void SetOcMasks(byte txMask, byte rxMask)
-    {
-        Interlocked.Exchange(ref _ocTxMask, txMask & 0x7F);
-        Interlocked.Exchange(ref _ocRxMask, rxMask & 0x7F);
-    }
+    public void SetOcMasks(byte txMask, byte rxMask, byte tuneMask) =>
+        Interlocked.Exchange(ref _ocMasksPacked, PackOcMasks(txMask, rxMask, tuneMask));
+
+    public void SetTune(bool on) =>
+        Interlocked.Exchange(ref _tune, on ? 1 : 0);
 
     /// <summary>Request an ATU tune cycle: assert the Apollo/Alex auto-tune-start
     /// bit (DriveFilter C2[4]) on every outgoing frame for <paramref name="durationMs"/>
@@ -883,6 +902,7 @@ public sealed class Protocol1Client : IProtocol1Client
         bool psOn = Volatile.Read(ref _psEnabled) != 0;
         bool moxOn = Volatile.Read(ref _mox) != 0;
         bool isHl2 = (HpsdrBoardKind)Volatile.Read(ref _boardKind) == HpsdrBoardKind.HermesLite2;
+        UnpackOcMasks(Volatile.Read(ref _ocMasksPacked), out byte ocTxMask, out byte ocRxMask, out byte ocTuneMask);
         // Number of receivers requested in the Config payload (`(N-1) << 3`
         // in C4 bits [5:3]). mi0bot's HL2 path (Thetis console.cs:8186-8265)
         // uses **4 DDCs** during PS+MOX:
@@ -910,8 +930,10 @@ public sealed class Protocol1Client : IProtocol1Client
             Board: (HpsdrBoardKind)Volatile.Read(ref _boardKind),
             HasN2adr: Volatile.Read(ref _hasN2adr) != 0,
             DriveLevel: drive,
-            UserOcTxMask: (byte)Volatile.Read(ref _ocTxMask),
-            UserOcRxMask: (byte)Volatile.Read(ref _ocRxMask),
+            UserOcTxMask: ocTxMask,
+            UserOcRxMask: ocRxMask,
+            UserOcTuneMask: ocTuneMask,
+            TuneActive: Volatile.Read(ref _tune) != 0,
             PsEnabled: psOn,
             PsPredistortionValue: (byte)Volatile.Read(ref _psPredistortionValue),
             PsPredistortionSubindex: (byte)Volatile.Read(ref _psPredistortionSubindex),
@@ -1355,13 +1377,14 @@ public sealed class Protocol1Client : IProtocol1Client
                 var elapsed = nowUtc - rateWindowStart;
                 if (elapsed >= TimeSpan.FromSeconds(1))
                 {
+                    UnpackOcMasks(Volatile.Read(ref _ocMasksPacked), out byte ocTxMask, out byte ocRxMask, out byte ocTuneMask);
                     _log.LogInformation(
-                        "p1.tx.rate pkts={Pkts} in {Ms:F0}ms = {Rate:F0} pkt/s (target 381) | wire: peak={Peak}/32767 mean={Mean} firstI={I} firstQ={Q} drv={Drv} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} mox={Mox}",
+                        "p1.tx.rate pkts={Pkts} in {Ms:F0}ms = {Rate:F0} pkt/s (target 381) | wire: peak={Peak}/32767 mean={Mean} firstI={I} firstQ={Q} drv={Drv} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocTune=0x{OcTune:X2} mox={Mox} tun={Tun}",
                         rateWindowPkts, elapsed.TotalMilliseconds, rateWindowPkts / elapsed.TotalSeconds,
                         ControlFrame.LastPeakAbs, ControlFrame.LastMeanAbs,
                         ControlFrame.LastFirstI, ControlFrame.LastFirstQ, ControlFrame.LastDriveByte,
-                        (byte)Volatile.Read(ref _ocTxMask), (byte)Volatile.Read(ref _ocRxMask),
-                        Volatile.Read(ref _mox) != 0);
+                        ocTxMask, ocRxMask, ocTuneMask,
+                        Volatile.Read(ref _mox) != 0, Volatile.Read(ref _tune) != 0);
                     rateWindowStart = nowUtc;
                     rateWindowPkts = 0;
                 }

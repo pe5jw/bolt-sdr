@@ -39,6 +39,11 @@ export type PaBandSettings = {
   // DX wiring travels with the band selection.
   ocDxTx: number;
   ocDxRx: number;
+  // Per-band OC-TUNE additive mask (issue #1325). 7-bit mask ORed on top
+  // of ocTx while TUN is active (Wire = ocTx | ocTune). Distinct from the
+  // removed global "OCtune" override (#124): additive, per-band. Default 0
+  // is byte-identical to pre-#1325 wire behaviour.
+  ocTune: number;
 };
 
 export type PaGlobalSettings = {
@@ -60,6 +65,7 @@ type PaBandDtoRaw = {
   autoOcMask?: unknown;
   ocDxTx?: unknown;
   ocDxRx?: unknown;
+  ocTune?: unknown;
 };
 
 type PaGlobalDtoRaw = {
@@ -100,6 +106,7 @@ function normalizeBand(raw: PaBandDtoRaw): PaBandSettings {
     // smuggle bits the wire path would silently zero anyway.
     ocDxTx: Math.max(0, Math.min(0x0f, Math.round(toNumber(raw.ocDxTx, 0)))),
     ocDxRx: Math.max(0, Math.min(0x0f, Math.round(toNumber(raw.ocDxRx, 0)))),
+    ocTune: Math.max(0, Math.min(0x7f, Math.round(toNumber(raw.ocTune, 0)))),
   };
 }
 

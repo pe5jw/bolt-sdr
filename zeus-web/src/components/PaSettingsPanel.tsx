@@ -74,7 +74,7 @@ const ANVELINA_EXT_TESTING_KEY = 'zeus.pa.showAnvelinaExtForTesting';
 // Persisted active tab for the Per Band section (design v2). Falls
 // back to 'tx' on first load and on any unrecognised value.
 const PERBAND_TAB_KEY = 'zeus.pa.activePerBandTab';
-type PerBandTab = 'tx' | 'rx' | 'auto';
+type PerBandTab = 'tx' | 'rx' | 'tune' | 'auto';
 
 // N2ADR LPF band-range hints — surfaced under each LPF pin number in
 // the AUTO tab so operators can see at a glance which filter bank the
@@ -319,7 +319,7 @@ export function PaSettingsPanel() {
   const [activeTab, setActiveTab] = useState<PerBandTab>(() => {
     try {
       const stored = localStorage.getItem(PERBAND_TAB_KEY);
-      if (stored === 'tx' || stored === 'rx' || stored === 'auto') return stored;
+      if (stored === 'tx' || stored === 'rx' || stored === 'tune' || stored === 'auto') return stored;
     } catch {
       /* localStorage unavailable — fall through. */
     }
@@ -553,6 +553,17 @@ export function PaSettingsPanel() {
               OC&nbsp;RX
               <span className="pa-tab-badge">{showAnvelinaExt ? '1–7 · 8–11' : '1–7'}</span>
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'tune'}
+              className={'pa-tab' + (activeTab === 'tune' ? ' is-active' : '')}
+              onClick={() => setActiveTab('tune')}
+              title="Extra OC bits asserted only during TUN, ORed on top of OC TX (Wire = OC TX | OC TUNE). Use for external amp bypass, external tuner start, etc. Empty (default) = no change from OC TX during TUN."
+            >
+              OC&nbsp;TUNE
+              <span className="pa-tab-badge">1–7</span>
+            </button>
             {showAutoCol && (
               <button
                 type="button"
@@ -583,6 +594,14 @@ export function PaSettingsPanel() {
                 {COPY_ICON}
                 {activeTab === 'tx' ? 'Copy from OC RX' : 'Copy from OC TX'}
               </button>
+            </div>
+          )}
+          {activeTab === 'tune' && (
+            <div className="pa-perband-tools">
+              <span className="pa-perband-notice">
+                <strong>Additive mask.</strong>&nbsp; Wire = OC&nbsp;TX &nbsp;|&nbsp; OC&nbsp;TUNE
+                during TUN. Empty (all pins off) leaves TUN identical to regular TX.
+              </span>
             </div>
           )}
           {activeTab === 'auto' && (
@@ -620,6 +639,23 @@ export function PaSettingsPanel() {
             isHl2={isHl2}
             setBand={setBand}
             showAnvelinaExt={showAnvelinaExt}
+            anvelinaDxTooltip={anvelinaDxTooltip}
+          />
+        )}
+        {activeTab === 'tune' && (
+          <OcPane
+            side="tune"
+            settings={settings}
+            paFieldLabel={paFieldLabel}
+            paFieldMax={paFieldMax}
+            paFieldStep={paFieldStep}
+            paFieldTitle={paFieldTitle}
+            isHl2={isHl2}
+            setBand={setBand}
+            /* OcTune is a standard 7-pin additive mask only — no Anvelina
+               DX counterpart in this phase (would need a separate wire
+               field for TUN-specific DX bits). Hide the ext column. */
+            showAnvelinaExt={false}
             anvelinaDxTooltip={anvelinaDxTooltip}
           />
         )}
@@ -671,7 +707,7 @@ export function PaSettingsPanel() {
 // row collapses to four columns (no divider, no ext bar) via the
 // `.is-ext-hidden` modifier on the table shell.
 function OcPane(props: {
-  side: 'tx' | 'rx';
+  side: 'tx' | 'rx' | 'tune';
   settings: ReturnType<typeof usePaStore.getState>['settings'];
   paFieldLabel: string;
   paFieldMax: number;
@@ -694,7 +730,7 @@ function OcPane(props: {
     showAnvelinaExt,
     anvelinaDxTooltip,
   } = props;
-  const stdLabel = side === 'tx' ? 'OC TX' : 'OC RX';
+  const stdLabel = side === 'tx' ? 'OC TX' : side === 'rx' ? 'OC RX' : 'OC TUNE';
   return (
     <div className={'pa-card pa-table-shell oc' + (showAnvelinaExt ? '' : ' is-ext-hidden')}>
       <div className="pa-oc-row is-thead">
@@ -717,9 +753,11 @@ function OcPane(props: {
       {HF_BANDS.map((bandName) => {
         const b = settings.bands.find((x) => x.band === bandName);
         if (!b) return null;
-        const stdMask = side === 'tx' ? b.ocTx : b.ocRx;
-        const extMask = side === 'tx' ? b.ocDxTx : b.ocDxRx;
-        const stdKey = side === 'tx' ? ('ocTx' as const) : ('ocRx' as const);
+        const stdMask = side === 'tx' ? b.ocTx : side === 'rx' ? b.ocRx : b.ocTune;
+        // Anvelina DX ext bar is TX/RX-only — there is no TUN-specific DX wire
+        // slot, so the tune tab must never read or write the DX masks.
+        const extMask = side === 'tx' ? b.ocDxTx : side === 'rx' ? b.ocDxRx : 0;
+        const stdKey = side === 'tx' ? ('ocTx' as const) : side === 'rx' ? ('ocRx' as const) : ('ocTune' as const);
         const extKey = side === 'tx' ? ('ocDxTx' as const) : ('ocDxRx' as const);
         return (
           <div key={bandName} className="pa-oc-row">
