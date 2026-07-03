@@ -1613,11 +1613,15 @@ public sealed class WdspDspEngine : IDspEngine
 
     /// <summary>PureSignal feedback panadapter pixels — sourced from the
     /// post-PA loopback IQ pumped through FeedPsFeedbackBlock. Returns false
-    /// when the PS-FB analyzer is not open (PS disarmed, TX analyzer inactive,
-    /// or engine disposed). Caller is expected to gate this on
-    /// <c>PsEnabled &amp;&amp; PsMonitorEnabled &amp;&amp; PsCorrecting</c> so a
-    /// pre-correction transient doesn't briefly show splatter on the
-    /// panadapter.</summary>
+    /// when the PS-FB analyzer is not open (PS disarmed, or engine disposed;
+    /// the analyzer opens on arm even when the TX display analyzer could not —
+    /// it inherits RX geometry in that case). Two callers in Tick: the
+    /// PS-Monitor path gates on <c>PsEnabled &amp;&amp; PsMonitorEnabled
+    /// &amp;&amp; PsCorrecting</c> so a pre-correction transient doesn't show
+    /// splatter when the operator has a better source; the keyed LAST-RESORT
+    /// path (single-ADC time-mux burst, no TX/RX pixels available) gates only
+    /// on <c>PsEnabled</c> — the true post-PA signal, splatter and all, beats
+    /// a frozen display.</summary>
     public bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut)
     {
         if (_disposed != 0) return false;
@@ -1967,9 +1971,14 @@ public sealed class WdspDspEngine : IDspEngine
                         // slot and leave _txDispAlive false so the panadapter falls
                         // back to the RX analyzer on MOX.
                         NativeMethods.DestroyAnalyzer(id);
+                        // Log the DSP rate — that's what the rate rule actually
+                        // compares (the analyzer taps the SIPHON at dsp_rate,
+                        // not the output rate), so at RX 192k this reads
+                        // "tx=96000", making the failed 96k-vs-192k relation
+                        // visible instead of a baffling "192000 vs 192000".
                         _log.LogWarning(
-                            "wdsp.openTxChannel tx-analyzer skipped — rx={RxRate} tx={TxRate} not an integer multiple; panadapter will fall back to RX trace",
-                            rxSampleRateHz, _txaOutputRateHz);
+                            "wdsp.openTxChannel tx-analyzer skipped — rx={RxRate} txDsp={TxDspRate} not an integer multiple; panadapter will fall back to RX trace (and to PS-feedback pixels while keyed with PS armed)",
+                            rxSampleRateHz, _txaDspRateHz);
                     }
                 }
                 else
@@ -2804,8 +2813,34 @@ public sealed class WdspDspEngine : IDspEngine
         }
         if (!txAlive || pixelWidth <= 0)
         {
-            _log.LogInformation("wdsp.psFb.open skip — txDisp not alive (toggle will fall through to TX pixels)");
-            return;
+            // TX display analyzer isn't alive — at RX rates above the TXA DSP
+            // rate (192k/384k: 96k DSP can't render the span) its rate rule
+            // fails and it never opens. Inherit the first RXA's geometry
+            // instead: the PS-FB source runs at PsFeedbackSampleRateHz (192k),
+            // so ITS rate rule can still pass where the TX analyzer's can't.
+            // On a single-ADC time-mux board (HermesC10 / ANAN-G2E) this is
+            // load-bearing, not cosmetic: a keyed PS burst diverts the board's
+            // ONLY DDC to feedback, the RX analyzer starves, and with no TX
+            // analyzer this PS-FB analyzer is the one live spectrum source —
+            // without it the panadapter/waterfall freeze for the whole
+            // transmission (G2E field report, #960 rework bench).
+            pixelWidth = 0;
+            foreach (var st in _channels.Values)
+            {
+                pixelWidth = st.PixelWidth;
+                rxRate = st.SampleRateHz;
+                zoom = Math.Max(1, st.ZoomLevel);
+                break;
+            }
+            if (pixelWidth <= 0)
+            {
+                _log.LogInformation(
+                    "wdsp.psFb.open skip — no TX display analyzer and no RX channel geometry to inherit");
+                return;
+            }
+            _log.LogInformation(
+                "wdsp.psFb.open inheriting RX geometry (txDisp not alive): pix={Pix} rxRate={RxRate} zoom={Zoom}",
+                pixelWidth, rxRate, zoom);
         }
 
         lock (_psFbDispLock)

@@ -64,7 +64,53 @@ public sealed class PsSettingsStore : IDisposable
         _entries = _db.GetCollection<PsSettingsEntry>("ps_settings");
         _entries.EnsureIndex(x => x.ProfileId, unique: true);
 
+        MigrateTxAttnPoison();
+
         _log.LogInformation("PsSettingsStore initialized at {Path}", dbPath);
+    }
+
+    /// <summary>
+    /// Current TxAttnByBoard migration version. New entries must be stamped
+    /// at this version (RadioService.PersistPsState does) so a store created
+    /// AFTER the poison window is never wiped by a later startup's migration
+    /// pass.
+    /// </summary>
+    public const int TxAttnMigrationCurrent = 1;
+
+    /// <summary>
+    /// One-time migration (TxAttnMigration 0 → 1): drop persisted ANAN-G2E
+    /// (HermesC10) TX feedback-attenuation entries. The G2E testers builds
+    /// (test-g2e-ps / test-g2e-p1-ps, PRs #1249/#1283) shipped a defective
+    /// auto-acquire walk that ratcheted the attenuation to 31 dB (max — a
+    /// deaf feedback ADC) and persisted it per-board, re-applied on every
+    /// connect. Both field testers' stores are known-poisoned (#1248/#1285).
+    /// Clearing the entries returns the board to the protected virgin-store
+    /// arm (31 dB seed, then the two-tone servo walks down and re-persists a
+    /// calibrated value). HwPeakByBoard is left untouched — it was never
+    /// written by the broken walk and may hold an operator calibration.
+    /// Scoped to HermesC10 keys only; every other board's entries survive.
+    /// </summary>
+    private void MigrateTxAttnPoison()
+    {
+        const int targetVersion = TxAttnMigrationCurrent;
+        foreach (var entry in _entries.FindAll().ToList())
+        {
+            if (entry.TxAttnMigration >= targetVersion) continue;
+            var poisoned = entry.TxAttnByBoard.Keys
+                .Where(k => k.EndsWith(":HermesC10", StringComparison.Ordinal)
+                            || k.Contains(":HermesC10:", StringComparison.Ordinal))
+                .ToList();
+            foreach (var key in poisoned) entry.TxAttnByBoard.Remove(key);
+            entry.TxAttnMigration = targetVersion;
+            _entries.Update(entry);
+            if (poisoned.Count > 0)
+            {
+                _log.LogWarning(
+                    "ps.migration txAttn v{Version}: cleared {Count} poisoned HermesC10 attenuation entr{Plural} ({Keys}) — see PR #1249/#1283 field failure",
+                    targetVersion, poisoned.Count, poisoned.Count == 1 ? "y" : "ies",
+                    string.Join(",", poisoned));
+            }
+        }
     }
 
     public PsSettingsEntry? Get(string profileId = "default")
@@ -135,5 +181,10 @@ public sealed class PsSettingsEntry
     // control) changes it; consumed on connect by the DspPipelineService
     // restore. Empty on first run — no entry means "leave the radio at 0".
     public Dictionary<string, int> TxAttnByBoard { get; set; } = new();
+    // Schema migration marker for TxAttnByBoard cleanups. 0 (the LiteDB
+    // default for pre-existing records) = never migrated; 1 = poisoned
+    // HermesC10 entries from the PR #1249/#1283 testers builds were cleared.
+    // See PsSettingsStore.MigrateTxAttnPoison.
+    public int TxAttnMigration { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }
