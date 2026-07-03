@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createElement, type ComponentType } from 'react';
 
 import { render } from './meters/__tests__/harness';
+import { reportReceiverFloorDb, resetReceiverFloors } from '../dsp/floor-normalization';
 import { useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { useRxMetersStore } from '../state/rx-meters-store';
 import { useTxStore } from '../state/tx-store';
@@ -52,6 +53,7 @@ function resetStores() {
     agcEnvAv: -Infinity,
   });
   useSignalEnhanceStore.getState().setSignalEnhanceSceneStatus(null);
+  resetReceiverFloors();
 }
 
 function setSceneSnr(maxSnrDb: number) {
@@ -113,12 +115,29 @@ describe('SMeterLive', () => {
       signalPk: -88,
       signalAv: -91,
     });
+    reportReceiverFloorDb(0, -112);
     setSceneSnr(18.4);
 
     const { container, unmount } = render(createElement(SMeterLiveComponent));
 
     expect(container.textContent).toContain('-88');
-    expect(container.textContent).toContain('SNR 18 dB');
+    expect(container.textContent).toContain('SNR 24 dB');
+
+    unmount();
+  });
+
+  it('does not show positive SNR when the signal is below the noise floor', () => {
+    useRxMetersStore.setState({
+      signalPk: -118,
+      signalAv: -120,
+    });
+    reportReceiverFloorDb(0, -112);
+    setSceneSnr(37);
+
+    const { container, unmount } = render(createElement(SMeterLiveComponent));
+
+    expect(container.textContent).toContain('-118');
+    expect(container.textContent).not.toContain('SNR');
 
     unmount();
   });
