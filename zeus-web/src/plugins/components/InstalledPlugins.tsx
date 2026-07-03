@@ -35,36 +35,6 @@ const LIST_COPY: Record<
   },
 };
 
-function CapabilityChips({ caps }: { caps: string[] }) {
-  if (caps.length === 0) {
-    return (
-      <span style={{ color: 'var(--fg-3)', fontStyle: 'italic' }}>
-        no host capabilities granted
-      </span>
-    );
-  }
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-      {caps.map((c) => (
-        <span
-          key={c}
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10,
-            padding: '2px 6px',
-            borderRadius: 'var(--r-sm)',
-            background: 'var(--bg-2)',
-            border: '1px solid var(--line)',
-            color: 'var(--fg-1)',
-          }}
-        >
-          {c}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 function PluginCard({ p }: { p: PluginDto }) {
   const uninstall = usePluginsStore((s) => s.uninstall);
   const inflight = usePluginsStore((s) => s.uninstallInflight);
@@ -88,101 +58,39 @@ function PluginCard({ p }: { p: PluginDto }) {
           gap: 8,
         }}
       >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'baseline',
-          justifyContent: 'space-between',
-          gap: 12,
-        }}
-      >
-        <div>
-          <div style={{ fontWeight: 700, color: 'var(--fg-0)', fontSize: 13 }}>
-            {p.name}
-          </div>
-          <div style={{ color: 'var(--fg-2)', fontSize: 11 }}>
-            <span style={{ fontFamily: 'var(--font-mono)' }}>{p.id}</span>
-            {' · '}v{p.version}
-            {p.author ? ` · ${p.author}` : ''}
-            {p.license ? ` · ${p.license}` : ''}
-          </div>
-        </div>
-        <button
-          type="button"
-          className="btn sm"
-          onClick={onUninstall}
-          disabled={inflight}
-          aria-label={`Uninstall ${p.name}`}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            justifyContent: 'space-between',
+            gap: 12,
+          }}
         >
-          {inflight ? 'WORKING…' : 'UNINSTALL'}
-        </button>
-      </div>
-
-      {p.description && (
-        <div style={{ color: 'var(--fg-1)', lineHeight: 1.5 }}>
-          {p.description}
+          <div>
+            <div style={{ fontWeight: 700, color: 'var(--fg-0)', fontSize: 13 }}>
+              {p.name}
+            </div>
+            <div style={{ color: 'var(--fg-2)', fontSize: 11 }}>
+              v{p.version}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={onUninstall}
+            disabled={inflight}
+            aria-label={`Uninstall ${p.name}`}
+          >
+            {inflight ? 'WORKING…' : 'UNINSTALL'}
+          </button>
         </div>
-      )}
 
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        {p.ui && (
-          <span
-            style={{
-              fontSize: 10,
-              padding: '2px 6px',
-              borderRadius: 'var(--r-sm)',
-              background: 'var(--accent-soft)',
-              border: '1px solid var(--accent-line)',
-              color: 'var(--accent-bright)',
-              fontWeight: 600,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-            }}
-          >
-            UI · {p.ui.panels.length} panel
-            {p.ui.panels.length === 1 ? '' : 's'}
-          </span>
+        {p.description && (
+          <div style={{ color: 'var(--fg-1)', lineHeight: 1.5 }}>
+            {p.description}
+          </div>
         )}
-        {p.audio && (
-          <span
-            style={{
-              fontSize: 10,
-              padding: '2px 6px',
-              borderRadius: 'var(--r-sm)',
-              background: 'var(--amber-soft)',
-              border: '1px solid var(--amber)',
-              color: 'var(--amber)',
-              fontWeight: 600,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-            }}
-          >
-            AUDIO · {p.audio.slot}
-          </span>
-        )}
-        {p.homepage && (
-          <a
-            href={p.homepage}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              fontSize: 10,
-              padding: '2px 6px',
-              borderRadius: 'var(--r-sm)',
-              border: '1px solid var(--line)',
-              color: 'var(--accent-bright)',
-              textDecoration: 'none',
-              fontWeight: 600,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-            }}
-          >
-            HOMEPAGE
-          </a>
-        )}
-      </div>
 
-      <CapabilityChips caps={p.capabilities} />
       </div>
       {confirmOpen && (
         <ConfirmDialog
@@ -196,7 +104,7 @@ function PluginCard({ p }: { p: PluginDto }) {
         >
           <p>Uninstall {p.name}?</p>
           <p>
-            {p.id} will be removed from the host. A restart may be required to
+            {p.name} will be removed from the host. A restart may be required to
             fully unload the assembly.
           </p>
         </ConfirmDialog>
@@ -213,8 +121,6 @@ export function InstalledPlugins({
   const installed = usePluginsStore((s) => s.installed);
   const installedVsts = usePluginsStore((s) => s.installedVsts);
   const load = usePluginsStore((s) => s.installedLoad);
-  const sdkAbi = usePluginsStore((s) => s.sdkAbi);
-  const sdkVersion = usePluginsStore((s) => s.sdkVersion);
   const refresh = usePluginsStore((s) => s.refreshInstalled);
   const uninstallError = usePluginsStore((s) => s.lastUninstallError);
   const uninstallNotice = usePluginsStore((s) => s.lastUninstallNotice);
@@ -238,13 +144,10 @@ export function InstalledPlugins({
         style={{
           display: 'flex',
           alignItems: 'baseline',
-          justifyContent: 'space-between',
+          justifyContent: 'flex-end',
           gap: 12,
         }}
       >
-        <div style={{ color: 'var(--fg-2)', fontSize: 11 }}>
-          SDK ABI v{sdkAbi || '?'} · runtime {sdkVersion || '—'}
-        </div>
         <button
           type="button"
           className="btn sm"

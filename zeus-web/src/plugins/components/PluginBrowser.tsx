@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // PluginBrowser — registry catalog browser. Lists entries from
-// /api/plugins/registry; each card shows the latest version, license,
+// /api/plugins/registry; each card shows the latest version, description,
 // categories and verified-by-Zeus badge. The Install button posts
 // { source: "registry", id, version } to the install endpoint.
 
@@ -146,10 +146,7 @@ function RegistryCard({
             {entry.verified && <VerifiedBadge />}
           </div>
           <div style={{ color: 'var(--fg-2)', fontSize: 11 }}>
-            <span style={{ fontFamily: 'var(--font-mono)' }}>{entry.id}</span>
-            {latest ? ` · latest v${latest.version}` : ' · no versions'}
-            {entry.author ? ` · ${entry.author}` : ''}
-            {entry.license ? ` · ${entry.license}` : ''}
+            {latest ? `v${latest.version}` : 'No versions'}
           </div>
         </div>
         <button
@@ -185,18 +182,6 @@ function RegistryCard({
         </div>
       )}
 
-      {latest && (
-        <div
-          style={{
-            color: 'var(--fg-3)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10,
-          }}
-        >
-          SDK ABI v{latest.sdkAbi} · min v{latest.sdkMinVersion} · platforms{' '}
-          {latest.platforms.join(', ')}
-        </div>
-      )}
       {restartModalOpen && (
         <RestartRequiredModal
           pluginDisplayName={installedDisplayName ?? entry.name}
@@ -209,7 +194,6 @@ function RegistryCard({
 
 export function PluginBrowser() {
   const registry = usePluginsStore((s) => s.registry);
-  const sourceUrl = usePluginsStore((s) => s.registrySourceUrl);
   const load = usePluginsStore((s) => s.registryLoad);
   const refresh = usePluginsStore((s) => s.refreshRegistry);
   const installed = usePluginsStore((s) => s.installed);
@@ -237,16 +221,10 @@ export function PluginBrowser() {
         style={{
           display: 'flex',
           alignItems: 'baseline',
-          justifyContent: 'space-between',
+          justifyContent: 'flex-end',
           gap: 12,
         }}
       >
-        <div style={{ color: 'var(--fg-2)', fontSize: 11 }}>
-          Source:{' '}
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-1)' }}>
-            {sourceUrl || '—'}
-          </span>
-        </div>
         <button
           type="button"
           className="btn sm"

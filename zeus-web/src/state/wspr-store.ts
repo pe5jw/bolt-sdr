@@ -9,7 +9,7 @@
 // ft8-store.
 
 import { create } from 'zustand';
-import { DIGITAL_PLUGIN_BASE } from '../api/digital-plugin';
+import { digitalPluginBase } from '../api/digital-plugin';
 import { dialHzFor, nearestDigitalBand } from '../dsp/digital-segments';
 import {
   configureRadioForDigital,
@@ -119,9 +119,10 @@ export const useWsprStore = create<WsprState>((set, get) => ({
     }),
 
   refreshStatus: async (signal) => {
+    const base = digitalPluginBase();
     try {
-      const res = await fetch(`${DIGITAL_PLUGIN_BASE}/wspr`, { signal });
-      if (!res.ok) throw new Error(`GET ${DIGITAL_PLUGIN_BASE}/wspr → ${res.status}`);
+      const res = await fetch(`${base}/wspr`, { signal });
+      if (!res.ok) throw new Error(`GET ${base}/wspr → ${res.status}`);
       const j = (await res.json()) as Record<string, unknown>;
       set({
         nativeAvailable: j.nativeAvailable === true,
@@ -134,14 +135,15 @@ export const useWsprStore = create<WsprState>((set, get) => ({
   },
 
   enable: async (band) => {
+    const base = digitalPluginBase();
     try {
       const dialHz = dialHzFor('WSPR', band) ?? 14_095_600;
-      const res = await fetch(`${DIGITAL_PLUGIN_BASE}/wspr/enable`, {
+      const res = await fetch(`${base}/wspr/enable`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ receiver: 0, dialFreqMhz: dialHz / 1e6 }),
       });
-      if (!res.ok) throw new Error(`POST ${DIGITAL_PLUGIN_BASE}/wspr/enable → ${res.status}`);
+      if (!res.ok) throw new Error(`POST ${base}/wspr/enable → ${res.status}`);
       const j = (await res.json()) as Record<string, unknown>;
       const ok = j.enabled === true;
       set({
@@ -157,8 +159,9 @@ export const useWsprStore = create<WsprState>((set, get) => ({
   },
 
   disable: async () => {
+    const base = digitalPluginBase();
     try {
-      await fetch(`${DIGITAL_PLUGIN_BASE}/wspr/disable`, { method: 'POST' });
+      await fetch(`${base}/wspr/disable`, { method: 'POST' });
     } catch {
       /* best-effort */
     }

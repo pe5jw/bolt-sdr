@@ -8,21 +8,39 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 //
-// REST + SSE client for the Zeus Digital plugin (com.kb2uka.digital) — the
+// REST + SSE client for the Zeus Digital plugin — the
 // backend plugin that hosts the FT8/FT4/WSPR decoders, TX keyer and spotting
 // uploaders after their extraction from core. Everything digital-mode the
 // frontend used to reach at /api/ft8|/api/wspr|/api/spotting now lives under
-// /api/plugins/com.kb2uka.digital (EXCEPT /api/ft8/settings — the UI-shell
-// per-mode prefs stay core). GET /status doubles as the liveness probe the
-// mode-gate uses: 2xx means the plugin's routes are live (mapped at boot or
-// on a mid-session install — the host publishes plugin routes dynamically);
-// 404 (not installed / activation failed) and 503 (shut down) both read as
-// not-live.
+// /api/plugins/{resolved digital plugin id} (EXCEPT /api/ft8/settings — the
+// UI-shell per-mode prefs stay core). GET /status doubles as the liveness probe
+// the mode-gate uses: 2xx means the plugin's routes are live (mapped at boot or
+// on a mid-session install — the host publishes plugin routes dynamically); 404
+// (not installed / activation failed) and 503 (shut down) both read as not-live.
 
 import { getServerBaseUrl } from '../serverUrl';
+import { usePluginsStore } from '../plugins/state/plugins-store';
+import type { PluginDto } from '../plugins/api/plugins';
 
-export const DIGITAL_PLUGIN_ID = 'com.kb2uka.digital';
+export const DIGITAL_PLUGIN_ID = 'org.openhpsdr.digital';
+export const LEGACY_DIGITAL_PLUGIN_ID = 'com.kb2uka.digital';
 export const DIGITAL_PLUGIN_BASE = `/api/plugins/${DIGITAL_PLUGIN_ID}`;
+
+export function resolveDigitalPluginId(
+  installed: readonly Pick<PluginDto, 'id'>[] = usePluginsStore.getState().installed,
+): string | null {
+  if (installed.some((p) => p.id === DIGITAL_PLUGIN_ID)) return DIGITAL_PLUGIN_ID;
+  if (installed.some((p) => p.id === LEGACY_DIGITAL_PLUGIN_ID)) return LEGACY_DIGITAL_PLUGIN_ID;
+  return null;
+}
+
+export function digitalPluginId(): string {
+  return resolveDigitalPluginId() ?? DIGITAL_PLUGIN_ID;
+}
+
+export function digitalPluginBase(): string {
+  return `/api/plugins/${digitalPluginId()}`;
+}
 
 /**
  * Liveness probe for the mode gate: true ONLY on a 2xx from GET /status.
@@ -31,8 +49,9 @@ export const DIGITAL_PLUGIN_BASE = `/api/plugins/${DIGITAL_PLUGIN_ID}`;
  * trigger (ws reconnect / install refresh) recovers.
  */
 export async function probeDigitalPlugin(signal?: AbortSignal): Promise<boolean> {
+  const base = digitalPluginBase();
   try {
-    const res = await fetch(`${DIGITAL_PLUGIN_BASE}/status`, { signal });
+    const res = await fetch(`${base}/status`, { signal });
     return res.ok;
   } catch {
     return false;
@@ -47,13 +66,14 @@ export interface DigitalIdentity {
 }
 
 export async function postDigitalIdentity(identity: DigitalIdentity, signal?: AbortSignal): Promise<void> {
-  const res = await fetch(`${DIGITAL_PLUGIN_BASE}/config/identity`, {
+  const base = digitalPluginBase();
+  const res = await fetch(`${base}/config/identity`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(identity),
     signal,
   });
-  if (!res.ok) throw new Error(`POST ${DIGITAL_PLUGIN_BASE}/config/identity → ${res.status}`);
+  if (!res.ok) throw new Error(`POST ${base}/config/identity → ${res.status}`);
 }
 
 /**
@@ -75,13 +95,14 @@ export interface DigitalWsjtxLiveConfig {
 }
 
 export async function postDigitalWsjtxLive(cfg: DigitalWsjtxLiveConfig, signal?: AbortSignal): Promise<void> {
-  const res = await fetch(`${DIGITAL_PLUGIN_BASE}/config/wsjtx-live`, {
+  const base = digitalPluginBase();
+  const res = await fetch(`${base}/config/wsjtx-live`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(cfg),
     signal,
   });
-  if (!res.ok) throw new Error(`POST ${DIGITAL_PLUGIN_BASE}/config/wsjtx-live → ${res.status}`);
+  if (!res.ok) throw new Error(`POST ${base}/config/wsjtx-live → ${res.status}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -120,7 +141,7 @@ export function openDigitalEvents(h: DigitalEventsHandlers): () => void {
     if (closed) return;
     // Relative on web/desktop; Capacitor builds prefix the configured LAN base
     // (EventSource bypasses the fetch interceptor, so resolve it explicitly).
-    es = new EventSource(`${getServerBaseUrl()}${DIGITAL_PLUGIN_BASE}/events`);
+    es = new EventSource(`${getServerBaseUrl()}${digitalPluginBase()}/events`);
     es.onopen = () => {
       h.onConnectionChange?.(true);
       h.onOpen?.();

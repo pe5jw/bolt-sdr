@@ -13,7 +13,13 @@ import {
 } from './digital-plugin-store';
 import { usePluginsStore } from '../plugins/state/plugins-store';
 import { useDisplayStore } from './display-store';
-import { DIGITAL_PLUGIN_BASE, DIGITAL_PLUGIN_ID } from '../api/digital-plugin';
+import {
+  DIGITAL_PLUGIN_BASE,
+  DIGITAL_PLUGIN_ID,
+  LEGACY_DIGITAL_PLUGIN_ID,
+  digitalPluginBase,
+  resolveDigitalPluginId,
+} from '../api/digital-plugin';
 import { parsePluginDto } from '../plugins/api/plugins';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -23,7 +29,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 function stubFetch(statusCode: number, pluginIds: string[] = []) {
   const fn = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url === `${DIGITAL_PLUGIN_BASE}/status`) {
+    if (url.endsWith('/status')) {
       return {
         ok: statusCode >= 200 && statusCode < 300,
         status: statusCode,
@@ -58,7 +64,13 @@ function installDigitalPlugin() {
 describe('digital-plugin-store', () => {
   beforeEach(() => {
     stubFetch(200);
-    useDigitalPluginStore.setState({ installed: false, live: false, probed: false, sseConnected: false });
+    useDigitalPluginStore.setState({
+      installed: false,
+      pluginId: null,
+      live: false,
+      probed: false,
+      sseConnected: false,
+    });
     usePluginsStore.setState({ installed: [] });
     useDisplayStore.setState({ connected: false });
   });
@@ -113,6 +125,7 @@ describe('digital-plugin-store', () => {
     });
     await flush();
     expect(useDigitalPluginStore.getState().installed).toBe(true);
+    expect(useDigitalPluginStore.getState().pluginId).toBe(DIGITAL_PLUGIN_ID);
     expect(fn.mock.calls.some((c) => String(c[0]) === `${DIGITAL_PLUGIN_BASE}/status`)).toBe(true);
 
     usePluginsStore.setState({ installed: [] });
@@ -126,6 +139,36 @@ describe('digital-plugin-store', () => {
     });
     await flush();
     expect(useDigitalPluginStore.getState().installed).toBe(false);
+  });
+
+  it('resolves the preferred new id when installed', () => {
+    const installed = [
+      parsePluginDto({ id: LEGACY_DIGITAL_PLUGIN_ID, name: 'Zeus Digital Legacy' }),
+      parsePluginDto({ id: DIGITAL_PLUGIN_ID, name: 'Zeus Digital' }),
+    ];
+
+    expect(resolveDigitalPluginId(installed)).toBe(DIGITAL_PLUGIN_ID);
+  });
+
+  it('falls back to the legacy id when it is the only digital plugin installed', async () => {
+    const fn = stubFetch(200);
+
+    usePluginsStore.setState({
+      installed: [parsePluginDto({ id: LEGACY_DIGITAL_PLUGIN_ID, name: 'Zeus Digital' })],
+    });
+    await flush();
+
+    expect(useDigitalPluginStore.getState().installed).toBe(true);
+    expect(useDigitalPluginStore.getState().pluginId).toBe(LEGACY_DIGITAL_PLUGIN_ID);
+    expect(fn.mock.calls.some((c) =>
+      String(c[0]) === `/api/plugins/${LEGACY_DIGITAL_PLUGIN_ID}/status`,
+    )).toBe(true);
+  });
+
+  it('uses the preferred base when neither id is installed', () => {
+    expect(resolveDigitalPluginId([])).toBeNull();
+    usePluginsStore.setState({ installed: [] });
+    expect(digitalPluginBase()).toBe(DIGITAL_PLUGIN_BASE);
   });
 
   it('isDigitalPluginReady requires BOTH installed and live', () => {
