@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Zeus.Plugins.Contracts;
 using Zeus.Plugins.Contracts.Audio;
+using Zeus.Plugins.Host.Registry;
 
 namespace Zeus.Plugins.Host;
 
@@ -86,9 +87,14 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
         // dir — the uninstall silently undone.
         SweepPendingDeletes(root);
 
+        var suppressedDirs = await RunStartupMigrationsAsync(root, ct)
+            .ConfigureAwait(false);
+
         var pluginDirs = Directory.EnumerateDirectories(root)
             .Where(d => File.Exists(Path.Combine(d, "plugin.json"))
-                        && !File.Exists(Path.Combine(d, PendingDeleteMarker)))
+                        && !File.Exists(Path.Combine(d, PendingDeleteMarker))
+                        && !suppressedDirs.Contains(Path.GetFullPath(d))
+                        && !IsAlreadyActiveDirectory(d))
             .ToArray();
 
         foreach (var dir in pluginDirs)
@@ -116,7 +122,11 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
             if (!File.Exists(Path.Combine(dir, PendingDeleteMarker))) continue;
             try
             {
-                Directory.Delete(dir, recursive: true);
+                if (!TryDeletePluginDirectory(dir))
+                {
+                    _log.LogWarning("Could not complete deferred uninstall of {Dir}; will retry next start.", dir);
+                    continue;
+                }
                 _log.LogInformation("Completed deferred uninstall of {Dir}", dir);
             }
             catch (Exception ex)
@@ -127,6 +137,71 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
             }
         }
     }
+
+    private bool TryDeletePluginDirectory(string dir)
+    {
+        if (_options.TryDeleteDirectory is { } tryDeleteDirectory)
+            return tryDeleteDirectory(dir);
+
+        Directory.Delete(dir, recursive: true);
+        return true;
+    }
+
+    private async Task<IReadOnlySet<string>> RunStartupMigrationsAsync(
+        string root,
+        CancellationToken ct)
+    {
+        var migrator = _services.GetService<PluginIdMigrator>();
+        var installer = _services.GetService<PluginInstaller>();
+        if (migrator is null || installer is null)
+            return EmptyPathSet;
+
+        using var migrationCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        migrationCts.CancelAfter(_options.MigrationTimeout);
+
+        try
+        {
+            return await migrator.RunStartupMigrationsAsync(installer, migrationCts.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && migrationCts.IsCancellationRequested)
+        {
+            _log.LogWarning(ex,
+                "Plugin id startup migrations did not complete for {Root}; installed plugins will continue loading.",
+                root);
+            return EmptyPathSet;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex,
+                "Plugin id startup migrations did not complete for {Root}; installed plugins will continue loading.",
+                root);
+            return EmptyPathSet;
+        }
+    }
+
+    private bool IsAlreadyActiveDirectory(string dir)
+    {
+        var full = NormalizeDirectoryPath(dir);
+        return _active.Values.Any(p =>
+            string.Equals(NormalizeDirectoryPath(p.Loaded.PluginDir), full, PathComparison));
+    }
+
+    private static string NormalizeDirectoryPath(string dir) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
+
+    private static readonly IReadOnlySet<string> EmptyPathSet =
+        new HashSet<string>(PathComparer);
+
+    private static StringComparer PathComparer =>
+        OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+
+    private static StringComparison PathComparison =>
+        OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
 
     public async Task StopAsync(CancellationToken ct)
     {
@@ -264,7 +339,9 @@ public sealed record PluginManagerOptions
 {
     public TimeSpan InitTimeout { get; init; } = TimeSpan.FromSeconds(10);
     public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromSeconds(5);
+    public TimeSpan MigrationTimeout { get; init; } = TimeSpan.FromSeconds(60);
     public bool SafeMode { get; init; } = false;
+    internal Func<string, bool>? TryDeleteDirectory { get; init; }
 
     /// <summary>
     /// Override the plugin discovery root. Null (default) defers to
