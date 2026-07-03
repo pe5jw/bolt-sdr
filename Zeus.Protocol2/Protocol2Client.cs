@@ -1441,6 +1441,38 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         }
     }
 
+    public int FlushPendingTxIqTailPacket()
+    {
+        if (_sock is null || _rxTask is null) return 0;
+        lock (_txIqGate)
+        {
+            int pendingComplexSamples = _txIqScratchCount / 2;
+            if (pendingComplexSamples <= 0) return 0;
+
+            Array.Clear(_txIqScratch, _txIqScratchCount, _txIqScratch.Length - _txIqScratchCount);
+            _txIqScratchCount = _txIqScratch.Length;
+            FlushTxIqLocked();
+            return pendingComplexSamples;
+        }
+    }
+
+    public bool WaitForTxIqQueueIdle(TimeSpan timeout)
+    {
+        long start = Stopwatch.GetTimestamp();
+        long timeoutTicks = timeout <= TimeSpan.Zero
+            ? 0
+            : (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+        while (true)
+        {
+            var diag = TxIqDiagnosticsSnapshot();
+            if (diag.ScratchComplexSamples == 0 && diag.QueuedPackets == 0) return true;
+            if (timeoutTicks <= 0) return false;
+            long elapsed = Stopwatch.GetTimestamp() - start;
+            if (elapsed >= timeoutTicks) return false;
+            Thread.Sleep(1);
+        }
+    }
+
     private void ResetTxIq()
     {
         lock (_txIqGate) _txIqScratchCount = 0;

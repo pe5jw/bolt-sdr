@@ -562,4 +562,29 @@ public class TxAudioIngestTests
         Assert.All(p2Blocks, block => Assert.Equal(2048, block.Length));
         Assert.Contains(p2Blocks.SelectMany(block => block), v => Math.Abs(v) > 0.05f);
     }
+
+    [Fact]
+    public void RogerBeepTail_WaitsForTransportDrainBeforeClearingRing()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        int drainCalls = 0;
+        int ringCountAtDrain = 0;
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>(),
+            drainTxTransport: _ =>
+            {
+                drainCalls++;
+                ringCountAtDrain = ring.Count;
+                return true;
+            });
+
+        bool emitted = ingest.DrainRogerBeepTail();
+
+        Assert.True(emitted);
+        Assert.Equal(1, drainCalls);
+        Assert.True(ringCountAtDrain > 0);
+        Assert.Equal(0, ring.Count);
+    }
 }

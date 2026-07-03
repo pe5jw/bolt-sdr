@@ -69,6 +69,7 @@ public class DspPipelineService : BackgroundService,
     private readonly RadioService _radio;
     private readonly StreamingHub _hub;
     private readonly IRxAudioSink[] _audioSinks;
+    private readonly TxIqRing? _txIqRing;
     // Operator RX master mute (desktop "Mute" button, issue #1252). Read once per
     // tick so the local-monitor lane (Recorder playback) can stay audible while
     // real RX audio is muted. Null in unit tests / non-desktop hosts => never muted.
@@ -1272,10 +1273,12 @@ public class DspPipelineService : BackgroundService,
         Func<TxAudioIngest?>? txIngestFactory = null,
         Nr3ModelStore? nr3ModelStore = null,
         IKiwiAudioBus? kiwiAudioBus = null,
-        RxAudioMuteState? rxAudioMute = null)
+        RxAudioMuteState? rxAudioMute = null,
+        TxIqRing? txIqRing = null)
     {
         _radio = radio;
         _hub = hub;
+        _txIqRing = txIqRing;
         _freeDv = freeDv;
         _kiwiAudioBus = kiwiAudioBus;
         _rxAudioMute = rxAudioMute;
@@ -1375,6 +1378,21 @@ public class DspPipelineService : BackgroundService,
     /// MOX release, before the wire MOX bit drops.
     /// </summary>
     public virtual bool DrainRogerBeepTail() => ResolveTxIngest()?.DrainRogerBeepTail() ?? false;
+
+    public virtual bool DrainTxIqTransportTail(TimeSpan timeout)
+    {
+        var p2 = _p2Client;
+        if (p2 is not null)
+        {
+            p2.FlushPendingTxIqTailPacket();
+            return p2.WaitForTxIqQueueIdle(timeout);
+        }
+
+        if (_radio.ActiveClient is not null && _txIqRing is not null)
+            return _txIqRing.WaitForEmpty(timeout);
+
+        return true;
+    }
 
     // Persisted TX display analyzer config (live TX waterfall feature). Optional
     // so test constructions of DspPipelineService keep working; when null the

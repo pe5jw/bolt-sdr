@@ -72,4 +72,35 @@ public class TxIqQuantizerTests
         Assert.Equal(32, diag.QueuedPackets);
         Assert.Equal(40u, diag.NextSequence);
     }
+
+    [Fact]
+    public void FlushPendingTxIqTailPacket_ZeroPadsAndQueuesPartialPacket()
+    {
+        var client = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
+        using var sock = new System.Net.Sockets.Socket(
+            System.Net.Sockets.AddressFamily.InterNetwork,
+            System.Net.Sockets.SocketType.Dgram,
+            System.Net.Sockets.ProtocolType.Udp);
+        typeof(Protocol2Client)
+            .GetField("_sock", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(client, sock);
+        typeof(Protocol2Client)
+            .GetField("_rxTask", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(client, Task.CompletedTask);
+        var iq = new float[100 * 2];
+        Array.Fill(iq, 0.1f);
+
+        client.SendTxIq(iq);
+        var before = client.TxIqDiagnosticsSnapshot();
+        int flushed = client.FlushPendingTxIqTailPacket();
+        var after = client.TxIqDiagnosticsSnapshot();
+
+        Assert.Equal(100, before.ScratchComplexSamples);
+        Assert.Equal(0, before.PacketsQueued);
+        Assert.Equal(100, flushed);
+        Assert.Equal(0, after.ScratchComplexSamples);
+        Assert.Equal(1, after.PacketsQueued);
+        Assert.Equal(1, after.QueuedPackets);
+        Assert.Equal(1u, after.NextSequence);
+    }
 }

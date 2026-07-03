@@ -140,6 +140,7 @@ public sealed class TxAudioIngest : IDisposable
     private const int FreeDvTxTailCeilingMs = 1200;     // absolute runaway cap on the drain
     private const int FreeDvTxTailGuardMs = 160;        // post-drain FIFO flush hold
     private const int RogerBeepDurationMs = 120;
+    private const int RogerBeepTransportDrainTimeoutMs = 350;
     private const int RogerBeepTailGuardMs = 70;
     private const double RogerBeepFrequencyHz = 1000.0;
     private const float RogerBeepMagnitude = 0.20f;
@@ -283,6 +284,7 @@ public sealed class TxAudioIngest : IDisposable
         FreeDvService? freeDv = null)
         : this(ring, () => pipeline.CurrentEngine, () => tx.IsMoxOn, hub, log,
                forwardP2: iq => pipeline.ForwardTxIqToP2(iq.Span),
+               drainTxTransport: pipeline.DrainTxIqTransportTail,
                txOwnedByTuneDriver: () => tx.IsTunOn || tx.IsTwoToneOn,
                preKeyOpenAtTicks: () => tx.PreKeyOpenAtTicks,
                freeDv: freeDv)
@@ -301,6 +303,7 @@ public sealed class TxAudioIngest : IDisposable
         StreamingHub hub,
         ILogger<TxAudioIngest> log,
         Action<ReadOnlyMemory<float>>? forwardP2 = null,
+        Func<TimeSpan, bool>? drainTxTransport = null,
         Action<int>? onWdspConsumed = null,
         Func<bool>? txOwnedByTuneDriver = null,
         Func<long>? preKeyOpenAtTicks = null,
@@ -311,6 +314,7 @@ public sealed class TxAudioIngest : IDisposable
         _isMoxOn = isMoxOn;
         _freeDv = freeDv;
         _forwardP2 = forwardP2;
+        _drainTxTransport = drainTxTransport;
         _onWdspConsumed = onWdspConsumed;
         _txOwnedByTuneDriver = txOwnedByTuneDriver ?? (static () => false);
         _preKeyOpenAtTicks = preKeyOpenAtTicks ?? (static () => 0L);
@@ -504,10 +508,12 @@ public sealed class TxAudioIngest : IDisposable
                 }
             }
 
+            bool transportDrained = _drainTxTransport?.Invoke(
+                TimeSpan.FromMilliseconds(RogerBeepTransportDrainTimeoutMs)) ?? true;
             Thread.Sleep(RogerBeepTailGuardMs);
             _log.LogInformation(
-                "tx.rogerBeep.tail dropping PTT: blocks={Blocks} durationMs={Duration} guardMs={Guard}",
-                blocks, RogerBeepDurationMs, RogerBeepTailGuardMs);
+                "tx.rogerBeep.tail dropping PTT: blocks={Blocks} durationMs={Duration} transportDrained={TransportDrained} guardMs={Guard}",
+                blocks, RogerBeepDurationMs, transportDrained, RogerBeepTailGuardMs);
             return emitted;
         }
         catch (Exception ex)
@@ -543,6 +549,7 @@ public sealed class TxAudioIngest : IDisposable
     private readonly FreeDvService? _freeDv;
 
     private readonly Action<ReadOnlyMemory<float>>? _forwardP2;
+    private readonly Func<TimeSpan, bool>? _drainTxTransport;
     // True while TUN or the two-tone test is active. TxTuneDriver is the sole TX
     // driver in those states; this mic-ingest path must NOT also run ProcessTxBlock
     // or push IQ, or two threads drive the same TXA (fexchange2) and BOTH feed the
