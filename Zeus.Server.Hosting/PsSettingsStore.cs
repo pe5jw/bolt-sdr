@@ -75,11 +75,12 @@ public sealed class PsSettingsStore : IDisposable
     /// AFTER the poison window is never wiped by a later startup's migration
     /// pass.
     /// </summary>
-    public const int TxAttnMigrationCurrent = 1;
+    public const int TxAttnMigrationCurrent = 2;
 
     /// <summary>
-    /// One-time migration (TxAttnMigration 0 → 1): drop persisted ANAN-G2E
-    /// (HermesC10) TX feedback-attenuation entries. The G2E testers builds
+    /// Step-wise migration: TxAttnMigration &lt; 1 drops persisted HermesC10
+    /// TX feedback-attenuation entries; TxAttnMigration &lt; 2 drops HermesII
+    /// entries. The G2E testers builds
     /// (test-g2e-ps / test-g2e-p1-ps, PRs #1249/#1283) shipped a defective
     /// auto-acquire walk that ratcheted the attenuation to 31 dB (max — a
     /// deaf feedback ADC) and persisted it per-board, re-applied on every
@@ -88,7 +89,9 @@ public sealed class PsSettingsStore : IDisposable
     /// arm (31 dB seed, then the two-tone servo walks down and re-persists a
     /// calibrated value). HwPeakByBoard is left untouched — it was never
     /// written by the broken walk and may hold an operator calibration.
-    /// Scoped to HermesC10 keys only; every other board's entries survive.
+    /// v2 also clears HermesII (ANAN-10E) entries produced by the same pre-
+    /// hardening servo policy, without re-clearing HermesC10 entries that
+    /// already passed v1. Every other board's entries survive.
     /// </summary>
     private void MigrateTxAttnPoison()
     {
@@ -96,21 +99,43 @@ public sealed class PsSettingsStore : IDisposable
         foreach (var entry in _entries.FindAll().ToList())
         {
             if (entry.TxAttnMigration >= targetVersion) continue;
-            var poisoned = entry.TxAttnByBoard.Keys
-                .Where(k => k.EndsWith(":HermesC10", StringComparison.Ordinal)
-                            || k.Contains(":HermesC10:", StringComparison.Ordinal))
-                .ToList();
-            foreach (var key in poisoned) entry.TxAttnByBoard.Remove(key);
+            int fromVersion = entry.TxAttnMigration;
+            var poisoned = new List<string>();
+            int c10Cleared = fromVersion < 1
+                ? RemoveTxAttnBoardKeys(entry, HpsdrBoardKind.HermesC10, poisoned)
+                : 0;
+            int hermesIICleared = fromVersion < 2
+                ? RemoveTxAttnBoardKeys(entry, HpsdrBoardKind.HermesII, poisoned)
+                : 0;
             entry.TxAttnMigration = targetVersion;
             _entries.Update(entry);
             if (poisoned.Count > 0)
             {
                 _log.LogWarning(
-                    "ps.migration txAttn v{Version}: cleared {Count} poisoned HermesC10 attenuation entr{Plural} ({Keys}) — see PR #1249/#1283 field failure",
-                    targetVersion, poisoned.Count, poisoned.Count == 1 ? "y" : "ies",
-                    string.Join(",", poisoned));
+                    "ps.migration txAttn v{FromVersion}->{ToVersion}: cleared HermesC10={C10Count} HermesII={HermesIICount} poisoned single-ADC attenuation entr{Plural} ({Keys}) — see PR #1249/#1283 field failure",
+                    fromVersion, targetVersion, c10Cleared, hermesIICleared,
+                    poisoned.Count == 1 ? "y" : "ies", string.Join(",", poisoned));
             }
         }
+    }
+
+    private static int RemoveTxAttnBoardKeys(
+        PsSettingsEntry entry,
+        HpsdrBoardKind board,
+        List<string> removedKeys)
+    {
+        string suffix = ":" + board;
+        string middle = suffix + ":";
+        var keys = entry.TxAttnByBoard.Keys
+            .Where(k => k.EndsWith(suffix, StringComparison.Ordinal)
+                        || k.Contains(middle, StringComparison.Ordinal))
+            .ToList();
+        foreach (var key in keys)
+        {
+            entry.TxAttnByBoard.Remove(key);
+            removedKeys.Add(key);
+        }
+        return keys.Count;
     }
 
     public PsSettingsEntry? Get(string profileId = "default")
@@ -183,7 +208,9 @@ public sealed class PsSettingsEntry
     public Dictionary<string, int> TxAttnByBoard { get; set; } = new();
     // Schema migration marker for TxAttnByBoard cleanups. 0 (the LiteDB
     // default for pre-existing records) = never migrated; 1 = poisoned
-    // HermesC10 entries from the PR #1249/#1283 testers builds were cleared.
+    // HermesC10 entries from the PR #1249/#1283 testers builds were cleared;
+    // 2 = HermesII entries from the same pre-hardening servo window were also
+    // cleared.
     // See PsSettingsStore.MigrateTxAttnPoison.
     public int TxAttnMigration { get; set; }
     public DateTime UpdatedUtc { get; set; }

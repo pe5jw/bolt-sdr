@@ -447,9 +447,10 @@ public sealed class WdspDspEngine : IDspEngine
     // PS feedback IQ sample rate. 192 kHz on every P2 path — the paired
     // DDC0/DDC1 scheme (G2 / Saturn / ANAN-7000) and the HermesC10 keyed
     // time-mux burst both run the feedback DDC at a fixed 192 kHz — and on
-    // the HL2 P1 path (shipped behaviour, untouched). On the HermesC10 P1
-    // 4-DDC path the feedback rides the normal EP6 stream at the WIRE rate
-    // (all P1 DDCs share the one global rate), so DspPipelineService
+    // the HL2 P1 path (shipped behaviour, untouched). On Hermes-family
+    // single-ADC P1 paths (HermesC10 4-DDC, HermesII 2-DDC) feedback rides
+    // the normal EP6 stream at the WIRE rate (all P1 DDCs share the one
+    // global rate), so DspPipelineService
     // overrides this via SetPsFeedbackRateHz before OpenTxChannel — telling
     // WDSP 192 kHz while feeding it 48/96/384 kHz mis-scales calcc's
     // mox/loop-delay sample counts and amp-delay lines and the fit never
@@ -462,10 +463,10 @@ public sealed class WdspDspEngine : IDspEngine
 
     /// <summary>
     /// Override the PS feedback sample rate (Hz) BEFORE <see cref="OpenTxChannel"/>
-    /// runs. HermesC10-P1 only today — see the <see cref="_psFeedbackRateHz"/>
-    /// comment. No-op after TXA open (the value is latched into WDSP at open;
-    /// P1 rate changes tear down and rebuild the whole engine, so the seam
-    /// re-runs on every re-rate).
+    /// runs. Hermes-family single-ADC P1 only — see the
+    /// <see cref="_psFeedbackRateHz"/> comment. No-op after TXA open (the
+    /// value is latched into WDSP at open; P1 rate changes tear down and
+    /// rebuild the whole engine, so the seam re-runs on every re-rate).
     /// </summary>
     public void SetPsFeedbackRateHz(int rateHz)
     {

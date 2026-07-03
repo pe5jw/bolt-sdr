@@ -106,6 +106,7 @@ public class Ep2DecoderPsHermesC10Tests
 
     [Theory]
     [InlineData(HpsdrBoardKind.HermesC10)]
+    [InlineData(HpsdrBoardKind.HermesII)]
     [InlineData(HpsdrBoardKind.HermesLite2)]   // locks the existing HL2 leg too
     public void Attenuator_PsBoards_Armed_SetPsRun(HpsdrBoardKind board)
     {
@@ -139,22 +140,28 @@ public class Ep2DecoderPsHermesC10Tests
     [InlineData(0, 0)]
     [InlineData(17, 17)]
     [InlineData(31, 31)]
-    public void LnaTxGainStable_C10_CarriesOperatorAttenOnTx(int db, byte expected)
+    public void LnaTxGainStable_SingleAdcP1_CarriesOperatorAttenOnTx(int db, byte expected)
     {
-        var host = Decode(ControlFrame.CcRegister.LnaTxGainStable, ControlFrame.CcRegister.TxFreq,
-            PsState(HpsdrBoardKind.HermesC10, psTxAttnOnTxDb: db));
-        Assert.Equal(expected, host.P1AttenOnTxDb);
+        foreach (var board in new[] { HpsdrBoardKind.HermesC10, HpsdrBoardKind.HermesII })
+        {
+            var host = Decode(ControlFrame.CcRegister.LnaTxGainStable, ControlFrame.CcRegister.TxFreq,
+                PsState(board, psTxAttnOnTxDb: db));
+            Assert.Equal(expected, host.P1AttenOnTxDb);
+        }
     }
 
     [Fact]
-    public void LnaTxGainStable_C10_SentinelUnset_Carries31()
+    public void LnaTxGainStable_SingleAdcP1_SentinelUnset_Carries31()
     {
         // "Operator never set a value" → the wire carries 31, the silicon
         // reset default — the honest no-op that starves nothing and clips
         // nothing. A regression to 0 dB here is the ADC-clip extreme.
-        var host = Decode(ControlFrame.CcRegister.LnaTxGainStable, ControlFrame.CcRegister.TxFreq,
-            PsState(HpsdrBoardKind.HermesC10));
-        Assert.Equal(31, host.P1AttenOnTxDb);
+        foreach (var board in new[] { HpsdrBoardKind.HermesC10, HpsdrBoardKind.HermesII })
+        {
+            var host = Decode(ControlFrame.CcRegister.LnaTxGainStable, ControlFrame.CcRegister.TxFreq,
+                PsState(board));
+            Assert.Equal(31, host.P1AttenOnTxDb);
+        }
     }
 
     [Fact]

@@ -23,11 +23,12 @@ namespace Zeus.Server.Tests;
 
 /// <summary>
 /// PsSettingsStore.MigrateTxAttnPoison — the one-time cleanup of persisted
-/// ANAN-G2E (HermesC10) TX feedback-attenuation entries poisoned by the
+/// single-ADC TX feedback-attenuation entries poisoned by the
 /// PR #1249/#1283 testers builds (a defective auto-acquire ratcheted the
 /// value to 31 dB — a deaf feedback ADC — and re-applied it on every
-/// connect; #1248/#1285). The migration must wipe ONLY HermesC10 attn keys,
-/// exactly once, and never eat a value calibrated after the poison window.
+/// connect; #1248/#1285). The migration must wipe ONLY the single-ADC
+/// attn keys covered by that poison class, exactly once, and never eat a
+/// value calibrated after the poison window.
 /// </summary>
 public class PsTxAttnMigrationTests : IDisposable
 {
@@ -48,20 +49,23 @@ public class PsTxAttnMigrationTests : IDisposable
 
     private static string C10P2Key => RadioService.GetPsBoardKey(true, HpsdrBoardKind.HermesC10, OrionMkIIVariant.G2);
     private static string C10P1Key => RadioService.GetPsBoardKey(false, HpsdrBoardKind.HermesC10, OrionMkIIVariant.G2);
+    private static string HermesIIP2Key => RadioService.GetPsBoardKey(true, HpsdrBoardKind.HermesII, OrionMkIIVariant.G2);
+    private static string HermesIIP1Key => RadioService.GetPsBoardKey(false, HpsdrBoardKind.HermesII, OrionMkIIVariant.G2);
     private static string G2Key => RadioService.GetPsBoardKey(true, HpsdrBoardKind.OrionMkII, OrionMkIIVariant.G2);
 
     [Fact]
-    public void Migration_ClearsPoisonedHermesC10Entries_KeepsOtherBoards()
+    public void Migration_V0ClearsHermesC10AndHermesII_KeepsOtherBoards()
     {
-        // Seed a store shaped like both field testers': HermesC10 attn
-        // ratcheted to 31 on both protocols (Bob P1 #1285, Stig P2), plus a
-        // healthy G2 value and an operator hwPeak calibration that must
-        // survive.
+        // Seed a store shaped like the poisoned single-ADC field records:
+        // HermesC10 and HermesII attn ratcheted on both protocols, plus a
+        // healthy G2 value and an operator hwPeak calibration that must survive.
         using (var store = OpenStore())
         {
             var entry = store.Get() ?? new PsSettingsEntry();
             entry.TxAttnByBoard[C10P2Key] = 31;
             entry.TxAttnByBoard[C10P1Key] = 31;
+            entry.TxAttnByBoard[HermesIIP2Key] = 30;
+            entry.TxAttnByBoard[HermesIIP1Key] = 29;
             entry.TxAttnByBoard[G2Key] = 12;
             entry.HwPeakByBoard[C10P2Key] = 0.31;   // operator cal — NOT poison
             entry.TxAttnMigration = 0;              // pre-migration record
@@ -75,6 +79,8 @@ public class PsTxAttnMigrationTests : IDisposable
             Assert.NotNull(entry);
             Assert.False(entry!.TxAttnByBoard.ContainsKey(C10P2Key)); // wiped
             Assert.False(entry.TxAttnByBoard.ContainsKey(C10P1Key));  // wiped
+            Assert.False(entry.TxAttnByBoard.ContainsKey(HermesIIP2Key));
+            Assert.False(entry.TxAttnByBoard.ContainsKey(HermesIIP1Key));
             Assert.Equal(12, entry.TxAttnByBoard[G2Key]);             // survives
             Assert.Equal(0.31, entry.HwPeakByBoard[C10P2Key]);        // hwPeak untouched
             Assert.Equal(PsSettingsStore.TxAttnMigrationCurrent, entry.TxAttnMigration);
@@ -82,7 +88,35 @@ public class PsTxAttnMigrationTests : IDisposable
     }
 
     [Fact]
-    public void Migration_RunsExactlyOnce_PostMigrationCalibrationSurvives()
+    public void Migration_V1ClearsOnlyHermesII_PostHardeningHermesC10Survives()
+    {
+        using (var store = OpenStore())
+        {
+            var entry = store.Get() ?? new PsSettingsEntry();
+            entry.TxAttnByBoard[C10P2Key] = 24;
+            entry.TxAttnByBoard[C10P1Key] = 25;
+            entry.TxAttnByBoard[HermesIIP2Key] = 30;
+            entry.TxAttnByBoard[HermesIIP1Key] = 29;
+            entry.TxAttnByBoard[G2Key] = 12;
+            entry.TxAttnMigration = 1;              // already passed the HermesC10 step
+            store.Upsert(entry);
+        }
+
+        using (var store = OpenStore())
+        {
+            var entry = store.Get();
+            Assert.NotNull(entry);
+            Assert.Equal(24, entry!.TxAttnByBoard[C10P2Key]);
+            Assert.Equal(25, entry.TxAttnByBoard[C10P1Key]);
+            Assert.False(entry.TxAttnByBoard.ContainsKey(HermesIIP2Key));
+            Assert.False(entry.TxAttnByBoard.ContainsKey(HermesIIP1Key));
+            Assert.Equal(12, entry.TxAttnByBoard[G2Key]);
+            Assert.Equal(PsSettingsStore.TxAttnMigrationCurrent, entry.TxAttnMigration);
+        }
+    }
+
+    [Fact]
+    public void Migration_V2IsIdempotent_PostMigrationCalibrationSurvives()
     {
         // First open stamps the (empty) store at the current version.
         using (var store = OpenStore())
@@ -92,6 +126,8 @@ public class PsTxAttnMigrationTests : IDisposable
             // A value calibrated AFTER the poison window — the two-tone servo's
             // post-calibration persist writes exactly this shape.
             entry.TxAttnByBoard[C10P2Key] = 24;
+            entry.TxAttnByBoard[HermesIIP2Key] = 23;
+            entry.TxAttnByBoard[G2Key] = 12;
             store.Upsert(entry);
         }
 
@@ -101,6 +137,9 @@ public class PsTxAttnMigrationTests : IDisposable
             var entry = store.Get();
             Assert.NotNull(entry);
             Assert.Equal(24, entry!.TxAttnByBoard[C10P2Key]);
+            Assert.Equal(23, entry.TxAttnByBoard[HermesIIP2Key]);
+            Assert.Equal(12, entry.TxAttnByBoard[G2Key]);
+            Assert.Equal(PsSettingsStore.TxAttnMigrationCurrent, entry.TxAttnMigration);
         }
     }
 
@@ -115,7 +154,7 @@ public class PsTxAttnMigrationTests : IDisposable
         {
             var radio = new RadioService(
                 NullLoggerFactory.Instance,
-                new DspSettingsStore(NullLogger<DspSettingsStore>.Instance),
+                new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath),
                 new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath),
                 filterPresetStore: null, txIqSource: null,
                 preferredRadioStore: null, psStore: store);

@@ -30,6 +30,7 @@ internal sealed class Ep6Encoder
     // the compile-time proof that the emulator reaches Zeus.Protocol1 internals.
     public const int Ep6PacketLength = PacketParser.PacketLength;                 // 1032
     public const int ComplexSamplesPerPacket = PacketParser.ComplexSamplesPerPacket; // 126
+    public const int TwoDdcSamplesPerPacket = PacketParser.TwoDdcSamplesPerPacket;   // 72
 
     // The remaining geometry constants come straight from PacketParser so the
     // encoder and decoder agree on the layout by construction.
@@ -146,6 +147,67 @@ internal sealed class Ep6Encoder
                 short mic = sampleIndex < micSamples.Length ? micSamples[sampleIndex] : (short)0;
                 BinaryPrimitives.WriteInt16BigEndian(payload.Slice(off + 6, 2), mic);
 
+                sampleIndex++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Encode a two-DDC EP6 RX-IQ packet (NumReceiversMinusOne=1). DDC0 occupies
+    /// each 14-byte slot at offset 0 and DDC1 at offset 6; mic bytes remain at
+    /// offsets 12..13.
+    /// </summary>
+    public void EncodeTwoDdc(
+        Span<byte> packet,
+        uint sequence,
+        ReadOnlySpan<double> ddc0Iq,
+        ReadOnlySpan<double> ddc1Iq,
+        in RfTelemetry telemetry,
+        bool pttEcho = false,
+        ReadOnlySpan<short> micSamples = default)
+    {
+        if (packet.Length != Ep6PacketLength)
+            throw new ArgumentException(
+                $"packet must be exactly {Ep6PacketLength} bytes", nameof(packet));
+
+        int needed = 2 * TwoDdcSamplesPerPacket;
+        if (ddc0Iq.Length < needed || ddc1Iq.Length < needed)
+            throw new ArgumentException(
+                $"each DDC buffer must hold at least {needed} doubles");
+
+        packet.Clear();
+        packet[0] = 0xEF;
+        packet[1] = 0xFE;
+        packet[2] = 0x01;
+        packet[3] = 0x06;
+        BinaryPrimitives.WriteUInt32BigEndian(packet.Slice(4, 4), sequence);
+
+        int sampleIndex = 0;
+        for (int frame = 0; frame < 2; frame++)
+        {
+            Span<byte> usb = packet.Slice(MetisHeaderLength + frame * UsbFrameLength, UsbFrameLength);
+            usb[0] = Sync;
+            usb[1] = Sync;
+            usb[2] = Sync;
+
+            byte addr = frame == 0 ? AddrAlexFwd : AddrAlexRef;
+            usb[3] = (byte)((addr << 3) | (pttEcho ? 0x01 : 0x00));
+            ushort ain0 = frame == 0 ? (ushort)0 : telemetry.RefAdc;
+            ushort ain1 = frame == 0 ? telemetry.FwdAdc : (ushort)0;
+            BinaryPrimitives.WriteUInt16BigEndian(usb.Slice(4, 2), ain0);
+            BinaryPrimitives.WriteUInt16BigEndian(usb.Slice(6, 2), ain1);
+
+            Span<byte> payload = usb.Slice(UsbHeaderLength);
+            for (int g = 0; g < PacketParser.TwoDdcSamplesPerUsbFrame; g++)
+            {
+                int off = g * PacketParser.TwoDdcBytesPerSlot;
+                WriteInt24BigEndian(payload.Slice(off, 3), ToInt24(ddc0Iq[2 * sampleIndex]));
+                WriteInt24BigEndian(payload.Slice(off + 3, 3), ToInt24(ddc0Iq[2 * sampleIndex + 1]));
+                WriteInt24BigEndian(payload.Slice(off + 6, 3), ToInt24(ddc1Iq[2 * sampleIndex]));
+                WriteInt24BigEndian(payload.Slice(off + 9, 3), ToInt24(ddc1Iq[2 * sampleIndex + 1]));
+
+                short mic = sampleIndex < micSamples.Length ? micSamples[sampleIndex] : (short)0;
+                BinaryPrimitives.WriteInt16BigEndian(payload.Slice(off + 12, 2), mic);
                 sampleIndex++;
             }
         }
