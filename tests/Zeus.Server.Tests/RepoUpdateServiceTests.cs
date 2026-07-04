@@ -45,7 +45,7 @@ public class RepoUpdateServiceTests
     [Theory]
     [InlineData("windows", Architecture.X64, false, false, "openhpsdr-zeus-0.9.1-win-x64-setup.exe")]
     [InlineData("windows", Architecture.Arm64, false, false, "openhpsdr-zeus-0.9.1-win-arm64-setup.exe")]
-    [InlineData("macos", Architecture.Arm64, false, false, "OpenhpsdrZeus-0.9.1-macos-arm64.dmg")]
+    [InlineData("macos", Architecture.Arm64, false, false, "openhpsdr-zeus-0.9.1-macos-arm64.pkg")]
     [InlineData("linux", Architecture.X64, false, false, "openhpsdr-zeus-0.9.1-linux-x64.tar.gz")]
     [InlineData("linux", Architecture.Arm64, false, false, "openhpsdr-zeus-0.9.1-linux-arm64.tar.gz")]
     [InlineData("linux", Architecture.X64, true, false, "OpenhpsdrZeus-0.9.1-linux-x86_64.AppImage")]
@@ -102,12 +102,68 @@ public class RepoUpdateServiceTests
         Assert.Null(none);
     }
 
+    [Theory]
+    [InlineData(null, "0.9.1", false, null, "0.9.1")]
+    [InlineData("", "0.9.1", false, null, "0.9.1")]
+    [InlineData("not-a-version", "0.9.1", false, null, "0.9.1")]
+    [InlineData("0.9.0", "0.9.1", false, null, "0.9.1")]
+    [InlineData("0.9.1", "0.9.1", false, null, "0.9.1")]
+    [InlineData("0.9.2", "0.9.1", true, "0.9.2", "0.9.2")]
+    public void EvaluateVersionFloor_BlocksOnlyDowngrades(
+        string? storedFloor,
+        string currentVersion,
+        bool expectedForce,
+        string? expectedRequired,
+        string? expectedPersist)
+    {
+        var decision = RepoUpdateService.EvaluateVersionFloor(storedFloor, currentVersion);
+
+        Assert.Equal(expectedForce, decision.ForceUpdate);
+        Assert.Equal(expectedRequired, decision.RequiredVersion);
+        Assert.Equal(expectedPersist, decision.PersistVersion);
+        Assert.Equal(expectedForce ? "downgrade" : null, decision.ForceReason);
+    }
+
+    [Fact]
+    public void SelectObsoleteLinuxReleaseArtifacts_MatchesOnlyExactOlderArtifacts()
+    {
+        var entries = new[]
+        {
+            new RepoUpdateService.LinuxReleaseArtifact("OpenhpsdrZeus-0.9.0-linux-x86_64.AppImage", IsDirectory: false),
+            new RepoUpdateService.LinuxReleaseArtifact("OpenhpsdrZeus-Server-0.9.0-linux-x86_64.AppImage", IsDirectory: false),
+            new RepoUpdateService.LinuxReleaseArtifact("OpenhpsdrZeus-0.9.1-linux-x86_64.AppImage", IsDirectory: false),
+            new RepoUpdateService.LinuxReleaseArtifact("OpenhpsdrZeus-0.8.9-linux-aarch64.AppImage", IsDirectory: false),
+            new RepoUpdateService.LinuxReleaseArtifact("openhpsdr-zeus-0.8.0-linux-x64", IsDirectory: true),
+            new RepoUpdateService.LinuxReleaseArtifact("openhpsdr-zeus-0.8.0-linux-x64.tar.gz", IsDirectory: false),
+            new RepoUpdateService.LinuxReleaseArtifact("openhpsdr-zeus-0.9.1-linux-x64", IsDirectory: true),
+            new RepoUpdateService.LinuxReleaseArtifact("OpenhpsdrZeus-0.1.0-linux-x86_64.AppImage", IsDirectory: true),
+            new RepoUpdateService.LinuxReleaseArtifact("OpenhpsdrZeus-nightly-linux-x86_64.AppImage", IsDirectory: false),
+            new RepoUpdateService.LinuxReleaseArtifact("notes.txt", IsDirectory: false),
+        };
+
+        var obsolete = RepoUpdateService
+            .SelectObsoleteLinuxReleaseArtifacts(entries, "0.9.1")
+            .Select(e => e.Name)
+            .ToArray();
+
+        Assert.Equal(
+            new[]
+            {
+                "OpenhpsdrZeus-0.9.0-linux-x86_64.AppImage",
+                "OpenhpsdrZeus-Server-0.9.0-linux-x86_64.AppImage",
+                "OpenhpsdrZeus-0.8.9-linux-aarch64.AppImage",
+                "openhpsdr-zeus-0.8.0-linux-x64",
+                "openhpsdr-zeus-0.8.0-linux-x64.tar.gz",
+            },
+            obsolete);
+    }
+
     // Mirrors the asset shape produced by tools/update-download-manifest.mjs.
     private static List<ZeusDownloadAsset> DownloadAssets() => new()
     {
         new() { Filename = "openhpsdr-zeus-0.9.1-win-x64-setup.exe", Platform = "windows", Arch = "x64", Kind = "installer" },
         new() { Filename = "openhpsdr-zeus-0.9.1-win-arm64-setup.exe", Platform = "windows", Arch = "arm64", Kind = "installer" },
-        new() { Filename = "OpenhpsdrZeus-0.9.1-macos-arm64.dmg", Platform = "macos", Arch = "arm64", Kind = "dmg" },
+        new() { Filename = "openhpsdr-zeus-0.9.1-macos-arm64.pkg", Platform = "macos", Arch = "arm64", Kind = "pkg" },
         new() { Filename = "openhpsdr-zeus-0.9.1-linux-x64.tar.gz", Platform = "linux", Arch = "x64", Kind = "tarball" },
         new() { Filename = "openhpsdr-zeus-0.9.1-linux-arm64.tar.gz", Platform = "linux", Arch = "arm64", Kind = "tarball" },
         new() { Filename = "OpenhpsdrZeus-0.9.1-linux-x86_64.AppImage", Platform = "linux", Arch = "x64", Kind = "appimage", Mode = "desktop" },

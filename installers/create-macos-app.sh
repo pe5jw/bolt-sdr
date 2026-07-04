@@ -648,7 +648,7 @@ fi
 
 echo "DMG created at ${DMG_PATH}"
 if [ "${WILL_SIGN}" -eq 1 ]; then
-    echo "DMG is signed; CI will run notarytool submit + stapler staple as follow-up steps."
+    echo "DMG is signed. Release CI packages and notarizes the .pkg installer separately."
 else
     echo
     echo "NOTE: this is an unsigned dev build — users must clear the quarantine flag on first launch:"

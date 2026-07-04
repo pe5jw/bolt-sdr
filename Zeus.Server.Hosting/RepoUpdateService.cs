@@ -16,9 +16,9 @@
 //
 // This drives Settings -> Updates (/api/system/update). The service NEVER pulls,
 // rebuilds, or restarts: it tells the operator which production build is newest
-// and surfaces the platform-matched installer / DMG / AppImage / tarball download
+// and surfaces the platform-matched installer / package / AppImage / tarball download
 // URL (with its published SHA-256). Replacing the running binary is left to the
-// installer / DMG / AppImage flow. Developers running from a git checkout still
+// installer / package / AppImage flow. Developers running from a git checkout still
 // update their source manually with scripts/update.* — that path is intentionally
 // not exposed in the UI.
 
@@ -105,7 +105,7 @@ public sealed partial class RepoUpdateService
             }
         }
 
-        return new RepoUpdateStatus(
+        var status = new RepoUpdateStatus(
             IsGitRepo: isGitRepo,
             Branch: branch,
             CurrentSha: null,
@@ -128,6 +128,7 @@ public sealed partial class RepoUpdateService
             UpdateAvailable = false,
             UpdateAction = "none",
         };
+        return ApplyStartupPolicy(status);
     }
 
     /// <summary>Fetch the production download manifest and layer the
@@ -171,8 +172,25 @@ public sealed partial class RepoUpdateService
                 RuntimeInformation.OSArchitecture,
                 IsRunningFromAppImage(),
                 IsServerMode());
+            var manifestMinVersion = NullIfEmpty(manifest.MinVersion ?? string.Empty);
+            var forceUpdate = status.ForceUpdate;
+            var forceReason = status.ForceReason;
+            var requiredVersion = status.MinVersion;
+            if (!status.IsGitRepo
+                && !string.Equals(forceReason, "downgrade", StringComparison.Ordinal)
+                && IsReleaseNewer(manifestMinVersion, status.InstalledVersion))
+            {
+                forceUpdate = true;
+                forceReason = "minVersion";
+                requiredVersion = manifestMinVersion;
+            }
+            else if (requiredVersion is null)
+            {
+                requiredVersion = manifestMinVersion;
+            }
+
             var updateAvailable = IsManifestNewer(status.InstalledVersion, latestVersion);
-            var updateAction = updateAvailable
+            var updateAction = updateAvailable || forceUpdate
                 ? asset?.Url is { Length: > 0 }
                     ? "download"
                     : "openRelease"
@@ -184,6 +202,9 @@ public sealed partial class RepoUpdateService
                 UpdateAvailable = updateAvailable,
                 UpdateAction = updateAction,
                 LatestVersion = latestVersion,
+                MinVersion = requiredVersion,
+                ForceUpdate = forceUpdate,
+                ForceReason = forceReason,
                 ReleaseTag = NullIfEmpty(manifest.Source?.Commit ?? string.Empty),
                 ReleaseName = $"Zeus {latestVersion}",
                 ReleaseUrl = DownloadsPageUrl,
@@ -375,7 +396,7 @@ public sealed partial class RepoUpdateService
             return assets.FirstOrDefault(a => Matches(a, "installer"));
 
         if (string.Equals(platform, "macos", StringComparison.OrdinalIgnoreCase))
-            return assets.FirstOrDefault(a => Matches(a, "dmg"));
+            return assets.FirstOrDefault(a => Matches(a, "pkg"));
 
         if (string.Equals(platform, "linux", StringComparison.OrdinalIgnoreCase))
         {
@@ -423,6 +444,15 @@ public sealed partial class RepoUpdateService
         }
         return null;
     }
+
+    /// <summary>Run packaged-startup maintenance that must happen once per
+    /// process but only outside source checkouts.</summary>
+    public void InitializePackagedStartupGuards()
+    {
+        if (_repoRoot is not null) return;
+        EnsureVersionFloorInitialized();
+        RunLinuxFirstRunCleanup();
+    }
 }
 
 /// <summary>One version entry from the download domain (`latest.json` / the head
@@ -437,6 +467,9 @@ internal sealed class ZeusDownloadManifest
 
     [JsonPropertyName("publishedAt")]
     public string? PublishedAt { get; set; }
+
+    [JsonPropertyName("minVersion")]
+    public string? MinVersion { get; set; }
 
     [JsonPropertyName("source")]
     public ZeusDownloadSource? Source { get; set; }

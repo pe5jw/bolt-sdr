@@ -25,12 +25,12 @@ export function StartupUpdatePrompt({ status, onDismiss, onOpenSettings }: Props
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    if (!status) return;
+    if (!status || status.forceUpdate) return;
     const timer = setTimeout(() => setVisible(true), 100);
     return () => clearTimeout(timer);
   }, [status]);
 
-  if (!status) return null;
+  if (!status || status.forceUpdate) return null;
 
   const url = updateUrl(status);
   const latest = status.latestVersion ?? status.releaseTag ?? 'latest';

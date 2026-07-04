@@ -1309,6 +1309,8 @@ public static class ZeusHost
         // the user-management ledger before the first browser session asks.
         var users = app.Services.GetRequiredService<UserManagementStore>();
         _ = users.GetSession(qrzService.GetStatus());
+
+        app.Services.GetRequiredService<RepoUpdateService>().InitializePackagedStartupGuards();
     }
 
     static void PrintBanner(
