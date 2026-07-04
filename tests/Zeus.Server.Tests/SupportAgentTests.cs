@@ -179,6 +179,26 @@ public class CrashCaptureTests : IDisposable
         var remaining = Directory.GetFiles(_dir, "crash-*.json").Length;
         Assert.True(remaining <= 25, $"expected <=25 retained crash records, found {remaining}");
     }
+
+    [Fact]
+    public void WriteCrashRecord_PrunesSiblingAndOrphanUploadedMarkers()
+    {
+        for (int i = 0; i < 30; i++)
+        {
+            var path = Path.Combine(_dir, SupportPaths.CrashRecordFileName(1_000_000_000_000 + i, 1));
+            File.WriteAllText(path, "{}");
+            CrashBacklogUploader.MarkUploaded(path);
+        }
+        File.WriteAllText(Path.Combine(_dir, "crash-0000000000000-1.json.uploaded"), "orphan");
+
+        CrashCapture.WriteCrashRecord(Opts(), exitCode: 0, nowUnixMs: 1_700_000_000_000);
+
+        foreach (var marker in Directory.GetFiles(_dir, "crash-*.json.uploaded"))
+        {
+            var record = marker[..^".uploaded".Length];
+            Assert.True(File.Exists(record), $"orphan marker remained: {Path.GetFileName(marker)}");
+        }
+    }
 }
 
 public class SupportPathsTests
@@ -209,6 +229,7 @@ internal sealed class FakeBrokerClient : ISupportBrokerClient
     public int Drops;
     public int Uploads;
     public string? LastUploadedJson;
+    public List<string> UploadedJson { get; } = [];
 
     public bool RegisterResult = true;
     public bool UploadResult = true;
@@ -220,6 +241,7 @@ internal sealed class FakeBrokerClient : ISupportBrokerClient
     {
         Uploads++;
         LastUploadedJson = json;
+        UploadedJson.Add(json);
         return Task.FromResult(UploadResult);
     }
 }
@@ -457,6 +479,78 @@ public class CrashAutoShareTests
     }
 }
 
+public class CrashBacklogUploaderTests : IDisposable
+{
+    private readonly string _dir;
+
+    public CrashBacklogUploaderTests()
+    {
+        _dir = Path.Combine(Path.GetTempPath(), $"zeus-crash-backlog-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_dir);
+    }
+
+    public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
+
+    [Fact]
+    public async Task UploadEligibleAsync_UploadsUnmarkedOldestFirst_AndWritesMarkers()
+    {
+        var first = WriteRecord(1_000_000_000_000, 1, "{\"id\":1}");
+        var alreadyUploaded = WriteRecord(1_000_000_000_001, 1, "{\"id\":2}");
+        var second = WriteRecord(1_000_000_000_002, 1, "{\"id\":3}");
+        CrashBacklogUploader.MarkUploaded(alreadyUploaded);
+        var broker = new FakeBrokerClient();
+        var log = new List<string>();
+
+        await CrashBacklogUploader.UploadEligibleAsync(_dir, broker, log.Add, CancellationToken.None);
+
+        Assert.Equal(2, broker.Uploads);
+        Assert.Equal(["{\"id\":1}", "{\"id\":3}"], broker.UploadedJson);
+        Assert.True(File.Exists(CrashBacklogUploader.UploadedMarkerPath(first)));
+        Assert.True(File.Exists(CrashBacklogUploader.UploadedMarkerPath(alreadyUploaded)));
+        Assert.True(File.Exists(CrashBacklogUploader.UploadedMarkerPath(second)));
+        Assert.Contains(log, l => l.Contains($"{Path.GetFileName(first)} ok", StringComparison.Ordinal));
+        Assert.Contains(log, l => l.Contains($"{Path.GetFileName(second)} ok", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task UploadEligibleAsync_FailedUpload_DoesNotWriteMarker()
+    {
+        var path = WriteRecord(1_000_000_000_000, 1, "{\"id\":1}");
+        var broker = new FakeBrokerClient { UploadResult = false };
+        var log = new List<string>();
+
+        await CrashBacklogUploader.UploadEligibleAsync(_dir, broker, log.Add, CancellationToken.None);
+
+        Assert.Equal(1, broker.Uploads);
+        Assert.False(File.Exists(CrashBacklogUploader.UploadedMarkerPath(path)));
+        Assert.Contains(log, l => l.Contains("failed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task UploadEligibleAsync_CapsAtFivePerRun()
+    {
+        var paths = new List<string>();
+        for (int i = 0; i < 7; i++)
+            paths.Add(WriteRecord(1_000_000_000_000 + i, 1, $"{{\"id\":{i}}}"));
+        var broker = new FakeBrokerClient();
+
+        await CrashBacklogUploader.UploadEligibleAsync(_dir, broker, ct: CancellationToken.None);
+
+        Assert.Equal(5, broker.Uploads);
+        for (int i = 0; i < 5; i++)
+            Assert.True(File.Exists(CrashBacklogUploader.UploadedMarkerPath(paths[i])));
+        for (int i = 5; i < 7; i++)
+            Assert.False(File.Exists(CrashBacklogUploader.UploadedMarkerPath(paths[i])));
+    }
+
+    private string WriteRecord(long unixMs, int pid, string json)
+    {
+        var path = Path.Combine(_dir, SupportPaths.CrashRecordFileName(unixMs, pid));
+        File.WriteAllText(path, json);
+        return path;
+    }
+}
+
 public class HttpSupportBrokerClientIdentityTests
 {
     private static BrokerEndpoints Endpoints() =>
@@ -643,6 +737,27 @@ public class PresenceCoordinatorTests
 
         coord.Apply(State(remoteDiag: true, callsign: "N9WAR", key: "K", autoShare: true));
         Assert.True(coord.AutoShareOnCrash);
+    }
+
+    [Fact]
+    public void CrashBacklogTrigger_FiresOnce_WhenAutoShareAndIdentityAreBothPresent()
+    {
+        var broker = new FakeMutableBroker();
+        var presence = new PresenceClient(broker, initiallyAvailable: false);
+        var triggers = 0;
+        var coord = new PresenceCoordinator(
+            broker,
+            presence,
+            onCrashBacklogEligible: () => triggers++);
+
+        coord.Apply(State(remoteDiag: true, callsign: "N9WAR", key: null, autoShare: true));
+        coord.Apply(State(remoteDiag: true, callsign: "N9WAR", key: "K", autoShare: false));
+        Assert.Equal(0, triggers);
+
+        coord.Apply(State(remoteDiag: true, callsign: "N9WAR", key: "K", autoShare: true));
+        coord.Apply(State(remoteDiag: true, callsign: "N9WAR", key: "K", autoShare: true));
+
+        Assert.Equal(1, triggers);
     }
 
     [Fact]
