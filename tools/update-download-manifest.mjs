@@ -1,12 +1,17 @@
 #!/usr/bin/env node
+// tools/update-floor.json is the one-shot release floor switch. When its
+// minVersion is non-null the workflow passes that exact value as
+// UPDATE_MIN_VERSION for the next release; later runs leave the file alone and
+// this tool carries the previous manifest floor forward indefinitely.
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-const [artifactRoot, existingPath, outputPath] = process.argv.slice(2);
+const { positional, minVersion: cliMinVersion } = parseArgs(process.argv.slice(2));
+const [artifactRoot, existingPath, outputPath] = positional;
 
 if (!artifactRoot || !existingPath || !outputPath) {
-  console.error("Usage: node tools/update-download-manifest.mjs <artifact-root> <existing-manifest.json> <output-manifest.json>");
+  console.error("Usage: node tools/update-download-manifest.mjs [--min-version <version>] <artifact-root> <existing-manifest.json> <output-manifest.json>");
   process.exit(2);
 }
 
@@ -24,6 +29,7 @@ if (!version) {
 }
 
 const manifest = loadManifest(existingPath);
+const minVersion = resolveMinVersion(manifest.minVersion, cliMinVersion);
 const assets = files
   .map((file) => assetFor(file, version, baseUrl))
   .filter(Boolean)
@@ -38,6 +44,7 @@ const versionEntry = {
   version,
   channel: process.env.ZEUS_DOWNLOAD_CHANNEL || "main",
   publishedAt: new Date().toISOString(),
+  minVersion,
   source: {
     branch: process.env.ZEUS_DOWNLOAD_BRANCH || process.env.GITHUB_REF_NAME || "main",
     commit: process.env.GITHUB_SHA || null,
@@ -53,16 +60,12 @@ const versionEntry = {
   notesHtml: loadNotesHtml(),
 };
 
-const versions = [
-  versionEntry,
-  ...manifest.versions.filter((entry) => entry.version !== version),
-].sort((a, b) => String(b.publishedAt || "").localeCompare(String(a.publishedAt || "")));
-
 const nextManifest = {
   schema: 1,
   updatedAt: versionEntry.publishedAt,
   latest: version,
-  versions,
+  minVersion,
+  versions: [versionEntry],
 };
 
 writeFileSync(outputPath, `${JSON.stringify(nextManifest, null, 2)}\n`, "utf8");
@@ -83,7 +86,7 @@ function walk(root) {
 
 function isDownload(file) {
   const name = path.basename(file).toLowerCase();
-  return name.endsWith(".exe") || name.endsWith(".dmg") || name.endsWith(".tar.gz") || name.endsWith(".appimage");
+  return name.endsWith(".exe") || name.endsWith(".pkg") || name.endsWith(".tar.gz") || name.endsWith(".appimage");
 }
 
 function loadManifest(file) {
@@ -95,6 +98,7 @@ function loadManifest(file) {
     const parsed = JSON.parse(readFileSync(file, "utf8"));
     return {
       schema: 1,
+      minVersion: normalizeMinVersion(parsed.minVersion),
       versions: Array.isArray(parsed.versions) ? parsed.versions : [],
     };
   } catch {
@@ -120,7 +124,7 @@ function inferVersion(filesToInspect) {
     const match =
       name.match(/^openhpsdr-zeus-(.+)-win-(?:x64|arm64)-setup\.exe$/i) ||
       name.match(/^openhpsdr-zeus-(.+)-linux-(?:x64|arm64)\.tar\.gz$/i) ||
-      name.match(/^OpenhpsdrZeus-(.+)-macos-arm64\.dmg$/) ||
+      name.match(/^openhpsdr-zeus-(.+)-macos-(?:arm64|x64)\.pkg$/i) ||
       name.match(/^OpenhpsdrZeus(?:-Server)?-(.+)-linux-(?:x86_64|aarch64)\.AppImage$/);
     if (match) return match[1];
   }
@@ -149,14 +153,14 @@ function assetFor(file, versionValue, urlBase) {
     };
   }
 
-  match = filename.match(/^OpenhpsdrZeus-(.+)-macos-(arm64)\.dmg$/);
+  match = filename.match(/^openhpsdr-zeus-(.+)-macos-(arm64|x64)\.pkg$/i);
   if (match) {
     return {
       ...common,
       platform: "macos",
-      arch: match[2],
-      kind: "dmg",
-      label: "macOS Apple Silicon DMG",
+      arch: match[2].toLowerCase(),
+      kind: "pkg",
+      label: `macOS ${match[2].toLowerCase() === "arm64" ? "Apple Silicon" : "Intel"} package installer`,
     };
   }
 
@@ -191,11 +195,43 @@ function assetFor(file, versionValue, urlBase) {
 function assetSort(a, b) {
   const platformOrder = { windows: 0, macos: 1, linux: 2 };
   const archOrder = { x64: 0, arm64: 1 };
-  const kindOrder = { installer: 0, dmg: 0, appimage: 1, tarball: 2 };
+  const kindOrder = { installer: 0, pkg: 0, appimage: 1, tarball: 2 };
   return (
     (platformOrder[a.platform] ?? 9) - (platformOrder[b.platform] ?? 9) ||
     (archOrder[a.arch] ?? 9) - (archOrder[b.arch] ?? 9) ||
     (kindOrder[a.kind] ?? 9) - (kindOrder[b.kind] ?? 9) ||
     a.filename.localeCompare(b.filename)
   );
+}
+
+function parseArgs(args) {
+  const positional = [];
+  let minVersion;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--min-version") {
+      i += 1;
+      minVersion = args[i];
+    } else if (arg.startsWith("--min-version=")) {
+      minVersion = arg.slice("--min-version=".length);
+    } else {
+      positional.push(arg);
+    }
+  }
+  return { positional, minVersion };
+}
+
+function resolveMinVersion(previous, cliValue) {
+  if (cliValue !== undefined) return normalizeMinVersion(cliValue);
+  if (process.env.UPDATE_MIN_VERSION !== undefined) {
+    return normalizeMinVersion(process.env.UPDATE_MIN_VERSION);
+  }
+  return normalizeMinVersion(previous);
+}
+
+function normalizeMinVersion(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === "null") return null;
+  return trimmed;
 }

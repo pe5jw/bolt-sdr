@@ -99,6 +99,7 @@ import { useTxAudioProfileDirtyTracker } from './state/tx-audio-profile-tracker'
 import { useEasterEggStore } from './state/easter-egg-store';
 import { useSignalJammerStore } from './state/signal-jammer-store';
 import { ThemeApplier } from './components/ThemeApplier';
+import { ForceUpdateGate } from './components/ForceUpdateGate';
 import { StartupUpdatePrompt } from './components/StartupUpdatePrompt';
 import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
@@ -390,8 +391,9 @@ export default function App() {
         // A newer production build (from the download domain) is available and
         // we have somewhere to send the operator — prompt on startup.
         const actionableRelease =
-          next.updateAvailable
-          && (next.updateAction === 'download' || next.updateAction === 'openRelease');
+          next.forceUpdate
+          || (next.updateAvailable
+            && (next.updateAction === 'download' || next.updateAction === 'openRelease'));
         if (actionableRelease) setStartupUpdate(next);
       })
       .catch(() => {
@@ -1093,6 +1095,15 @@ export default function App() {
     heroTitle, dspActive, logbookTitle, logbookActions,
     handleLogQso, handleClearQrz, onCallsignSubmit, runQrzLookup, submitBeam,
   ]);
+
+  if (startupUpdate?.forceUpdate) {
+    return (
+      <>
+        <ThemeApplier />
+        <ForceUpdateGate status={startupUpdate} />
+      </>
+    );
+  }
 
   if (adminRoute) {
     return (

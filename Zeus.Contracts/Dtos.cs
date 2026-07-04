@@ -2621,6 +2621,10 @@ public sealed record TxFidelityPolicyDto(
 /// <see cref="ReleaseAssetName"/> + <see cref="ReleaseAssetDigest"/> (sha256).
 /// <see cref="UpdateAction"/> is "download" when a matching asset exists,
 /// "openRelease" when only the website is available, or "none".
+/// <see cref="MinVersion"/>/<see cref="ForceUpdate"/>/<see cref="ForceReason"/>
+/// describe the dormant mandatory-update gate when the release manifest sets a
+/// floor, or when a packaged install is older than the highest packaged version
+/// previously run on the machine.
 /// <see cref="IsGitRepo"/>/<see cref="Branch"/>/<see cref="CurrentShortSha"/> are
 /// diagnostics for source checkouts; the git fast-forward path was removed, so
 /// <see cref="Behind"/>/<see cref="Ahead"/>/<see cref="CanFastForward"/>/
@@ -2650,6 +2654,9 @@ public sealed record RepoUpdateStatus(
     public bool UpdateAvailable { get; init; }
     public string UpdateAction { get; init; } = "none";
     public string? LatestVersion { get; init; }
+    public string? MinVersion { get; init; }
+    public bool ForceUpdate { get; init; }
+    public string? ForceReason { get; init; }
     public string? ReleaseTag { get; init; }
     public string? ReleaseName { get; init; }
     public string? ReleaseUrl { get; init; }

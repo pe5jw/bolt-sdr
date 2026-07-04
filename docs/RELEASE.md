@@ -41,7 +41,7 @@ The GitHub Actions release workflow will automatically trigger when the tag is p
    - Build the frontend
    - Publish .NET apps for all platforms (Windows x64, Linux x64, macOS x64/arm64)
    - Create Windows installer (Inno Setup)
-   - Create macOS DMGs
+   - Create macOS packages
    - Create Linux tarball
    - Create a GitHub Release with all artifacts attached
 
@@ -56,7 +56,7 @@ Once the workflow completes:
 3. Verify all artifacts are present:
    - `openhpsdr-zeus-X.Y.Z-win-x64-setup.exe`
    - `openhpsdr-zeus-X.Y.Z-win-arm64-setup.exe`
-   - `OpenhpsdrZeus-X.Y.Z-macos-arm64.dmg`
+   - `openhpsdr-zeus-X.Y.Z-macos-arm64.pkg`
    - `openhpsdr-zeus-X.Y.Z-linux-x64.tar.gz`
    - `openhpsdr-zeus-X.Y.Z-linux-arm64.tar.gz`
    - `OpenhpsdrZeus-X.Y.Z-linux-x86_64.AppImage`
@@ -118,6 +118,7 @@ iscc /DMyAppVersion="$VERSION" installers\zeus-windows.iss
 **macOS**:
 ```bash
 installers/create-macos-app.sh $VERSION arm64
+installers/create-macos-pkg.sh $VERSION arm64
 ```
 
 **Linux**:
@@ -181,14 +182,10 @@ If the version doesn't match:
 - Check `Directory.Build.props` version logic
 - Rebuild with explicit `-p:VersionPrefix=X.Y.Z`
 
-### macOS app won't run after download
+### macOS package won't run after download
 
-This is expected for unsigned apps. Ensure the release notes include:
-```bash
-xattr -cr /Applications/Zeus.app
-```
-
-Users on macOS must run this command after installation.
+Tagged release packages are signed and notarized. If Gatekeeper rejects one,
+verify the package was signed, notarized, and stapled in the release workflow.
 
 ---
 
@@ -201,10 +198,10 @@ Use this checklist for each release:
 - [ ] Version number decided (semver)
 - [ ] Tag created and pushed (`v{version}`)
 - [ ] Release workflow completed successfully
-- [ ] All 4 artifacts present on release page
+- [ ] All release artifacts present on release page
 - [ ] Release notes reviewed and accurate
 - [ ] Installation instructions in release notes
-- [ ] macOS `xattr` warning present in release notes
+- [ ] macOS package signing/notarization noted in release notes
 - [ ] Release published (not draft)
 - [ ] Announcement posted (if applicable)
 

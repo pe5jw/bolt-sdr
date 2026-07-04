@@ -31,44 +31,28 @@ Zeus is distributed as native installers for Windows, macOS, and Linux.
 
 ### Requirements
 - macOS 11 (Big Sur) or later
-- Apple Silicon (M1/M2/M3) or Intel processor
+- Apple Silicon (M1/M2/M3). Intel users can build from source.
 - 4 GB RAM minimum, 8 GB recommended
 
 ### Installation Steps
 
-1. Download the appropriate DMG for your Mac:
-   - **Apple Silicon (M1/M2/M3)**: `Zeus-X.Y.Z-macos-arm64.dmg`
-   - **Intel**: `Zeus-X.Y.Z-macos-x64.dmg`
+1. Download the macOS package for your Mac:
+   - **Apple Silicon (M1/M2/M3)**: `openhpsdr-zeus-X.Y.Z-macos-arm64.pkg`
 
-2. Open the downloaded DMG file
+2. Open the downloaded package
 
-3. Drag `Zeus.app` to your Applications folder
+3. Click through the installer
 
-4. **IMPORTANT**: Remove the quarantine attribute
-   ```bash
-   xattr -cr /Applications/Zeus.app
-   ```
-   This step is **required** because Zeus is not signed by a registered Apple Developer.
+4. Launch `OpenHPSDR Zeus` from your Applications folder or Launchpad
 
-5. Launch Zeus from your Applications folder or Launchpad
-
-6. Your default browser will open to `http://localhost:6060`
+5. Use `OpenHPSDR Zeus Server` when you want the LAN status window and browser access
 
 ### Troubleshooting
 
-If you see **"Zeus.app is damaged and can't be opened"**:
-- You forgot to run the `xattr -cr` command. Open Terminal and run:
-  ```bash
-  xattr -cr /Applications/Zeus.app
-  ```
-
-If you see **"Zeus.app can't be opened because it is from an unidentified developer"**:
-- Right-click on Zeus.app and select "Open"
-- Click "Open" in the security dialog
-- Or run `xattr -cr /Applications/Zeus.app` as above
+If macOS reports that the package or app cannot be verified, confirm that you downloaded the signed `.pkg` from the latest Zeus release.
 
 ### Uninstallation
-- Drag `Zeus.app` from Applications to Trash
+- Drag `OpenHPSDR Zeus.app` and `OpenHPSDR Zeus Server.app` from Applications to Trash
 
 ---
 
@@ -157,9 +141,9 @@ When a new version is available, Zeus will show a notification in the Settings >
 - It will automatically upgrade your existing installation
 
 ### macOS
-1. Download the new DMG
-2. Drag the new `Zeus.app` to Applications (replace the old one)
-3. Run `xattr -cr /Applications/Zeus.app` again
+1. Download the new `.pkg`
+2. Run the installer
+3. Restart Zeus
 
 ### Linux
 1. Download the new tarball

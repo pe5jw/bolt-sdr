@@ -10,7 +10,7 @@ All official builds live on the project's **Releases page** on GitHub. From ther
 |---|---|
 | Windows (Intel/AMD, 64-bit) | `Zeus-<version>-win-x64-setup.exe` (background service) or `Zeus-Desktop-<version>-win-x64-setup.exe` (desktop window) |
 | Windows on ARM (Surface Pro X, Snapdragon laptops) | `Zeus-<version>-win-arm64-setup.exe` or `Zeus-Desktop-<version>-win-arm64-setup.exe` |
-| macOS (Intel and Apple Silicon) | `OpenHPSDR Zeus` `.dmg` |
+| macOS (Apple Silicon) | `openhpsdr-zeus-<version>-macos-arm64.pkg` |
 | Linux / Raspberry Pi (x64 and arm64) | `.tar.gz` tarball, or the `.AppImage` for a desktop window |
 
 Each build is **self-contained** — it carries its own copy of the .NET runtime and the WDSP DSP engine, so there is no separate runtime to install first.
@@ -22,18 +22,9 @@ A quick word on the two flavors you will see on Windows, macOS, and Linux. Since
 
 There is also a third, invisible mode: launched with no special flag, Zeus runs **headless** as a pure background service (no window at all). That is what the Raspberry Pi and other always-on server setups use.
 
-### macOS — do this before you launch
+### macOS
 
-Zeus is not yet signed by a registered Apple developer, so macOS Gatekeeper will block it on first launch with a misleading message such as *"OpenHPSDR Zeus.app is damaged and can't be opened"* or *"cannot be opened because the developer cannot be verified."* The app is fine — Gatekeeper simply quarantines anything it can't verify.
-
-After dragging Zeus into your Applications folder, open the **Terminal** app and run:
-
-```
-xattr -cr "/Applications/OpenHPSDR Zeus.app"
-xattr -cr "/Applications/OpenHPSDR Zeus Server.app"
-```
-
-This strips the quarantine flag and lets the app run. It is a **one-time step per install** — you do not need to repeat it every time you open Zeus, only after installing or updating. If you only installed the desktop app and not the server app, skip the second line.
+Run the `.pkg` installer and click **Install**. It installs both `OpenHPSDR Zeus.app` and `OpenHPSDR Zeus Server.app` into Applications. Tagged releases are signed and notarized, so Gatekeeper should accept the installer without an `xattr` workaround.
 
 ### Windows
 
@@ -81,7 +72,7 @@ Zeus checks for new releases on its own. Packaged installs query the official re
 - **Platform** — the operating system and processor the panel detected, so it can offer the right download for your machine.
 - A status line that reads *Up to date*, *Version X available* (highlighted), or *Checking releases*, along with when it last checked.
 
-Two buttons sit at the bottom. **Check for Updates** re-queries the release feed right away. **Update Now** opens the correct installer, DMG, AppImage, or tarball for your platform — it picks the matching download automatically. Zeus does not silently overwrite itself: you run the downloaded installer and restart Zeus, exactly as you did the first time. On macOS, remember the `xattr` quarantine step applies to the updated app too.
+Two buttons sit at the bottom. **Check for Updates** re-queries the release feed right away. **Update Now** opens the correct installer, package, AppImage, or tarball for your platform — it picks the matching download automatically. Zeus does not silently overwrite itself: you run the downloaded installer and restart Zeus, exactly as you did the first time.
 
 If you run Zeus from a **source checkout** instead of an installer, the Updates panel tells you which branch and revision you're on and how it compares to upstream. To pull and apply updates, use the bundled update scripts — `scripts/update.ps1` on Windows, or `scripts/update.sh` on macOS and Linux. Each one fast-forwards your checkout to the latest code (refusing if you have uncommitted changes so your work is never clobbered), rebuilds the web UI and the backend, and then asks you to restart Zeus. A pull only changes the source — you must rebuild and restart for it to take effect.
 

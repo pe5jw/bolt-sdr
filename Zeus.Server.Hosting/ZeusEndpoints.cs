@@ -269,7 +269,7 @@ public static class ZeusEndpoints
         // Self-update status. The latest PRODUCTION build is read from the Zeus
         // download domain (downloads.openhpsdrzeus.com), which is published from
         // `main` only — never develop/nightly. The GET response carries the
-        // platform-matched installer/DMG/AppImage/tarball URL + its SHA-256; the
+        // platform-matched installer/package/AppImage/tarball URL + its SHA-256; the
         // app opens that download. Zeus never pulls/rebuilds/restarts itself.
         app.MapGet("/api/system/update",
             async (RepoUpdateService updates, bool? fetch, CancellationToken ct) =>

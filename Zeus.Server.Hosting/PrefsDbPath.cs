@@ -78,6 +78,18 @@ public static class PrefsDbPath
         return Path.Combine(dir, "logs");
     }
 
+    // Highest packaged version observed on this machine. Uses the same
+    // ZEUS_PREFS_PATH data-dir isolation as LogDir(), so dev/test instances
+    // write beside their throwaway prefs DB instead of the operator's real dir.
+    public static string VersionFloorPath()
+    {
+        var env = Environment.GetEnvironmentVariable("ZEUS_PREFS_PATH");
+        var dir = string.IsNullOrEmpty(env)
+            ? DataDir
+            : (Path.GetDirectoryName(Path.GetFullPath(env)) ?? DataDir);
+        return Path.Combine(dir, "version-floor.txt");
+    }
+
     // Full path of the active rolling runtime log file.
     public static string AppLogPath() => Path.Combine(LogDir(), "zeus-app.log");
 

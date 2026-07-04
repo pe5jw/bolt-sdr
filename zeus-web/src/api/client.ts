@@ -5350,6 +5350,9 @@ export interface RepoUpdateStatus {
   updateAvailable: boolean;
   updateAction: UpdateAction;
   latestVersion: string | null;
+  minVersion: string | null;
+  forceUpdate: boolean;
+  forceReason: 'minVersion' | 'downgrade' | string | null;
   releaseTag: string | null;
   releaseName: string | null;
   releaseUrl: string | null;
