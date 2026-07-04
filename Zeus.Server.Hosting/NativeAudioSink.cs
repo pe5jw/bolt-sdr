@@ -194,6 +194,11 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
             OutputChannels: outputChannels,
             TotalSamplesIn: Interlocked.Read(ref _totalSamplesIn),
             TotalSamplesOut: Interlocked.Read(ref _totalSamplesOut),
+            PreviewEnabled: _previewEnabled,
+            PreviewRingDepthSamples: _previewRing.Count,
+            PreviewRingCapacitySamples: PreviewRingCapacity,
+            PreviewSamplesIn: Interlocked.Read(ref _previewSamplesIn),
+            PreviewSamplesOut: Interlocked.Read(ref _previewSamplesOut),
             DroppedFormatSamplesTotal: Interlocked.Read(ref _droppedFormatSamplesTotal),
             DroppedMutedSamplesTotal: Interlocked.Read(ref _droppedMutedSamplesTotal),
             LastInputSampleRateHz: Volatile.Read(ref _lastInputSampleRateHz),
@@ -216,6 +221,11 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         int OutputChannels,
         long TotalSamplesIn,
         long TotalSamplesOut,
+        bool PreviewEnabled,
+        int PreviewRingDepthSamples,
+        int PreviewRingCapacitySamples,
+        long PreviewSamplesIn,
+        long PreviewSamplesOut,
         long DroppedFormatSamplesTotal,
         long DroppedMutedSamplesTotal,
         int LastInputSampleRateHz,
@@ -251,7 +261,8 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         if (sampleRate != FrameRateHz) return;   // defence in depth — mic is always 48 kHz
         if (_muteState.IsMuted) return;           // RX mute also silences preview
 
-        _previewRing.Write(monoSamples);
+        int written = _previewRing.Write(monoSamples);
+        Interlocked.Add(ref _previewSamplesIn, written);
         // Preview overruns are not interesting enough to track — the
         // mic-capture cadence (960 samples / 20 ms) means the worst case
         // is ~250 ms of stale preview dropped if the playback thread
@@ -264,6 +275,8 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     private long _overrunSamples;
     private long _totalSamplesIn;
     private long _totalSamplesOut;
+    private long _previewSamplesIn;
+    private long _previewSamplesOut;
     private long _droppedFormatSamplesTotal;
     private long _droppedMutedSamplesTotal;
     private int _lastInputSampleRateHz;
@@ -539,12 +552,11 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     }
 
     // Mute-EXEMPT publish: byte-for-byte identical to Publish EXCEPT it omits the
-    // RX master-mute early-return. DspPipelineService routes ONLY the local-monitor
-    // lane (the Recorder plugin's local clip playback) here, and ONLY while the
-    // operator is muted — so a muted radio still plays the operator's own recording
-    // on the PC output. Real RX audio is never handed to this method; it stays on
-    // Publish, which the master mute still drops. Shares the same playback ring and
-    // overrun/throughput accounting as Publish so diagnostics stay coherent.
+    // RX master-mute early-return. DspPipelineService routes only operator-requested
+    // local monitor audio here (Recorder playback and TX Monitor preview), and only
+    // while the operator is muted. Real RX audio is never handed to this method; it
+    // stays on Publish, which the master mute still drops. Shares the same playback
+    // ring and overrun/throughput accounting as Publish so diagnostics stay coherent.
     public void PublishExempt(in AudioFrame frame)
     {
         if (frame.Channels != 1 || frame.SampleRateHz != FrameRateHz)
@@ -656,6 +668,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
             // underran we still sum the bytes we got and leave the
             // rest of mono unchanged (RX continues underneath).
             for (int i = 0; i < audRead; i++) mono[i] += aud[i];
+            if (audRead > 0) Interlocked.Add(ref _previewSamplesOut, audRead);
             mixedPreview = audRead > 0;
         }
 

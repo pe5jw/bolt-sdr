@@ -52,7 +52,7 @@ using Zeus.Contracts;
 
 namespace Zeus.Dsp.Wdsp;
 
-public sealed class WdspDspEngine : IDspEngine
+public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
 {
     // RXA: keep the 1024-sample window the panadapter / audio pipeline have
     // always used. Changing it broke RX audio entirely (regression observed

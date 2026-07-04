@@ -132,7 +132,6 @@ export function TxLevelingSettingsSection() {
   const txLeveling = useConnectionStore((s) => s.txLeveling);
   const setLocalTxLeveling = useConnectionStore((s) => s.setTxLeveling);
   const applyState = useConnectionStore((s) => s.applyState);
-  const connected = useConnectionStore((s) => s.status === 'Connected');
 
   // Leveler max-gain lives on its own server path (tx-store + /api/tx/
   // leveler-max-gain), surfaced here so the operator gets the full Leveler
@@ -201,7 +200,7 @@ export function TxLevelingSettingsSection() {
         max={120}
         step={1}
         unit="dB"
-        disabled={!connected}
+        disabled={false}
         onCommit={(v) => send({ ...txLeveling, alcMaxGainDb: v })}
       />
       <NumField
@@ -210,7 +209,7 @@ export function TxLevelingSettingsSection() {
         min={1}
         max={50}
         unit="ms"
-        disabled={!connected}
+        disabled={false}
         onCommit={(v) => send({ ...txLeveling, alcDecayMs: v })}
       />
 
@@ -221,7 +220,7 @@ export function TxLevelingSettingsSection() {
         </span>
         <button
           type="button"
-          disabled={!connected}
+          disabled={false}
           onClick={() =>
             send({ ...txLeveling, levelerEnabled: !txLeveling.levelerEnabled })
           }
@@ -238,7 +237,7 @@ export function TxLevelingSettingsSection() {
         max={20}
         step={0.5}
         unit="dB"
-        disabled={!connected}
+        disabled={false}
         onCommit={sendMaxGain}
       />
       <NumField
@@ -247,7 +246,7 @@ export function TxLevelingSettingsSection() {
         min={1}
         max={5000}
         unit="ms"
-        disabled={!connected}
+        disabled={false}
         onCommit={(v) => send({ ...txLeveling, levelerDecayMs: v })}
       />
 
@@ -258,7 +257,7 @@ export function TxLevelingSettingsSection() {
         </span>
         <button
           type="button"
-          disabled={!connected}
+          disabled={false}
           onClick={() =>
             send({
               ...txLeveling,
@@ -278,7 +277,7 @@ export function TxLevelingSettingsSection() {
         max={20}
         step={1}
         unit="dB"
-        disabled={!connected}
+        disabled={false}
         onCommit={(v) => send({ ...txLeveling, compressorGainDb: v })}
       />
     </div>

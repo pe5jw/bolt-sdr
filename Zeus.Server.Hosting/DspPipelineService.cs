@@ -61,6 +61,7 @@ public class DspPipelineService : BackgroundService,
 {
     private const int Width = 2048;
     private const int SyntheticSampleRateHz = 192_000;
+    private const int OfflinePreviewTxOutputRateHz = 192_000;
     public const int AudioOutputRateHz = 48_000;
     private const int AudioDrainCapacity = 2048;
     private const float DisplayInvalidBinDb = -200f;
@@ -1148,6 +1149,7 @@ public class DspPipelineService : BackgroundService,
     private IProtocol1Client? _attachedSinkP1;
     private Zeus.Protocol2.Protocol2Client? _attachedSinkP2;
     private long _lastTickStopwatchTicks;
+    private long _lastInlineTickStopwatchTicks;
     private static readonly long TickPeriodStopwatchTicks =
         (long)(Stopwatch.Frequency / 30.0);
 
@@ -1452,11 +1454,11 @@ public class DspPipelineService : BackgroundService,
     /// operator's FFT/window/smoothing rather than engine defaults. Also seeds
     /// the cal-offset field read by <see cref="Tick"/>. Display-only — never
     /// touches the transmitted signal.</summary>
-    private void SeedTxDisplayConfig(WdspDspEngine wdsp)
+    private void SeedTxDisplayConfig(IDspEngine engine)
     {
         var dto = _displaySettings?.Get();
         Volatile.Write(ref _txDisplayCalOffsetDb, ResolveCalOffset(dto));
-        wdsp.ConfigureTxDisplayAnalyzer(
+        engine.ConfigureTxDisplayAnalyzer(
             dto?.TxDisplayFftSize ?? DefaultTxDisplayFftSize,
             dto?.TxDisplayWindow ?? DefaultTxDisplayWindow,
             (dto?.TxDisplayAvgTauMs ?? DefaultTxDisplayAvgTauMs) / 1000.0);
@@ -1700,7 +1702,8 @@ public class DspPipelineService : BackgroundService,
             _audioSinks[i].Publish(in frame);
     }
 
-    // Fan out a mute-EXEMPT frame (the local-monitor / Recorder-playback lane).
+    // Fan out a mute-EXEMPT frame (local monitor audio the operator explicitly
+    // asked to hear, such as Recorder playback or TX Monitor preview).
     // Only NativeAudioSink honours it; every other sink inherits the interface's
     // default no-op, so exempt playback reaches the desktop PC output but never
     // the WebSocket fan-out or the onboard radio speakers.
@@ -1740,19 +1743,24 @@ public class DspPipelineService : BackgroundService,
         {
             while (await timer.WaitForNextTickAsync(ct))
             {
+                long nowTicks = Stopwatch.GetTimestamp();
                 // iter5: when a radio is connected, the sink (called on the
-                // RX OS thread) drives Tick inline via Stopwatch elapsed
-                // checks — see OnIqFrame. Skip the timer-driven Tick to avoid
-                // a double-tick and keep WDSP truly single-thread-owned on
-                // the hot path. The "no sink attached" branch keeps the
-                // synthetic-mode display alive when there's no radio.
-                if (_rxSinkAttached) continue;
+                // RX OS thread) normally drives Tick inline via Stopwatch
+                // elapsed checks — see OnIqFrame. If the sink is attached but
+                // RX packets stall, the timer becomes the fallback driver so
+                // monitor/preview audio, commands, and diagnostics still drain.
+                if (_rxSinkAttached &&
+                    !ShouldTimerTickWhenSinkAttached(
+                        nowTicks,
+                        Volatile.Read(ref _lastInlineTickStopwatchTicks),
+                        Volatile.Read(ref _lastTickStopwatchTicks),
+                        TickPeriodStopwatchTicks))
+                    continue;
                 // Drain any cross-thread commands posted while no sink was
-                // attached (rare — most commands arrive while a radio is
-                // connected and the sink is the consumer).
+                // attached, or while an attached sink has gone stale.
                 DrainDspCommands();
-                Tick(_panBuf, _wfBuf, _audioBuf);
-                _lastTickStopwatchTicks = Stopwatch.GetTimestamp();
+                if (Tick(_panBuf, _wfBuf, _audioBuf))
+                    Volatile.Write(ref _lastTickStopwatchTicks, nowTicks);
             }
         }
         catch (OperationCanceledException) { }
@@ -1800,8 +1808,8 @@ public class DspPipelineService : BackgroundService,
         lock (_engineLock) { _engine?.SetTxTune(on); }
     }
 
-    /// <summary>Current engine snapshot (may be <see cref="SyntheticDspEngine"/>
-    /// while disconnected). TxAudioIngest calls ProcessTxBlock on this; the
+    /// <summary>Current engine snapshot (may be <see cref="OfflinePreviewDspEngine"/>
+    /// or <see cref="SyntheticDspEngine"/> while disconnected). TxAudioIngest calls ProcessTxBlock on this; the
     /// engine handles a disposed-during-call race internally by returning 0.
     /// Virtual so tests can subclass this service and substitute a stub engine
     /// without running the full Synthetic/WDSP lifecycle.
@@ -1828,6 +1836,7 @@ public class DspPipelineService : BackgroundService,
         var nrRuntime = BuildNrRuntime(engine, state);
         bool wdspActive = nrRuntime.WdspActive;
         bool synthetic = engine is SyntheticDspEngine;
+        bool offlinePreview = engine is OfflinePreviewDspEngine;
         var squelchConfig = state.Squelch ?? new SquelchConfig();
         var rxDsp = BuildRxDspChainDiagnostics(
             state,
@@ -1846,9 +1855,10 @@ public class DspPipelineService : BackgroundService,
         {
             schemaVersion = 1,
             engine = engine?.GetType().Name ?? "None",
-            engineKind = wdspActive ? "WDSP" : synthetic ? "Synthetic" : engine is null ? "None" : "Other",
+            engineKind = wdspActive ? "WDSP" : offlinePreview ? "OfflinePreview" : synthetic ? "Synthetic" : engine is null ? "None" : "Other",
             wdspActive = nrRuntime.WdspActive,
             synthetic,
+            offlinePreview,
             wdspNativeLoadable = nrRuntime.WdspNativeLoadable,
             wdspEmnrPost2Available = nrRuntime.WdspEmnrPost2Available,
             wdspNr4SbnrAvailable = nrRuntime.WdspNr4SbnrAvailable,
@@ -1887,6 +1897,8 @@ public class DspPipelineService : BackgroundService,
             wdspWisdomStatus = wisdom.Status,
             readiness = wdspActive
                 ? "wdsp-active"
+                : offlinePreview
+                    ? "offline-preview-active"
                 : synthetic
                     ? "synthetic-idle-or-fallback"
                     : "no-engine",
@@ -1980,10 +1992,14 @@ public class DspPipelineService : BackgroundService,
         OrionMkIIVariant variant = OrionMkIIVariant.G2,
         bool protocol2Active = false)
     {
-        bool wdsp = engine is WdspDspEngine;
+        bool wdsp = engine is WdspDspEngine or OfflinePreviewDspEngine;
         int txBlock = engine?.TxBlockSamples ?? 0;
         int txOut = engine?.TxOutputSamples ?? 0;
-        string status = wdsp ? "runtime-rate-writable-fixed-profile" : engine is SyntheticDspEngine ? "synthetic-profile" : "engine-unavailable";
+        string status = engine is OfflinePreviewDspEngine
+            ? "offline-preview-tx-profile"
+            : wdsp
+                ? "runtime-rate-writable-fixed-profile"
+                : engine is SyntheticDspEngine ? "synthetic-profile" : "engine-unavailable";
         int[] sampleRates = [48_000, 96_000, 192_000, 384_000, 768_000, 1_536_000];
         int[] iqBufferSizes = [64, 128, 256, 512, 1024];
         int[] filterTapSizes = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144];
@@ -3555,9 +3571,7 @@ public class DspPipelineService : BackgroundService,
 
     private void OpenSynthetic()
     {
-        var engine = new SyntheticDspEngine();
-        int channelId = engine.OpenChannel(SyntheticSampleRateHz, Width);
-        ApplyStateToNewChannel(engine, channelId);
+        var engine = CreateDisconnectedEngine(out int channelId);
         // iter5 pass-2: _engineLock serialises CONCURRENT WRITERS. Volatile.Write
         // is used so a lock-free sink-side Volatile.Read sees the new engine
         // pointer; the lock-release fence also publishes the writes, but
@@ -3570,8 +3584,38 @@ public class DspPipelineService : BackgroundService,
             ResetSecondaryRxChannels();
             Volatile.Write(ref _sampleRateHz, SyntheticSampleRateHz);
         }
-        _log.LogInformation("dsp.pipeline engine=synthetic channel={Id}", channelId);
+        _log.LogInformation("dsp.pipeline engine={Engine} channel={Id}", engine.GetType().Name, channelId);
         RaiseEngineChanged(engine);
+    }
+
+    private IDspEngine CreateDisconnectedEngine(out int channelId)
+    {
+        OfflinePreviewDspEngine? preview = null;
+        try
+        {
+            preview = new OfflinePreviewDspEngine(_loggerFactory.CreateLogger<WdspDspEngine>());
+            channelId = preview.OpenChannel(SyntheticSampleRateHz, Width);
+            SeedTxDisplayConfig(preview);
+            preview.OpenTxChannel(outputRateHz: OfflinePreviewTxOutputRateHz);
+            try
+            {
+                ApplyStateToNewChannel(preview, channelId);
+            }
+            catch (EntryPointNotFoundException ex)
+            {
+                _log.LogWarning(ex, "dsp.pipeline offline-preview wdsp missing entry point - partial config applied");
+            }
+            return preview;
+        }
+        catch (Exception ex)
+        {
+            try { preview?.Dispose(); } catch { }
+            _log.LogWarning(ex, "dsp.pipeline offline-preview wdsp open failed, falling back to synthetic engine");
+            var synth = new SyntheticDspEngine();
+            channelId = synth.OpenChannel(SyntheticSampleRateHz, Width);
+            ApplyStateToNewChannel(synth, channelId);
+            return synth;
+        }
     }
 
     private void OnRadioConnected(IProtocol1Client client)
@@ -3669,9 +3713,7 @@ public class DspPipelineService : BackgroundService,
         // the timer-driven Tick take over for synthetic-mode display.
         DetachRxSinkP1();
 
-        var synth = new SyntheticDspEngine();
-        int channelId = synth.OpenChannel(SyntheticSampleRateHz, Width);
-        ApplyStateToNewChannel(synth, channelId);
+        var disconnectedEngine = CreateDisconnectedEngine(out int channelId);
 
         IDspEngine? old;
         int oldChannel;
@@ -3679,15 +3721,17 @@ public class DspPipelineService : BackgroundService,
         {
             old = _engine;
             oldChannel = _channelId;
-            Volatile.Write(ref _engine, synth);
+            Volatile.Write(ref _engine, disconnectedEngine);
             Volatile.Write(ref _channelId, channelId);
             ResetSecondaryRxChannels();
             Volatile.Write(ref _sampleRateHz, SyntheticSampleRateHz);
         }
 
         TeardownEngine(old, oldChannel);
-        _log.LogInformation("dsp.pipeline engine=synthetic channel={Id}", channelId);
-        RaiseEngineChanged(synth);
+        _appliedTxMonitorEnabled = false;
+        _log.LogInformation("dsp.pipeline engine={Engine} channel={Id}", disconnectedEngine.GetType().Name, channelId);
+        RaiseEngineChanged(disconnectedEngine);
+        OnRadioStateChanged(_radio.Snapshot());
     }
 
     // FreeDV is a linear digital mode: the OFDM waveform must pass the TX chain
@@ -5252,12 +5296,10 @@ public class DspPipelineService : BackgroundService,
 
     public void DisconnectP3TxEngine()
     {
-        if (!_radio.IsProtocol3Active && Volatile.Read(ref _engine) is SyntheticDspEngine)
+        if (!_radio.IsProtocol3Active && Volatile.Read(ref _engine) is SyntheticDspEngine or OfflinePreviewDspEngine)
             return;
 
-        var synth = new SyntheticDspEngine();
-        int channelId = synth.OpenChannel(SyntheticSampleRateHz, Width);
-        ApplyStateToNewChannel(synth, channelId);
+        var disconnectedEngine = CreateDisconnectedEngine(out int channelId);
 
         IDspEngine? old;
         int oldChannel;
@@ -5265,7 +5307,7 @@ public class DspPipelineService : BackgroundService,
         {
             old = _engine;
             oldChannel = _channelId;
-            Volatile.Write(ref _engine, synth);
+            Volatile.Write(ref _engine, disconnectedEngine);
             Volatile.Write(ref _channelId, channelId);
             ResetSecondaryRxChannels();
             Volatile.Write(ref _sampleRateHz, SyntheticSampleRateHz);
@@ -5274,8 +5316,9 @@ public class DspPipelineService : BackgroundService,
         TeardownEngine(old, oldChannel);
         _psResyncRequired = true;
         _appliedTxMonitorEnabled = false;
-        RaiseEngineChanged(synth);
-        _log.LogInformation("dsp.pipeline p3 tx disconnected, engine=synthetic");
+        RaiseEngineChanged(disconnectedEngine);
+        OnRadioStateChanged(_radio.Snapshot());
+        _log.LogInformation("dsp.pipeline p3 tx disconnected, engine={Engine}", disconnectedEngine.GetType().Name);
     }
 
     public async Task DisconnectP2Async(CancellationToken ct)
@@ -5298,9 +5341,7 @@ public class DspPipelineService : BackgroundService,
         try { await client.StopAsync(ct).ConfigureAwait(false); } catch { }
         await client.DisposeAsync().ConfigureAwait(false);
 
-        var synth = new SyntheticDspEngine();
-        int channelId = synth.OpenChannel(SyntheticSampleRateHz, Width);
-        ApplyStateToNewChannel(synth, channelId);
+        var disconnectedEngine = CreateDisconnectedEngine(out int channelId);
 
         IDspEngine? old;
         int oldChannel;
@@ -5308,13 +5349,13 @@ public class DspPipelineService : BackgroundService,
         {
             old = _engine;
             oldChannel = _channelId;
-            Volatile.Write(ref _engine, synth);
+            Volatile.Write(ref _engine, disconnectedEngine);
             Volatile.Write(ref _channelId, channelId);
             ResetSecondaryRxChannels();
             Volatile.Write(ref _sampleRateHz, SyntheticSampleRateHz);
         }
         TeardownEngine(old, oldChannel);
-        RaiseEngineChanged(synth);
+        RaiseEngineChanged(disconnectedEngine);
         // Mark PS state for forced re-push on the next ConnectP2Async. The
         // change-detect cache (`_appliedPs*`) is preserved across disconnect
         // — by design, so a reconnect with unchanged operator state doesn't
@@ -5326,8 +5367,9 @@ public class DspPipelineService : BackgroundService,
         // `project_ps_reconnect_state_loss.md` for the rack reproduction.
         _psResyncRequired = true;
         _appliedTxMonitorEnabled = false;
+        OnRadioStateChanged(_radio.Snapshot());
         _radio.MarkProtocol2Disconnected();
-        _log.LogInformation("dsp.pipeline p2 disconnected, engine=synthetic");
+        _log.LogInformation("dsp.pipeline p2 disconnected, engine={Engine}", disconnectedEngine.GetType().Name);
     }
 
     public Zeus.Protocol2.Protocol2Client? ActiveP2Client => _p2Client;
@@ -5785,12 +5827,15 @@ public class DspPipelineService : BackgroundService,
     private void MaybeTickInline()
     {
         long now = Stopwatch.GetTimestamp();
-        long last = _lastTickStopwatchTicks;
+        long last = Volatile.Read(ref _lastTickStopwatchTicks);
         if (ShouldTickInline(now, last, TickPeriodStopwatchTicks))
         {
-            if (last != 0) RecordTickInterval(now - last, now);
-            _lastTickStopwatchTicks = now;
-            Tick(_panBuf, _wfBuf, _audioBuf);
+            if (Tick(_panBuf, _wfBuf, _audioBuf))
+            {
+                if (last != 0) RecordTickInterval(now - last, now);
+                Volatile.Write(ref _lastTickStopwatchTicks, now);
+                Volatile.Write(ref _lastInlineTickStopwatchTicks, now);
+            }
         }
     }
 
@@ -5805,6 +5850,23 @@ public class DspPipelineService : BackgroundService,
     /// </summary>
     internal static bool ShouldTickInline(long nowTicks, long lastTicks, long periodTicks)
         => lastTicks == 0 || (nowTicks - lastTicks) >= periodTicks;
+
+    /// <summary>
+    /// Timer fallback cadence while an RX sink is attached. The inline RX packet
+    /// thread remains the preferred pacer; the timer only takes over after two
+    /// missed inline periods, then ticks at the normal cadence until packets
+    /// resume. This drains TX monitor/preview audio during a P2 DDC packet stall
+    /// without stealing ticks from a healthy RX thread.
+    /// </summary>
+    internal static bool ShouldTimerTickWhenSinkAttached(
+        long nowTicks,
+        long lastInlineTicks,
+        long lastAnyTickTicks,
+        long periodTicks)
+    {
+        bool inlineStale = lastInlineTicks == 0 || (nowTicks - lastInlineTicks) >= periodTicks * 2;
+        return inlineStale && ShouldTickInline(nowTicks, lastAnyTickTicks, periodTicks);
+    }
 
     // #1148: accumulate inline-tick interval stats and emit at ~1 Hz. Called
     // only from MaybeTickInline (single active RX thread), so no synchronisation
@@ -5849,7 +5911,8 @@ public class DspPipelineService : BackgroundService,
         // Reset the tick clock so the first IQ frame on the new connection
         // gets a fresh display tick (avoids a stale ~33 ms gap if the timer
         // was running synthetic ticks just before connect).
-        _lastTickStopwatchTicks = 0;
+        Volatile.Write(ref _lastTickStopwatchTicks, 0);
+        Volatile.Write(ref _lastInlineTickStopwatchTicks, 0);
         _attachedSinkP1 = client;
         client.AttachRxSink(this);
         _rxSinkAttached = true;
@@ -5876,7 +5939,8 @@ public class DspPipelineService : BackgroundService,
 
     private void AttachRxSinkP2(Zeus.Protocol2.Protocol2Client client)
     {
-        _lastTickStopwatchTicks = 0;
+        Volatile.Write(ref _lastTickStopwatchTicks, 0);
+        Volatile.Write(ref _lastInlineTickStopwatchTicks, 0);
         _attachedSinkP2 = client;
         client.AttachRxSink(this);
         _rxSinkAttached = true;
@@ -5991,14 +6055,14 @@ public class DspPipelineService : BackgroundService,
         return count;
     }
 
-    private void Tick(float[] panBuf, float[] wfBuf, float[] audioBuf)
+    private bool Tick(float[] panBuf, float[] wfBuf, float[] audioBuf)
     {
         // issue #1167: the timer thread and the RX inline-tick thread can both
         // be live during the sink attach/detach window. FloatSpscRing is strict
         // single-producer; this gate guarantees only one Tick runs at a time so
         // the producer side stays single-threaded. ~30 Hz, so the CompareExchange
         // is free. A skipped tick is harmless — the holder is ticking ~now.
-        if (!_tickGate.TryEnter()) { Interlocked.Increment(ref _tickReentrySkips); return; }
+        if (!_tickGate.TryEnter()) { Interlocked.Increment(ref _tickReentrySkips); return false; }
         try
         {
         // iter5 pass-2: lock-free hot path. Tick runs inline on the RX OS
@@ -6009,7 +6073,7 @@ public class DspPipelineService : BackgroundService,
         var engine = Volatile.Read(ref _engine);
         int channel = Volatile.Read(ref _channelId);
         int sampleRate = Volatile.Read(ref _sampleRateHz);
-        if (engine is null) return;
+        if (engine is null) return true;
 
         var state = _radio.Snapshot();
         // Synthetic engine stays open while disconnected so SetMode/SetFilter
@@ -6021,7 +6085,7 @@ public class DspPipelineService : BackgroundService,
         // race window — visible as a brief flash of the fake waterfall right
         // when the user clicked Connect. The synthetic engine never produces
         // real-radio data, so suppressing it unconditionally is correct.
-        if (engine is SyntheticDspEngine) return;
+        if (engine is SyntheticDspEngine) return true;
 
         // Issue #597 Phase 0: restore the default display tau once the LO has
         // been quiet for FastAttackRestoreMs. Runs on the RX/pipeline thread;
@@ -6661,7 +6725,12 @@ public class DspPipelineService : BackgroundService,
                 // operator hears nothing while the sample is captured in the
                 // background. The TX-air tap below still fires (read-only).
                 if (!_txMonitorMeterOnly)
-                    PublishAudio(in monFrame);
+                {
+                    if (rxAudioMuted)
+                        PublishExemptAudio(in monFrame);
+                    else
+                        PublishAudio(in monFrame);
+                }
                 // TX-air tap source: the processed transmit audio (what goes on
                 // the air). Read-only fan-out to IRxAudioTapPlugin/ITxAudioTapPlugin
                 // taps; null subscriber list = no cost.
@@ -6733,6 +6802,7 @@ public class DspPipelineService : BackgroundService,
             _hub.Broadcast(v2);
             RxMetersV2Updated?.Invoke(channel, v2);
         }
+        return true;
         }
         finally { _tickGate.Exit(); }
     }

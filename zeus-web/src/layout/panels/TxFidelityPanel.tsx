@@ -1033,7 +1033,6 @@ function NumberBox({ label, ariaLabel, value, min, max, parse, disabled, onCommi
 // Live TX shaping controls — mic / leveler / decay / low / high — committing
 // through the existing live Set* endpoints. Transient vs the stored profile.
 function TxLiveShapingControls() {
-  const status = useConnectionStore((s) => s.status);
   const mode = useConnectionStore((s) => s.mode);
   const applyState = useConnectionStore((s) => s.applyState);
   const setTxLevelingLocal = useConnectionStore((s) => s.setTxLeveling);
@@ -1049,7 +1048,7 @@ function TxLiveShapingControls() {
   const setLevelerMaxGainDb = useTxStore((s) => s.setLevelerMaxGainDb);
   const [error, setError] = useState<string | null>(null);
 
-  const disabled = status !== 'Connected';
+  const disabled = false;
   const filterAbs = filterSignedToAbs(mode, txFilterLowHz, txFilterHighHz);
   const lowDisabled = disabled || isSymmetricMode(mode);
 
