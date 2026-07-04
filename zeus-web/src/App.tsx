@@ -114,7 +114,7 @@ import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
 import { setAudioHostMode } from './audio/host-mode';
 import { useMicUplink } from './audio/use-mic-uplink';
-import { fetchState, fetchUpdateStatus, type RepoUpdateStatus } from './api/client';
+import { disconnect, disconnectP2, disconnectP3, fetchState, fetchUpdateStatus, type RepoUpdateStatus } from './api/client';
 import { useConnectionStore } from './state/connection-store';
 import { getReceiverMode } from './state/receiver-state';
 import { useFreeDvWindowStore } from './state/freedv-window-store';
@@ -268,6 +268,27 @@ export default function App() {
   const workspaceZoomPct = useConnectionStore((s) => s.workspaceZoomPct);
   const chromeZoom = (workspaceZoomPct > 0 ? workspaceZoomPct : 100) / 100;
   const connected = status === 'Connected';
+  useEffect(() => {
+    if (appAccessAllowed || status !== 'Connected') return;
+
+    void (async () => {
+      try {
+        await disconnectP3();
+      } catch {
+        // Best-effort cleanup; the active protocol may not be P3.
+      }
+      try {
+        await disconnectP2();
+      } catch {
+        // Best-effort cleanup; the active protocol may not be P2.
+      }
+      try {
+        await disconnect();
+      } catch (err) {
+        console.warn('access denial disconnect failed', err);
+      }
+    })();
+  }, [appAccessAllowed, status]);
   // Brand sub label reflects what discovery actually saw on the wire
   // (selection.connected), not the operator's preferred override — showing
   // "ANAN G2" when an HL2 is plugged in would just confuse anyone reading

@@ -32,6 +32,21 @@ public static class ZeusEndpoints
         var log = app.Services.GetRequiredService<ILogger<object>>();
         var configuration = app.Configuration;
 
+        app.Use(async (ctx, next) =>
+        {
+            if (!IsUserAccessGateEnabled(app) ||
+                !IsUserAccessGateProtectedRequest(ctx.Request.Method, ctx.Request.Path))
+            {
+                await next().ConfigureAwait(false);
+                return;
+            }
+
+            if (await DenyIfUserAccessBlockedAsync(ctx, log).ConfigureAwait(false))
+                return;
+
+            await next().ConfigureAwait(false);
+        });
+
         // Live Diagnostics API v2 — unified, registry-driven surface
         // (/api/diagnostics/v2). Legacy diagnostics routes below delegate to
         // the same providers for wire-compatible snapshots.
@@ -3744,8 +3759,9 @@ public static class ZeusEndpoints
             if (remoteUsers.Enabled)
             {
                 log.LogWarning(
-                    "api.users.session remote user management unavailable; falling back to local QRZ user {Callsign}",
+                    "api.users.session remote user management unavailable; denying QRZ user {Callsign}",
                     qrzStatus.Home?.Callsign);
+                return Results.Ok(remoteUsers.RemoteUnavailableSession(qrzStatus));
             }
 
             return Results.Ok(users.GetSession(qrzStatus));
@@ -4658,6 +4674,139 @@ public static class ZeusEndpoints
         });
 
         return app;
+    }
+
+    public static bool IsUserAccessGateProtectedRequest(string method, PathString path)
+    {
+        if (!path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (HttpMethods.IsGet(method) || HttpMethods.IsHead(method) || HttpMethods.IsOptions(method))
+            return false;
+
+        var value = path.Value ?? string.Empty;
+        return !IsUserAccessGatePublicMutation(value);
+    }
+
+    private static bool IsUserAccessGateEnabled(WebApplication app)
+    {
+        if (!app.Environment.IsEnvironment("Test"))
+            return true;
+
+        return string.Equals(
+            app.Configuration["ZEUS_TEST_USER_ACCESS_GATE"],
+            "on",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsUserAccessGatePublicMutation(string path)
+    {
+        return string.Equals(path, "/api/qrz/login", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "/api/qrz/logout", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "/api/qrz/apikey", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "/api/disconnect", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "/api/disconnect/p2", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "/api/disconnect/p3", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task<bool> DenyIfUserAccessBlockedAsync(HttpContext ctx, ILogger log)
+    {
+        var qrz = ctx.RequestServices.GetRequiredService<QrzService>();
+        var users = ctx.RequestServices.GetRequiredService<UserManagementStore>();
+        var remoteUsers = ctx.RequestServices.GetRequiredService<Zeus.Server.Hosting.RemoteUserAccessClient>();
+        var qrzStatus = qrz.GetStatus();
+
+        if (!qrzStatus.Connected)
+        {
+            await WriteUserAccessDeniedAsync(
+                ctx,
+                StatusCodes.Status401Unauthorized,
+                "QRZ login required",
+                "Sign in to QRZ before using Zeus.").ConfigureAwait(false);
+            return true;
+        }
+
+        var remoteSession = await remoteUsers.TryGetSessionAsync(qrz, qrzStatus, ctx.RequestAborted)
+            .ConfigureAwait(false);
+        var session = remoteSession
+            ?? (remoteUsers.Enabled ? remoteUsers.RemoteUnavailableSession(qrzStatus) : users.GetSession(qrzStatus));
+
+        if (session.AccessAllowed)
+            return false;
+
+        await RevokeActiveRadioAccessAsync(ctx, log).ConfigureAwait(false);
+        await WriteUserAccessDeniedAsync(
+            ctx,
+            StatusCodes.Status403Forbidden,
+            session.DenialReason ?? "Zeus app access disabled",
+            "Your Zeus account is blocked by user management.").ConfigureAwait(false);
+        return true;
+    }
+
+    private static async Task WriteUserAccessDeniedAsync(
+        HttpContext ctx,
+        int statusCode,
+        string error,
+        string message)
+    {
+        ctx.Response.StatusCode = statusCode;
+        ctx.Response.ContentType = "application/json";
+        await ctx.Response.WriteAsJsonAsync(new
+        {
+            error,
+            message,
+            accessAllowed = false,
+        }, ctx.RequestAborted).ConfigureAwait(false);
+    }
+
+    private static async Task RevokeActiveRadioAccessAsync(HttpContext ctx, ILogger log)
+    {
+        try
+        {
+            var tx = ctx.RequestServices.GetService<TxService>();
+            tx?.TrySetTun(false, out _);
+            tx?.TrySetMox(false, out _);
+        }
+        catch (Exception ex)
+        {
+            log.LogDebug(ex, "user.access.revoke.tx.failed");
+        }
+
+        var radio = ctx.RequestServices.GetService<RadioService>();
+        if (radio is null || !radio.IsConnected)
+            return;
+
+        var ct = ctx.RequestAborted;
+        try
+        {
+            if (radio.IsProtocol3Active)
+            {
+                var sidecar = ctx.RequestServices.GetService<Protocol3SidecarBridge>();
+                var dsp = ctx.RequestServices.GetService<DspPipelineService>();
+                if (sidecar is not null)
+                    await sidecar.DisconnectAsync(ct).ConfigureAwait(false);
+                radio.MarkProtocol3Disconnected();
+                dsp?.DisconnectP3TxEngine();
+                return;
+            }
+
+            if (radio.IsProtocol2Active)
+            {
+                var dsp = ctx.RequestServices.GetService<DspPipelineService>();
+                if (dsp is not null)
+                    await dsp.DisconnectP2Async(ct).ConfigureAwait(false);
+                return;
+            }
+
+            await radio.DisconnectAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "user.access.revoke.disconnect.failed");
+        }
     }
 
     // ---------- helpers (formerly local functions in Program.cs) -------------
