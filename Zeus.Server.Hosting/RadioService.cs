@@ -126,6 +126,7 @@ public sealed class RadioService : IDisposable
     // calls FlushState() which writes to LiteDB and clears the flag.
     // Avoids hammering LiteDB during rapid VFO scroll or filter drags.
     private volatile bool _stateDirty;
+    private volatile bool _disposed;
     private readonly System.Threading.Timer? _stateFlushTimer;
     // Last-known preset name per mode, preserved across mode switches.
     // RX2 keeps its own cache so VFO B top-bar edits do not affect what VFO A
@@ -727,7 +728,12 @@ public sealed class RadioService : IDisposable
         // since the last flush). Keeps RadioService latency unaffected by disk IO
         // during rapid VFO scroll or filter drags.
         if (_radioStateStore is not null)
-            _stateFlushTimer = new System.Threading.Timer(_ => FlushState(), null, 1_000, 1_000);
+            _stateFlushTimer = new System.Threading.Timer(_ =>
+            {
+                if (_disposed) return;
+                try { FlushState(); }
+                catch { /* never escape on a timer thread */ }
+            }, null, 1_000, 1_000);
     }
 
     /// <summary>
@@ -4247,6 +4253,8 @@ public sealed class RadioService : IDisposable
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
         _paStore.Changed -= RecomputePaAndPush;
         if (_antennaStore is not null)
             _antennaStore.Changed -= RecomputePaAndPush;
@@ -4258,7 +4266,21 @@ public sealed class RadioService : IDisposable
             _hl2GpioStore.Changed -= PushHl2Gpio;
         try { DisconnectAsync(CancellationToken.None).GetAwaiter().GetResult(); }
         catch { /* best-effort */ }
-        _stateFlushTimer?.Dispose();
+        if (_stateFlushTimer is not null)
+        {
+            // Parameterless Dispose does not wait for in-flight callbacks; that
+            // races host teardown while a timer flush may still be using DI
+            // stores that are about to be disposed (issue #1342).
+            var flushed = new ManualResetEvent(false);
+            if (_stateFlushTimer.Dispose(flushed))
+            {
+                var completed = flushed.WaitOne(TimeSpan.FromSeconds(5));
+                // If the wait times out, Timer may still Set() this handle when
+                // the callback unwinds; disposing it here would move the crash
+                // from the flush path into Timer internals.
+                if (completed) flushed.Dispose();
+            }
+        }
         // Final flush so the last operator actions survive a clean shutdown.
         _stateDirty = true;
         FlushState();
@@ -4500,7 +4522,8 @@ public sealed class RadioService : IDisposable
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "radio.state.flush failed");
+            try { _log.LogWarning(ex, "radio.state.flush failed"); }
+            catch { /* logger may be disposed during shutdown */ }
         }
     }
 
