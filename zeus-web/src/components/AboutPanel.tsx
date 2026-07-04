@@ -21,7 +21,32 @@
 // Both are GPL-2.0-or-later.
 
 import { useEffect, useState } from 'react';
+import type { MouseEvent } from 'react';
 import { UninstallDialog } from './UninstallDialog';
+import { openExternalUrl } from './report-problem/openExternalUrl';
+import { getServerBaseUrl } from '../serverUrl';
+
+// Open a link in the operator's real browser. Inside the Photino desktop shell
+// the webview swallows `target="_blank"` navigations, so a plain anchor does
+// nothing — route through openExternalUrl (which posts zeus.openExternal to the
+// C# host) instead. Relative paths (e.g. "/manual") are resolved to an absolute
+// http(s) URL against the configured server base, because the host bridge only
+// accepts absolute URLs (see TryReadOpenExternalRequest in Program.cs).
+function openExternalLink(url: string) {
+  return (event: MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
+    let absolute = url;
+    if (typeof window !== 'undefined') {
+      const base = getServerBaseUrl() || window.location.origin;
+      try {
+        absolute = new URL(url, base).href;
+      } catch {
+        absolute = url;
+      }
+    }
+    openExternalUrl(absolute);
+  };
+}
 
 // Release date for the version this build ships against. Bump whenever
 // VersionPrefix in Directory.Build.props bumps. ISO 8601 so toLocaleDateString
@@ -106,10 +131,13 @@ export function AboutPanel() {
         <p style={{ margin: '0 0 12px 0', lineHeight: 1.6, color: 'var(--fg-1)' }}>
           📖{' '}
           {/* The manual PDF ships inside every installer; the backend serves it
-              at /manual (see ZeusEndpoints). Opens in a new tab — and is a no-op
-              in dev builds that don't bundle the PDF. */}
+              at /manual (see ZeusEndpoints). Routed through openExternalUrl so it
+              opens in the OS browser — the Photino desktop webview swallows a
+              plain target="_blank" navigation. A no-op in dev builds that don't
+              bundle the PDF (the backend 404s). */}
           <a
             href="/manual"
+            onClick={openExternalLink('/manual')}
             target="_blank"
             rel="noopener noreferrer"
             style={{ color: 'var(--accent)', textDecoration: 'underline', fontWeight: 600 }}
@@ -128,6 +156,7 @@ export function AboutPanel() {
           Licensed under GNU GPL v2 or later. See{' '}
           <a
             href="https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus"
+            onClick={openExternalLink('https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus')}
             target="_blank"
             rel="noopener noreferrer"
             style={{ color: 'var(--accent)', textDecoration: 'underline' }}
