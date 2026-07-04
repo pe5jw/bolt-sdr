@@ -24,6 +24,7 @@ import {
   type UninstallResult,
 } from '../api/plugins';
 import { reloadInstalledPluginUis } from '../runtime/pluginRuntime';
+import { pluginAccessFor } from '../../state/user-access-store';
 
 type LoadState = {
   loaded: boolean;
@@ -42,6 +43,7 @@ export type PluginsStoreState = {
   // are split into installedVsts so the plugin store can show them separately.
   installed: PluginDto[];
   installedVsts: PluginDto[];
+  blocked: PluginDto[];
   sdkAbi: number;
   sdkVersion: string;
   installedLoad: LoadState;
@@ -95,6 +97,7 @@ async function refreshRuntimePanels() {
 export const usePluginsStore = create<PluginsStoreState>((set, get) => ({
   installed: [],
   installedVsts: [],
+  blocked: [],
   sdkAbi: 0,
   sdkVersion: '',
   installedLoad: { ...INITIAL_LOAD },
@@ -118,14 +121,17 @@ export const usePluginsStore = create<PluginsStoreState>((set, get) => ({
     set({ installedLoad: { ...INITIAL_LOAD, inflight: true } });
     try {
       const resp: PluginListResponse = await fetchInstalledPlugins();
+      const entitled = resp.plugins.filter((p) => pluginAccessFor(p.id, p.scanned).allowed);
+      const blocked = resp.plugins.filter((p) => !p.scanned && !pluginAccessFor(p.id, p.scanned).allowed);
       set({
         // Operator-scanned VST3 / AU plugins (resp.plugins[].scanned) live in
         // their own Settings ▸ Plugins ▸ VSTs tab — they are not Zeus
         // plugin-repo plugins, so the main Installed list excludes them. The
         // Audio Suite has its own consumer (pluginRuntime.fetchInstalledPlugins)
         // that still sees the full server list.
-        installed: resp.plugins.filter((p) => !p.scanned),
-        installedVsts: resp.plugins.filter((p) => p.scanned),
+        installed: entitled.filter((p) => !p.scanned),
+        installedVsts: entitled.filter((p) => p.scanned),
+        blocked,
         sdkAbi: resp.sdkAbi,
         sdkVersion: resp.sdkVersion,
         installedLoad: { loaded: true, inflight: false, loadError: null },
@@ -170,6 +176,12 @@ export const usePluginsStore = create<PluginsStoreState>((set, get) => ({
       lastInstallOk: null,
     });
     try {
+      if (req.source === 'registry' && req.id) {
+        const access = pluginAccessFor(req.id);
+        if (!access.allowed) {
+          throw new Error(access.reason ?? 'Plugin subscription required');
+        }
+      }
       const dto = await installPlugin(req);
       set({
         installInflight: false,

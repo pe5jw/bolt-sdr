@@ -13,6 +13,7 @@ import type {
   RegistryPluginVersion,
 } from '../api/plugins';
 import { RestartRequiredModal } from '../../components/RestartRequiredModal';
+import { pluginAccessFor } from '../../state/user-access-store';
 
 function latestVersion(
   entry: RegistryPluginEntry,
@@ -78,6 +79,13 @@ function CategoryChip({ label }: { label: string }) {
   );
 }
 
+function subscriptionPrice(pluginAccess: ReturnType<typeof pluginAccessFor>): string | null {
+  const managed = pluginAccess.managedPlugin;
+  if (!managed?.subscriptionRequired) return null;
+  if (managed.monthlyPriceCents <= 0) return `${managed.currency} manual subscription`;
+  return `${managed.currency} ${(managed.monthlyPriceCents / 100).toFixed(2)}/mo`;
+}
+
 function RegistryCard({
   entry,
   installedIds,
@@ -89,6 +97,9 @@ function RegistryCard({
   const installing = usePluginsStore((s) => s.installInflight);
   const latest = useMemo(() => latestVersion(entry), [entry]);
   const alreadyInstalled = installedIds.has(entry.id);
+  const pluginAccess = pluginAccessFor(entry.id);
+  const checkoutUrl = pluginAccess.managedPlugin?.checkoutUrl;
+  const price = subscriptionPrice(pluginAccess);
 
   // Restart-required modal — fires after a successful install of THIS
   // card's plugin. The plugin host registers new endpoints +
@@ -99,6 +110,10 @@ function RegistryCard({
   const [installedDisplayName, setInstalledDisplayName] = useState<string | null>(null);
 
   const onInstall = async () => {
+    if (!pluginAccess.allowed) {
+      if (checkoutUrl) window.location.href = checkoutUrl;
+      return;
+    }
     if (!latest || installing) return;
     const dto = await install({
       source: 'registry',
@@ -153,20 +168,33 @@ function RegistryCard({
           type="button"
           className="btn sm"
           onClick={onInstall}
-          disabled={!latest || installing || alreadyInstalled}
+          disabled={!latest || installing || alreadyInstalled || (!pluginAccess.allowed && !checkoutUrl)}
+          title={!pluginAccess.allowed ? pluginAccess.reason ?? 'Plugin subscription required' : undefined}
           aria-label={
-            alreadyInstalled
-              ? `${entry.name} already installed`
-              : `Install ${entry.name}`
+            !pluginAccess.allowed
+              ? `${entry.name} requires a plugin subscription`
+              : alreadyInstalled
+                ? `${entry.name} already installed`
+                : `Install ${entry.name}`
           }
         >
-          {alreadyInstalled
-            ? 'INSTALLED'
-            : installing
-              ? 'WORKING…'
-              : 'INSTALL'}
+          {!pluginAccess.allowed
+            ? 'SUBSCRIBE'
+            : alreadyInstalled
+              ? 'INSTALLED'
+              : installing
+                ? 'WORKING…'
+                : 'INSTALL'}
         </button>
       </div>
+
+      {!pluginAccess.allowed && (
+        <div style={{ color: 'var(--accent)', fontSize: 11, fontFamily: 'var(--font-mono)' }}>
+          {price
+            ? `${pluginAccess.reason ?? 'Plugin subscription required'} - ${price}`
+            : pluginAccess.reason ?? 'Plugin subscription required'}
+        </div>
+      )}
 
       {entry.description && (
         <div style={{ color: 'var(--fg-1)', lineHeight: 1.5 }}>

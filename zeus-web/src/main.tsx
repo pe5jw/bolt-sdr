@@ -91,10 +91,6 @@ import './styles/user-management.css';
 import App from './App.tsx';
 import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import { installFetchInterceptor } from './serverUrl';
-import { loadInstalledPluginUis } from './plugins/runtime/pluginRuntime';
-import { usePluginsStore } from './plugins/state/plugins-store';
-import { useDigitalPluginStore } from './state/digital-plugin-store';
-import { useFreeDvPluginStore } from './state/freedv-plugin-store';
 // Side-effect import: registers the `beforeinstallprompt` capture before the
 // lazily-loaded mobile shell mounts, so the install banner can replay it.
 import './pwa/pwa-install';
@@ -102,18 +98,6 @@ import './pwa/pwa-install';
 // Capacitor / standalone-host builds set localStorage["zeus.serverUrl"]
 // to a LAN address; on plain web this is a no-op (relative paths).
 installFetchInterceptor();
-
-// Fire and forget — plugin UIs join the workspace once their ES modules
-// finish loading. The Add Panel modal subscribes via usePluginPanels()
-// and re-renders when entries land.
-void loadInstalledPluginUis();
-
-// Boot-time plugin gates: mode buttons key off the plugins-store installed
-// list plus per-plugin liveness probes. Seed both here so the mode pickers are
-// correct from first paint.
-void usePluginsStore.getState().refreshInstalled();
-void useDigitalPluginStore.getState().probe();
-void useFreeDvPluginStore.getState().probe();
 
 // Seed the operator's chosen theme on <html> BEFORE React paints. The
 // ThemeApplier component reapplies on store changes; this just prevents

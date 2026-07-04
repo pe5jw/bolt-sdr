@@ -14,6 +14,8 @@ export type ZeusUserRecord = {
   isAdmin: boolean;
   subscriptionStatus: string;
   subscriptionExpiresUtc: string | null;
+  pluginAccessMode: 'all' | 'selected';
+  pluginEntitlements: ZeusPluginEntitlement[];
   hasQrzXmlSubscription: boolean;
   grid: string | null;
   notes: string | null;
@@ -31,13 +33,38 @@ export type ZeusUserSession = {
   hasQrzXmlSubscription: boolean;
   subscriptionStatus: string;
   subscriptionExpiresUtc: string | null;
+  pluginAccessMode: 'all' | 'selected';
+  pluginEntitlements: ZeusPluginEntitlement[];
+  managedPlugins: ZeusManagedPluginRecord[];
   denialReason: string | null;
   user: ZeusUserRecord | null;
+};
+
+export type ZeusPluginEntitlement = {
+  pluginId: string;
+  accessAllowed: boolean;
+  subscriptionStatus: string;
+  subscriptionExpiresUtc: string | null;
+  denialReason: string | null;
+};
+
+export type ZeusManagedPluginRecord = {
+  pluginId: string;
+  displayName: string;
+  subscriptionRequired: boolean;
+  monthlyPriceCents: number;
+  currency: string;
+  active: boolean;
+  checkoutUrl: string | null;
+  notes: string | null;
+  createdUtc: string;
+  updatedUtc: string;
 };
 
 export type ZeusUsersAdminResponse = {
   session: ZeusUserSession;
   users: ZeusUserRecord[];
+  managedPlugins: ZeusManagedPluginRecord[];
 };
 
 export type ZeusUserUpdateRequest = {
@@ -45,6 +72,8 @@ export type ZeusUserUpdateRequest = {
   isAdmin?: boolean;
   subscriptionStatus?: string;
   subscriptionExpiresUtc?: string | null;
+  pluginAccessMode?: 'all' | 'selected';
+  pluginEntitlements?: ZeusPluginEntitlement[];
   notes?: string | null;
 };
 
@@ -52,8 +81,65 @@ export type ZeusUserUpsertRequest = ZeusUserUpdateRequest & {
   callsign: string;
 };
 
+export type ZeusManagedPluginUpdateRequest = {
+  displayName?: string | null;
+  subscriptionRequired?: boolean;
+  monthlyPriceCents?: number;
+  currency?: string | null;
+  active?: boolean;
+  checkoutUrl?: string | null;
+  notes?: string | null;
+};
+
 function toStr(v: unknown): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
+function normalizePluginAccessMode(raw: unknown): 'all' | 'selected' {
+  return raw === 'selected' ? 'selected' : 'all';
+}
+
+function normalizePluginEntitlement(raw: unknown): ZeusPluginEntitlement {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    pluginId: typeof r.pluginId === 'string' ? r.pluginId : '',
+    accessAllowed: r.accessAllowed === true,
+    subscriptionStatus: typeof r.subscriptionStatus === 'string' ? r.subscriptionStatus : 'manual',
+    subscriptionExpiresUtc: toStr(r.subscriptionExpiresUtc),
+    denialReason: toStr(r.denialReason),
+  };
+}
+
+function normalizePluginEntitlements(raw: unknown): ZeusPluginEntitlement[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map(normalizePluginEntitlement)
+    .filter((e) => e.pluginId.length > 0);
+}
+
+function normalizeManagedPlugin(raw: unknown): ZeusManagedPluginRecord {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    pluginId: typeof r.pluginId === 'string' ? r.pluginId : '',
+    displayName: typeof r.displayName === 'string' ? r.displayName : '',
+    subscriptionRequired: r.subscriptionRequired === true,
+    monthlyPriceCents: typeof r.monthlyPriceCents === 'number' && Number.isFinite(r.monthlyPriceCents)
+      ? r.monthlyPriceCents
+      : 0,
+    currency: typeof r.currency === 'string' ? r.currency : 'USD',
+    active: r.active !== false,
+    checkoutUrl: toStr(r.checkoutUrl),
+    notes: toStr(r.notes),
+    createdUtc: typeof r.createdUtc === 'string' ? r.createdUtc : '',
+    updatedUtc: typeof r.updatedUtc === 'string' ? r.updatedUtc : '',
+  };
+}
+
+function normalizeManagedPlugins(raw: unknown): ZeusManagedPluginRecord[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map(normalizeManagedPlugin)
+    .filter((p) => p.pluginId.length > 0);
 }
 
 function normalizeUser(raw: unknown): ZeusUserRecord {
@@ -65,6 +151,8 @@ function normalizeUser(raw: unknown): ZeusUserRecord {
     isAdmin: r.isAdmin === true,
     subscriptionStatus: typeof r.subscriptionStatus === 'string' ? r.subscriptionStatus : 'manual',
     subscriptionExpiresUtc: toStr(r.subscriptionExpiresUtc),
+    pluginAccessMode: normalizePluginAccessMode(r.pluginAccessMode),
+    pluginEntitlements: normalizePluginEntitlements(r.pluginEntitlements),
     hasQrzXmlSubscription: r.hasQrzXmlSubscription === true,
     grid: toStr(r.grid),
     notes: toStr(r.notes),
@@ -85,6 +173,9 @@ function normalizeSession(raw: unknown): ZeusUserSession {
     hasQrzXmlSubscription: r.hasQrzXmlSubscription === true,
     subscriptionStatus: typeof r.subscriptionStatus === 'string' ? r.subscriptionStatus : 'none',
     subscriptionExpiresUtc: toStr(r.subscriptionExpiresUtc),
+    pluginAccessMode: normalizePluginAccessMode(r.pluginAccessMode),
+    pluginEntitlements: normalizePluginEntitlements(r.pluginEntitlements),
+    managedPlugins: normalizeManagedPlugins(r.managedPlugins),
     denialReason: toStr(r.denialReason),
     user: r.user ? normalizeUser(r.user) : null,
   };
@@ -95,6 +186,7 @@ function normalizeAdminResponse(raw: unknown): ZeusUsersAdminResponse {
   return {
     session: normalizeSession(r.session),
     users: Array.isArray(r.users) ? r.users.map(normalizeUser) : [],
+    managedPlugins: normalizeManagedPlugins(r.managedPlugins),
   };
 }
 
@@ -156,5 +248,22 @@ export function updateAdminUser(
       signal,
     },
     normalizeUser,
+  );
+}
+
+export function updateManagedPlugin(
+  pluginId: string,
+  req: ZeusManagedPluginUpdateRequest,
+  signal?: AbortSignal,
+): Promise<ZeusManagedPluginRecord> {
+  return jsonFetch(
+    `/api/admin/plugins/${encodeURIComponent(pluginId)}`,
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+      signal,
+    },
+    normalizeManagedPlugin,
   );
 }

@@ -13,6 +13,25 @@
 
 namespace Zeus.Contracts;
 
+public sealed record ZeusPluginEntitlement(
+    string PluginId,
+    bool AccessAllowed,
+    string SubscriptionStatus,
+    DateTime? SubscriptionExpiresUtc,
+    string? DenialReason = null);
+
+public sealed record ZeusManagedPluginRecord(
+    string PluginId,
+    string DisplayName,
+    bool SubscriptionRequired,
+    int MonthlyPriceCents,
+    string Currency,
+    bool Active,
+    string? CheckoutUrl,
+    string? Notes,
+    DateTime CreatedUtc,
+    DateTime UpdatedUtc);
+
 public sealed record ZeusUserRecord(
     string Callsign,
     string DisplayName,
@@ -20,6 +39,8 @@ public sealed record ZeusUserRecord(
     bool IsAdmin,
     string SubscriptionStatus,
     DateTime? SubscriptionExpiresUtc,
+    string PluginAccessMode,
+    IReadOnlyList<ZeusPluginEntitlement> PluginEntitlements,
     bool HasQrzXmlSubscription,
     string? Grid,
     string? Notes,
@@ -36,12 +57,16 @@ public sealed record ZeusUserSession(
     bool HasQrzXmlSubscription,
     string SubscriptionStatus,
     DateTime? SubscriptionExpiresUtc,
+    string PluginAccessMode,
+    IReadOnlyList<ZeusPluginEntitlement> PluginEntitlements,
+    IReadOnlyList<ZeusManagedPluginRecord> ManagedPlugins,
     string? DenialReason,
     ZeusUserRecord? User);
 
 public sealed record ZeusUsersAdminResponse(
     ZeusUserSession Session,
-    IReadOnlyList<ZeusUserRecord> Users);
+    IReadOnlyList<ZeusUserRecord> Users,
+    IReadOnlyList<ZeusManagedPluginRecord> ManagedPlugins);
 
 public sealed record ZeusUserUpsertRequest(
     string Callsign,
@@ -49,6 +74,17 @@ public sealed record ZeusUserUpsertRequest(
     bool? IsAdmin = null,
     string? SubscriptionStatus = null,
     DateTime? SubscriptionExpiresUtc = null,
+    string? PluginAccessMode = null,
+    IReadOnlyList<ZeusPluginEntitlement>? PluginEntitlements = null,
+    string? Notes = null);
+
+public sealed record ZeusManagedPluginUpdateRequest(
+    string? DisplayName = null,
+    bool? SubscriptionRequired = null,
+    int? MonthlyPriceCents = null,
+    string? Currency = null,
+    bool? Active = null,
+    string? CheckoutUrl = null,
     string? Notes = null);
 
 public sealed record ZeusUserUpdateRequest(
@@ -56,4 +92,6 @@ public sealed record ZeusUserUpdateRequest(
     bool? IsAdmin = null,
     string? SubscriptionStatus = null,
     DateTime? SubscriptionExpiresUtc = null,
+    string? PluginAccessMode = null,
+    IReadOnlyList<ZeusPluginEntitlement>? PluginEntitlements = null,
     string? Notes = null);

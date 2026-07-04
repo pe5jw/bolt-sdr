@@ -86,6 +86,8 @@
 .admin-summary span,
 .admin-detail-ledger span,
 .admin-field-grid span,
+.admin-plugin-edit-grid span,
+.admin-entitlement-row span,
 .admin-notes span,
 .auth-form span {
   display: block;
@@ -135,6 +137,8 @@
 
 .auth-form label,
 .admin-field-grid label,
+.admin-plugin-edit-grid label,
+.admin-entitlement-row label,
 .admin-notes {
   display: flex;
   flex-direction: column;
@@ -143,8 +147,12 @@
 
 .auth-form input,
 .admin-add-user input,
+.admin-add-plugin input,
 .admin-field-grid input,
 .admin-field-grid select,
+.admin-plugin-edit-grid input,
+.admin-entitlement-row input,
+.admin-entitlement-row select,
 .admin-notes textarea {
   width: 100%;
   padding: 7px 9px;
@@ -157,8 +165,12 @@
 
 .auth-form input:focus,
 .admin-add-user input:focus,
+.admin-add-plugin input:focus,
 .admin-field-grid input:focus,
 .admin-field-grid select:focus,
+.admin-plugin-edit-grid input:focus,
+.admin-entitlement-row input:focus,
+.admin-entitlement-row select:focus,
 .admin-notes textarea:focus {
   outline: 1px solid var(--accent);
   outline-offset: 0;
@@ -168,7 +180,9 @@
 .auth-actions,
 .admin-topbar-actions,
 .admin-add-user,
+.admin-add-plugin,
 .admin-panel-head,
+.admin-panel-actions,
 .admin-brand {
   display: flex;
   align-items: center;
@@ -178,6 +192,8 @@
 .auth-actions .btn,
 .admin-topbar-actions .btn,
 .admin-add-user .btn,
+.admin-add-plugin .btn,
+.admin-managed-plugin-row .btn,
 .admin-save {
   display: inline-flex;
   align-items: center;
@@ -219,7 +235,7 @@
 
 .admin-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -243,6 +259,7 @@
 
 .admin-users-panel,
 .admin-detail-panel,
+.admin-plugin-panel,
 .admin-denied {
   min-height: 0;
   display: flex;
@@ -264,12 +281,17 @@
   color: var(--accent-bright);
 }
 
+.admin-panel-actions {
+  margin-left: auto;
+}
+
 .admin-add-user {
   padding: 10px;
   border-bottom: 1px solid var(--panel-border);
 }
 
-.admin-add-user input {
+.admin-add-user input,
+.admin-add-plugin input {
   font-family: var(--font-mono);
 }
 
@@ -407,6 +429,135 @@
   padding: 0 10px 10px;
 }
 
+.admin-plugin-access {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.admin-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-1);
+  font: 800 11px/1 var(--font-sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.admin-section-title svg {
+  color: var(--accent-bright);
+}
+
+.admin-entitlement-list,
+.admin-managed-plugin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin-entitlement-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.2fr) minmax(96px, 0.55fr) minmax(110px, 0.65fr) minmax(120px, 0.7fr);
+  gap: 8px;
+  padding: 10px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+}
+
+.admin-entitlement-plugin,
+.admin-managed-plugin-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.admin-entitlement-plugin strong,
+.admin-managed-plugin-main strong {
+  overflow: hidden;
+  color: var(--fg-0);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-entitlement-plugin span,
+.admin-managed-plugin-main span {
+  overflow: hidden;
+  color: var(--fg-2);
+  font: 700 10px/1.2 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-entitlement-plugin em,
+.admin-managed-plugin-main em {
+  color: var(--accent-bright);
+  font: 800 10px/1.2 var(--font-sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.admin-entitlement-reason {
+  grid-column: 2 / -1;
+}
+
+.admin-plugin-panel {
+  flex: 0 0 auto;
+}
+
+.admin-add-plugin {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.1fr) minmax(200px, 0.8fr) auto;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.admin-managed-plugin-list {
+  padding: 10px;
+}
+
+.admin-managed-plugin-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.75fr) minmax(420px, 1.4fr) auto;
+  align-items: end;
+  gap: 10px;
+  padding: 10px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+}
+
+.admin-plugin-edit-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 90px 72px minmax(118px, 0.85fr) minmax(96px, 0.65fr);
+  gap: 8px;
+}
+
+.admin-check-field {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.admin-check-field input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.admin-check-field span {
+  margin: 0;
+}
+
+.admin-plugin-wide {
+  grid-column: span 2;
+}
+
 .admin-notes {
   padding: 0 10px 10px;
 }
@@ -424,6 +575,15 @@
 .admin-empty {
   margin: auto;
   color: var(--fg-3);
+  font-style: italic;
+}
+
+.admin-empty-row {
+  padding: 12px;
+  color: var(--fg-3);
+  background: var(--bg-0);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-sm);
   font-style: italic;
 }
 
@@ -445,12 +605,21 @@
   .admin-summary,
   .admin-grid,
   .admin-detail-ledger,
-  .admin-field-grid {
+  .admin-field-grid,
+  .admin-entitlement-row,
+  .admin-add-plugin,
+  .admin-managed-plugin-row,
+  .admin-plugin-edit-grid {
     grid-template-columns: 1fr;
   }
 
   .admin-grid {
     min-height: auto;
+  }
+
+  .admin-entitlement-reason,
+  .admin-plugin-wide {
+    grid-column: auto;
   }
 
   .admin-topbar {

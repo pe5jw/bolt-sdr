@@ -138,6 +138,10 @@ import { useDesktopViewportLock, useIsMobileViewport } from './mobile/use-mobile
 import type L from 'leaflet';
 import type { Contact } from './components/design/data';
 import { qrzStationToContact } from './components/design/qrz-contact';
+import { reloadInstalledPluginUis } from './plugins/runtime/pluginRuntime';
+import { usePluginsStore } from './plugins/state/plugins-store';
+import { useDigitalPluginStore } from './state/digital-plugin-store';
+import { useFreeDvPluginStore } from './state/freedv-plugin-store';
 
 const SettingsView = lazy(async () => {
   const module = await import('./components/SettingsMenu');
@@ -169,12 +173,35 @@ export default function App() {
   const remoteMode = useMemo(() => isRemoteMode(), []);
   const adminRoute = useMemo(() => window.location.pathname.replace(/\/+$/, '') === '/admin', []);
   const appAccessAllowed = useUserAccessStore((s) => s.session?.accessAllowed === true);
+  const pluginPolicyKey = useUserAccessStore((s) =>
+    s.session
+      ? JSON.stringify({
+          mode: s.session.pluginAccessMode,
+          entitlements: s.session.pluginEntitlements,
+          managed: s.session.managedPlugins,
+        })
+      : '',
+  );
   const refreshAccessSession = useUserAccessStore((s) => s.refreshSession);
   const appShellEnabled = appAccessAllowed && !adminRoute;
 
   useEffect(() => {
     void refreshAccessSession();
   }, [refreshAccessSession]);
+
+  useEffect(() => {
+    if (!appShellEnabled) return;
+    void (async () => {
+      try {
+        await usePluginsStore.getState().refreshInstalled();
+        await reloadInstalledPluginUis();
+        await useDigitalPluginStore.getState().probe();
+        await useFreeDvPluginStore.getState().probe();
+      } catch (err) {
+        console.warn('plugin access refresh failed', err);
+      }
+    })();
+  }, [appShellEnabled, pluginPolicyKey]);
 
   // Reopen any detached workspace windows the operator left open at the last
   // desktop shutdown. Main window only (a detached window must not re-spawn its

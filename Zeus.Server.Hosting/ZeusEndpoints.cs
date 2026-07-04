@@ -3735,7 +3735,7 @@ public static class ZeusEndpoints
             var session = users.GetSession(qrz.GetStatus());
             var denied = RequireAdminSession(session);
             if (denied is not null) return denied;
-            return Results.Ok(new ZeusUsersAdminResponse(session, users.ListUsers()));
+            return Results.Ok(new ZeusUsersAdminResponse(session, users.ListUsers(), users.ListManagedPlugins()));
         });
 
         app.MapPost("/api/admin/users", (ZeusUserUpsertRequest req, QrzService qrz, UserManagementStore users) =>
@@ -3799,6 +3799,34 @@ public static class ZeusEndpoints
             catch (InvalidOperationException ex)
             {
                 return Results.Conflict(new { error = ex.Message });
+            }
+        });
+
+        app.MapPut("/api/admin/plugins/{pluginId}", (
+            string pluginId,
+            ZeusManagedPluginUpdateRequest req,
+            QrzService qrz,
+            UserManagementStore users) =>
+        {
+            var session = users.GetSession(qrz.GetStatus());
+            var denied = RequireAdminSession(session);
+            if (denied is not null) return denied;
+
+            try
+            {
+                var plugin = users.UpsertManagedPlugin(pluginId, req);
+                log.LogInformation(
+                    "api.admin.plugins.update actor={Actor} plugin={PluginId} required={Required} priceCents={PriceCents} active={Active}",
+                    session.Callsign,
+                    plugin.PluginId,
+                    plugin.SubscriptionRequired,
+                    plugin.MonthlyPriceCents,
+                    plugin.Active);
+                return Results.Ok(plugin);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
             }
         });
 

@@ -18,6 +18,7 @@ function resetStore() {
   usePluginsStore.setState({
     installed: [],
     installedVsts: [],
+    blocked: [],
     sdkAbi: 0,
     sdkVersion: '',
     installedLoad: { loaded: false, inflight: false, loadError: null },

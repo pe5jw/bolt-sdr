@@ -12,6 +12,10 @@ import {
   fetchAdminUsers,
   fetchUserSession,
   updateAdminUser,
+  updateManagedPlugin as updateManagedPluginApi,
+  type ZeusManagedPluginRecord,
+  type ZeusManagedPluginUpdateRequest,
+  type ZeusPluginEntitlement,
   type ZeusUserRecord,
   type ZeusUserSession,
   type ZeusUserUpdateRequest,
@@ -28,6 +32,7 @@ type UserAccessState = {
   adminError: string | null;
   session: ZeusUserSession | null;
   users: ZeusUserRecord[];
+  managedPlugins: ZeusManagedPluginRecord[];
 
   refreshSession: () => Promise<ZeusUserSession | null>;
   loginWithQrz: (username: string, password: string) => Promise<boolean>;
@@ -35,6 +40,10 @@ type UserAccessState = {
   loadAdminUsers: () => Promise<void>;
   createUser: (request: ZeusUserUpsertRequest) => Promise<ZeusUserRecord | null>;
   updateUser: (callsign: string, request: ZeusUserUpdateRequest) => Promise<ZeusUserRecord | null>;
+  updateManagedPlugin: (
+    pluginId: string,
+    request: ZeusManagedPluginUpdateRequest,
+  ) => Promise<ZeusManagedPluginRecord | null>;
 };
 
 function errorMessage(err: unknown): string {
@@ -50,6 +59,99 @@ function replaceUser(users: ZeusUserRecord[], next: ZeusUserRecord): ZeusUserRec
   });
 }
 
+export type PluginAccessDecision = {
+  allowed: boolean;
+  reason: string | null;
+  entitlement: ZeusPluginEntitlement | null;
+  managedPlugin: ZeusManagedPluginRecord | null;
+};
+
+function expiredAt(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const time = Date.parse(value);
+  return Number.isFinite(time) && time <= Date.now();
+}
+
+function findPluginEntitlement(
+  session: ZeusUserSession | null,
+  pluginId: string,
+): ZeusPluginEntitlement | null {
+  const wanted = pluginId.trim().toLowerCase();
+  if (!wanted) return null;
+  return session?.pluginEntitlements.find((e) => e.pluginId.toLowerCase() === wanted) ?? null;
+}
+
+function findManagedPlugin(
+  session: ZeusUserSession | null,
+  pluginId: string,
+): ZeusManagedPluginRecord | null {
+  const wanted = pluginId.trim().toLowerCase();
+  if (!wanted) return null;
+  return session?.managedPlugins.find((p) => p.pluginId.toLowerCase() === wanted) ?? null;
+}
+
+export function pluginAccessFor(pluginId: string, scanned = false): PluginAccessDecision {
+  if (scanned) {
+    return { allowed: true, reason: null, entitlement: null, managedPlugin: null };
+  }
+
+  const session = useUserAccessStore.getState().session;
+  if (!session) {
+    return { allowed: true, reason: null, entitlement: null, managedPlugin: null };
+  }
+
+  const managedPlugin = findManagedPlugin(session, pluginId);
+  if (!session.accessAllowed) {
+    return {
+      allowed: false,
+      reason: session?.denialReason ?? 'QRZ app access required',
+      entitlement: null,
+      managedPlugin,
+    };
+  }
+
+  const entitlement = findPluginEntitlement(session, pluginId);
+  if (entitlement) {
+    if (!entitlement.accessAllowed) {
+      return {
+        allowed: false,
+        reason: entitlement.denialReason ?? 'Plugin subscription required',
+        entitlement,
+        managedPlugin,
+      };
+    }
+    if (expiredAt(entitlement.subscriptionExpiresUtc)) {
+      return {
+        allowed: false,
+        reason: 'Plugin subscription expired',
+        entitlement,
+        managedPlugin,
+      };
+    }
+    return { allowed: true, reason: null, entitlement, managedPlugin };
+  }
+
+  if (managedPlugin?.active === false) {
+    return {
+      allowed: false,
+      reason: 'Plugin disabled by Zeus admin',
+      entitlement: null,
+      managedPlugin,
+    };
+  }
+
+  if (managedPlugin?.subscriptionRequired || session.pluginAccessMode === 'selected') {
+    return {
+      allowed: false,
+      reason: 'Plugin subscription required',
+      entitlement: null,
+      managedPlugin,
+    };
+  }
+
+  return { allowed: true, reason: null, entitlement: null, managedPlugin };
+}
+
 export const useUserAccessStore = create<UserAccessState>((set, get) => ({
   checked: false,
   loading: false,
@@ -59,6 +161,7 @@ export const useUserAccessStore = create<UserAccessState>((set, get) => ({
   adminError: null,
   session: null,
   users: [],
+  managedPlugins: [],
 
   refreshSession: async () => {
     set({ loading: true, error: null });
@@ -84,6 +187,7 @@ export const useUserAccessStore = create<UserAccessState>((set, get) => ({
       checked: true,
       session: null,
       users: [],
+      managedPlugins: [],
       error: null,
       adminError: null,
     });
@@ -98,6 +202,7 @@ export const useUserAccessStore = create<UserAccessState>((set, get) => ({
         adminLoading: false,
         session: response.session,
         users: response.users,
+        managedPlugins: response.managedPlugins,
       });
     } catch (err) {
       set({ adminLoading: false, adminError: errorMessage(err) });
@@ -123,6 +228,31 @@ export const useUserAccessStore = create<UserAccessState>((set, get) => ({
       set((state) => ({ saving: false, users: replaceUser(state.users, user) }));
       await get().refreshSession();
       return user;
+    } catch (err) {
+      set({ saving: false, adminError: errorMessage(err) });
+      return null;
+    }
+  },
+
+  updateManagedPlugin: async (pluginId, request) => {
+    set({ saving: true, adminError: null });
+    try {
+      const managedPlugin = await updateManagedPluginApi(pluginId, request);
+      set((state) => {
+        const found = state.managedPlugins.some((p) => p.pluginId === managedPlugin.pluginId);
+        const managedPlugins = found
+          ? state.managedPlugins.map((p) => (p.pluginId === managedPlugin.pluginId ? managedPlugin : p))
+          : [...state.managedPlugins, managedPlugin];
+        const sorted = [...managedPlugins].sort((a, b) => a.pluginId.localeCompare(b.pluginId));
+        const session = state.session
+          ? {
+              ...state.session,
+              managedPlugins: sorted,
+            }
+          : state.session;
+        return { saving: false, managedPlugins: sorted, session };
+      });
+      return managedPlugin;
     } catch (err) {
       set({ saving: false, adminError: errorMessage(err) });
       return null;

@@ -102,6 +102,66 @@ public sealed class UserManagementStoreTests : IDisposable
     }
 
     [Fact]
+    public void Update_StoresPerUserPluginEntitlements()
+    {
+        _store.GetSession(Qrz("N9WAR"));
+        _store.GetSession(Qrz("KB2UKA"));
+        var expiry = new DateTime(2027, 5, 6, 7, 8, 9, DateTimeKind.Utc);
+
+        var updated = _store.Update(
+            "kb2uka",
+            new ZeusUserUpdateRequest(
+                PluginAccessMode: "selected",
+                PluginEntitlements: new[]
+                {
+                    new ZeusPluginEntitlement(
+                        PluginId: "COM.OPENHPSDR.PAID",
+                        AccessAllowed: true,
+                        SubscriptionStatus: "active",
+                        SubscriptionExpiresUtc: expiry),
+                }));
+
+        Assert.Equal("selected", updated.PluginAccessMode);
+        var entitlement = Assert.Single(updated.PluginEntitlements);
+        Assert.Equal("com.openhpsdr.paid", entitlement.PluginId);
+        Assert.True(entitlement.AccessAllowed);
+        Assert.Equal("active", entitlement.SubscriptionStatus);
+        Assert.Equal(expiry, entitlement.SubscriptionExpiresUtc);
+
+        var session = _store.GetSession(Qrz("KB2UKA"));
+        Assert.Equal("selected", session.PluginAccessMode);
+        Assert.Single(session.PluginEntitlements);
+    }
+
+    [Fact]
+    public void UpsertManagedPlugin_StoresSubscriptionCatalogMetadata()
+    {
+        var saved = _store.UpsertManagedPlugin(
+            "COM.OPENHPSDR.PAID",
+            new ZeusManagedPluginUpdateRequest(
+                DisplayName: "Paid Mode",
+                SubscriptionRequired: true,
+                MonthlyPriceCents: 499,
+                Currency: "usd",
+                Active: true,
+                CheckoutUrl: "https://checkout.example/plugin",
+                Notes: "monthly subscription"));
+
+        Assert.Equal("com.openhpsdr.paid", saved.PluginId);
+        Assert.Equal("Paid Mode", saved.DisplayName);
+        Assert.True(saved.SubscriptionRequired);
+        Assert.Equal(499, saved.MonthlyPriceCents);
+        Assert.Equal("USD", saved.Currency);
+        Assert.Equal("https://checkout.example/plugin", saved.CheckoutUrl);
+
+        var listed = Assert.Single(_store.ListManagedPlugins());
+        Assert.Equal(saved.PluginId, listed.PluginId);
+
+        var session = _store.GetSession(Qrz("N9WAR"));
+        Assert.Single(session.ManagedPlugins);
+    }
+
+    [Fact]
     public void Update_PreventsRemovingTheLastAllowedAdmin()
     {
         _store.GetSession(Qrz("N9WAR"));
