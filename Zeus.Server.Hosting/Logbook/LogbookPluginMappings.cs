@@ -95,8 +95,7 @@ internal static class LogbookPluginMappings
         ClearQslSentDate: req.ClearQslSentDate,
         ClearQslRcvdDate: req.ClearQslRcvdDate,
         ClearTxPowerW: req.ClearTxPowerW,
-        ClearFrequencyMhz: req.ClearFrequencyMhz,
-        ClearQsoDateTimeUtc: req.ClearQsoDateTimeUtc);
+        ClearFrequencyMhz: req.ClearFrequencyMhz);
 
     public static LogEntry ToContract(LogbookEntrySnapshot entry) => new(
         Id: entry.Id,

@@ -122,8 +122,7 @@ public sealed record UpdateLogEntryRequest(
     bool ClearQslSentDate = false,
     bool ClearQslRcvdDate = false,
     bool ClearTxPowerW = false,
-    bool ClearFrequencyMhz = false,
-    bool ClearQsoDateTimeUtc = false);
+    bool ClearFrequencyMhz = false);
 
 public sealed record LogEntriesResponse(
     IEnumerable<LogEntry> Entries,

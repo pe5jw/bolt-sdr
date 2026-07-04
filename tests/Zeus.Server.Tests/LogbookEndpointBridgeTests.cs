@@ -457,7 +457,7 @@ public sealed class LogbookEndpointBridgeTests
                 Mode = update.Mode ?? current.Mode,
                 Band = update.Band ?? current.Band,
                 FrequencyMhz = update.ClearFrequencyMhz ? null : update.FrequencyMhz ?? current.FrequencyMhz,
-                QsoDateTimeUtc = update.ClearQsoDateTimeUtc ? current.QsoDateTimeUtc : update.QsoDateTimeUtc ?? current.QsoDateTimeUtc,
+                QsoDateTimeUtc = update.QsoDateTimeUtc ?? current.QsoDateTimeUtc,
             };
             Entries[index] = updated;
             return Task.FromResult<LogbookEntrySnapshot?>(updated);
