@@ -80,6 +80,8 @@ import { PsToggleButton } from './components/PsToggleButton';
 import { PaTempChip } from './components/PaTempChip';
 import { WorkspaceZoomControls } from './components/WorkspaceZoomControls';
 import { QrzStatusPill } from './components/QrzStatusPill';
+import { AdminPage } from './components/AdminPage';
+import { QrzAccessGate } from './components/QrzAccessGate';
 import { QrmButton, QrmPanelToggleButton } from './components/QrmButton';
 import { RogerBeepButton } from './components/RogerBeepButton';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
@@ -101,7 +103,7 @@ import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
 import { BOARD_LABELS } from './api/radio';
 import { useFilterRibbonOpenSync } from './components/filter/filterRibbonShared';
-import { CONTACTS, bandOf } from './components/design/data';
+import { bandOf } from './components/design/data';
 import { bearingDeg, distanceKm } from './components/design/geo';
 import { startRealtime } from './realtime/ws-client';
 import { isRemoteMode } from './remote/remote-client';
@@ -116,6 +118,7 @@ import { getReceiverMode } from './state/receiver-state';
 import { useFreeDvWindowStore } from './state/freedv-window-store';
 import { useRadioStore } from './state/radio-store';
 import { useQrzStore } from './state/qrz-store';
+import { useUserAccessStore } from './state/user-access-store';
 import { qrzFullName } from './api/qrz';
 import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
@@ -135,6 +138,10 @@ import { useDesktopViewportLock, useIsMobileViewport } from './mobile/use-mobile
 import type L from 'leaflet';
 import type { Contact } from './components/design/data';
 import { qrzStationToContact } from './components/design/qrz-contact';
+import { reloadInstalledPluginUis } from './plugins/runtime/pluginRuntime';
+import { usePluginsStore } from './plugins/state/plugins-store';
+import { useDigitalPluginStore } from './state/digital-plugin-store';
+import { useFreeDvPluginStore } from './state/freedv-plugin-store';
 
 const SettingsView = lazy(async () => {
   const module = await import('./components/SettingsMenu');
@@ -164,15 +171,47 @@ export default function App() {
   // the broker instead of the local /ws; RemoteGate prompts for the session
   // password and owns that transport.
   const remoteMode = useMemo(() => isRemoteMode(), []);
+  const adminRoute = useMemo(() => window.location.pathname.replace(/\/+$/, '') === '/admin', []);
+  const appAccessAllowed = useUserAccessStore((s) => s.session?.accessAllowed === true);
+  const pluginPolicyKey = useUserAccessStore((s) =>
+    s.session
+      ? JSON.stringify({
+          mode: s.session.pluginAccessMode,
+          entitlements: s.session.pluginEntitlements,
+          managed: s.session.managedPlugins,
+        })
+      : '',
+  );
+  const refreshAccessSession = useUserAccessStore((s) => s.refreshSession);
+  const appShellEnabled = appAccessAllowed && !adminRoute;
+
+  useEffect(() => {
+    void refreshAccessSession();
+  }, [refreshAccessSession]);
+
+  useEffect(() => {
+    if (!appShellEnabled) return;
+    void (async () => {
+      try {
+        await usePluginsStore.getState().refreshInstalled();
+        await reloadInstalledPluginUis();
+        await useDigitalPluginStore.getState().probe();
+        await useFreeDvPluginStore.getState().probe();
+      } catch (err) {
+        console.warn('plugin access refresh failed', err);
+      }
+    })();
+  }, [appShellEnabled, pluginPolicyKey]);
+
   // Reopen any detached workspace windows the operator left open at the last
   // desktop shutdown. Main window only (a detached window must not re-spawn its
   // siblings) and not in remote/web mode. Runs once on mount; the helper is a
   // no-op outside the Photino desktop shell.
   useEffect(() => {
-    if (detachedLayoutId || detachedSettingsWindow || remoteMode) return;
+    if (!appShellEnabled || detachedLayoutId || detachedSettingsWindow || remoteMode) return;
     void restorePersistedWorkspaceWindows();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [appShellEnabled]);
   const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
   const settingsInitialTab = useLayoutStore((s) => s.settingsInitialTab);
   const setSettingsView = useLayoutStore((s) => s.setSettingsView);
@@ -219,7 +258,10 @@ export default function App() {
   // Reload on mount AND every time the wire connection flips to Connected.
   // Clicking Connect on a discovered radio doesn't refresh radio-store on
   // its own (only the manual-connect path does).
-  useEffect(() => { radioLoad(); }, [radioLoad, connected]);
+  useEffect(() => {
+    if (!appShellEnabled) return;
+    radioLoad();
+  }, [radioLoad, connected, appShellEnabled]);
   // Track unsaved TX Audio Profile edits (dirty flag) for the disconnect/close
   // save prompt. Mounted once here so it spans the whole session.
   useTxAudioProfileDirtyTracker();
@@ -242,11 +284,11 @@ export default function App() {
   // `radioLoaded` means we load the correct layout exactly once.
   const radioLoaded = useRadioStore((s) => s.loaded);
   useEffect(() => {
-    if (!radioLoaded) return;
+    if (!appShellEnabled || !radioLoaded) return;
     const key = radioConnected !== 'Unknown' ? radioConnected : 'default';
     void loadLayoutsForRadio(key);
     void loadSavedLayoutsForRadio(key);
-  }, [loadLayoutsForRadio, loadSavedLayoutsForRadio, radioConnected, radioLoaded]);
+  }, [loadLayoutsForRadio, loadSavedLayoutsForRadio, radioConnected, radioLoaded, appShellEnabled]);
   const activeLayoutId = useLayoutStore((s) => s.activeLayoutId);
 
   // Recover action for the workspace error boundary: reset the active layout to
@@ -342,14 +384,15 @@ export default function App() {
     // Remote (WebRTC) mode sources frames over the broker, not the local
     // websocket — RemoteGate owns that transport. Starting startRealtime() here
     // too would open a second, doomed /ws connection.
-    if (remoteMode) return;
+    if (!appShellEnabled || remoteMode) return;
     const stop = startRealtime();
     return () => {
       stop();
     };
-  }, [remoteMode]);
+  }, [remoteMode, appShellEnabled]);
 
   useEffect(() => {
+    if (!appShellEnabled) return;
     const ctrl = new AbortController();
     fetchState(ctrl.signal)
       .then((next) => {
@@ -360,13 +403,14 @@ export default function App() {
         /* ConnectPanel reports startup/API failures in the visible UI. */
       });
     return () => ctrl.abort();
-  }, []);
+  }, [appShellEnabled]);
 
   // Fetch host capabilities once on mount. The backend snapshot is built
   // at startup and doesn't change at runtime, so a single fetch is enough;
   // failures fall back to "no features available" which hides feature-gated
   // UI rather than rendering broken controls.
   useEffect(() => {
+    if (!appShellEnabled) return;
     void useCapabilitiesStore.getState().refresh();
     // Mirror the resolved host mode into the audio-host-mode flag so the
     // non-React consumers (audio-client, ws-client, mic-uplink) can opt
@@ -379,7 +423,7 @@ export default function App() {
       // own speakers, not the remote operator. See isNativeAudio().
       if (host) setAudioHostMode(host === 'desktop' && !remoteMode ? 'native' : 'browser');
     });
-  }, []);
+  }, [remoteMode, appShellEnabled]);
 
   useEffect(() => {
     // Normally the poll only runs once a radio is connected. In remote (WebRTC)
@@ -390,6 +434,7 @@ export default function App() {
     // disables MOX and empties every store-driven panel (meters, TX, controls)
     // even though the panadapter — fed straight from frames — keeps rendering.
     // The poll seeds the store as soon as the tunnel can serve /api/state.
+    if (!appShellEnabled) return;
     if (!connected && !remoteMode) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -421,7 +466,7 @@ export default function App() {
       if (timer != null) clearTimeout(timer);
       ctrl?.abort();
     };
-  }, [connected, remoteMode]);
+  }, [connected, remoteMode, appShellEnabled]);
 
   useEffect(() => {
     return useConnectionStore.subscribe((state, prev) => {
@@ -692,9 +737,7 @@ export default function App() {
   // to the current QRZ lookup.
   const rotStatus = useRotatorStore((s) => s.status);
   const rotLiveAz = rotStatus?.connected ? rotStatus.currentAz : null;
-  const contact: Contact | null = qrzActive
-    ? qrzStationToContact(qrzLookup, qrzHome)
-    : (CONTACTS[callsign.toUpperCase()] ?? null);
+  const contact: Contact | null = qrzActive ? qrzStationToContact(qrzLookup, qrzHome) : null;
 
   const workedSummaryCallsign = contact?.callsign ?? null;
 
@@ -787,9 +830,7 @@ export default function App() {
       // QrzCard — a clearer signal than the old "silently do nothing" gate.
       qrz.lookup(target).finally(() => setEnriching(false));
     } else {
-      // Design-mock fallback: CONTACTS lookup is synchronous; just run the scan
-      // briefly so the card doesn't pop in without the visual beat.
-      setTimeout(() => setEnriching(false), 700);
+      setEnriching(false);
     }
   }, [callsign]);
 
@@ -1022,6 +1063,24 @@ export default function App() {
     heroTitle, dspActive, logbookTitle, logbookActions,
     handleLogQso, handleClearQrz, onCallsignSubmit, runQrzLookup, submitBeam,
   ]);
+
+  if (adminRoute) {
+    return (
+      <>
+        <ThemeApplier />
+        <AdminPage />
+      </>
+    );
+  }
+
+  if (!appAccessAllowed) {
+    return (
+      <>
+        <ThemeApplier />
+        <QrzAccessGate />
+      </>
+    );
+  }
 
   if (detachedLayoutId) {
     return (

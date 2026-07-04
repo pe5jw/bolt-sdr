@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react';
 import { usePluginsStore } from '../state/plugins-store';
 import type { PluginDto } from '../api/plugins';
 import { ConfirmDialog } from '../../layout/ConfirmDialog';
+import { pluginAccessFor } from '../../state/user-access-store';
 
 type InstalledListKind = 'plugins' | 'vsts';
 
@@ -120,6 +121,7 @@ export function InstalledPlugins({
 }) {
   const installed = usePluginsStore((s) => s.installed);
   const installedVsts = usePluginsStore((s) => s.installedVsts);
+  const blocked = usePluginsStore((s) => s.blocked);
   const load = usePluginsStore((s) => s.installedLoad);
   const refresh = usePluginsStore((s) => s.refreshInstalled);
   const uninstallError = usePluginsStore((s) => s.lastUninstallError);
@@ -247,6 +249,39 @@ export function InstalledPlugins({
       {items.map((p) => (
         <PluginCard key={p.id} p={p} />
       ))}
+
+      {kind === 'plugins' && blocked.length > 0 && (
+        <div
+          style={{
+            padding: 12,
+            border: '1px solid var(--accent-line)',
+            borderRadius: 'var(--r-md)',
+            background: 'var(--accent-soft)',
+            color: 'var(--fg-0)',
+            display: 'grid',
+            gap: 8,
+          }}
+        >
+          <strong style={{ fontSize: 12 }}>Plugin subscriptions required</strong>
+          {blocked.map((p) => {
+            const access = pluginAccessFor(p.id);
+            const managed = access.managedPlugin;
+            const price = managed?.subscriptionRequired && managed.monthlyPriceCents > 0
+              ? `${managed.currency} ${(managed.monthlyPriceCents / 100).toFixed(2)}/mo`
+              : null;
+            return (
+              <div key={p.id} style={{ display: 'grid', gap: 2 }}>
+                <span style={{ fontWeight: 700 }}>{p.name}</span>
+                <span style={{ color: 'var(--fg-2)', fontSize: 12 }}>
+                  {price
+                    ? `${access.reason ?? 'Plugin subscription required'} - ${price}`
+                    : access.reason ?? 'Plugin subscription required'}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

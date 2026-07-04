@@ -26,6 +26,14 @@ radio access is gated end-to-end by the SPAKE2+ session password at the radio
   (`{ iceServers }`); 503 if TURN is not configured (clients then use STUN only).
 - `GET /signal?role=host` (WS, QRZ headers) — the radio registers for its callsign.
 - `GET /signal?role=client&callsign=<X>` (WS) — a browser joins radio `<X>`'s room.
+- `POST /admin/login` — admin dashboard login, returning a short-lived Bearer token.
+- `GET/POST /admin/users` and `PUT /admin/users/<CALLSIGN>` — durable user,
+  subscription, notes, and per-user plugin-entitlement ledger for the public
+  maintainer dashboard.
+- `GET/POST /admin/plugins` and `PUT /admin/plugins/<pluginId>` — plugin catalog
+  and subscription pricing metadata: free/paid flag, monthly price, checkout URL,
+  active state, and notes.
+- `GET /admin/presence` — online support-available operators.
 
 Signaling messages (JSON): client→host `offer`/`candidate`/`bye`; host→client
 `answer`/`candidate`/`bye` (addressed by the broker-assigned `clientId`); `ping`/

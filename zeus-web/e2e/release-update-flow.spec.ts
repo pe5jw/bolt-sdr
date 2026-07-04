@@ -45,6 +45,22 @@ async function fulfillJson(route: Route, body: unknown) {
   });
 }
 
+const allowedUserSession = {
+  qrzConnected: true,
+  callsign: 'N9WAR',
+  displayName: 'N9WAR',
+  accessAllowed: true,
+  isAdmin: false,
+  hasQrzXmlSubscription: true,
+  subscriptionStatus: 'qrz-xml',
+  subscriptionExpiresUtc: null,
+  pluginAccessMode: 'all',
+  pluginEntitlements: [],
+  managedPlugins: [],
+  denialReason: null,
+  user: null,
+};
+
 async function stubZeusApi(page: Page) {
   await page.addInitScript(() => {
     const NativeWebSocket = window.WebSocket;
@@ -121,6 +137,11 @@ async function stubZeusApi(page: Page) {
     const request = route.request();
     const url = new URL(request.url());
     const method = request.method();
+
+    if (url.pathname === '/api/users/session') {
+      await fulfillJson(route, allowedUserSession);
+      return;
+    }
 
     if (url.pathname === '/api/system/update') {
       await fulfillJson(route, releaseUpdateStatus);

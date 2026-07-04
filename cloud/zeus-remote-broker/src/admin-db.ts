@@ -29,6 +29,36 @@ export interface TokenRow {
   revoked: number;
 }
 
+/** A managed app user in the remote admin ledger. */
+export interface ManagedUserRow {
+  callsign: string;
+  display_name: string | null;
+  access_allowed: number;
+  is_admin: number;
+  subscription_status: string;
+  subscription_expires_at: number | null;
+  plugin_access_mode: string;
+  plugin_entitlements: string;
+  notes: string | null;
+  created_at: number;
+  updated_at: number;
+  last_login_at: number | null;
+}
+
+/** A plugin catalog row with pricing/subscription metadata. */
+export interface ManagedPluginRow {
+  plugin_id: string;
+  display_name: string;
+  subscription_required: number;
+  monthly_price_cents: number;
+  currency: string;
+  active: number;
+  checkout_url: string | null;
+  notes: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 // --- admins ----------------------------------------------------------------
 
 export async function getAdmin(db: D1Database, callsign: string): Promise<AdminRow | null> {
@@ -180,4 +210,152 @@ export async function insertAudit(
     .prepare('INSERT INTO admin_audit (ts, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)')
     .bind(Date.now(), entry.actor, entry.action, entry.target ?? null, entry.detail ?? null)
     .run();
+}
+
+// --- managed app users ------------------------------------------------------
+
+export async function listManagedUsers(db: D1Database): Promise<ManagedUserRow[]> {
+  const res = await db
+    .prepare(
+      'SELECT * FROM admin_users ORDER BY is_admin DESC, updated_at DESC, callsign',
+    )
+    .all<ManagedUserRow>();
+  return res.results ?? [];
+}
+
+export async function getManagedUser(db: D1Database, callsign: string): Promise<ManagedUserRow | null> {
+  return db.prepare('SELECT * FROM admin_users WHERE callsign = ?').bind(callsign).first<ManagedUserRow>();
+}
+
+export async function upsertManagedUser(
+  db: D1Database,
+  row: {
+    callsign: string;
+    display_name?: string | null;
+    access_allowed?: number;
+    is_admin?: number;
+    subscription_status?: string;
+    subscription_expires_at?: number | null;
+    plugin_access_mode?: string;
+    plugin_entitlements?: string;
+    notes?: string | null;
+    last_login_at?: number | null;
+  },
+): Promise<ManagedUserRow> {
+  const now = Date.now();
+  await db
+    .prepare(
+      'INSERT INTO admin_users ' +
+        '(callsign, display_name, access_allowed, is_admin, subscription_status, subscription_expires_at, plugin_access_mode, plugin_entitlements, notes, created_at, updated_at, last_login_at) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+        'ON CONFLICT(callsign) DO UPDATE SET ' +
+        'display_name = excluded.display_name, access_allowed = excluded.access_allowed, is_admin = excluded.is_admin, ' +
+        'subscription_status = excluded.subscription_status, subscription_expires_at = excluded.subscription_expires_at, ' +
+        'plugin_access_mode = excluded.plugin_access_mode, plugin_entitlements = excluded.plugin_entitlements, ' +
+        'notes = excluded.notes, updated_at = excluded.updated_at, last_login_at = COALESCE(excluded.last_login_at, admin_users.last_login_at)',
+    )
+    .bind(
+      row.callsign,
+      row.display_name ?? row.callsign,
+      row.access_allowed ?? 1,
+      row.is_admin ?? 0,
+      row.subscription_status ?? 'manual',
+      row.subscription_expires_at ?? null,
+      row.plugin_access_mode ?? 'all',
+      row.plugin_entitlements ?? '[]',
+      row.notes ?? null,
+      now,
+      now,
+      row.last_login_at ?? null,
+    )
+    .run();
+  const saved = await getManagedUser(db, row.callsign);
+  if (!saved) throw new Error('managed user upsert failed');
+  return saved;
+}
+
+export async function updateManagedUser(
+  db: D1Database,
+  callsign: string,
+  patch: Partial<Omit<ManagedUserRow, 'callsign' | 'created_at' | 'updated_at'>>,
+): Promise<ManagedUserRow | null> {
+  const existing = await getManagedUser(db, callsign);
+  if (!existing) return null;
+  const now = Date.now();
+  await db
+    .prepare(
+      'UPDATE admin_users SET display_name = ?, access_allowed = ?, is_admin = ?, subscription_status = ?, ' +
+        'subscription_expires_at = ?, plugin_access_mode = ?, plugin_entitlements = ?, notes = ?, last_login_at = ?, updated_at = ? ' +
+        'WHERE callsign = ?',
+    )
+    .bind(
+      patch.display_name ?? existing.display_name,
+      patch.access_allowed ?? existing.access_allowed,
+      patch.is_admin ?? existing.is_admin,
+      patch.subscription_status ?? existing.subscription_status,
+      patch.subscription_expires_at !== undefined ? patch.subscription_expires_at : existing.subscription_expires_at,
+      patch.plugin_access_mode ?? existing.plugin_access_mode,
+      patch.plugin_entitlements ?? existing.plugin_entitlements,
+      patch.notes !== undefined ? patch.notes : existing.notes,
+      patch.last_login_at !== undefined ? patch.last_login_at : existing.last_login_at,
+      now,
+      callsign,
+    )
+    .run();
+  return getManagedUser(db, callsign);
+}
+
+// --- managed plugins --------------------------------------------------------
+
+export async function listManagedPlugins(db: D1Database): Promise<ManagedPluginRow[]> {
+  const res = await db
+    .prepare('SELECT * FROM managed_plugins ORDER BY plugin_id')
+    .all<ManagedPluginRow>();
+  return res.results ?? [];
+}
+
+export async function getManagedPlugin(db: D1Database, pluginId: string): Promise<ManagedPluginRow | null> {
+  return db.prepare('SELECT * FROM managed_plugins WHERE plugin_id = ?').bind(pluginId).first<ManagedPluginRow>();
+}
+
+export async function upsertManagedPlugin(
+  db: D1Database,
+  row: {
+    plugin_id: string;
+    display_name?: string | null;
+    subscription_required?: number;
+    monthly_price_cents?: number;
+    currency?: string;
+    active?: number;
+    checkout_url?: string | null;
+    notes?: string | null;
+  },
+): Promise<ManagedPluginRow> {
+  const now = Date.now();
+  await db
+    .prepare(
+      'INSERT INTO managed_plugins ' +
+        '(plugin_id, display_name, subscription_required, monthly_price_cents, currency, active, checkout_url, notes, created_at, updated_at) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+        'ON CONFLICT(plugin_id) DO UPDATE SET ' +
+        'display_name = excluded.display_name, subscription_required = excluded.subscription_required, ' +
+        'monthly_price_cents = excluded.monthly_price_cents, currency = excluded.currency, active = excluded.active, ' +
+        'checkout_url = excluded.checkout_url, notes = excluded.notes, updated_at = excluded.updated_at',
+    )
+    .bind(
+      row.plugin_id,
+      row.display_name ?? row.plugin_id,
+      row.subscription_required ?? 0,
+      row.monthly_price_cents ?? 0,
+      row.currency ?? 'USD',
+      row.active ?? 1,
+      row.checkout_url ?? null,
+      row.notes ?? null,
+      now,
+      now,
+    )
+    .run();
+  const saved = await getManagedPlugin(db, row.plugin_id);
+  if (!saved) throw new Error('managed plugin upsert failed');
+  return saved;
 }
