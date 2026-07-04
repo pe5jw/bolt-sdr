@@ -58,6 +58,7 @@ import {
   restorePersistedWorkspaceWindows,
 } from './layout/workspace-windows';
 import { ConfirmDialog } from './layout/ConfirmDialog';
+import CrashConsentModal from './components/CrashConsentModal';
 import { SupportSessionWatcher } from './components/SupportSessionWatcher';
 import { FreeDvWindow } from './components/FreeDvWindow';
 import { AfGainSlider } from './components/AfGainSlider';
@@ -1547,6 +1548,7 @@ export default function App() {
       <UpdatePrompt show={updateAvailable} onUpdate={installUpdate} />
       <ReportProblemModal />
       <ProfileOverlayHost />
+      <CrashConsentModal />
       <SupportSessionWatcher />
       {remoteMode && <RemoteGate />}
     </div>

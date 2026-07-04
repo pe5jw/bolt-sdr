@@ -49,6 +49,8 @@ A Pi 4 handles RX comfortably (roughly 15-25% CPU at 48 kHz). Heavy modes such a
 
 The very first time you start Zeus on any platform, it builds a one-time DSP "wisdom" cache that tunes the math engine to your hardware. **This can take a few minutes** — that is normal, and every launch afterward is instant. Don't be alarmed if the first start feels slow.
 
+Zeus also asks one question on first launch: whether to **automatically send crash logs to the developers**. If Zeus ever crashes, a crash report (logs and a diagnostics snapshot) helps the problem get fixed without you having to re-create it. Answer **Yes** and Zeus turns on the two Remote Diagnostics switches for you; answer **No thanks** and nothing is shared — you can change your mind any time under **Settings → Server → Remote Diagnostics**. You are asked once, and never again.
+
 Once Zeus is up, the desktop app shows the console directly. If you are running the **Zeus Server** mode and connecting from a browser, point the browser at the LAN address the server window lists (typically `http://<your-computer-ip>:6060`).
 
 If you are using a separate device — a native mobile or desktop wrapper, or a browser that needs to reach a server elsewhere on your network — open **Settings → Server URL** and enter the address of the machine running the Zeus backend, for example `http://192.168.1.23:6060`. Plain browser users on the normal setup leave this field **blank**; the page already talks to the server that served it. Saving a new address reloads the page so everything reconnects cleanly. That same panel also lists any secure (HTTPS) LAN addresses your server is offering, which is what a phone browser needs in order to use its microphone for transmit.
