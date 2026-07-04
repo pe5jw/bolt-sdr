@@ -6,7 +6,7 @@
 //                         Christian Suarez (N9WAR), and contributors.
 
 import { useEffect, useState, type FormEvent } from 'react';
-import { KeyRound, LogOut, ShieldCheck } from 'lucide-react';
+import { KeyRound, LogOut, RefreshCw, ShieldCheck } from 'lucide-react';
 import { useQrzStore } from '../state/qrz-store';
 import { useUserAccessStore } from '../state/user-access-store';
 import type { ZeusUserSession } from '../api/users';
@@ -55,6 +55,7 @@ export function QrzAccessGate({ adminMode = false }: { adminMode?: boolean }) {
   const loginInFlight = useQrzStore((s) => s.loginInFlight);
   const loginError = useQrzStore((s) => s.loginError);
   const connected = useQrzStore((s) => s.connected);
+  const qrzHome = useQrzStore((s) => s.home);
   const session = useUserAccessStore((s) => s.session);
   const checked = useUserAccessStore((s) => s.checked);
   const loading = useUserAccessStore((s) => s.loading);
@@ -82,6 +83,14 @@ export function QrzAccessGate({ adminMode = false }: { adminMode?: boolean }) {
 
   const busy = loginInFlight || loading;
   const denial = session?.denialReason ?? accessError ?? loginError;
+  const qrzSignedIn = connected || session?.qrzConnected === true;
+  const qrzUsername = statusValue(session?.callsign ?? qrzHome?.callsign);
+  const title = qrzSignedIn
+    ? adminMode ? 'Admin QRZ Session' : 'QRZ Account Active'
+    : adminMode ? 'Admin QRZ Login' : 'QRZ Login Required';
+  const subtitle = qrzSignedIn
+    ? `${qrzUsername} is the Zeus username.`
+    : 'QRZ callsign is the Zeus username.';
 
   return (
     <div className="auth-shell">
@@ -91,8 +100,8 @@ export function QrzAccessGate({ adminMode = false }: { adminMode?: boolean }) {
             <KeyRound size={22} strokeWidth={2.2} />
           </div>
           <div>
-            <h1 id="qrz-auth-title">{adminMode ? 'Admin QRZ Login' : 'QRZ Login Required'}</h1>
-            <p>QRZ callsign is the Zeus username.</p>
+            <h1 id="qrz-auth-title">{title}</h1>
+            <p>{subtitle}</p>
           </div>
         </div>
 
@@ -105,44 +114,61 @@ export function QrzAccessGate({ adminMode = false }: { adminMode?: boolean }) {
           <div className="auth-banner auth-banner--warn">{denial}</div>
         )}
 
-        <form className="auth-form" onSubmit={onSubmit}>
-          <label>
-            <span>QRZ username</span>
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value.toUpperCase())}
-              autoComplete="username"
-              spellCheck={false}
-              disabled={busy}
-            />
-          </label>
-          <label>
-            <span>Password</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              disabled={busy}
-            />
-          </label>
+        {qrzSignedIn ? (
           <div className="auth-actions">
             <button
-              type="submit"
+              type="button"
               className="btn sm active"
-              disabled={busy || !username.trim() || !password}
+              onClick={() => void refreshSession()}
+              disabled={busy}
             >
-              <ShieldCheck size={14} strokeWidth={2.2} aria-hidden />
-              {busy ? 'SIGNING IN' : 'SIGN IN'}
+              <RefreshCw size={14} strokeWidth={2.2} aria-hidden />
+              {busy ? 'CHECKING' : 'REFRESH ACCESS'}
             </button>
-            {connected && (
-              <button type="button" className="btn sm" onClick={() => void logout()} disabled={busy}>
-                <LogOut size={14} strokeWidth={2.2} aria-hidden />
-                SIGN OUT
-              </button>
-            )}
+            <button
+              type="button"
+              className="btn sm"
+              onClick={() => void logout()}
+              disabled={busy}
+            >
+              <LogOut size={14} strokeWidth={2.2} aria-hidden />
+              SIGN OUT
+            </button>
           </div>
-        </form>
+        ) : (
+          <form className="auth-form" onSubmit={onSubmit}>
+            <label>
+              <span>QRZ username</span>
+              <input
+                value={username}
+                onChange={(e) => setUsername(e.target.value.toUpperCase())}
+                autoComplete="username"
+                spellCheck={false}
+                disabled={busy}
+              />
+            </label>
+            <label>
+              <span>Password</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                disabled={busy}
+              />
+            </label>
+            <div className="auth-actions">
+              <button
+                type="submit"
+                className="btn sm active"
+                disabled={busy || !username.trim() || !password}
+              >
+                <ShieldCheck size={14} strokeWidth={2.2} aria-hidden />
+                {busy ? 'SIGNING IN' : 'SIGN IN'}
+              </button>
+            </div>
+          </form>
+        )}
       </section>
     </div>
   );

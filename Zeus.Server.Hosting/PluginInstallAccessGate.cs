@@ -8,15 +8,18 @@ namespace Zeus.Server.Hosting;
 public sealed class PluginInstallAccessGate : IPluginInstallAccessGate
 {
     private readonly QrzService _qrz;
+    private readonly UserManagementStore _users;
     private readonly RemoteUserAccessClient _remote;
     private readonly ILogger<PluginInstallAccessGate> _log;
 
     public PluginInstallAccessGate(
         QrzService qrz,
+        UserManagementStore users,
         RemoteUserAccessClient remote,
         ILogger<PluginInstallAccessGate> log)
     {
         _qrz = qrz;
+        _users = users;
         _remote = remote;
         _log = log;
     }
@@ -27,18 +30,18 @@ public sealed class PluginInstallAccessGate : IPluginInstallAccessGate
         if (string.IsNullOrWhiteSpace(normalized))
             return PluginInstallAccessDecision.Deny("plugin id required");
 
-        if (!_remote.Enabled)
-            return PluginInstallAccessDecision.Allow;
-
         var qrzStatus = _qrz.GetStatus();
         if (!qrzStatus.Connected)
             return PluginInstallAccessDecision.Deny("QRZ login required");
 
+        if (!_remote.Enabled)
+            return AccessFor(_users.GetSession(qrzStatus), normalized);
+
         var session = await _remote.TryGetSessionAsync(_qrz, qrzStatus, ct).ConfigureAwait(false);
         if (session is null)
         {
-            _log.LogWarning("plugin install denied because remote user management was unavailable");
-            return PluginInstallAccessDecision.Deny("Zeus user management is unavailable");
+            _log.LogWarning("plugin install remote user management unavailable; falling back to local QRZ user policy");
+            session = _users.GetSession(qrzStatus);
         }
 
         return AccessFor(session, normalized);

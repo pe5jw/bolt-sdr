@@ -3742,7 +3742,11 @@ public static class ZeusEndpoints
             if (remoteSession is not null) return Results.Ok(remoteSession);
 
             if (remoteUsers.Enabled)
-                return Results.Ok(remoteUsers.RemoteUnavailableSession(qrzStatus));
+            {
+                log.LogWarning(
+                    "api.users.session remote user management unavailable; falling back to local QRZ user {Callsign}",
+                    qrzStatus.Home?.Callsign);
+            }
 
             return Results.Ok(users.GetSession(qrzStatus));
         });
