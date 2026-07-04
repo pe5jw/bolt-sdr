@@ -69,91 +69,45 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
 
     public async Task<IReadOnlyList<DiscoveredRadio>> DiscoverAsync(TimeSpan timeout, CancellationToken ct = default)
     {
-        var broadcastTargets = GetBroadcastTargets();
+        var socketPlans = GetSocketPlans();
 
-        _log.LogDebug("p2.discovery.start interfaces={Count}", broadcastTargets.Count);
-        foreach (var (ifaceAddr, bcastAddr) in broadcastTargets)
+        _log.LogDebug("p2.discovery.start interfaces={Count}", socketPlans.Count);
+        foreach (var plan in socketPlans)
         {
-            _log.LogDebug("p2.discovery.interface local={Local} broadcast={Broadcast}", ifaceAddr, bcastAddr);
+            _log.LogDebug("p2.discovery.interface local={Local} broadcast={Broadcast}", plan.BindAddress, plan.TargetAddress);
         }
 
-        using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp)
-        {
-            EnableBroadcast = true,
-        };
-        Protocol2Client.DisableUdpConnReset(socket);
-        socket.Bind(new IPEndPoint(IPAddress.Any, 0));
-
-        var packet = BuildDiscoveryPacket();
-        await SendProbesAsync(socket, packet, broadcastTargets, ct).ConfigureAwait(false);
-
-        var byMac = new Dictionary<PhysicalAddress, DiscoveredRadio>();
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(timeout);
-
-        var receiveBuffer = new byte[ReceiveBufferSize];
-        var any = new IPEndPoint(IPAddress.Any, 0);
+        var sockets = CreateDiscoverySockets(socketPlans);
+        if (sockets.Count == 0)
+            return [];
 
         try
         {
-            while (!timeoutCts.IsCancellationRequested)
+            var packet = BuildDiscoveryPacket();
+            await SendProbesAsync(sockets, packet, ct).ConfigureAwait(false);
+
+            var byMac = new Dictionary<PhysicalAddress, DiscoveredRadio>();
+            var receiveTasks = sockets
+                .Select(s => ReceiveRepliesAsync(s, timeout, ct))
+                .ToArray();
+            var replies = await Task.WhenAll(receiveTasks).ConfigureAwait(false);
+            foreach (var batch in replies)
             {
-                SocketReceiveFromResult res;
-                try
+                foreach (var radio in batch)
                 {
-                    res = await socket.ReceiveFromAsync(
-                        receiveBuffer,
-                        SocketFlags.None,
-                        any,
-                        timeoutCts.Token).ConfigureAwait(false);
+                    byMac[radio.Mac] = radio;
                 }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
-                {
-                    // Windows WSAECONNRESET (10054): stray ICMP port-unreachable.
-                    // Keep collecting replies until the timeout fires.
-                    continue;
-                }
-                catch (SocketException ex)
-                {
-                    _log.LogWarning(ex, "p2.discovery.socket.error");
-                    break;
-                }
-
-                var fromIp = ((IPEndPoint)res.RemoteEndPoint).Address;
-                var slice = new ReadOnlySpan<byte>(receiveBuffer, 0, res.ReceivedBytes);
-
-                if (!ReplyParser.TryParse(slice, fromIp, out var radio))
-                {
-                    _log.LogDebug(
-                        "p2.discovery.reply.invalid from={Ip} len={Len}",
-                        fromIp,
-                        res.ReceivedBytes);
-                    continue;
-                }
-
-                byMac[radio.Mac] = radio;
-                _log.LogInformation(
-                    "p2.discovery.reply from={Ip} board={Board} mac={Mac} fw={Firmware} rxs={NumRx} protoVer={ProtoVer}",
-                    radio.Ip,
-                    radio.Board,
-                    radio.Mac,
-                    radio.FirmwareString,
-                    radio.Details.NumReceivers,
-                    radio.Details.ProtocolSupported);
             }
+
+            ct.ThrowIfCancellationRequested();
+
+            return byMac.Values.OrderBy(IpSortKey).ToList();
         }
         finally
         {
-            try { socket.Shutdown(SocketShutdown.Both); } catch (SocketException) { }
+            foreach (var socket in sockets)
+                socket.Socket.Dispose();
         }
-
-        ct.ThrowIfCancellationRequested();
-
-        return byMac.Values.OrderBy(IpSortKey).ToList();
     }
 
     /// <inheritdoc />
@@ -266,23 +220,26 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
     }
 
     private async Task SendProbesAsync(
-        Socket socket,
+        IReadOnlyList<DiscoverySocket> sockets,
         ReadOnlyMemory<byte> packet,
-        IReadOnlyList<(IPAddress ifaceAddr, IPAddress bcastAddr)> broadcastTargets,
         CancellationToken ct)
     {
         for (var attempt = 0; attempt < SendAttempts; attempt++)
         {
-            foreach (var (_, bcastAddr) in broadcastTargets)
+            foreach (var socket in sockets)
             {
-                var endpoint = new IPEndPoint(bcastAddr, HpsdrPort);
+                var endpoint = new IPEndPoint(socket.Plan.TargetAddress, HpsdrPort);
                 try
                 {
-                    await socket.SendToAsync(packet, SocketFlags.None, endpoint, ct).ConfigureAwait(false);
+                    await socket.Socket.SendToAsync(packet, SocketFlags.None, endpoint, ct).ConfigureAwait(false);
                 }
                 catch (SocketException ex)
                 {
-                    _log.LogWarning(ex, "p2.discovery.send.error broadcast={Broadcast}", bcastAddr);
+                    _log.LogDebug(
+                        ex,
+                        "p2.discovery.send.skip local={Local} broadcast={Broadcast}",
+                        socket.Plan.BindAddress,
+                        socket.Plan.TargetAddress);
                 }
             }
 
@@ -300,14 +257,78 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
         }
     }
 
-    private IReadOnlyList<(IPAddress ifaceAddr, IPAddress bcastAddr)> GetBroadcastTargets()
+    private async Task<IReadOnlyList<DiscoveredRadio>> ReceiveRepliesAsync(
+        DiscoverySocket socket,
+        TimeSpan timeout,
+        CancellationToken ct)
     {
-        var targets = new List<(IPAddress, IPAddress)>();
+        var radios = new List<DiscoveredRadio>();
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(timeout);
+        var receiveBuffer = new byte[ReceiveBufferSize];
+        var any = new IPEndPoint(IPAddress.Any, 0);
+
+        while (!timeoutCts.IsCancellationRequested)
+        {
+            SocketReceiveFromResult res;
+            try
+            {
+                res = await socket.Socket.ReceiveFromAsync(
+                    receiveBuffer,
+                    SocketFlags.None,
+                    any,
+                    timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+            {
+                // Windows WSAECONNRESET (10054): stray ICMP port-unreachable.
+                // Keep collecting replies until the timeout fires.
+                continue;
+            }
+            catch (SocketException ex)
+            {
+                _log.LogWarning(ex, "p2.discovery.socket.error local={Local}", socket.Plan.BindAddress);
+                break;
+            }
+
+            var fromIp = ((IPEndPoint)res.RemoteEndPoint).Address;
+            var slice = new ReadOnlySpan<byte>(receiveBuffer, 0, res.ReceivedBytes);
+
+            if (!ReplyParser.TryParse(slice, fromIp, out var radio))
+            {
+                _log.LogDebug(
+                    "p2.discovery.reply.invalid from={Ip} len={Len}",
+                    fromIp,
+                    res.ReceivedBytes);
+                continue;
+            }
+
+            radios.Add(radio);
+            _log.LogInformation(
+                "p2.discovery.reply from={Ip} board={Board} mac={Mac} fw={Firmware} rxs={NumRx} protoVer={ProtoVer}",
+                radio.Ip,
+                radio.Board,
+                radio.Mac,
+                radio.FirmwareString,
+                radio.Details.NumReceivers,
+                radio.Details.ProtocolSupported);
+        }
+
+        return radios;
+    }
+
+    private IReadOnlyList<DiscoverySocketPlan> GetSocketPlans()
+    {
+        var interfaces = new List<DiscoveryInterfaceDescriptor>();
 
         try
         {
-            var interfaces = NetworkInterface.GetAllNetworkInterfaces();
-            foreach (var iface in interfaces)
+            var networkInterfaces = NetworkInterface.GetAllNetworkInterfaces();
+            foreach (var iface in networkInterfaces)
             {
                 if (iface.OperationalStatus != OperationalStatus.Up)
                     continue;
@@ -328,17 +349,7 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
                     if (mask == null || mask.Equals(IPAddress.Any))
                         continue;
 
-                    var ipBytes = ip.GetAddressBytes();
-                    var maskBytes = mask.GetAddressBytes();
-                    var bcastBytes = new byte[4];
-
-                    for (var i = 0; i < 4; i++)
-                    {
-                        bcastBytes[i] = (byte)(ipBytes[i] | ~maskBytes[i]);
-                    }
-
-                    var bcastAddr = new IPAddress(bcastBytes);
-                    targets.Add((ip, bcastAddr));
+                    interfaces.Add(new DiscoveryInterfaceDescriptor(ip, mask));
                 }
             }
         }
@@ -347,13 +358,92 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
             _log.LogWarning(ex, "p2.discovery.enumerate.error");
         }
 
-        if (targets.Count == 0)
+        var plans = BuildSocketPlan(interfaces);
+        if (plans.Count == 1 && plans[0].BindAddress.Equals(IPAddress.Any))
         {
             _log.LogWarning("p2.discovery.enumerate.empty, using global broadcast");
-            targets.Add((IPAddress.Any, IPAddress.Broadcast));
         }
 
-        return targets;
+        return plans;
+    }
+
+    internal static IReadOnlyList<DiscoverySocketPlan> BuildSocketPlan(
+        IEnumerable<DiscoveryInterfaceDescriptor> interfaces)
+    {
+        var plans = new List<DiscoverySocketPlan>();
+        foreach (var iface in interfaces)
+        {
+            if (iface.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+            if (iface.Mask.AddressFamily != AddressFamily.InterNetwork) continue;
+            if (iface.Mask.Equals(IPAddress.Any)) continue;
+            plans.Add(new DiscoverySocketPlan(iface.Address, BroadcastFor(iface.Address, iface.Mask)));
+        }
+
+        plans.Add(new DiscoverySocketPlan(IPAddress.Any, IPAddress.Broadcast));
+
+        return plans;
+    }
+
+    private IReadOnlyList<DiscoverySocket> CreateDiscoverySockets(IReadOnlyList<DiscoverySocketPlan> plans)
+    {
+        var sockets = new List<DiscoverySocket>();
+        foreach (var plan in plans)
+        {
+            var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp)
+            {
+                EnableBroadcast = true,
+            };
+            Protocol2Client.DisableUdpConnReset(socket);
+            try
+            {
+                socket.Bind(new IPEndPoint(plan.BindAddress, 0));
+                sockets.Add(new DiscoverySocket(socket, plan));
+            }
+            catch (SocketException ex)
+            {
+                _log.LogDebug(
+                    ex,
+                    "p2.discovery.bind.skip local={Local} broadcast={Broadcast}",
+                    plan.BindAddress,
+                    plan.TargetAddress);
+                socket.Dispose();
+            }
+        }
+
+        if (sockets.Count == 0 && plans.Any(p => !p.BindAddress.Equals(IPAddress.Any)))
+        {
+            var fallback = new DiscoverySocketPlan(IPAddress.Any, IPAddress.Broadcast);
+            var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp)
+            {
+                EnableBroadcast = true,
+            };
+            Protocol2Client.DisableUdpConnReset(socket);
+            try
+            {
+                socket.Bind(new IPEndPoint(IPAddress.Any, 0));
+                sockets.Add(new DiscoverySocket(socket, fallback));
+                _log.LogWarning("p2.discovery.bind.all_failed, using global broadcast");
+            }
+            catch (SocketException ex)
+            {
+                _log.LogWarning(ex, "p2.discovery.bind.fallback_failed");
+                socket.Dispose();
+            }
+        }
+
+        return sockets;
+    }
+
+    private static IPAddress BroadcastFor(IPAddress address, IPAddress mask)
+    {
+        var ipBytes = address.GetAddressBytes();
+        var maskBytes = mask.GetAddressBytes();
+        var bcastBytes = new byte[4];
+
+        for (var i = 0; i < 4; i++)
+            bcastBytes[i] = (byte)(ipBytes[i] | ~maskBytes[i]);
+
+        return new IPAddress(bcastBytes);
     }
 
     private static byte[] BuildDiscoveryPacket()
@@ -369,4 +459,10 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
         if (bytes.Length != 4) return uint.MaxValue;
         return BinaryPrimitives.ReadUInt32BigEndian(bytes);
     }
+
+    internal readonly record struct DiscoveryInterfaceDescriptor(IPAddress Address, IPAddress Mask);
+
+    internal readonly record struct DiscoverySocketPlan(IPAddress BindAddress, IPAddress TargetAddress);
+
+    private sealed record DiscoverySocket(Socket Socket, DiscoverySocketPlan Plan);
 }
