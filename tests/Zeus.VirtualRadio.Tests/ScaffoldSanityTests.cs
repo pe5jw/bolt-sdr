@@ -193,6 +193,102 @@ public class Protocol1Emulator_LoopbackRx_IntegrationTest
         }
     }
 
+    [SkippableFact]
+    public async Task LoopbackPs_HermesII_ArmKeyDeliversFeedback()
+    {
+        Skip.If(
+            string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ZEUS_VRADIO_LOOPBACK")),
+            "Set ZEUS_VRADIO_LOOPBACK=1 to run the P1 PS loopback integration test (binds a real UDP socket).");
+
+        int port = GetFreeUdpPort();
+        var endpoint = new IPEndPoint(IPAddress.Loopback, port);
+        const long toneHz = 14_074_000;
+
+        var profile = VirtualRadioProfile.Create(HpsdrBoardKind.HermesII, ProtocolVersion.P1) with
+        {
+            BindAddress = IPAddress.Loopback,
+            SampleRateKhz = 48,
+            TunedHz = toneHz,
+            Tones = new[] { new ToneSpec(toneHz, -50) },
+            NoiseFloorDbc = -110,
+        };
+
+        var engine = new Protocol1Engine(profile, logger: null, port: port);
+        using var engineCts = new CancellationTokenSource();
+        Task engineTask = engine.RunAsync(engineCts.Token);
+
+        using var client = new Protocol1Client { PsTransitionDrainMs = 50 };
+        client.SetBoardKind(HpsdrBoardKind.HermesII);
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+            await client.ConnectAsync(endpoint, cts.Token).ConfigureAwait(false);
+            client.SetVfoAHz(toneHz);
+            await client.StartAsync(
+                new StreamConfig(HpsdrSampleRate.Rate48k, PreampOn: false, Atten: HpsdrAtten.Zero),
+                cts.Token).ConfigureAwait(false);
+
+            await WaitUntilAsync(
+                () => client.TotalFrames > 10,
+                cts.Token, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+            await client.SetPsEnabledAsync(true, cts.Token).ConfigureAwait(false);
+            client.SetDriveByte(192);
+            client.SetMox(true);
+
+            await WaitUntilAsync(
+                () => engine.DecodedMox && engine.DecodedDriveByte == 192,
+                cts.Token, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            Assert.True(engine.DecodedMox, "engine did not decode MOX");
+            Assert.Equal(192, engine.DecodedDriveByte);
+
+            int psFrames = 0;
+            float peakRx = 0f, peakTx = 0f;
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(6);
+            while (DateTime.UtcNow < deadline && psFrames < 2)
+            {
+                while (client.PsFeedbackFrames.TryRead(out var frame))
+                {
+                    psFrames++;
+                    Assert.Equal(1024, frame.RxI.Length);
+                    Assert.Equal(1024, frame.TxI.Length);
+                    for (int i = 0; i < frame.RxI.Length; i++)
+                    {
+                        Assert.True(float.IsFinite(frame.RxI[i]));
+                        Assert.True(float.IsFinite(frame.RxQ[i]));
+                        Assert.True(float.IsFinite(frame.TxI[i]));
+                        Assert.True(float.IsFinite(frame.TxQ[i]));
+                        peakRx = MathF.Max(peakRx, MathF.Abs(frame.RxI[i]));
+                        peakRx = MathF.Max(peakRx, MathF.Abs(frame.RxQ[i]));
+                        peakTx = MathF.Max(peakTx, MathF.Abs(frame.TxI[i]));
+                        peakTx = MathF.Max(peakTx, MathF.Abs(frame.TxQ[i]));
+                    }
+                }
+                if (psFrames < 2) await Task.Delay(20, cts.Token).ConfigureAwait(false);
+            }
+
+            Assert.True(psFrames >= 2, $"expected PS feedback frames, got {psFrames}");
+            Assert.True(peakRx > 1e-4f, $"coupler feedback looks silent (peak={peakRx:E2})");
+            Assert.True(peakTx > 1e-4f, $"TX reference looks silent (peak={peakTx:E2})");
+
+            client.SetMox(false);
+            await client.SetPsEnabledAsync(false, cts.Token).ConfigureAwait(false);
+            Assert.False(client.PsEnabled);
+
+            await client.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            await client.DisconnectAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            engineCts.Cancel();
+            try { await engineTask.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+            catch (Exception) { /* shutdown best-effort */ }
+        }
+    }
+
     /// <summary>Poll <paramref name="condition"/> until true or the timeout lapses.</summary>
     private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken ct, TimeSpan timeout)
     {

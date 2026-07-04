@@ -793,11 +793,11 @@ public class PsFeedbackDdcRoutingTests
     }
 
     [Fact]
-    public void SetPsFeedbackEnabled_HermesII_ExplicitValue_StillForceSeeded()
+    public void SetPsFeedbackEnabled_HermesII_ExplicitValue_IsHonored_NotSeeded()
     {
-        // The honor-explicit policy is scoped to the G2E (HermesC10) — the
-        // 10E keeps its unconditional force-seed until it has a bench. Guards
-        // against accidentally widening the policy change.
+        // The 10E uses the same hardened policy as the G2E: once an explicit
+        // operator or persisted value exists, arming PS must not stomp it with
+        // the virgin protective seed.
         bool saved10e = Protocol2Client.Hermes10ePsTimeMuxOnAir;
         try
         {
@@ -807,10 +807,14 @@ public class PsFeedbackDdcRoutingTests
             p2.SetTxAttenuationDb(3);
 
             p2.SetPsFeedbackEnabled(true);
-            Assert.Equal(Protocol2Client.PsTxAdcProtectFloorDb, p2.TxStepAttnDb); // 31 — 10E policy unchanged
+            Assert.Equal((byte)3, p2.TxStepAttnDb);
 
             p2.SetPsFeedbackEnabled(false);
             Assert.Equal((byte)3, p2.TxStepAttnDb);
+
+            p2.SetPsFeedbackEnabled(true);
+            Assert.Equal((byte)3, p2.TxStepAttnDb);
+            p2.SetPsFeedbackEnabled(false);
         }
         finally
         {
@@ -821,22 +825,23 @@ public class PsFeedbackDdcRoutingTests
     [Fact]
     public void SetPsFeedbackEnabled_HermesII_FlagOn_SeedsByte59_RestoresOnDisarm()
     {
-        // Interlock lifted: arming PS on a 10E seeds the byte-59 protective floor
-        // (31) so the TX-DAC feedback can't slam the only RX ADC at 0 dB on
-        // first key-down; disarm restores the operator's prior value verbatim.
+        // Interlock lifted on a virgin 10E: arming PS seeds the byte-59
+        // protective floor (31) so the TX-DAC feedback can't slam the only RX
+        // ADC at 0 dB on first key-down; disarm restores the prior power-on
+        // value verbatim.
         bool saved10e = Protocol2Client.Hermes10ePsTimeMuxOnAir;
         try
         {
             Protocol2Client.Hermes10ePsTimeMuxOnAir = true;
             using var p2 = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
             p2.SetBoardKind(HpsdrBoardKind.HermesII);
-            p2.SetTxAttenuationDb(3);
+            Assert.Equal((byte)0, p2.TxStepAttnDb);
 
             p2.SetPsFeedbackEnabled(true);
             Assert.Equal(Protocol2Client.PsTxAdcProtectFloorDb, p2.TxStepAttnDb); // 31
 
             p2.SetPsFeedbackEnabled(false);
-            Assert.Equal((byte)3, p2.TxStepAttnDb); // restored
+            Assert.Equal((byte)0, p2.TxStepAttnDb); // restored
         }
         finally
         {

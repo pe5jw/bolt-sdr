@@ -70,14 +70,12 @@ public class ControlFramePsHermesC10GoldenTests
         return cc.ToArray();
     }
 
-    // Every P1 board that must stay byte-identical with PS armed, except HL2
-    // (which has its own PS-on goldens below) and HermesC10 (the board under
-    // change, positive-locked in part 2).
+    // Every P1 board that must stay byte-identical with PS armed, except HL2,
+    // HermesC10, and HermesII (the boards with positive PS paths below).
     public static TheoryData<HpsdrBoardKind> NonHl2NonC10Boards => new()
     {
         HpsdrBoardKind.Metis,
         HpsdrBoardKind.Hermes,
-        HpsdrBoardKind.HermesII,
         HpsdrBoardKind.Angelia,
         HpsdrBoardKind.Orion,
         HpsdrBoardKind.OrionMkII,
@@ -133,7 +131,6 @@ public class ControlFramePsHermesC10GoldenTests
     [InlineData(HpsdrBoardKind.Metis, HpsdrAntenna.Ant2, 0x20)]
     [InlineData(HpsdrBoardKind.Hermes, HpsdrAntenna.Ant2, 0x20)]
     [InlineData(HpsdrBoardKind.Hermes, HpsdrAntenna.Ant3, 0x40)]
-    [InlineData(HpsdrBoardKind.HermesII, HpsdrAntenna.Ant3, 0x40)]
     [InlineData(HpsdrBoardKind.Angelia, HpsdrAntenna.Ant2, 0x20)]
     [InlineData(HpsdrBoardKind.Orion, HpsdrAntenna.Ant3, 0x40)]
     [InlineData(HpsdrBoardKind.OrionMkII, HpsdrAntenna.Ant2, 0x20)]
@@ -230,7 +227,78 @@ public class ControlFramePsHermesC10GoldenTests
         Assert.Equal(0, client.SnapshotState().NumReceiversMinusOne);
     }
 
-    // ---- Part 2: HermesC10 positive locks ----------------------------------
+    // ---- Part 2a: HermesII positive locks ----------------------------------
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void HermesII_Attenuator_PsEnabled_Sets_C2_Bit6(bool mox)
+    {
+        var s = PsKeyedState(HpsdrBoardKind.HermesII) with { Mox = mox };
+        var cc = Cc(ControlFrame.CcRegister.Attenuator, s);
+        Assert.Equal(1 << 6, cc[2] & (1 << 6));
+        Assert.Equal(0x20, cc[4]);
+    }
+
+    [Fact]
+    public void HermesII_Config_ArmedAndKeyed_KeepsOperatorRxAntenna()
+    {
+        var s = PsKeyedState(HpsdrBoardKind.HermesII) with
+        {
+            RxAntenna = HpsdrAntenna.Ant3,
+            NumReceiversMinusOne = 1,
+        };
+        var cc = Cc(ControlFrame.CcRegister.Config, s);
+        Assert.Equal(0x40, cc[3]);
+        Assert.Equal(0x0C, cc[4]); // duplex + IF_last_chan=1
+    }
+
+    [Fact]
+    public void HermesII_LnaTxGainStable_SentinelUnset_Emits31()
+    {
+        var cc = Cc(ControlFrame.CcRegister.LnaTxGainStable, PsKeyedState(HpsdrBoardKind.HermesII));
+        Assert.Equal(new byte[] { 0x1D, 0x00, 0x00, 31, 0x00 }, cc);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(12, 12)]
+    [InlineData(31, 31)]
+    [InlineData(-5, 0)]
+    [InlineData(99, 31)]
+    public void HermesII_LnaTxGainStable_C3_CarriesClampedAttenOnTx(int db, byte expectedC3)
+    {
+        var s = PsKeyedState(HpsdrBoardKind.HermesII) with { PsTxAttnOnTxDb = db };
+        Assert.Equal(expectedC3, Cc(ControlFrame.CcRegister.LnaTxGainStable, s)[3]);
+    }
+
+    [Theory]
+    [InlineData(true, true, 1)]
+    [InlineData(true, false, 1)]
+    [InlineData(false, true, 0)]
+    [InlineData(false, false, 0)]
+    public void HermesII_NumRx_TwoDdc_WheneverArmed(bool psEnabled, bool mox, byte expected)
+    {
+        using var client = new Protocol1Client();
+        client.SetBoardKind(HpsdrBoardKind.HermesII);
+        client.SetPsEnabled(psEnabled);
+        client.SetMox(mox);
+        Assert.Equal(expected, client.SnapshotState().NumReceiversMinusOne);
+    }
+
+    [Fact]
+    public void HermesII_SetPsTxAttenOnTxDb_PlumbsThroughClientToWire()
+    {
+        using var client = new Protocol1Client();
+        client.SetBoardKind(HpsdrBoardKind.HermesII);
+        client.SetPsTxAttenOnTxDb(17);
+
+        Span<byte> cc = stackalloc byte[5];
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.LnaTxGainStable, client.SnapshotState());
+        Assert.Equal(17, cc[3]);
+    }
+
+    // ---- Part 2b: HermesC10 positive locks ----------------------------------
 
     [Theory]
     [InlineData(false)]  // armed at rest — gateware mux acts only under FPGA_PTT
@@ -300,6 +368,7 @@ public class ControlFramePsHermesC10GoldenTests
     [InlineData(HpsdrBoardKind.HermesC10, true, false, 0x40)]  // antenna restored
     [InlineData(HpsdrBoardKind.HermesC10, false, true, 0x40)]  // PS off
     [InlineData(HpsdrBoardKind.Hermes, true, true, 0x40)]      // other board: no override
+    [InlineData(HpsdrBoardKind.HermesII, true, true, 0x40)]    // 10E: no bypass write
     [InlineData(HpsdrBoardKind.HermesLite2, true, true, 0x00)] // HL2: clamped to ANT1
     public void C10_EncodePsBypassOrRxAntennaC3Bits_Matrix(
         HpsdrBoardKind board, bool psEnabled, bool mox, byte expected)
@@ -426,6 +495,15 @@ public class ControlFramePsHermesC10GoldenTests
     {
         using var client = new Protocol1Client();
         client.SetBoardKind(HpsdrBoardKind.HermesLite2);
+        client.SetPsEnabled(true);
+        Assert.True(Protocol1Client.PsArmedRotation(client.SnapshotState()));
+    }
+
+    [Fact]
+    public void Rotation_HermesIIArmed_SelectsPsRotation()
+    {
+        using var client = new Protocol1Client();
+        client.SetBoardKind(HpsdrBoardKind.HermesII);
         client.SetPsEnabled(true);
         Assert.True(Protocol1Client.PsArmedRotation(client.SnapshotState()));
     }

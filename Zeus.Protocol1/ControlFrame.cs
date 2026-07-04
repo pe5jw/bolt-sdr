@@ -521,19 +521,22 @@ internal static class ControlFrame
             c14[0] |= 1 << 5;   // C1[5] mic_bias
         }
 
-        // HL2 PureSignal: register 0x0a bit 22 = puresignal_run. Bit 22 lives
-        // in C2 bit 6 (22 - 16 = 6) of this same C0=0x14 frame. mi0bot
+        // Protocol-1 PureSignal: register 0x0a bit 22 = puresignal_run /
+        // PureSignal_enable. Bit 22 lives in C2 bit 6 (22 - 16 = 6) of this
+        // same C0=0x14 frame. mi0bot
         // networkproto1.c:1102 — `C2 = (line_in_gain & 0b00011111) |
         // ((puresignal_run & 1) << 6);`. The HermesC10 (ANAN-G2E, P1) decodes
         // the SAME bit — classic Hermes v3.3 gateware Hermes.v:2170-2173,
         // `PureSignal_enable <= IF_Rx_ctrl_2[6]` under addr 0001_010 — where
         // it muxes RX4 onto the TX DAC samples, acted on only under FPGA_PTT
-        // (Hermes.v:1401), so setting it while armed-at-rest is safe. Other
-        // boards (Hermes / ANAN-class) have their PS-enable bit elsewhere on
-        // the wire (Protocol 2's ALEX_PS_BIT) so we only flip C2[6] when we
-        // know we're talking to an HL2 or a HermesC10. Issue #172. PR #119
+        // (Hermes.v:1401), so setting it while armed-at-rest is safe. HermesII
+        // (ANAN-10E, P1) decodes the same bit and routes DDC1 to the TX-DAC
+        // reference under FPGA_PTT. Other boards (Hermes / ANAN-class) have no
+        // verified P1 path here, so we only flip C2[6] for these boards.
+        // Issue #172. PR #119
         // placed this in C3 — that bug is the canonical regression to guard.
-        if ((s.Board is HpsdrBoardKind.HermesLite2 or HpsdrBoardKind.HermesC10) && s.PsEnabled)
+        if ((s.Board is HpsdrBoardKind.HermesLite2 or HpsdrBoardKind.HermesC10 or HpsdrBoardKind.HermesII)
+            && s.PsEnabled)
         {
             c14[1] |= 1 << 6;   // C2 bit 6 = puresignal_run
         }
@@ -572,10 +575,10 @@ internal static class ControlFrame
         // managed TX LNA gain. Any operator UI for TX-managed LNA gain
         // would need its own register slot; today Zeus has none.
         //
-        // HermesC10 (ANAN-G2E, P1): the SAME wire byte 0x1c = register 0x0e
-        // is decoded completely differently by the classic Hermes v3.3
-        // gateware — `atten_on_Tx <= IF_Rx_ctrl_3[4:0]` (Hermes.v:2187),
-        // muxed onto the step attenuator only while FPGA_PTT (Hermes.v:2278).
+        // HermesC10 (ANAN-G2E, P1) and HermesII (ANAN-10E, P1): the SAME wire
+        // byte 0x1c = register 0x0e is decoded completely differently by the
+        // classic Hermes-family gateware — `atten_on_Tx <= IF_Rx_ctrl_3[4:0]`,
+        // muxed onto the step attenuator only while FPGA_PTT.
         // Reusing the HL2 all-zeros payload would command atten_on_Tx = 0 dB
         // — the opposite extreme of the silicon reset value 31 (Hermes.v:
         // 2127), an ADC-clip risk on a hot feedback tap. Board-branch: emit
@@ -584,7 +587,7 @@ internal static class ControlFrame
         // no-op. This register is only ever scheduled by the PS-armed
         // rotation, so no other board ever emits it; HL2 keeps the all-zero
         // payload below byte-identically.
-        if (s.Board == HpsdrBoardKind.HermesC10)
+        if (s.Board is HpsdrBoardKind.HermesC10 or HpsdrBoardKind.HermesII)
         {
             int attn = s.PsTxAttnOnTxDb == int.MinValue
                 ? 31

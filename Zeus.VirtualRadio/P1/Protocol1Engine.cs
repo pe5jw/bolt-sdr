@@ -47,6 +47,8 @@ public sealed class Protocol1Engine : IVirtualRadio
     private readonly Ep6Encoder _encoder = new();
     private readonly SyntheticIqGenerator _iq;
     private readonly RfTelemetryModel _rf;
+    private readonly PaDistortionModel _distortion;
+    private readonly TxReferenceSource _txRef;
 
     // Guards _state mutation (receive loop) against reads (send loop / Snapshot).
     private readonly object _stateGate = new();
@@ -93,6 +95,8 @@ public sealed class Protocol1Engine : IVirtualRadio
         _discovery = new DiscoveryResponder(profile);
         _iq = new SyntheticIqGenerator(profile);
         _rf = new RfTelemetryModel(profile);
+        _distortion = new PaDistortionModel(enabled: false);
+        _txRef = new TxReferenceSource(profile.SampleRateKhz * 1000.0);
         _currentRxHz = profile.TunedHz;
         _state.SampleRateKhz = profile.SampleRateKhz;
     }
@@ -239,6 +243,8 @@ public sealed class Protocol1Engine : IVirtualRadio
         // span (audio is a later phase).
         var packet = new byte[Ep6Encoder.Ep6PacketLength];
         var iq = new double[2 * Ep6Encoder.ComplexSamplesPerPacket];
+        var ddc0 = new double[2 * Ep6Encoder.TwoDdcSamplesPerPacket];
+        var ddc1 = new double[2 * Ep6Encoder.TwoDdcSamplesPerPacket];
 
         var sw = Stopwatch.StartNew();
         long nextTick = sw.ElapsedTicks;
@@ -249,6 +255,7 @@ public sealed class Protocol1Engine : IVirtualRadio
             bool running;
             byte driveByte;
             bool mox;
+            bool ps2Ddc;
             long bandHz;
             long tunedHz;
             int rateKhz;
@@ -257,6 +264,9 @@ public sealed class Protocol1Engine : IVirtualRadio
                 running = _state.Running;
                 driveByte = _state.DriveByte;
                 mox = _state.Mox;
+                ps2Ddc = _profile.Board == Zeus.Contracts.HpsdrBoardKind.HermesII
+                    && _state.P1PsRun
+                    && _state.NumReceiversMinusOne == 1;
                 bandHz = _state.TxFreqHz != 0 ? _state.TxFreqHz : _currentRxHz;
                 tunedHz = _currentRxHz;
                 rateKhz = _state.SampleRateKhz > 0 ? _state.SampleRateKhz : _profile.SampleRateKhz;
@@ -274,13 +284,30 @@ public sealed class Protocol1Engine : IVirtualRadio
 
             double sampleRateHz = rateKhz * 1000.0;
 
-            _iq.Generate(iq, Ep6Encoder.ComplexSamplesPerPacket, tunedHz);
             RfTelemetry tel = _rf.Compute(driveByte, bandHz, mox);
-            // C0[0] hardware-PTT echo follows the decoded host MOX (the firmware's
-            // debounced clean_PTT_in), independent of drive amplitude — so a
-            // keyed-with-zero-drive frame still echoes PTT. mic span omitted
-            // (audio is a later phase).
-            _encoder.Encode(packet, _ep6Sequence++, iq, tel, mox);
+            if (ps2Ddc)
+            {
+                if (mox)
+                {
+                    _txRef.Fill(ddc1, Ep6Encoder.TwoDdcSamplesPerPacket);
+                    FillP1PsCoupler(ddc1, ddc0, Ep6Encoder.TwoDdcSamplesPerPacket, _distortion);
+                }
+                else
+                {
+                    _iq.Generate(ddc0, Ep6Encoder.TwoDdcSamplesPerPacket, tunedHz);
+                    _iq.Generate(ddc1, Ep6Encoder.TwoDdcSamplesPerPacket, tunedHz);
+                }
+                _encoder.EncodeTwoDdc(packet, _ep6Sequence++, ddc0, ddc1, tel, mox);
+            }
+            else
+            {
+                _iq.Generate(iq, Ep6Encoder.ComplexSamplesPerPacket, tunedHz);
+                // C0[0] hardware-PTT echo follows the decoded host MOX (the firmware's
+                // debounced clean_PTT_in), independent of drive amplitude — so a
+                // keyed-with-zero-drive frame still echoes PTT. mic span omitted
+                // (audio is a later phase).
+                _encoder.Encode(packet, _ep6Sequence++, iq, tel, mox);
+            }
 
             try
             {
@@ -298,7 +325,10 @@ public sealed class Protocol1Engine : IVirtualRadio
             // seconds per packet (48k → 2.625 ms → ~381 pkt/s). Stopwatch-based
             // so the host's own clock pacing (Zeus paces TX off received RX) sees
             // a steady stream, not whatever Task.Delay rounds to.
-            long intervalTicks = (long)(Ep6Encoder.ComplexSamplesPerPacket / sampleRateHz * Stopwatch.Frequency);
+            int samplesPerPacket = ps2Ddc
+                ? Ep6Encoder.TwoDdcSamplesPerPacket
+                : Ep6Encoder.ComplexSamplesPerPacket;
+            long intervalTicks = (long)(samplesPerPacket / sampleRateHz * Stopwatch.Frequency);
             nextTick += intervalTicks;
             long now = sw.ElapsedTicks;
             long remain = nextTick - now;
@@ -319,6 +349,18 @@ public sealed class Protocol1Engine : IVirtualRadio
             // Spin off the sub-millisecond remainder for cadence accuracy.
             while (sw.ElapsedTicks < nextTick && !ct.IsCancellationRequested)
                 Thread.SpinWait(40);
+        }
+    }
+
+    internal static void FillP1PsCoupler(
+        ReadOnlySpan<double> refBuf, Span<double> coupBuf, int pairs,
+        PaDistortionModel distortion)
+    {
+        for (int i = 0; i < pairs; i++)
+        {
+            var (ci, cq) = distortion.Apply(refBuf[2 * i], refBuf[2 * i + 1]);
+            coupBuf[2 * i] = ci;
+            coupBuf[2 * i + 1] = cq;
         }
     }
 

@@ -317,9 +317,8 @@ public class PsWireFormatTests
     public void Alex0_10e_BypassBit_StaysClear_ProvingG2eScoping()
     {
         // Other-board safety (KB2UKA hard constraint): the 10E (HermesII) is
-        // the same single-ADC class but is intentionally left byte-identical
-        // until a 10E owner can bench-confirm the routing. The fix must NOT
-        // change the 10E wire.
+        // the same single-ADC class, but Thetis leaves the operator sampler
+        // wiring external and does not force the bit-11 RX bypass relay here.
         uint alex0 = Protocol2Client.ComposeAlex0ForTest(
             rxFreqHz: 14_200_000,
             moxOn: true,
@@ -328,7 +327,7 @@ public class PsWireFormatTests
             board: HpsdrBoardKind.HermesII);
 
         Assert.True((alex0 & Protocol2Client.AlexRxAntennaBypass) == 0,
-            "10E BYPASS relay must stay clear — the fix is scoped to the G2E.");
+            "10E BYPASS relay must stay clear — Thetis does not force it for HermesII.");
         Assert.True((alex0 & Protocol2Client.AlexPsBit) == 0,
             "10E must never set ALEX_PS either (single-ADC board).");
     }
@@ -533,16 +532,18 @@ public class PsWireFormatTests
         Assert.Equal(expected, NonZeroBytes(p));
     }
 
-    // ---- HermesC10 PS wire-instrumentation gate (issue #960) ----
-    // The read-only p2.ps.g2e ~1 Hz diagnostic is gated by this pure predicate.
-    // Deterministic, socketless: proves the log fires ONLY on the ANAN-G2E while
-    // PS is armed AND keyed, and NEVER for the 10E or any dual-ADC board.
+    // ---- Single-ADC PS wire-instrumentation gate (issue #960) ----
+    // The read-only ~1 Hz diagnostic is gated by this pure predicate.
+    // Deterministic, socketless: proves the log fires ONLY on the single-ADC
+    // time-mux boards while PS is armed AND keyed, and never for dual-ADC boards.
 
-    [Fact]
-    public void PsWireDiag_Emitted_OnlyFor_G2E_Armed_AndKeyed()
+    [Theory]
+    [InlineData(HpsdrBoardKind.HermesC10)]
+    [InlineData(HpsdrBoardKind.HermesII)]
+    public void PsWireDiag_Emitted_ForSingleAdcTimeMux_Armed_AndKeyed(HpsdrBoardKind board)
     {
-        Assert.True(Protocol2Client.ShouldLogG2ePsWireDiag(
-            HpsdrBoardKind.HermesC10, psFeedbackEnabled: true, txKeyed: true));
+        Assert.True(Protocol2Client.ShouldLogSingleAdcPsWireDiag(
+            board, psFeedbackEnabled: true, txKeyed: true));
     }
 
     [Theory]
@@ -551,18 +552,19 @@ public class PsWireFormatTests
     [InlineData(false, false)]
     public void PsWireDiag_NotEmitted_ForG2E_WhenNotArmedAndKeyed(bool armed, bool keyed)
     {
-        Assert.False(Protocol2Client.ShouldLogG2ePsWireDiag(
+        Assert.False(Protocol2Client.ShouldLogSingleAdcPsWireDiag(
             HpsdrBoardKind.HermesC10, psFeedbackEnabled: armed, txKeyed: keyed));
+        Assert.False(Protocol2Client.ShouldLogSingleAdcPsWireDiag(
+            HpsdrBoardKind.HermesII, psFeedbackEnabled: armed, txKeyed: keyed));
     }
 
     [Theory]
-    [InlineData(HpsdrBoardKind.HermesII)]   // sibling 10E — diagnostic is G2E-scoped
     [InlineData(HpsdrBoardKind.OrionMkII)]  // dual-ADC — also reaches the paired decoder
     [InlineData(HpsdrBoardKind.Orion)]
     [InlineData(HpsdrBoardKind.Hermes)]
-    public void PsWireDiag_NeverEmitted_ForOtherBoards_EvenArmedAndKeyed(HpsdrBoardKind board)
+    public void PsWireDiag_NeverEmitted_ForNonTimeMuxBoards_EvenArmedAndKeyed(HpsdrBoardKind board)
     {
-        Assert.False(Protocol2Client.ShouldLogG2ePsWireDiag(
+        Assert.False(Protocol2Client.ShouldLogSingleAdcPsWireDiag(
             board, psFeedbackEnabled: true, txKeyed: true));
     }
 }

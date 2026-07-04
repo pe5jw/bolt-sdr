@@ -178,7 +178,7 @@ public sealed class Protocol1Client : IProtocol1Client
     private long _droppedFrames;
     private long _totalFrames;
 
-    // ---- G2E (HermesC10) P1 PS safe-transition + observability (#1302) ----
+    // ---- Single-ADC Hermes-family P1 PS safe-transition + observability (#1302) ----
     // The C10 gateware applies a new receiver count INSTANTLY mid-frame
     // (IF_last_chan <= IF_Rx_ctrl_4[5:3], Hermes.v:2151) into a free-running
     // EP6 frame builder (num_loops 62<->18, Hermes_Tx_fifo_ctrl.v:140-152).
@@ -252,6 +252,15 @@ public sealed class Protocol1Client : IProtocol1Client
         rxMask = (byte)((packed >> 8) & 0x7F);
         tuneMask = (byte)((packed >> 16) & 0x7F);
     }
+
+    internal static bool UsesP1PsSafeTransition(HpsdrBoardKind board) =>
+        board is HpsdrBoardKind.HermesC10 or HpsdrBoardKind.HermesII;
+
+    private static bool UsesP1PsFourDdcLayout(HpsdrBoardKind board) =>
+        board == HpsdrBoardKind.HermesC10;
+
+    private static bool UsesP1PsTwoDdcLayout(HpsdrBoardKind board) =>
+        board == HpsdrBoardKind.HermesII;
 
     // TX IQ source: WDSP-TXA-driven ring in the live path (task #7/#8), or
     // the built-in test-tone when caller wants a bring-up carrier. Default is
@@ -641,6 +650,171 @@ public sealed class Protocol1Client : IProtocol1Client
         }
     }
 
+    /// <summary>
+    /// Decode the ANAN-10E / HermesII P1 PS-armed 2-DDC EP6 layout. DDC0 remains
+    /// the live receiver/display stream and, while keyed with PS armed, is also
+    /// the coupler feedback stream for pscc. DDC1 carries the TX-DAC reference
+    /// under FPGA_PTT. At rest both DDCs are parsed for display hygiene but
+    /// discarded for pscc so feedback blocks never straddle overs.
+    /// </summary>
+    private bool HandlePs2DdcPacket(ReadOnlySpan<byte> packet, short[] micScratch)
+    {
+        int needed = 2 * PacketParser.TwoDdcSamplesPerPacket;
+        var ddc0 = ArrayPool<double>.Shared.Rent(needed);
+        var ddc1 = ArrayPool<double>.Shared.Rent(needed);
+        bool publishedToIqChannel = false;
+        try
+        {
+            if (!PacketParser.TryParse2DdcPacket(
+                    packet, ddc0, ddc1,
+                    out uint seq, out int samples,
+                    out TelemetryReading telemetry0,
+                    out TelemetryReading telemetry1,
+                    out byte overloadBits))
+                return false;
+
+            Interlocked.Increment(ref _psPairedPacketCount);
+            ObserveSequence(seq);
+            Interlocked.Increment(ref _totalFrames);
+
+            if (telemetry0.C0Address != 0)
+            {
+                try { TelemetryReceived?.Invoke(telemetry0); }
+                catch (Exception ex) { _log.LogWarning(ex, "TelemetryReceived handler threw"); }
+            }
+            if (telemetry1.C0Address != 0)
+            {
+                try { TelemetryReceived?.Invoke(telemetry1); }
+                catch (Exception ex) { _log.LogWarning(ex, "TelemetryReceived handler threw"); }
+            }
+            try { AdcOverloadObserved?.Invoke(AdcOverloadStatus.FromBits(overloadBits)); }
+            catch (Exception ex) { _log.LogWarning(ex, "AdcOverloadObserved handler threw"); }
+
+            UpdateHardwarePtt(PacketParser.ExtractHardwarePtt(packet));
+            UpdateCwKeyDown(PacketParser.ExtractCwKeyDown(packet));
+
+            var rented = ArrayPool<double>.Shared.Rent(2 * samples);
+            new ReadOnlySpan<double>(ddc0, 0, 2 * samples)
+                .CopyTo(rented.AsSpan(0, 2 * samples));
+            int rateHz = CurrentRateHz();
+
+            var micHandlerSnap = _radioMicHandler;
+            if (micHandlerSnap is not null)
+            {
+                int micCount = PacketParser.ExtractMicSamples2Ddc(packet, micScratch);
+                if (micCount > 0)
+                {
+                    try { micHandlerSnap(new ReadOnlySpan<short>(micScratch, 0, micCount), rateHz); }
+                    catch (Exception ex) { _log.LogWarning(ex, "p1.rx radio-mic handler threw"); }
+                }
+            }
+
+            var memory = new ReadOnlyMemory<double>(rented, 0, 2 * samples);
+            var frame = new IqFrame(memory, samples, rateHz, seq, NowNs());
+            var sinkSnap = Volatile.Read(ref _rxSink);
+            if (sinkSnap != null)
+            {
+                try
+                {
+                    sinkSnap.OnIqFrame(in frame);
+                    publishedToIqChannel = true;
+                }
+                catch (Exception ex)
+                {
+                    _log.LogError(ex, "p1.rx.sink_threw kind=iq");
+                    ArrayPool<double>.Shared.Return(rented);
+                }
+            }
+            else if (_channel.Writer.TryWrite(frame))
+            {
+                publishedToIqChannel = true;
+            }
+            else
+            {
+                ArrayPool<double>.Shared.Return(rented);
+            }
+
+            if (Volatile.Read(ref _mox) == 0)
+            {
+                _psBlockFill = 0;
+                return true;
+            }
+
+            for (int s = 0; s < samples; s++)
+            {
+                if (_psBlockFill == 0) _psBlockStartSeq = seq;
+                _psRxI[_psBlockFill] = (float)ddc0[2 * s];
+                _psRxQ[_psBlockFill] = (float)ddc0[2 * s + 1];
+                _psTxI[_psBlockFill] = (float)ddc1[2 * s];
+                _psTxQ[_psBlockFill] = (float)ddc1[2 * s + 1];
+                _psBlockFill++;
+
+                if (_psBlockFill >= PsFeedbackBlockSize)
+                {
+                    var txI = new float[PsFeedbackBlockSize];
+                    var txQ = new float[PsFeedbackBlockSize];
+                    var rxI = new float[PsFeedbackBlockSize];
+                    var rxQ = new float[PsFeedbackBlockSize];
+                    Array.Copy(_psTxI, txI, PsFeedbackBlockSize);
+                    Array.Copy(_psTxQ, txQ, PsFeedbackBlockSize);
+                    Array.Copy(_psRxI, rxI, PsFeedbackBlockSize);
+                    Array.Copy(_psRxQ, rxQ, PsFeedbackBlockSize);
+                    var psFrame = new PsFeedbackFrame(txI, txQ, rxI, rxQ, _psBlockStartSeq);
+                    var psSinkSnap = Volatile.Read(ref _rxSink);
+                    if (psSinkSnap != null)
+                    {
+                        try { psSinkSnap.OnPsFeedbackFrame(in psFrame); }
+                        catch (Exception ex) { _log.LogError(ex, "p1.rx.sink_threw kind=psfb"); }
+                    }
+                    else
+                    {
+                        _psFeedbackFrames.Writer.TryWrite(psFrame);
+                    }
+                    _psBlockFill = 0;
+
+                    if (++_psBlocksEmitted % 190 == 0)
+                    {
+                        float rxPk = 0f, txPk = 0f, rxAbs = 0f, txAbs = 0f;
+                        for (int j = 0; j < PsFeedbackBlockSize; j++)
+                        {
+                            float ari = Math.Abs(rxI[j]);
+                            float arq = Math.Abs(rxQ[j]);
+                            float ati = Math.Abs(txI[j]);
+                            float atq = Math.Abs(txQ[j]);
+                            if (ari > rxPk) rxPk = ari;
+                            if (arq > rxPk) rxPk = arq;
+                            if (ati > txPk) txPk = ati;
+                            if (atq > txPk) txPk = atq;
+                            rxAbs += ari + arq;
+                            txAbs += ati + atq;
+                        }
+                        _log.LogInformation(
+                            "p1.ps.fb DDC0(rx) peak={RxPk:F4} mean={RxMn:F4} | DDC1(tx) peak={TxPk:F4} mean={TxMn:F4} | blocks={N}",
+                            rxPk, rxAbs / (2 * PsFeedbackBlockSize),
+                            txPk, txAbs / (2 * PsFeedbackBlockSize),
+                            _psBlocksEmitted);
+                    }
+                }
+            }
+            return true;
+        }
+        finally
+        {
+            ArrayPool<double>.Shared.Return(ddc0);
+            ArrayPool<double>.Shared.Return(ddc1);
+            _ = publishedToIqChannel;
+        }
+    }
+
+    private int CurrentRateHz() => (HpsdrSampleRate)Volatile.Read(ref _rate) switch
+    {
+        HpsdrSampleRate.Rate48k => 48_000,
+        HpsdrSampleRate.Rate96k => 96_000,
+        HpsdrSampleRate.Rate192k => 192_000,
+        HpsdrSampleRate.Rate384k => 384_000,
+        _ => 48_000,
+    };
+
     public bool EnableHl2BandVolts
     {
         get => Volatile.Read(ref _enableHl2BandVolts) != 0;
@@ -728,7 +902,7 @@ public sealed class Protocol1Client : IProtocol1Client
 
         _loopCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-        // HermesC10 (#1302 F2): pre-announce the receiver count in EP2 C&C
+        // Single-ADC Hermes-family (#1302 F2): pre-announce the receiver count in EP2 C&C
         // frames BEFORE the start command — piHPSDR old_protocol_run ordering
         // (old_protocol.c:2887-2905, two double-Config packets before
         // metis_start_stop(1)) / Thetis ForceCandCFrames (networkproto1.c:
@@ -742,8 +916,9 @@ public sealed class Protocol1Client : IProtocol1Client
         // sync-shifts the EP6 stream. Combined with the PsEnabled seeding in
         // RadioService.ConnectAsync (before StartAsync), a
         // connect-while-armed starts DIRECTLY in 4-DDC with no transition.
-        // C10-gated: every other board's connect wire traffic is unchanged.
-        if (BoardKind == HpsdrBoardKind.HermesC10)
+        // Gated to boards that change their EP6 frame geometry for PS; every
+        // other board's connect wire traffic is unchanged.
+        if (UsesP1PsSafeTransition(BoardKind))
         {
             // Connect hygiene (#1302): if a previous host session crashed or
             // vanished while armed, the radio can STILL be streaming (run=1,
@@ -1022,7 +1197,7 @@ public sealed class Protocol1Client : IProtocol1Client
             bool current = Volatile.Read(ref _psEnabled) != 0;
             if (current == on) return; // idempotent — reconnect resync no-op
             bool live = _loopCts is not null && _socket is not null && _remote is not null;
-            if (!live || BoardKind != HpsdrBoardKind.HermesC10)
+            if (!live || !UsesP1PsSafeTransition(BoardKind))
             {
                 // HL2 keeps its shipped MOX-scoped behaviour (sync-safe by
                 // construction in its gateware); non-PS boards only track
@@ -1066,8 +1241,8 @@ public sealed class Protocol1Client : IProtocol1Client
         // pre-announce would land on a live stream — the condemned flip.
         CancelStartHandshakeWatchdog();
         _log.LogInformation(
-            "p1.ps.transition begin target={On} board=HermesC10 — stop/drain/reconfigure/restart (#1302)",
-            enable);
+            "p1.ps.transition begin target={On} board={Board} — stop/drain/reconfigure/restart (#1302)",
+            enable, BoardKind);
         // Pause EP2 (TX loop drops pacing ticks) and discard inbound
         // datagrams for the whole window so stale frames from the old format
         // never reach a parser configured for the new one.
@@ -1423,6 +1598,7 @@ public sealed class Protocol1Client : IProtocol1Client
         var board = (HpsdrBoardKind)Volatile.Read(ref _boardKind);
         bool isHl2 = board == HpsdrBoardKind.HermesLite2;
         bool isC10 = board == HpsdrBoardKind.HermesC10;
+        bool is10e = board == HpsdrBoardKind.HermesII;
         UnpackOcMasks(Volatile.Read(ref _ocMasksPacked), out byte ocTxMask, out byte ocRxMask, out byte ocTuneMask);
         // Number of receivers requested in the Config payload (`(N-1) << 3`
         // in C4 bits [5:3]). mi0bot's HL2 path (Thetis console.cs:8186-8265)
@@ -1447,6 +1623,9 @@ public sealed class Protocol1Client : IProtocol1Client
         //   HL2: 4-DDC only during PS+MOX (the shipped, field-working HL2
         //        behaviour — do not touch).
         //   HermesC10 (G2E): 4-DDC for the WHOLE armed period, keyed or not.
+        //   HermesII (10E): 2-DDC for the WHOLE armed period, keyed or not;
+        //        DDC0 is feedback/user RX and DDC1 is the TX-DAC reference while
+        //        FPGA_PTT is asserted.
         //        Flipping the EP6 framing live at every TR edge is the
         //        verified #1283 field failure (#1285): the Config register
         //        rides only 2 of 16 C&C rotation phases, so the parser and
@@ -1460,7 +1639,9 @@ public sealed class Protocol1Client : IProtocol1Client
         //        means the only format transitions happen at the arm/disarm
         //        CLICK — unkeyed, where a brief self-healing mismatch window
         //        costs a few ms of RX display, never TX.
-        byte numRxMinus1 = (byte)(psOn && ((isHl2 && moxOn) || isC10) ? 3 : 0);
+        byte numRxMinus1 = psOn
+            ? (byte)(is10e ? 1 : ((isHl2 && moxOn) || isC10 ? 3 : 0))
+            : (byte)0;
 
         return new(
             VfoAHz: Interlocked.Read(ref _vfoAHz),
@@ -1630,7 +1811,7 @@ public sealed class Protocol1Client : IProtocol1Client
                     continue;
                 }
 
-                // PS-armed 4-DDC layout (HL2 + HermesC10). The radio emits
+                // PS-armed paired-DDC layouts. The radio emits
                 // the 26-byte-per-slot 4-DDC packet shape only when the last
                 // Config frame carried NumReceiversMinusOne=3 — and
                 // SnapshotState only requests that during MOX+PS on those two
@@ -1648,7 +1829,8 @@ public sealed class Protocol1Client : IProtocol1Client
                 // panadapter stay alive) and DDC2/DDC3 to the
                 // PsFeedbackFrame channel.
                 var psBoard = (HpsdrBoardKind)Volatile.Read(ref _boardKind);
-                bool ps4DdcActive = Volatile.Read(ref _psEnabled) != 0
+                bool psEnabled = Volatile.Read(ref _psEnabled) != 0;
+                bool ps4DdcActive = psEnabled
                     // Parser gate mirrors SnapshotState's NumReceiversMinusOne
                     // gate EXACTLY (see the comment there): HL2 = PS+MOX only
                     // (shipped behaviour, untouched); HermesC10 = the whole
@@ -1729,6 +1911,36 @@ public sealed class Protocol1Client : IProtocol1Client
                         {
                             try { _txSignal.Release(); } catch (SemaphoreFullException) { }
                         }
+                    }
+                    continue;
+                }
+
+                bool ps2DdcActive = psEnabled && UsesP1PsTwoDdcLayout(psBoard);
+                if (ps2DdcActive)
+                {
+                    bool parsedOk = HandlePs2DdcPacket(buffer.AsSpan(0, n), micScratch);
+                    if (parsedOk)
+                    {
+                        Interlocked.Increment(ref _ps4DdcOkTotal);
+                        Volatile.Write(ref _lastPs4OkTicks, Environment.TickCount64);
+                        Volatile.Write(ref _psStallFired, 0);
+                    }
+                    else
+                    {
+                        Interlocked.Increment(ref _ps4DdcSyncFailTotal);
+                    }
+                    _ps4WinDatagrams++;
+                    if (parsedOk) _ps4WinOk++;
+                    else _ps4WinFail++;
+                    Ps4DdcHousekeeping();
+
+                    int psRateHz = CurrentRateHz();
+                    double rxPktsPerSec = psRateHz / (double)PacketParser.TwoDdcSamplesPerPacket;
+                    psTxCredit += 381.0 / rxPktsPerSec;
+                    if (psTxCredit >= 1.0)
+                    {
+                        psTxCredit -= 1.0;
+                        try { _txSignal.Release(); } catch (SemaphoreFullException) { }
                     }
                     continue;
                 }
@@ -1865,17 +2077,20 @@ public sealed class Protocol1Client : IProtocol1Client
     /// </summary>
     private void Ps4DdcHousekeeping()
     {
+        var board = (HpsdrBoardKind)Volatile.Read(ref _boardKind);
         if (Volatile.Read(ref _psEnabled) == 0
-            || (HpsdrBoardKind)Volatile.Read(ref _boardKind) != HpsdrBoardKind.HermesC10
+            || !UsesP1PsSafeTransition(board)
             || Volatile.Read(ref _rxDiscard) == 1)
             return;
 
         long now = Environment.TickCount64;
+        string stream = UsesP1PsTwoDdcLayout(board) ? "p1.rx.ps2ddc" : "p1.rx.ps4ddc";
         if (_ps4WinStartTicks == 0) _ps4WinStartTicks = now;
         if (now - _ps4WinStartTicks >= 1000)
         {
             _log.LogInformation(
-                "p1.rx.ps4ddc pkts={Pkts} ok={Ok} fail={Fail} dropped={Dropped}",
+                "{Stream} pkts={Pkts} ok={Ok} fail={Fail} dropped={Dropped}",
+                stream,
                 _ps4WinDatagrams, _ps4WinOk, _ps4WinFail,
                 Interlocked.Read(ref _droppedFrames));
             if (_ps4WinFail > 0 && _ps4WinOk == 0)
@@ -1884,9 +2099,9 @@ public sealed class Protocol1Client : IProtocol1Client
                 {
                     _ps4FailWarned = true;
                     _log.LogWarning(
-                        "p1.rx.ps4ddc sustained sync-parse failure: {Fail} packets failed, 0 parsed in the last second — " +
+                        "{Stream} sustained sync-parse failure: {Fail} packets failed, 0 parsed in the last second — " +
                         "EP6 stream is misframed (see issue #1302); every packet is being discarded",
-                        _ps4WinFail);
+                        stream, _ps4WinFail);
                 }
             }
             else if (_ps4WinOk > 0)
@@ -1904,7 +2119,7 @@ public sealed class Protocol1Client : IProtocol1Client
             && Interlocked.CompareExchange(ref _psStallFired, 1, 0) == 0)
         {
             _log.LogWarning(
-                "p1.ps.watchdog zero parsed 4-DDC packets for {Ms}ms while datagrams keep arriving — " +
+                "p1.ps.watchdog zero parsed paired-DDC packets for {Ms}ms while datagrams keep arriving — " +
                 "PS feedback stream is dead/misframed; requesting auto-disarm (#1302)",
                 PsStallTimeoutMs);
             try { PsFeedbackStalled?.Invoke(); }
@@ -1963,7 +2178,7 @@ public sealed class Protocol1Client : IProtocol1Client
     /// </summary>
     internal static bool PsArmedRotation(in ControlFrame.CcState state)
         => state.PsEnabled
-           && state.Board is HpsdrBoardKind.HermesLite2 or HpsdrBoardKind.HermesC10;
+           && state.Board is HpsdrBoardKind.HermesLite2 or HpsdrBoardKind.HermesC10 or HpsdrBoardKind.HermesII;
 
     /// <summary>
     /// Round-robin register selector. When <paramref name="psArmed"/> is true
