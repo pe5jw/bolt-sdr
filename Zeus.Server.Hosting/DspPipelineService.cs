@@ -47,6 +47,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Threading.Channels;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Zeus.Contracts;
 using Zeus.Dsp;
@@ -77,6 +78,7 @@ public class DspPipelineService : BackgroundService,
     private readonly RxAudioMuteState? _rxAudioMute;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<DspPipelineService> _log;
+    private double _displayMaxFrameRateHz;
 
     /// <summary>
     /// Raised when an RX S-meter reading is available (approximately 5 Hz).
@@ -1181,6 +1183,9 @@ public class DspPipelineService : BackgroundService,
     // ExecuteAsync), so no synchronisation is needed.
     private readonly float[] _panBuf = new float[Width];
     private readonly float[] _wfBuf = new float[Width];
+    private readonly object _displayFrameRateLock = new();
+    private long _displayFrameBudgetLastTicks;
+    private double _displayFrameBudget = 1.0;
     // Per-receiver display/audio probe: 1 Hz tally of how often each receiver's
     // pan/wf pixout reports fresh data. If a secondary's wf advances but pan stays
     // ~0, the freeze is backend (pan pixout never goes fresh); if both advance like
@@ -1302,7 +1307,8 @@ public class DspPipelineService : BackgroundService,
         IKiwiAudioBus? kiwiAudioBus = null,
         RxAudioMuteState? rxAudioMute = null,
         TxIqRing? txIqRing = null,
-        Protocol3SidecarBridge? p3Sidecar = null)
+        Protocol3SidecarBridge? p3Sidecar = null,
+        IConfiguration? configuration = null)
     {
         _radio = radio;
         _hub = hub;
@@ -1320,8 +1326,18 @@ public class DspPipelineService : BackgroundService,
         _displaySettings = displaySettings;
         _txIngestFactory = txIngestFactory;
         _log = loggerFactory.CreateLogger<DspPipelineService>();
+        var persistedDisplaySettings = _displaySettings?.Get();
+        _displayMaxFrameRateHz =
+            persistedDisplaySettings?.DisplayMaxFrameRateHz ??
+            DisplayPerformanceOptions.Resolve(configuration).MaxFrameRateHz;
+        if (_displayMaxFrameRateHz < DisplayPerformanceOptions.DefaultFrameRateHz)
+        {
+            _log.LogInformation(
+                "display.performance maxFrameRateHz={MaxFrameRateHz:F1}",
+                _displayMaxFrameRateHz);
+        }
         Volatile.Write(ref _widebandDisplayEnabled,
-            (_displaySettings?.Get().WidebandDisplayEnabled ?? false) ? 1 : 0);
+            (persistedDisplaySettings?.WidebandDisplayEnabled ?? false) ? 1 : 0);
         // Allocate secondary-receiver slots 1..N-1 up front (slot 0 stays null —
         // RX1 is _channelId). Buffers live for the service lifetime, mirroring the
         // old _rx2* fields; only activated slots open a WDSP channel.
@@ -1486,6 +1502,29 @@ public class DspPipelineService : BackgroundService,
     {
         ApplyTxDisplaySettings(dto);
         SetWidebandDisplayEnabled(dto.WidebandDisplayEnabled);
+        SetDisplayMaxFrameRateHz(dto.DisplayMaxFrameRateHz);
+    }
+
+    private void SetDisplayMaxFrameRateHz(double frameRateHz)
+    {
+        var next = DisplayPerformanceOptions.NormalizeFrameRate(frameRateHz);
+        var changed = false;
+        lock (_displayFrameRateLock)
+        {
+            if (Math.Abs(_displayMaxFrameRateHz - next) < 0.0001)
+                return;
+            _displayMaxFrameRateHz = next;
+            _displayFrameBudgetLastTicks = 0;
+            _displayFrameBudget = 1.0;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            _log.LogInformation(
+                "display.performance maxFrameRateHz={MaxFrameRateHz:F1}",
+                next);
+        }
     }
 
     private void SetWidebandDisplayEnabled(bool enabled)
@@ -1538,6 +1577,35 @@ public class DspPipelineService : BackgroundService,
 
     private uint NextDisplaySeq() => unchecked((uint)Interlocked.Increment(ref _seq));
 
+    private bool ShouldProcessDisplayFrame(long nowTicks)
+    {
+        lock (_displayFrameRateLock)
+        {
+            var frameRateHz = _displayMaxFrameRateHz;
+            if (frameRateHz >= DisplayPerformanceOptions.DefaultFrameRateHz)
+                return true;
+
+            if (_displayFrameBudgetLastTicks == 0)
+            {
+                _displayFrameBudgetLastTicks = nowTicks;
+                _displayFrameBudget = 0.0;
+                return true;
+            }
+
+            var elapsedTicks = Math.Max(0, nowTicks - _displayFrameBudgetLastTicks);
+            _displayFrameBudgetLastTicks = nowTicks;
+            _displayFrameBudget = Math.Min(
+                1.0,
+                _displayFrameBudget + (elapsedTicks / (double)Stopwatch.Frequency * frameRateHz));
+
+            if (_displayFrameBudget + 1.0e-9 < 1.0)
+                return false;
+
+            _displayFrameBudget -= 1.0;
+            return true;
+        }
+    }
+
     private async Task RunWidebandDisplayAnalyzerAsync(CancellationToken ct)
     {
         while (true)
@@ -1554,6 +1622,8 @@ public class DspPipelineService : BackgroundService,
             }
 
             if (Volatile.Read(ref _widebandDisplayEnabled) == 0 || !_hub.DisplayStreamRequested)
+                continue;
+            if (!ShouldProcessDisplayFrame(Stopwatch.GetTimestamp()))
                 continue;
 
             _widebandAnalyzer.Analyze(_widebandAnalysisSamples, sampleRateHz, _widebandPanBuf, _widebandWfBuf);
@@ -1604,6 +1674,7 @@ public class DspPipelineService : BackgroundService,
         while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
         {
             if (!ShouldPollP3WidebandDisplay()) continue;
+            if (!ShouldProcessDisplayFrame(Stopwatch.GetTimestamp())) continue;
 
             Protocol3SidecarDisplayFrame? sidecarFrame;
             try
@@ -6112,7 +6183,11 @@ public class DspPipelineService : BackgroundService,
         // allocate. Control-only clients still receive meters/state/audio as
         // appropriate; they just do not pin the high-rate display stream on.
         bool widebandDisplayActive = RefreshWidebandDisplayState();
-        bool hasDisplaySubscribers = _hub.DisplayStreamRequested && !widebandDisplayActive;
+        bool displayStreamRequested = _hub.DisplayStreamRequested;
+        bool hasDisplaySubscribers =
+            displayStreamRequested &&
+            !widebandDisplayActive &&
+            ShouldProcessDisplayFrame(Stopwatch.GetTimestamp());
         // Audio path uses nowMs too (it runs even when no clients are connected,
         // for in-process RxAudioAvailable subscribers like TCI). Hoisted above
         // the display gate to keep one timestamp call per tick.
@@ -6413,7 +6488,7 @@ public class DspPipelineService : BackgroundService,
         {
             // Still reset the PS-monitor tick counter on no-client ticks so a
             // fresh client doesn't pick up a stale gate counter.
-            _psMonitorTickCount = 0;
+            if (!displayStreamRequested) _psMonitorTickCount = 0;
         }
 
         // Audio broadcast — when TX monitor is on, replace RX audio with the

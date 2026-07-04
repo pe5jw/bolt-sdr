@@ -2757,7 +2757,8 @@ public static class ZeusEndpoints
                 req.WfDbMin, req.WfDbMax, req.WfTxDbMin, req.WfTxDbMax,
                 req.TxDisplayCalOffsetDb, req.TxDisplayFftSize,
                 req.TxDisplayWindow, req.TxDisplayAvgTauMs,
-                req.WidebandDisplayEnabled);
+                req.WidebandDisplayEnabled,
+                req.DisplayMaxFrameRateHz);
             var saved = store.Get();
             // Push the (validated, merged) display config to the running
             // engine/client so the change is live without a reconnect.
