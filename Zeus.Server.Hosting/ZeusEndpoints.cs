@@ -8,6 +8,7 @@
 using System.Buffers.Binary;
 using System.Globalization;
 using System.Net;
+using System.Text.Json.Serialization;
 using Zeus.Contracts;
 using Zeus.Plugins.Contracts.Extensions;
 using Zeus.Plugins.Host;
@@ -125,7 +126,7 @@ public static class ZeusEndpoints
         // PUT; the in-app Allow/Deny prompt + active-session badge poll /status.
         app.MapGet("/api/support/availability",
             (Zeus.Server.Hosting.Support.SupportAvailabilityStore store) =>
-                Results.Ok(new { available = store.IsAvailable, autoShareCrashes = store.AutoShareOnCrash }));
+                Results.Ok(BuildSupportAvailabilityResponse(store)));
 
         app.MapPut("/api/support/availability",
             (SupportAvailabilityRequest req, Zeus.Server.Hosting.Support.SupportAvailabilityStore store) =>
@@ -139,8 +140,15 @@ public static class ZeusEndpoints
                 log.LogInformation(
                     "api.support.availability available={Available} autoShareCrashes={AutoShare}",
                     newAvailable, newAutoShare);
-                return Results.Ok(new { available = newAvailable, autoShareCrashes = newAutoShare });
+                return Results.Ok(BuildSupportAvailabilityResponse(
+                    newAvailable,
+                    newAutoShare,
+                    store.AnsweredAgreementVersion));
             });
+
+        app.MapPost("/api/support/agreement",
+            (SupportAgreementRequest req, Zeus.Server.Hosting.Support.SupportAvailabilityStore store) =>
+                Results.Ok(AnswerSupportAgreement(req, store, log)));
 
         // Single poll surface for the operator UI: opt-in posture + live pending
         // requests + how many maintainer sessions are currently viewing.
@@ -4815,6 +4823,42 @@ public static class ZeusEndpoints
         return app;
     }
 
+    internal static SupportAvailabilityResponse BuildSupportAvailabilityResponse(
+        Zeus.Server.Hosting.Support.SupportAvailabilityStore store) =>
+        BuildSupportAvailabilityResponse(
+            store.IsAvailable,
+            store.AutoShareOnCrash,
+            store.AnsweredAgreementVersion);
+
+    internal static SupportAvailabilityResponse BuildSupportAvailabilityResponse(
+        bool available,
+        bool autoShareCrashes,
+        int agreementVersion) =>
+        new(
+            available,
+            autoShareCrashes,
+            agreementVersion,
+            Zeus.Server.Hosting.Support.SupportAvailabilityStore.CurrentAgreementVersion);
+
+    internal static SupportAvailabilityResponse AnswerSupportAgreement(
+        SupportAgreementRequest req,
+        Zeus.Server.Hosting.Support.SupportAvailabilityStore store,
+        ILogger log)
+    {
+        var beforeAvailable = store.IsAvailable;
+        var beforeAutoShare = store.AutoShareOnCrash;
+        var (newAvailable, newAutoShare, agreementVersion) = store.AnswerAgreement(req.OptIn);
+        if (beforeAvailable != newAvailable || beforeAutoShare != newAutoShare)
+        {
+            Zeus.Server.SupportSidecar.NotifyAvailabilityChanged(newAvailable, newAutoShare, log: log);
+        }
+
+        log.LogInformation(
+            "api.support.agreement optIn={OptIn} available={Available} autoShareCrashes={AutoShare} agreementVersion={AgreementVersion}",
+            req.OptIn, newAvailable, newAutoShare, agreementVersion);
+        return BuildSupportAvailabilityResponse(newAvailable, newAutoShare, agreementVersion);
+    }
+
     public static bool IsUserAccessGateProtectedRequest(string method, PathString path)
     {
         if (!path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
@@ -6268,6 +6312,17 @@ internal sealed record NativeMuteRequest(bool Muted);
 internal sealed record SupportDecisionRequest(string? RequestId);
 /// <summary>Operator opt-in body for the L1 Remote Diagnostics master switch (remote-diag P5).</summary>
 internal sealed record SupportAvailabilityRequest(bool? Available, bool? AutoShareCrashes);
+/// <summary>Operator answer body for the crash-report agreement prompt.</summary>
+internal sealed record SupportAgreementRequest(bool OptIn);
+internal sealed record SupportAvailabilityResponse(
+    [property: JsonPropertyName("available")]
+    bool Available,
+    [property: JsonPropertyName("autoShareCrashes")]
+    bool AutoShareCrashes,
+    [property: JsonPropertyName("agreementVersion")]
+    int AgreementVersion,
+    [property: JsonPropertyName("currentAgreementVersion")]
+    int CurrentAgreementVersion);
 internal sealed record NativeAudioDevicesSetRequest(string? InputDeviceId, string? OutputDeviceId);
 internal sealed record NativeAudioDeviceDto(string Id, string Name, bool IsDefault);
 internal sealed record NativeAudioDevicesResponse(

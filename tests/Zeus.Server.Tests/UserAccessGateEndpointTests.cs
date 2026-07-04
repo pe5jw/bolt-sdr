@@ -9,6 +9,7 @@ public sealed class UserAccessGateEndpointTests
     [InlineData("POST", "/api/connect/p2", true)]
     [InlineData("POST", "/api/vfo", true)]
     [InlineData("PUT", "/api/support/availability", true)]
+    [InlineData("POST", "/api/support/agreement", true)]
     [InlineData("POST", "/api/plugins/checkout", true)]
     [InlineData("POST", "/api/qrz/login", false)]
     [InlineData("POST", "/api/qrz/logout", false)]
