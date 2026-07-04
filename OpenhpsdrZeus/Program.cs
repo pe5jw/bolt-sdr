@@ -100,6 +100,7 @@ public partial class Program
     {
         public string? Type { get; set; }
         public string? LayoutId { get; set; }
+        public string? Route { get; set; }
         public string? Title { get; set; }
         public string? Url { get; set; }
     }
@@ -447,6 +448,11 @@ public partial class Program
         var iconPath = Path.Combine(AppContext.BaseDirectory, iconFileName);
         var detachedWorkspaceWindows = new List<DetachedWorkspaceWindow>();
         PhotinoWindow? detachedSettingsWindow = null;
+        // At most one detached window per audio-suite route (tx / rx), keyed by
+        // route so a second click on the same button re-focuses instead of
+        // stacking duplicates. Tracked only for clean shutdown — unlike detached
+        // workspaces these are not persisted or re-opened next launch.
+        var detachedAudioSuiteWindows = new Dictionary<string, PhotinoWindow>();
 
         // The dark placeholder loaded as StartString carries a tiny script that,
         // once the page is live (i.e. WebView2 has finished initialising), posts a
@@ -525,6 +531,11 @@ public partial class Program
                             if (ReferenceEquals(detachedSettingsWindow, child))
                                 detachedSettingsWindow = null;
                         });
+                    return;
+                }
+                if (TryReadAudioSuiteWindowRequest(msg, out var audioSuiteRequest))
+                {
+                    OpenAudioSuiteWindow(owner, detachedAudioSuiteWindows, audioSuiteRequest, iconPath);
                     return;
                 }
                 // External links (e.g. the "Report a problem" → GitHub button):
@@ -741,6 +752,17 @@ public partial class Program
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"detached settings close failed: {ex.Message}");
+            }
+        }
+        foreach (var child in detachedAudioSuiteWindows.Values.ToArray())
+        {
+            try
+            {
+                child.Close();
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"detached audio suite close failed: {ex.Message}");
             }
         }
 
@@ -1154,6 +1176,79 @@ public partial class Program
         {
             onClosed(child);
             Console.Error.WriteLine($"detached settings open failed: {ex.Message}");
+        }
+    }
+
+    private static bool TryReadAudioSuiteWindowRequest(string message, out WorkspaceWindowRequest request)
+    {
+        request = new WorkspaceWindowRequest();
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<WorkspaceWindowRequest>(message, WebMessageJsonOptions);
+            if (parsed?.Type != "zeus.openAudioSuiteWindow") return false;
+            var route = parsed.Route?.Trim().ToLowerInvariant();
+            if (route != "tx" && route != "rx") return false;
+            if (string.IsNullOrWhiteSpace(parsed.Url)) return false;
+            if (!Uri.TryCreate(parsed.Url, UriKind.Absolute, out _)) return false;
+            parsed.Route = route;
+            request = parsed;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static void OpenAudioSuiteWindow(
+        PhotinoWindow owner,
+        Dictionary<string, PhotinoWindow> detachedAudioSuiteWindows,
+        WorkspaceWindowRequest request,
+        string iconPath)
+    {
+        if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var uri)) return;
+        var route = request.Route ?? "tx";
+        var title = string.IsNullOrWhiteSpace(request.Title)
+            ? (route == "rx" ? "RX Audio Suite" : "TX Audio Suite")
+            : request.Title.Trim();
+
+        // Re-clicking the button for a route that is already popped out should
+        // not stack a duplicate; the existing window stays up.
+        if (detachedAudioSuiteWindows.ContainsKey(route)) return;
+
+        // Same footprint as the former in-app floating suite (see
+        // AUDIO_SUITE_WINDOW_WIDTH/HEIGHT in workspace-windows.ts) so popping
+        // out doesn't resize the operator's rack.
+        var child = new PhotinoWindow(owner)
+            .SetTitle($"Zeus - {title}")
+            .SetUseOsDefaultLocation(true)
+            .SetMinWidth(600)
+            .SetMinHeight(520)
+            .SetSize(860, 760)
+            .SetIconFile(iconPath)
+            .RegisterWindowClosingHandler((sender, _) =>
+            {
+                if (sender is PhotinoWindow closed)
+                {
+                    foreach (var kv in detachedAudioSuiteWindows.ToArray())
+                    {
+                        if (ReferenceEquals(kv.Value, closed))
+                            detachedAudioSuiteWindows.Remove(kv.Key);
+                    }
+                }
+                return false;
+            })
+            .Load(uri);
+
+        detachedAudioSuiteWindows[route] = child;
+        try
+        {
+            child.WaitForClose();
+        }
+        catch (Exception ex)
+        {
+            detachedAudioSuiteWindows.Remove(route);
+            Console.Error.WriteLine($"detached audio suite open failed: {ex.Message}");
         }
     }
 

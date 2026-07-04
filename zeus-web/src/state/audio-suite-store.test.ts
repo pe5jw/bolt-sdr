@@ -7,8 +7,18 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '../components/meters/__tests__/harness';
+
+// The suite pops out as an independent OS window; stub the opener so the store
+// tests exercise the delegation without spawning real popups.
+vi.mock('../layout/workspace-windows', () => ({
+  openAudioSuiteWindow: vi.fn(),
+}));
+
 import { useAudioSuiteStore } from './audio-suite-store';
 import { useTxStore } from './tx-store';
+import { openAudioSuiteWindow } from '../layout/workspace-windows';
+
+const openAudioSuiteWindowMock = vi.mocked(openAudioSuiteWindow);
 
 function response(body: unknown, ok = true): Response {
   return {
@@ -39,6 +49,7 @@ describe('audio-suite-store profile selection', () => {
     vi.useRealTimers();
     resetStoreState();
     localStorage.clear();
+    openAudioSuiteWindowMock.mockClear();
   });
 
   afterEach(() => {
@@ -69,44 +80,37 @@ describe('audio-suite-store profile selection', () => {
     expect(useAudioSuiteStore.getState().rxSelectedProfile).toBe('Clear RX');
   });
 
-  it('opens TX and RX suites as independent windows', async () => {
-    expect(useAudioSuiteStore.getState().suiteRoute).toBe('tx');
-
+  it('pops TX and RX suites out into their own independent OS windows', () => {
+    // openTx/openRx are fire-and-forget: they open a detached OS window (like a
+    // VST plugin editor) and keep NO open/closed flag in the main-window store.
     useAudioSuiteStore.getState().openTx();
-    useAudioSuiteStore.getState().openRx();
-
-    expect(useAudioSuiteStore.getState().isOpen).toBe(true);
-    expect(useAudioSuiteStore.getState().txOpen).toBe(true);
-    expect(useAudioSuiteStore.getState().rxOpen).toBe(true);
-    expect(useAudioSuiteStore.getState().suiteRoute).toBe('rx');
-
-    useAudioSuiteStore.getState().closeRx();
-
-    expect(useAudioSuiteStore.getState().isOpen).toBe(true);
-    expect(useAudioSuiteStore.getState().txOpen).toBe(true);
-    expect(useAudioSuiteStore.getState().rxOpen).toBe(false);
-    expect(useAudioSuiteStore.getState().suiteRoute).toBe('tx');
+    expect(openAudioSuiteWindowMock).toHaveBeenLastCalledWith('tx');
 
     useAudioSuiteStore.getState().openRx();
-    useAudioSuiteStore.getState().closeTx();
+    expect(openAudioSuiteWindowMock).toHaveBeenLastCalledWith('rx');
 
-    expect(useAudioSuiteStore.getState().isOpen).toBe(true);
+    // The route dispatcher routes to the same detached windows.
+    useAudioSuiteStore.getState().open('rx');
+    expect(openAudioSuiteWindowMock).toHaveBeenLastCalledWith('rx');
+    useAudioSuiteStore.getState().open('tx');
+    expect(openAudioSuiteWindowMock).toHaveBeenLastCalledWith('tx');
+
+    // No in-app floating window is toggled — the main window stays clean.
     expect(useAudioSuiteStore.getState().txOpen).toBe(false);
-    expect(useAudioSuiteStore.getState().rxOpen).toBe(true);
-    expect(useAudioSuiteStore.getState().suiteRoute).toBe('rx');
+    expect(useAudioSuiteStore.getState().rxOpen).toBe(false);
+    expect(openAudioSuiteWindowMock).toHaveBeenCalledTimes(4);
+  });
 
+  it('persists per-route window placement across a rehydrate', async () => {
     useAudioSuiteStore.getState().setWindowPosition('tx', 111, 122);
     useAudioSuiteStore.getState().setWindowPosition('rx', 211, 222);
 
     const stored = JSON.parse(localStorage.getItem('zeus-audio-suite') ?? '{}');
-    expect(stored.state.suiteRoute).toBe('rx');
     expect(stored.state.txX).toBe(111);
     expect(stored.state.rxX).toBe(211);
 
-    // Window placement persists, but neither suite reopens on rehydrate —
-    // the suites only open on an explicit operator click after startup.
+    // Placement persists, but neither suite reopens on rehydrate.
     await rehydrateAudioSuiteFromStorage();
-    expect(useAudioSuiteStore.getState().suiteRoute).toBe('rx');
     expect(useAudioSuiteStore.getState().isOpen).toBe(false);
     expect(useAudioSuiteStore.getState().txOpen).toBe(false);
     expect(useAudioSuiteStore.getState().rxOpen).toBe(false);
@@ -680,6 +684,7 @@ describe('audio-suite-store VST engine install', () => {
     vi.useRealTimers();
     resetStoreState();
     localStorage.clear();
+    openAudioSuiteWindowMock.mockClear();
   });
 
   afterEach(() => {
@@ -787,6 +792,7 @@ describe('audio-suite-store platform affordance', () => {
     vi.useRealTimers();
     resetStoreState();
     localStorage.clear();
+    openAudioSuiteWindowMock.mockClear();
   });
 
   afterEach(() => {

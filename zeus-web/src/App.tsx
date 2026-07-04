@@ -53,6 +53,7 @@ import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
 import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import {
   currentDetachedWorkspaceLayoutId,
+  currentDetachedAudioSuiteRoute,
   isDetachedSettingsWindow,
   restorePersistedWorkspaceWindows,
 } from './layout/workspace-windows';
@@ -169,6 +170,7 @@ const MIDI_ACTIVE_STATE_POLL_MS = 250;
 export default function App() {
   const detachedLayoutId = useMemo(() => currentDetachedWorkspaceLayoutId(), []);
   const detachedSettingsWindow = useMemo(() => isDetachedSettingsWindow(), []);
+  const detachedAudioSuiteRoute = useMemo(() => currentDetachedAudioSuiteRoute(), []);
   // Remote (WebRTC) RX-monitoring mode — ?remote=<CALLSIGN>. Frames arrive over
   // the broker instead of the local /ws; RemoteGate prompts for the session
   // password and owns that transport.
@@ -219,7 +221,14 @@ export default function App() {
   // siblings) and not in remote/web mode. Runs once on mount; the helper is a
   // no-op outside the Photino desktop shell.
   useEffect(() => {
-    if (!appShellEnabled || detachedLayoutId || detachedSettingsWindow || remoteMode) return;
+    if (
+      !appShellEnabled ||
+      detachedLayoutId ||
+      detachedSettingsWindow ||
+      detachedAudioSuiteRoute ||
+      remoteMode
+    )
+      return;
     void restorePersistedWorkspaceWindows();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appShellEnabled]);
@@ -1189,6 +1198,34 @@ export default function App() {
     );
   }
 
+  // Detached Audio Suite window — the TX/RX rack popped out into its own
+  // independent OS window (like a hosted VST plugin editor). Renders the suite
+  // in embedded (full-window flow) mode; the OS window chrome owns close/resize.
+  if (detachedAudioSuiteRoute) {
+    return (
+      <BandPlanProvider>
+      <ThemeApplier />
+      <div
+        className="detached-workspace-app detached-audio-suite-app"
+        data-screen-label={`Detached ${detachedAudioSuiteRoute.toUpperCase()} Audio Suite`}
+      >
+        {/* Embedded mode flows at natural height and expects its host to be
+            the scroll container; .workspace-area is overflow:hidden, so wrap
+            the suite in a scroll pane or a tall rack would clip in a short
+            window. */}
+        <div
+          className="workspace-area detached-workspace-area"
+          style={{ overflow: 'auto' }}
+        >
+          <AppErrorBoundary scope="Audio Suite">
+            <AudioSuiteWindow route={detachedAudioSuiteRoute} embedded />
+          </AppErrorBoundary>
+        </div>
+      </div>
+      </BandPlanProvider>
+    );
+  }
+
   return (
     <BandPlanProvider>
     <WorkspaceContext.Provider value={workspaceCtx}>
@@ -1362,13 +1399,10 @@ export default function App() {
         )}
       </div>
 
-      {/* Audio Suite floating window — position:fixed overlay rendered
-          outside the workspace grid so it can drift to wherever the
-          operator drags it without getting clipped by a parent. Mounted
-          unconditionally (returns null when closed) so the open/close
-          state in the store is the single source of truth. */}
-      <AudioSuiteWindow route="tx" />
-      <AudioSuiteWindow route="rx" />
+      {/* The TX/RX Audio Suite is no longer a fixed overlay inside the main
+          window — it pops out into its own independent OS window (see the
+          detachedAudioSuiteRoute branch above and openAudioSuiteWindow), the
+          way a hosted VST plugin editor detaches from the host. */}
       <SignalJammerPopover />
       <SignalJammerRuntime />
 
