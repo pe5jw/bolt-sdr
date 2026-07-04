@@ -77,6 +77,17 @@ function entry(overrides: Partial<LogEntry> = {}): LogEntry {
     createdUtc: '2026-06-26T12:00:00.000Z',
     qrzLogId: null,
     qrzUploadedUtc: null,
+    tags: null,
+    qslSent: null,
+    qslRcvd: null,
+    qslSentDate: null,
+    qslRcvdDate: null,
+    lotwQslSentUtc: null,
+    lotwQslRcvdUtc: null,
+    qrzQslRcvdUtc: null,
+    rig: null,
+    antenna: null,
+    txPowerW: null,
     ...overrides,
   };
 }

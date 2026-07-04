@@ -478,6 +478,16 @@ public sealed class QrzService
         }
     }
 
+    internal async Task<string?> GetLogbookApiKeyAsync(CancellationToken ct = default)
+    {
+        if (!string.IsNullOrWhiteSpace(_apiKey))
+            return _apiKey;
+
+        var stored = await _credStore.GetAsync(ApiKeyServiceName, ct).ConfigureAwait(false);
+        _apiKey = string.IsNullOrWhiteSpace(stored?.Password) ? null : stored.Password;
+        return _apiKey;
+    }
+
     public async Task<QrzPublishResult> PublishLogEntryAsync(LogEntry logEntry, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))

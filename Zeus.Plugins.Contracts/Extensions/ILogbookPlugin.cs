@@ -25,3 +25,10 @@ public interface ILogbookPlugin
     Task<LogbookExportFileResult> ExportAdifToFileAsync(string? directory = null, IEnumerable<string>? ids = null, CancellationToken ct = default);
     Task<LogbookImportResult> ImportAdifAsync(string adifText, CancellationToken ct = default);
 }
+
+public interface ILogbookPluginV2 : ILogbookPlugin
+{
+    Task<LogbookEntrySnapshot?> UpdateAsync(string id, LogbookEntryUpdate update, CancellationToken ct = default);
+    Task<int> UpdateQslStatusAsync(IReadOnlyList<LogbookQslStatusUpdate> updates, CancellationToken ct = default);
+    Task<IReadOnlyList<string>> GetAllTagsAsync(CancellationToken ct = default);
+}

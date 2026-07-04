@@ -35,6 +35,17 @@ function entry(over: Partial<LogEntry> & Pick<LogEntry, 'id' | 'callsign'>): Log
     createdUtc: '2026-05-24T12:00:05Z',
     qrzLogId: null,
     qrzUploadedUtc: null,
+    tags: null,
+    qslSent: null,
+    qslRcvd: null,
+    qslSentDate: null,
+    qslRcvdDate: null,
+    lotwQslSentUtc: null,
+    lotwQslRcvdUtc: null,
+    qrzQslRcvdUtc: null,
+    rig: null,
+    antenna: null,
+    txPowerW: null,
     ...over,
   };
 }

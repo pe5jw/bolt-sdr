@@ -12,6 +12,7 @@ import {
   topCountries,
   countThisMonth,
   geoPoints,
+  awardStats,
 } from './logbook-stats';
 import { countryToFlag, flagEmoji } from './logbook-flag';
 
@@ -34,6 +35,17 @@ function entry(over: Partial<LogEntry> & Pick<LogEntry, 'id' | 'callsign'>): Log
     createdUtc: '2026-05-24T12:00:05Z',
     qrzLogId: null,
     qrzUploadedUtc: null,
+    tags: null,
+    qslSent: null,
+    qslRcvd: null,
+    qslSentDate: null,
+    qslRcvdDate: null,
+    lotwQslSentUtc: null,
+    lotwQslRcvdUtc: null,
+    qrzQslRcvdUtc: null,
+    rig: null,
+    antenna: null,
+    txPowerW: null,
     ...over,
   };
 }
@@ -117,6 +129,24 @@ describe('geoPoints', () => {
     expect(pts).toHaveLength(2);
     const total = pts.reduce((s, p) => s + p.count, 0);
     expect(total).toBe(3);
+  });
+});
+
+describe('awardStats', () => {
+  it('counts worked and confirmed award progress', () => {
+    const stats = awardStats([
+      entry({ id: '1', callsign: 'A', dxcc: 291, state: 'CT', grid: 'FN31pr', lotwQslRcvdUtc: '2026-06-01T00:00:00Z' }),
+      entry({ id: '2', callsign: 'B', dxcc: 291, state: 'CT', grid: 'FN31aa' }),
+      entry({ id: '3', callsign: 'C', dxcc: 110, state: 'CA', grid: 'CM87', qslRcvd: 'Y' }),
+      entry({ id: '4', callsign: 'D', dxcc: 223, state: 'DX', grid: 'IO63', qrzQslRcvdUtc: '2026-06-02T00:00:00Z' }),
+    ]);
+
+    expect(stats).toEqual({
+      dxccWorked: 3,
+      dxccConfirmed: 3,
+      statesWorked: 2,
+      gridsWorked: 3,
+    });
   });
 });
 

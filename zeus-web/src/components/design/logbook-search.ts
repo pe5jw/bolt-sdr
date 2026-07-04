@@ -19,7 +19,7 @@ export type LogEntryFilterOptions = {
 };
 
 export function isQrzPublished(entry: LogEntry): boolean {
-  return !!entry.qrzLogId;
+  return Boolean(entry.qrzLogId || entry.qrzUploadedUtc);
 }
 
 export function logEntrySearchText(entry: LogEntry): string {
@@ -46,7 +46,24 @@ export function logEntrySearchText(entry: LogEntry): string {
     entry.state,
     entry.comment,
     entry.qrzLogId,
+    entry.qrzUploadedUtc,
+    entry.qrzQslRcvdUtc,
+    ...(entry.tags ?? []),
   ]);
+}
+
+function parseTerms(query: string): { text: string[]; tags: string[] } {
+  const text: string[] = [];
+  const tags: string[] = [];
+  for (const term of normalizeSearchText(query).split(/\s+/).filter(Boolean)) {
+    if (term.startsWith('tag:')) {
+      const tag = term.slice(4).trim();
+      if (tag) tags.push(tag);
+    } else {
+      text.push(term);
+    }
+  }
+  return { text, tags };
 }
 
 export function filterLogEntries(
@@ -57,11 +74,13 @@ export function filterLogEntries(
   const candidates = options.hideQrzPublished
     ? entries.filter((entry) => !isQrzPublished(entry))
     : entries;
-  const terms = normalizeSearchText(query).split(/\s+/).filter(Boolean);
-  if (terms.length === 0) return candidates;
+  const terms = parseTerms(query);
+  if (terms.text.length === 0 && terms.tags.length === 0) return candidates;
 
   return candidates.filter((entry) => {
     const haystack = logEntrySearchText(entry);
-    return terms.every((term) => haystack.includes(term));
+    const entryTags = (entry.tags ?? []).map((tag) => tag.toLocaleLowerCase());
+    return terms.text.every((term) => haystack.includes(term))
+      && terms.tags.every((term) => entryTags.some((tag) => tag.includes(term)));
   });
 }

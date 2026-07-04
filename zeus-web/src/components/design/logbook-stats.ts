@@ -19,11 +19,24 @@ import { gridToLatLon } from './geo';
 // HF/6m band ordering (low → high) so the band histogram reads like a rig's band
 // stack. Bands outside this list (unlikely) sort after, alphabetically.
 const BAND_ORDER = ['160M', '80M', '60M', '40M', '30M', '20M', '17M', '15M', '12M', '10M', '6M', '2M'];
+const US_STATES = new Set([
+  'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+  'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+  'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+  'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+  'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
+]);
 
 export type BandCount = { band: string; count: number };
 export type ModeCount = { mode: string; count: number; pct: number };
 export type CountryCount = { country: string; count: number };
 export type GeoPoint = { lat: number; lon: number; count: number };
+export type AwardStats = {
+  dxccWorked: number;
+  dxccConfirmed: number;
+  statesWorked: number;
+  gridsWorked: number;
+};
 
 function normBand(band: string | null | undefined): string {
   return (band ?? '').trim().toUpperCase();
@@ -126,4 +139,39 @@ export function geoPoints(entries: LogEntry[]): GeoPoint[] {
     }
   }
   return [...buckets.values()];
+}
+
+function isConfirmed(entry: LogEntry): boolean {
+  return Boolean(
+    entry.lotwQslRcvdUtc
+    || entry.qrzQslRcvdUtc
+    || (entry.qslRcvd ?? '').toUpperCase() === 'Y',
+  );
+}
+
+export function awardStats(entries: LogEntry[]): AwardStats {
+  const dxccWorked = new Set<number>();
+  const dxccConfirmed = new Set<number>();
+  const states = new Set<string>();
+  const grids = new Set<string>();
+
+  for (const entry of entries) {
+    if (typeof entry.dxcc === 'number' && Number.isFinite(entry.dxcc)) {
+      dxccWorked.add(entry.dxcc);
+      if (isConfirmed(entry)) dxccConfirmed.add(entry.dxcc);
+    }
+
+    const state = (entry.state ?? '').trim().toUpperCase();
+    if (US_STATES.has(state)) states.add(state);
+
+    const grid = (entry.grid ?? '').trim().toUpperCase();
+    if (/^[A-R]{2}[0-9]{2}/.test(grid)) grids.add(grid.slice(0, 4));
+  }
+
+  return {
+    dxccWorked: dxccWorked.size,
+    dxccConfirmed: dxccConfirmed.size,
+    statesWorked: states.size,
+    gridsWorked: grids.size,
+  };
 }
