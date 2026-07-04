@@ -232,6 +232,13 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         public volatile bool Stopped;
         public CancellationTokenSource Cts = new();
         public int SpectrumRun = 1;
+        // Set true after the worker runs Spectrum0 at least once. WDSP's GetPixels
+        // reads the analyzer's snapped pixel buffer, which is null until the first
+        // Spectrum0 — calling it before then dereferences null (native 0xc0000005).
+        // P3 opens an RX WDSP channel to drive the local TXA chain but never feeds
+        // it IQ (RX comes from the sidecar), so its analyzer never snaps; the
+        // display drain must skip it. Also guards the first tick after any open.
+        public volatile bool AnalyzerHasSnapped;
         public readonly float[] AudioRing = new float[AudioRingCapacity];
         public int AudioHead;
         public int AudioCount;
@@ -316,8 +323,18 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
     public bool BlockingIqFeed { get; init; }
 
     private readonly ConcurrentDictionary<int, ChannelState> _channels = new();
-    private readonly object _nativeSlotLock = new();
-    private readonly HashSet<int> _reservedNativeSlots = new();
+    // WDSP's channel/analyzer table is a single PROCESS-GLOBAL array (comm.h
+    // MAX_CHANNELS = 32), so slot reservation must be process-wide, not per
+    // engine instance. During a connect hand-off two WdspDspEngine instances are
+    // briefly alive (the new engine is built before TeardownEngine disposes the
+    // old one). With per-instance sets both would reserve id 0, 1, ... over the
+    // SAME global channels — so disposing the old engine's channels/TXA would
+    // destroy the new engine's, and the next WDSP call (GetPixels, SetPSHWPeak,
+    // ...) hits a freed slot (native 0xc0000005). Static reservation gives the
+    // new engine ids the old one still holds, so teardown only frees its own.
+    // Every reserved slot is released on Dispose/StopChannel, so this cannot leak.
+    private static readonly object _nativeSlotLock = new();
+    private static readonly HashSet<int> _reservedNativeSlots = new();
     private readonly ILogger _log;
     private int _disposed;
     private int _channelGeneration;
@@ -1612,6 +1629,13 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
 
         lock (state.AnalyzerLock)
         {
+            // The pixel drain runs on the DspPipelineService tick thread and can
+            // race a concurrent StopChannel (disconnect, sample-rate/mode rebuild).
+            // GetPixels on a torn-down WDSP analyzer slot is a native use-after-free
+            // (0xc0000005). StopChannel sets Stopped and performs DestroyAnalyzer
+            // under this same lock, so re-checking Stopped here makes the drain and
+            // the teardown mutually exclusive and closes the crash window.
+            if (state.Stopped || !state.AnalyzerHasSnapped) return false;
             NativeMethods.GetPixels(channelId, (int)which, ref MemoryMarshal.GetReference(dbOut), out int flag);
             return flag == 1;
         }
@@ -3622,12 +3646,23 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
             }
             state.InQueue.Dispose();
             state.Cts.Dispose();
-            NativeMethods.DestroyAnalyzer(state.Id);
-            // Tear down EXT blankers before CloseChannel — they reference our id
-            // slot in panb[]/pnob[] and outlive CloseChannel unless destroyed here.
-            NativeMethods.DestroyAnbEXT(state.Id);
-            NativeMethods.DestroyNobEXT(state.Id);
-            NativeMethods.CloseChannel(state.Id);
+            // Serialize native teardown against the display pixel-drain
+            // (TryGetDisplayPixels → GetPixels), which reads this analyzer under the
+            // same lock on the DspPipelineService tick thread. state.Stopped is set
+            // at the top of StopChannel and re-checked by the drain under this lock,
+            // so once we hold it the drain has either already finished or will
+            // early-out instead of touching a freed WDSP slot (fixes 0xc0000005 on
+            // disconnect / sample-rate rebuild). The worker thread was joined above,
+            // so it can no longer contend this lock (no deadlock).
+            lock (state.AnalyzerLock)
+            {
+                NativeMethods.DestroyAnalyzer(state.Id);
+                // Tear down EXT blankers before CloseChannel — they reference our id
+                // slot in panb[]/pnob[] and outlive CloseChannel unless destroyed here.
+                NativeMethods.DestroyAnbEXT(state.Id);
+                NativeMethods.DestroyNobEXT(state.Id);
+                NativeMethods.CloseChannel(state.Id);
+            }
         }
         finally
         {
@@ -3688,6 +3723,8 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
                 {
                     NativeMethods.Spectrum0(state.SpectrumRun, state.Id, 0, 0, ref spectrumIq[0]);
                 }
+                // The analyzer now has a snapped pixel buffer; GetPixels is safe.
+                state.AnalyzerHasSnapped = true;
                 PushAudio(state, audio, monoSamples);
                 state.FreeFrames.Enqueue(frame);
 
