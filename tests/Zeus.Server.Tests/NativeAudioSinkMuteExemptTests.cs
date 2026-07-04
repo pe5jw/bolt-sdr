@@ -7,13 +7,14 @@ using Zeus.Server;
 namespace Zeus.Server.Tests;
 
 /// <summary>
-/// The WAV Recorder's local playback must stay audible when the operator presses
-/// the desktop RX master Mute (<see cref="RxAudioMuteState"/>). DspPipelineService
-/// routes that recorder-only monitor audio to <c>NativeAudioSink.PublishExempt</c>,
-/// which — unlike <c>Publish</c> — is NOT gated by the mute; real RX audio stays on
-/// <c>Publish</c> and is still dropped while muted. These tests pin the sink-level
-/// contract: the exempt lane bypasses the mute, the normal lane honours it, and the
-/// exempt lane keeps the same format defence-in-depth guard.
+/// Operator-requested local monitor audio must stay audible when the operator
+/// presses the desktop RX master Mute (<see cref="RxAudioMuteState"/>). The WAV
+/// Recorder playback lane and TX Monitor preview route through
+/// <c>NativeAudioSink.PublishExempt</c>, which — unlike <c>Publish</c> — is NOT
+/// gated by the mute; real RX audio stays on <c>Publish</c> and is still dropped
+/// while muted. These tests pin the sink-level contract: the exempt lane bypasses
+/// the mute, the normal lane honours it, and the exempt lane keeps the same format
+/// defence-in-depth guard.
 /// </summary>
 public sealed class NativeAudioSinkMuteExemptTests
 {
@@ -48,7 +49,7 @@ public sealed class NativeAudioSinkMuteExemptTests
 
         sink.PublishExempt(Frame(480));
 
-        // Recorder local playback bypasses the master mute — the fix's core requirement.
+        // Recorder playback and TX Monitor preview bypass the master mute.
         Assert.Equal(480, sink.CurrentRingDepth);
     }
 

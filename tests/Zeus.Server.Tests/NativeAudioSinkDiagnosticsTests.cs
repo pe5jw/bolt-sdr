@@ -40,6 +40,11 @@ public sealed class NativeAudioSinkDiagnosticsTests
         Assert.Equal(0, d.OutputChannels);
         Assert.Equal(0L, d.TotalSamplesIn);
         Assert.Equal(0L, d.TotalSamplesOut);
+        Assert.False(d.PreviewEnabled);
+        Assert.Equal(0, d.PreviewRingDepthSamples);
+        Assert.Equal(16_384, d.PreviewRingCapacitySamples);
+        Assert.Equal(0L, d.PreviewSamplesIn);
+        Assert.Equal(0L, d.PreviewSamplesOut);
         Assert.Equal(0L, d.DroppedFormatSamplesTotal);
         Assert.Equal(0L, d.DroppedMutedSamplesTotal);
         Assert.Equal(0, d.LastInputSampleRateHz);
@@ -71,5 +76,29 @@ public sealed class NativeAudioSinkDiagnosticsTests
         // A target >= capacity would wedge the sink in permanent rebuffering.
         Assert.True(NativeAudioSink.ComputePrebufferTarget(40_000) <= 65_536 - 40_000);
         Assert.True(NativeAudioSink.ComputePrebufferTarget(60_000) < 65_536);
+    }
+
+    [Fact]
+    public void GetDiagnostics_ReportsPreviewSideChannelDepthAndThroughput()
+    {
+        using var sink = new NativeAudioSink(NullLogger<NativeAudioSink>.Instance);
+        var samples = Enumerable.Repeat(0.25f, 480).ToArray();
+
+        sink.SetEnabled(true);
+        sink.PublishPreview(samples, 48_000);
+
+        var queued = sink.GetDiagnostics();
+        Assert.True(queued.PreviewEnabled);
+        Assert.Equal(480, queued.PreviewRingDepthSamples);
+        Assert.Equal(480L, queued.PreviewSamplesIn);
+        Assert.Equal(0L, queued.PreviewSamplesOut);
+
+        Span<float> output = stackalloc float[480];
+        sink.RenderPlaybackForTest(output, frameCount: 480, channels: 1);
+
+        var drained = sink.GetDiagnostics();
+        Assert.Equal(0, drained.PreviewRingDepthSamples);
+        Assert.Equal(480L, drained.PreviewSamplesOut);
+        Assert.Contains(output.ToArray(), sample => sample > 0f);
     }
 }

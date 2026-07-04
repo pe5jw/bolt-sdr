@@ -65,4 +65,42 @@ public sealed class DspPipelineDisplayTickTests
 
         Assert.Equal(11, ticks); // first immediate tick + one per full period
     }
+
+    [Fact]
+    public void AttachedSinkTimer_DoesNotStealFreshInlineTicks()
+    {
+        Assert.False(DspPipelineService.ShouldTimerTickWhenSinkAttached(
+            nowTicks: 1000 + Period,
+            lastInlineTicks: 1000 + Period - 1,
+            lastAnyTickTicks: 1000,
+            periodTicks: Period));
+    }
+
+    [Fact]
+    public void AttachedSinkTimer_TakesOverWhenInlineTicksStall()
+    {
+        Assert.True(DspPipelineService.ShouldTimerTickWhenSinkAttached(
+            nowTicks: 1000 + Period * 2,
+            lastInlineTicks: 1000,
+            lastAnyTickTicks: 1000,
+            periodTicks: Period));
+    }
+
+    [Fact]
+    public void AttachedSinkTimer_KeepsFallbackCadenceAfterTakeover()
+    {
+        // Once the inline pacer is stale, lastAnyTickTicks controls fallback
+        // cadence so the timer can keep draining preview audio at the normal
+        // tick rate until RX packets resume.
+        Assert.False(DspPipelineService.ShouldTimerTickWhenSinkAttached(
+            nowTicks: 1000 + Period * 3 - 1,
+            lastInlineTicks: 1000,
+            lastAnyTickTicks: 1000 + Period * 2,
+            periodTicks: Period));
+        Assert.True(DspPipelineService.ShouldTimerTickWhenSinkAttached(
+            nowTicks: 1000 + Period * 3,
+            lastInlineTicks: 1000,
+            lastAnyTickTicks: 1000 + Period * 2,
+            periodTicks: Period));
+    }
 }

@@ -63,6 +63,7 @@ public class TxAudioIngestTests
     private sealed class StubEngine : IDspEngine
     {
         public int BlockSize { get; set; } = 1024;
+        public bool MonitorOn { get; set; }
         public int TxBlockSamples => BlockSize;
         public int TxOutputSamples => BlockSize;
         public int ProcessedBlocks { get; private set; }
@@ -138,7 +139,7 @@ public class TxAudioIngestTests
         public void SetCfcConfig(CfcConfig cfg) { }
         public void SetTxMonitorEnabled(bool enabled) { }
         public int ReadTxMonitorAudio(Span<float> output) => 0;
-        public bool IsTxMonitorOn => false;
+        public bool IsTxMonitorOn => MonitorOn;
         public void Dispose() { }
     }
 
@@ -194,6 +195,28 @@ public class TxAudioIngestTests
         ingest.OnMicPcmBytes(payload);                    // should drain
         Assert.Equal(0, ring.Count);
         Assert.Equal(1, engine.ProcessedBlocks);           // no additional block processed
+    }
+
+    [Fact]
+    public void MonitorOn_MoxOff_ProcessesTxChainWithoutWritingRf()
+    {
+        var engine = new StubEngine { MonitorOn = true };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        float[]? p2Iq = null;
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => false, hub, new NullLogger<TxAudioIngest>(),
+            forwardP2: iq => p2Iq = iq.ToArray());
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytes(payload);                    // 960 in accumulator
+        ingest.OnMicPcmBytes(payload);                    // monitor path flushes one TXA block
+
+        Assert.Equal(1, engine.ProcessedBlocks);
+        Assert.Equal(1, ingest.TotalTxBlocks);
+        Assert.Equal(0, ring.Count);                      // no P1 RF IQ while unkeyed
+        Assert.Null(p2Iq);                                // no P2 RF IQ while unkeyed
+        Assert.NotNull(engine.LastMicBlock);
     }
 
     [Fact]
