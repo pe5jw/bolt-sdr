@@ -15,6 +15,13 @@ using Zeus.Server.Diagnostics;
 
 namespace Zeus.Server.Hosting.Support;
 
+public interface ISupportWebRtcSession
+{
+    event Action? Closed;
+    Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct = default);
+    void Close();
+}
+
 /// <summary>
 /// One read-only maintainer support session over WebRTC. Unlike the operator's
 /// own remote tunnel (<see cref="Zeus.Server.Hosting.Remote.RemoteWebRtcSession"/>,
@@ -33,7 +40,7 @@ namespace Zeus.Server.Hosting.Support;
 /// it wants), mirroring the operator tunnel's pattern — the answerer-side onopen is
 /// not relied upon.
 /// </summary>
-public sealed class SupportWebRtcSession
+public sealed class SupportWebRtcSession : ISupportWebRtcSession
 {
     private readonly ILogger _log;
     private readonly SupportApiProxy? _proxy;
@@ -51,6 +58,11 @@ public sealed class SupportWebRtcSession
 
     /// <summary>How many recent log lines to replay when the maintainer attaches the log channel.</summary>
     private const int LogBacklogLines = 300;
+
+    // TURN allocation plus srflx round-trips must land inside the vanilla-ICE
+    // answer SDP; gathering completes early on LAN, so this does not add delay
+    // once the candidate set is complete.
+    private static readonly TimeSpan AnswerIceGatherTimeout = TimeSpan.FromSeconds(3);
 
     public SupportWebRtcSession(
         SupportGrant grant,
@@ -97,7 +109,7 @@ public sealed class SupportWebRtcSession
 
         var answer = _pc.createAnswer(null);
         await _pc.setLocalDescription(answer);
-        await WaitForIceGatheringAsync(_pc, TimeSpan.FromMilliseconds(750), ct);
+        await WaitForIceGatheringAsync(_pc, AnswerIceGatherTimeout, ct);
         return _pc.localDescription.sdp.ToString();
     }
 
