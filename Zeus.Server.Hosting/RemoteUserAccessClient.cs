@@ -5,6 +5,7 @@
 //                         Douglas J. Cerrato (KB2UKA),
 //                         Christian Suarez (N9WAR), and contributors.
 
+using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Zeus.Contracts;
@@ -19,9 +20,11 @@ public sealed class RemoteUserAccessClient
     private static readonly Uri DefaultSessionEndpoint = new("https://remote.openhpsdrzeus.com/users/session");
     private static readonly Uri DefaultCheckoutEndpoint = new("https://remote.openhpsdrzeus.com/billing/checkout");
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly TimeSpan SessionGraceTtl = TimeSpan.FromMinutes(5);
 
     private readonly IHttpClientFactory _httpFactory;
     private readonly ILogger<RemoteUserAccessClient> _log;
+    private readonly ConcurrentDictionary<string, CachedUserSession> _sessionCache = new(StringComparer.OrdinalIgnoreCase);
 
     public RemoteUserAccessClient(
         IHttpClientFactory httpFactory,
@@ -43,8 +46,10 @@ public sealed class RemoteUserAccessClient
         CancellationToken ct)
     {
         if (!Enabled || !qrzStatus.Connected) return null;
+        var statusCallsign = NormalizeCallsign(qrzStatus.Home?.Callsign);
         var identity = await TryGetIdentityAsync(qrz, ct).ConfigureAwait(false);
-        if (identity is null) return null;
+        if (identity is null)
+            return TryGetCachedSession(statusCallsign, "identity-unavailable");
 
         try
         {
@@ -57,12 +62,17 @@ public sealed class RemoteUserAccessClient
                     "remote user-management session returned {Status} for {Callsign}",
                     (int)res.StatusCode,
                     identity.Value.Callsign);
-                return null;
+                return TryGetCachedSession(identity.Value.Callsign, $"http-{(int)res.StatusCode}");
             }
 
             var remote = await res.Content.ReadFromJsonAsync<BrokerUserSessionResponse>(JsonOptions, ct)
                 .ConfigureAwait(false);
-            return remote?.User is null ? null : ToSession(remote, qrzStatus);
+            if (remote?.User is null)
+                return TryGetCachedSession(identity.Value.Callsign, "empty-response");
+
+            var session = ToSession(remote, qrzStatus);
+            CacheSession(session);
+            return session;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -71,7 +81,7 @@ public sealed class RemoteUserAccessClient
         catch (Exception ex)
         {
             _log.LogWarning(ex, "remote user-management session failed");
-            return null;
+            return TryGetCachedSession(identity.Value.Callsign, "request-failed");
         }
     }
 
@@ -208,6 +218,35 @@ public sealed class RemoteUserAccessClient
         req.Headers.TryAddWithoutValidation("X-QRZ-Session", identity.SessionKey);
     }
 
+    private void CacheSession(ZeusUserSession session)
+    {
+        var callsign = NormalizeCallsign(session.Callsign);
+        if (callsign is null) return;
+        _sessionCache[callsign] = new CachedUserSession(session, DateTimeOffset.UtcNow);
+    }
+
+    private ZeusUserSession? TryGetCachedSession(string? callsign, string reason)
+    {
+        var normalized = NormalizeCallsign(callsign);
+        if (normalized is null) return null;
+        if (!_sessionCache.TryGetValue(normalized, out var cached)) return null;
+
+        var age = DateTimeOffset.UtcNow - cached.CachedAt;
+        if (age > SessionGraceTtl)
+        {
+            _sessionCache.TryRemove(normalized, out _);
+            return null;
+        }
+
+        _log.LogWarning(
+            "remote user-management session unavailable ({Reason}); using cached decision for {Callsign} age={AgeSeconds}s accessAllowed={AccessAllowed}",
+            reason,
+            normalized,
+            (int)age.TotalSeconds,
+            cached.Session.AccessAllowed);
+        return cached.Session;
+    }
+
     private static async Task<string?> ReadErrorAsync(HttpResponseMessage response, CancellationToken ct)
     {
         try
@@ -292,6 +331,8 @@ public sealed class RemoteUserAccessClient
         string? Notes,
         long? CreatedAt,
         long? UpdatedAt);
+
+    private sealed record CachedUserSession(ZeusUserSession Session, DateTimeOffset CachedAt);
 }
 
 public sealed record PluginCheckoutRequest(
