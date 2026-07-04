@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
+// Copyright (C) 2025-2026 Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
+//
+// Render smoke + content checks for the popped-out Logbook workspace pieces:
+// the station-detail card and the analytics dashboard.
+
+import { describe, expect, it } from 'vitest';
+import { createElement } from 'react';
+import { render } from '../meters/__tests__/harness';
+import { LogbookDetail } from './LogbookDetail';
+import { LogbookDashboard } from './LogbookDashboard';
+import type { LogEntry } from '../../api/log';
+
+function entry(over: Partial<LogEntry> & Pick<LogEntry, 'id' | 'callsign'>): LogEntry {
+  return {
+    qsoDateTimeUtc: '2026-05-24T15:12:00Z',
+    name: null,
+    frequencyMhz: 14.074,
+    band: '20m',
+    mode: 'FT8',
+    rstSent: '-07',
+    rstRcvd: '-07',
+    grid: 'FN31',
+    country: null,
+    dxcc: null,
+    cqZone: null,
+    ituZone: null,
+    state: null,
+    comment: null,
+    createdUtc: '2026-05-24T15:12:05Z',
+    qrzLogId: null,
+    qrzUploadedUtc: null,
+    ...over,
+  };
+}
+
+describe('LogbookDetail', () => {
+  it('shows the empty state when no QSO is focused', () => {
+    const { container, unmount } = render(createElement(LogbookDetail, { entry: null }));
+    expect(container.textContent).toContain('Select a QSO');
+    unmount();
+  });
+
+  it('renders the focused QSO fields and QRZ status', () => {
+    const e = entry({
+      id: '1',
+      callsign: 'K2L',
+      name: '13 Colonies Special Event',
+      country: 'United States',
+      state: 'South Carolina',
+      grid: 'EM93',
+      ituZone: 8,
+      cqZone: 5,
+      qrzLogId: 'X1',
+      comment: 'Great signal',
+    });
+    const { container, unmount } = render(createElement(LogbookDetail, { entry: e }));
+    const text = container.textContent ?? '';
+    expect(text).toContain('K2L');
+    expect(text).toContain('14.074');
+    expect(text).toContain('FT8');
+    expect(text).toContain('Great signal');
+    expect(text).toContain('✓ QRZ');
+    expect(container.querySelector('.lbd-qrz-link')?.getAttribute('href')).toContain('/db/K2L');
+    unmount();
+  });
+});
+
+describe('LogbookDashboard', () => {
+  it('renders totals, bands, modes and countries from the entry set', () => {
+    const entries = [
+      entry({ id: '1', callsign: 'A', band: '20m', mode: 'FT8', country: 'United States' }),
+      entry({ id: '2', callsign: 'B', band: '40m', mode: 'SSB', country: 'Canada' }),
+      entry({ id: '3', callsign: 'C', band: '20m', mode: 'FT8', country: 'United States' }),
+    ];
+    const { container, unmount } = render(
+      createElement(LogbookDashboard, { entries, totalCount: 1248, fullyLoaded: true }),
+    );
+    const text = container.textContent ?? '';
+    expect(text).toContain('1,248'); // headline total from totalCount, not the loaded slice
+    expect(text).toContain('Total QSOs');
+    expect(text).toContain('Bands');
+    expect(text).toContain('Modes');
+    expect(text).toContain('United States');
+    // A conic-gradient ring is built for the mode mix.
+    expect(container.querySelector('.lb-donut')).not.toBeNull();
+    // Every gridded QSO becomes a map dot.
+    expect(container.querySelectorAll('.lb-map-dots circle').length).toBeGreaterThan(0);
+    unmount();
+  });
+
+  it('shows a loading hint until the full log is hydrated', () => {
+    const { container, unmount } = render(
+      createElement(LogbookDashboard, { entries: [], totalCount: 5000, fullyLoaded: false }),
+    );
+    expect(container.textContent).toContain('Loading full log');
+    unmount();
+  });
+});

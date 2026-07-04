@@ -45,7 +45,7 @@
 
 import { useState } from 'react';
 import { Eye, EyeOff, Puzzle, Search, X } from 'lucide-react';
-import { LogbookLive } from '../../components/design/LogbookLive';
+import { LogbookWorkspace } from '../../components/design/LogbookWorkspace';
 import { useLoggerStore } from '../../state/logger-store';
 import { logbookPluginUnavailableReason, useLogbookPluginStore } from '../../state/logbook-plugin-store';
 import { useWorkspace } from '../WorkspaceContext';
@@ -111,7 +111,7 @@ export function LogbookPanel() {
       </div>
       <div className="logbook-panel-body">
         {pluginReady ? (
-          <LogbookLive searchText={searchText} hideQrzPublished={hideQrzPublished} />
+          <LogbookWorkspace searchText={searchText} hideQrzPublished={hideQrzPublished} />
         ) : (
           <div className="workspace-unavailable-panel" style={{ height: '100%' }}>
             <div className="workspace-unavailable-panel-icon" aria-hidden>
