@@ -36,6 +36,9 @@ public sealed class PluginSettingsStore : IDisposable
         _log?.LogInformation("PluginSettingsStore initialised at {Path}", dbPath);
     }
 
+    public string DataDirectory =>
+        Path.GetDirectoryName(Path.GetFullPath(_dbPath)) ?? Directory.GetCurrentDirectory();
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         WriteIndented = false,

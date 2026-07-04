@@ -138,3 +138,36 @@ public sealed record AdifExportToFileResponse(
     string Path,
     int Count,
     long Bytes);
+
+public sealed record WorkedCallsignSummary(
+    string Callsign,
+    bool WorkedBefore,
+    int TotalCount,
+    DateTime? LastWorkedUtc,
+    string? LastBand,
+    string? LastMode,
+    double? LastFrequencyMhz,
+    string? LastRstSent,
+    string? LastRstRcvd,
+    string? LastName,
+    string? LastGrid,
+    string? LastCountry,
+    string? LastState,
+    string? LastComment,
+    IReadOnlyList<string> Bands,
+    IReadOnlyList<string> Modes,
+    IReadOnlyList<WorkedCallsignRecentQso> RecentQsos);
+
+public sealed record WorkedCallsignRecentQso(
+    DateTime QsoDateTimeUtc,
+    string? Band,
+    string? Mode,
+    double? FrequencyMhz,
+    string? RstSent,
+    string? RstRcvd,
+    string? Name,
+    string? Grid,
+    string? Country,
+    string? State,
+    string? Comment,
+    string? QrzLogId);

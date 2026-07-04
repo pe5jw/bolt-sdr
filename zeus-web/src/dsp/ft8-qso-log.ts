@@ -7,12 +7,12 @@
 //
 // ft8-qso-log — PURE glue between the FT8/FT4 QSO state machine and the native
 // logbook. `qsoStateToLogEntry` maps a completed QsoState (+ the dial context)
-// into the existing CreateLogEntryRequest used by LogService; `computeFt8Stats`
+// into the existing CreateLogEntryRequest used by /api/log; `computeFt8Stats`
 // derives the workspace STATS panel numbers from the logbook entries. No I/O, no
 // React — same inputs, same output, so both are unit-testable directly.
 //
-// Reuses the existing logbook stack (LogService / useLoggerStore / /api/log) —
-// this module never opens a new store or DB.
+// Reuses the existing logbook stack (useLoggerStore / /api/log) — this module
+// never opens a new store or DB.
 
 import { fmtSnr, type QsoState, type DigitalQsoMode } from './ft8-sequencer';
 import type { CreateLogEntryRequest, LogEntry } from '../api/log';

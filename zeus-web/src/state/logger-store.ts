@@ -64,6 +64,15 @@ import {
   deleteLogEntries,
 } from '../api/log';
 import { useCapabilitiesStore } from './capabilities-store';
+import { isLogbookPluginReady, logbookPluginUnavailableReason } from './logbook-plugin-store';
+
+let logbookUnavailableNoticeShown = false;
+const LOGBOOK_UNAVAILABLE_FALLBACK = 'Logbook plugin unavailable';
+const LOGBOOK_INSTALL_REASON = 'Install the Logbook plugin from Settings → Plugins';
+
+function isLogbookUnavailableMessage(message: string | null): boolean {
+  return message === LOGBOOK_UNAVAILABLE_FALLBACK || message === LOGBOOK_INSTALL_REASON;
+}
 
 type LoggerState = {
   entries: LogEntry[];
@@ -166,7 +175,21 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
   },
 
   addLogEntry: async (request: CreateLogEntryRequest) => {
-    set({ error: null });
+    if (isLogbookPluginReady()) {
+      if (logbookUnavailableNoticeShown) {
+        logbookUnavailableNoticeShown = false;
+        if (isLogbookUnavailableMessage(get().error)) set({ error: null });
+      }
+      set({ error: null });
+    } else {
+      const message = logbookPluginUnavailableReason() ?? LOGBOOK_UNAVAILABLE_FALLBACK;
+      if (!logbookUnavailableNoticeShown) {
+        logbookUnavailableNoticeShown = true;
+        set({ error: message });
+      }
+      return null;
+    }
+
     try {
       const entry = await createLogEntry(request);
       // Reload entries to get the updated list

@@ -122,6 +122,7 @@ import { useUserAccessStore } from './state/user-access-store';
 import { qrzFullName } from './api/qrz';
 import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
+import { logbookPluginUnavailableReason, useLogbookPluginStore } from './state/logbook-plugin-store';
 import { useTxStore } from './state/tx-store';
 import { useLayoutStore } from './state/layout-store';
 import { useSavedLayoutsStore } from './state/saved-layouts-store';
@@ -197,6 +198,7 @@ export default function App() {
         await reloadInstalledPluginUis();
         await useDigitalPluginStore.getState().probe();
         await useFreeDvPluginStore.getState().probe();
+        await useLogbookPluginStore.getState().probe();
       } catch (err) {
         console.warn('plugin access refresh failed', err);
       }
@@ -608,6 +610,8 @@ export default function App() {
   const logExportResult = useLoggerStore((s) => s.lastExportResult);
   const logExportError = useLoggerStore((s) => s.exportError);
   const logImportAdifFile = useLoggerStore((s) => s.importAdifFile);
+  const logbookPluginReady = useLogbookPluginStore((s) => s.installed && s.live);
+  const logbookUnavailableReason = logbookPluginUnavailableReason();
   const workedSummary = useLoggerStore((s) => s.workedSummary);
   const workedSummaryLoading = useLoggerStore((s) => s.workedSummaryLoading);
   const loadWorkedSummary = useLoggerStore((s) => s.loadWorkedSummary);
@@ -650,14 +654,18 @@ export default function App() {
   }
 
   const logSelectedCount = logSelectedIds.size;
-  const publishDisabled = logSelectedCount === 0 || logPublishInFlight || !qrzHasApiKey;
-  const publishTitle = !qrzHasApiKey
+  const publishDisabled = !logbookPluginReady || logSelectedCount === 0 || logPublishInFlight || !qrzHasApiKey;
+  const publishTitle = !logbookPluginReady
+    ? (logbookUnavailableReason ?? 'Logbook plugin unavailable')
+    : !qrzHasApiKey
     ? 'Set a QRZ API key in the QRZ panel to enable publishing'
     : logSelectedCount === 0
       ? 'Select one or more rows to publish'
       : 'Publish selected QSOs to QRZ logbook';
-  const deleteDisabled = logSelectedCount === 0 || logDeleteInFlight;
-  const deleteTitle = logSelectedCount === 0
+  const deleteDisabled = !logbookPluginReady || logSelectedCount === 0 || logDeleteInFlight;
+  const deleteTitle = !logbookPluginReady
+    ? (logbookUnavailableReason ?? 'Logbook plugin unavailable')
+    : logSelectedCount === 0
     ? 'Select one or more rows to delete'
     : `Delete ${logSelectedCount} selected ${logSelectedCount === 1 ? 'entry' : 'entries'} from the logbook`;
 
@@ -680,8 +688,8 @@ export default function App() {
         type="button"
         className="btn ghost sm"
         onClick={() => logImportInputRef.current?.click()}
-        disabled={logImportInFlight}
-        title="Import an ADIF logbook file"
+        disabled={!logbookPluginReady || logImportInFlight}
+        title={logbookPluginReady ? 'Import an ADIF logbook file' : (logbookUnavailableReason ?? 'Logbook plugin unavailable')}
         aria-label="Import ADIF logbook file"
       >
         <Upload size={13} strokeWidth={2.2} aria-hidden="true" />
@@ -711,7 +719,8 @@ export default function App() {
         type="button"
         className="btn ghost sm"
         onClick={() => void logExportAdif()}
-        title="Export all log entries to ADIF file"
+        disabled={!logbookPluginReady || logExportInFlight}
+        title={logbookPluginReady ? 'Export all log entries to ADIF file' : (logbookUnavailableReason ?? 'Logbook plugin unavailable')}
       >
         <Download size={13} strokeWidth={2.2} aria-hidden="true" />
         Export
@@ -720,6 +729,9 @@ export default function App() {
   ), [
     handleLogImportFile,
     logExportAdif,
+    logExportInFlight,
+    logbookPluginReady,
+    logbookUnavailableReason,
     logImportInFlight,
     logPublishInFlight,
     logPublishSelected,
@@ -1468,4 +1480,3 @@ export default function App() {
     </BandPlanProvider>
   );
 }
-

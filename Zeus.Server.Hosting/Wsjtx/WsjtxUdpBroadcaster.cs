@@ -11,6 +11,7 @@
 using System.Net;
 using System.Net.Sockets;
 using Zeus.Contracts;
+using Zeus.Server;
 
 namespace Zeus.Server.Wsjtx;
 
@@ -48,7 +49,7 @@ public sealed class WsjtxUdpBroadcaster : IDisposable
 {
     private readonly ILogger<WsjtxUdpBroadcaster> _log;
     private readonly WsjtxManagementService _mgmt;
-    private readonly LogService _logService;
+    private readonly LogbookPluginBridge _logbook;
     private readonly OperatorIdentityStore? _identity;
     private readonly QrzService? _qrz;
 
@@ -65,7 +66,7 @@ public sealed class WsjtxUdpBroadcaster : IDisposable
     public WsjtxUdpBroadcaster(
         ILogger<WsjtxUdpBroadcaster> log,
         WsjtxManagementService mgmt,
-        LogService logService,
+        LogbookPluginBridge logbook,
         // Optional so the existing broadcaster tests (which exercise the type-12
         // path only) keep their 3-arg construction. Supplies operator call/grid for
         // the MY_* fields of the optional QSOLogged (type 5) message via
@@ -75,7 +76,7 @@ public sealed class WsjtxUdpBroadcaster : IDisposable
     {
         _log = log;
         _mgmt = mgmt;
-        _logService = logService;
+        _logbook = logbook;
         _identity = identity;
         _qrz = qrz;
     }
@@ -89,9 +90,21 @@ public sealed class WsjtxUdpBroadcaster : IDisposable
 
         try
         {
-            var adif = await _logService.ExportToAdifAsync(new[] { entry.Id }, ct);
-            var datagram = WsjtxMessage.EncodeLoggedAdif(cfg.InstanceId, adif);
-            await SendInternalAsync(cfg, datagram, ct).ConfigureAwait(false);
+            var loggedAdifBytes = 0;
+            var loggedAdifSent = false;
+            var plugin = _logbook.Current;
+            if (plugin is null)
+            {
+                _log.LogDebug("wsjtx.broadcast skipped LoggedADIF; logbook plugin absent call={Call}", entry.Callsign);
+            }
+            else
+            {
+                var adif = await plugin.ExportAdifAsync(new[] { entry.Id }, ct);
+                var datagram = WsjtxMessage.EncodeLoggedAdif(cfg.InstanceId, adif);
+                await SendInternalAsync(cfg, datagram, ct).ConfigureAwait(false);
+                loggedAdifBytes = datagram.Length;
+                loggedAdifSent = true;
+            }
 
             if (cfg.SendQsoLogged)
             {
@@ -123,8 +136,8 @@ public sealed class WsjtxUdpBroadcaster : IDisposable
             }
 
             _log.LogInformation(
-                "wsjtx.broadcast call={Call} -> {Transport} {Host}:{Port} bytes={Bytes} type5={T5}",
-                entry.Callsign, cfg.Transport, TargetHost(cfg), cfg.Port, datagram.Length, cfg.SendQsoLogged);
+                "wsjtx.broadcast call={Call} -> {Transport} {Host}:{Port} bytes={Bytes} type12={T12} type5={T5}",
+                entry.Callsign, cfg.Transport, TargetHost(cfg), cfg.Port, loggedAdifBytes, loggedAdifSent, cfg.SendQsoLogged);
         }
         catch (Exception ex)
         {

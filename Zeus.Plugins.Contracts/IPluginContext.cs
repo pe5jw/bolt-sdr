@@ -28,6 +28,12 @@ public interface IPluginContext
     /// </summary>
     string PluginRootPath { get; }
 
+    /// <summary>
+    /// Absolute path to the host data directory containing zeus-prefs.db and
+    /// zeus-logbook.db. Default keeps older test doubles source-compatible.
+    /// </summary>
+    string HostDataDirectory => string.Empty;
+
     /// <summary>Capabilities actually granted (intersect of manifest + user choice).</summary>
     PluginCapabilities GrantedCapabilities { get; }
 

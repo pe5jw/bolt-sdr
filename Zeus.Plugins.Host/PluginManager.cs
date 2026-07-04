@@ -240,6 +240,7 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
             radioController: granted.HasFlag(PluginCapabilities.ControlRadio)
                 ? _services.GetService<IRadioController>()
                 : null,
+            hostDataDirectory: _options.HostDataDirectory ?? _settings.DataDirectory,
             // Audio playback sink (local monitor + on-air TX inject). Provided
             // by the host when available; on-air only reaches the air under
             // operator MOX, so this is not capability-gated here. Prefer the
@@ -350,6 +351,17 @@ public sealed record PluginManagerOptions
     /// <c>ZEUS_PLUGINS_PATH</c> env var.
     /// </summary>
     public string? PluginRoot { get; init; }
+
+    /// <summary>
+    /// The host data directory surfaced to plugins as
+    /// <see cref="Zeus.Plugins.Contracts.IPluginContext.HostDataDirectory"/>.
+    /// Null (default) falls back to the prefs database's directory — which is
+    /// WRONG for hosts using prefs profiles (the prefs file moves into
+    /// <c>profiles/</c> while per-data-dir files like <c>zeus-logbook.db</c>
+    /// stay at the data-dir root), so the host should always set this to the
+    /// data-dir root it wants plugins to see.
+    /// </summary>
+    public string? HostDataDirectory { get; init; }
 }
 
 /// <summary>Runtime state for one currently-active plugin.</summary>

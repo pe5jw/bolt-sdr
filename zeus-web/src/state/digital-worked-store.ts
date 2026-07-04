@@ -8,8 +8,8 @@
 // Digital worked-before set. The Zeus Digital plugin has no logbook access, so
 // the server-side workedBefore enrichment the decode table used to receive on
 // every 0x38 frame moved HERE: the CORE endpoint GET /api/log/digital-worked
-// (wraps LogService.GetDigitalWorkedCallsignsAsync — callsigns with a prior
-// FT8/FT4 QSO, full logbook history) feeds this set, and Ft8DecodeTable
+// (callsigns with a prior FT8/FT4 QSO, full logbook history) feeds this set,
+// and Ft8DecodeTable
 // decorates rows at RENDER time. Render-time decoration self-heals: batches
 // that arrive before the fetch resolves highlight as soon as it lands.
 //

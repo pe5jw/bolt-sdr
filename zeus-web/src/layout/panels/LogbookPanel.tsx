@@ -44,15 +44,18 @@
 // License for details.
 
 import { useState } from 'react';
-import { Eye, EyeOff, Search, X } from 'lucide-react';
+import { Eye, EyeOff, Puzzle, Search, X } from 'lucide-react';
 import { LogbookLive } from '../../components/design/LogbookLive';
 import { useLoggerStore } from '../../state/logger-store';
+import { logbookPluginUnavailableReason, useLogbookPluginStore } from '../../state/logbook-plugin-store';
 import { useWorkspace } from '../WorkspaceContext';
 
 export function LogbookPanel() {
   const { logbookActions } = useWorkspace();
+  const pluginReady = useLogbookPluginStore((s) => s.installed && s.live);
   const [searchText, setSearchText] = useState('');
   const [hideQrzPublished, setHideQrzPublished] = useState(false);
+  const unavailableReason = logbookPluginUnavailableReason();
   const qrzPublishedCount = useLoggerStore((s) =>
     s.entries.reduce((count, entry) => count + (entry.qrzLogId ? 1 : 0), 0),
   );
@@ -78,6 +81,7 @@ export function LogbookPanel() {
             onChange={(event) => setSearchText(event.target.value)}
             placeholder="Search logbook"
             aria-label="Search logbook"
+            disabled={!pluginReady}
             spellCheck={false}
           />
           {query && (
@@ -96,7 +100,7 @@ export function LogbookPanel() {
           type="button"
           className={`btn ghost sm logbook-visibility-toggle ${hideQrzPublished ? 'active' : ''}`}
           onClick={() => setHideQrzPublished((value) => !value)}
-          disabled={qrzPublishedCount === 0 && !hideQrzPublished}
+          disabled={!pluginReady || (qrzPublishedCount === 0 && !hideQrzPublished)}
           aria-label={qrzToggleTitle}
           aria-pressed={hideQrzPublished}
           title={qrzToggleTitle}
@@ -106,7 +110,19 @@ export function LogbookPanel() {
         {logbookActions}
       </div>
       <div className="logbook-panel-body">
-        <LogbookLive searchText={searchText} hideQrzPublished={hideQrzPublished} />
+        {pluginReady ? (
+          <LogbookLive searchText={searchText} hideQrzPublished={hideQrzPublished} />
+        ) : (
+          <div className="workspace-unavailable-panel" style={{ height: '100%' }}>
+            <div className="workspace-unavailable-panel-icon" aria-hidden>
+              <Puzzle size={18} />
+            </div>
+            <div className="workspace-unavailable-panel-copy">
+              <div className="workspace-unavailable-panel-title">Logbook unavailable</div>
+              <p>{unavailableReason}</p>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

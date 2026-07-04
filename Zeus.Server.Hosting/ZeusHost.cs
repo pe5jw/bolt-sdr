@@ -210,7 +210,7 @@ public static class ZeusHost
 
         // One-time fold of the legacy encrypted zeus.db (credentials + QSO
         // logbook) into the plaintext config DB (credentials, via CredentialStore)
-        // and the dedicated logbook DB (via LogService). Runs AFTER the integrity
+        // and the dedicated logbook DB. Runs AFTER the integrity
         // guard and BEFORE any store opens, disposing its handles before it
         // renames the legacy file aside. Strictly best-effort: it never throws and
         // never blocks launch, and it's a no-op on a fresh install or once the
@@ -755,7 +755,6 @@ public static class ZeusHost
         builder.Services.AddSingleton<RadioStateStore>();
         builder.Services.AddSingleton<QrzService>();
         builder.Services.AddSingleton<UserManagementStore>();
-        builder.Services.AddSingleton<LogService>();
         builder.Services.AddSingleton<FrontendDspSceneDiagnosticsService>();
         builder.Services.AddSingleton<FrontendAudioPlaybackDiagnosticsService>();
         builder.Services.AddSingleton<HardwareDiagnosticsService>();
@@ -814,7 +813,24 @@ public static class ZeusHost
         // is registered as IHostedService so plugin discovery / activation
         // runs as part of normal app startup; plugin REST endpoints are
         // mounted below via PluginEndpoints.MapAll under /api/plugins/...
-        builder.Services.AddZeusPlugins(prefsDbPathProvider: PrefsDbPath.Get);
+        // HostDataDirectory must be the data-dir ROOT (where zeus-logbook.db
+        // lives), NOT the prefs file's directory: with a named prefs profile the
+        // prefs file moves into profiles/, but per-data-dir files do not. The
+        // logbook path is the authority for that root.
+        builder.Services.AddZeusPlugins(
+            prefsDbPathProvider: PrefsDbPath.Get,
+            options: new Zeus.Plugins.Host.PluginManagerOptions
+            {
+                HostDataDirectory = Path.GetDirectoryName(PrefsDbPath.LogbookPath()),
+            });
+
+        // LogbookPluginBridge publishes the one active ILogbookPlugin to the
+        // stable /api/log/* endpoints. The UI and egress paths stay in core;
+        // the plugin owns zeus-logbook.db and ADIF/log queries.
+        builder.Services.AddSingleton(sp => new LogbookPluginBridge(
+            sp.GetRequiredService<PluginManager>(),
+            sp.GetRequiredService<ILogger<LogbookPluginBridge>>()));
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<LogbookPluginBridge>());
 
         // AudioModemPluginBridge publishes the one active IAudioModemPlugin
         // (FreeDV today) to the existing RX/TX insertion points. It also

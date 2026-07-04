@@ -20,6 +20,7 @@ internal sealed class PluginContext : IPluginContext
         IPluginSettings settings,
         IRadioStateReader? radio,
         IRadioController? radioController,
+        string hostDataDirectory,
         IAudioPlaybackSink? playback = null,
         IQrzLookup? qrz = null,
         IOperatorIdentityProvider? operatorIdentity = null)
@@ -32,6 +33,7 @@ internal sealed class PluginContext : IPluginContext
         Settings = settings;
         Radio = radio;
         RadioController = radioController;
+        HostDataDirectory = hostDataDirectory;
         Playback = playback;
         Qrz = qrz;
         OperatorIdentity = operatorIdentity;
@@ -41,6 +43,7 @@ internal sealed class PluginContext : IPluginContext
     public PluginManifest Manifest { get; }
     public ILogger Logger { get; }
     public string PluginRootPath { get; }
+    public string HostDataDirectory { get; }
     public PluginCapabilities GrantedCapabilities { get; }
     public IPluginSettings Settings { get; }
     public IRadioStateReader? Radio { get; }

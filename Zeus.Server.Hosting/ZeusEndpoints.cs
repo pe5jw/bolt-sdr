@@ -3966,19 +3966,35 @@ public static class ZeusEndpoints
         app.MapGet("/api/spacewx", async (SpaceWeatherService sw, HttpContext ctx) =>
             Results.Ok(await sw.GetAsync(ctx.RequestAborted)));
 
-        app.MapGet("/api/log/entries", async (LogService logService, HttpContext ctx, int skip = 0, int take = 100) =>
+        app.MapGet("/api/log/entries", async (LogbookPluginBridge logbook, HttpContext ctx, int skip = 0, int take = 100) =>
         {
-            var response = await logService.GetLogEntriesAsync(skip, take, ctx.RequestAborted);
-            return Results.Ok(response);
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return Results.Ok(new LogEntriesResponse(Array.Empty<LogEntry>(), 0));
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var response = await plugin.GetEntriesAsync(skip, take, ctx.RequestAborted);
+                return Results.Ok(LogbookPluginMappings.ToContract(response));
+            }, logbook, plugin, log);
         });
 
-        app.MapGet("/api/log/worked", async (LogService logService, HttpContext ctx, string callsign, int recent = 5) =>
+        app.MapGet("/api/log/worked", async (LogbookPluginBridge logbook, HttpContext ctx, string callsign, int recent = 5) =>
         {
             if (string.IsNullOrWhiteSpace(callsign))
                 return Results.BadRequest(new { error = "callsign required" });
 
-            var response = await logService.GetWorkedCallsignSummaryAsync(callsign, recent, ctx.RequestAborted);
-            return Results.Ok(response);
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return Results.Ok(LogbookPluginMappings.EmptyWorkedSummary(callsign));
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var response = await plugin.GetWorkedSummaryAsync(callsign, recent, ctx.RequestAborted);
+                return Results.Ok(response is null
+                    ? LogbookPluginMappings.EmptyWorkedSummary(callsign)
+                    : LogbookPluginMappings.ToContract(response));
+            }, logbook, plugin, log);
         });
 
         // Digital worked-before set — every callsign with a prior FT8/FT4 QSO
@@ -3986,15 +4002,22 @@ public static class ZeusEndpoints
         // Zeus Digital pop-out fetches this to decorate decode rows with the
         // worked-B4 highlight; the enrichment moved client-side when the decode
         // pipeline moved into the com.kb2uka.digital plugin.
-        app.MapGet("/api/log/digital-worked", async (LogService logService, HttpContext ctx) =>
+        app.MapGet("/api/log/digital-worked", async (LogbookPluginBridge logbook, HttpContext ctx) =>
         {
-            var worked = await logService.GetDigitalWorkedCallsignsAsync(ctx.RequestAborted);
-            return Results.Ok(new { calls = worked.ToArray() });
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return Results.Ok(new { calls = Array.Empty<string>() });
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var worked = await plugin.GetDigitalWorkedCallsignsAsync(ctx.RequestAborted);
+                return Results.Ok(new { calls = worked.ToArray() });
+            }, logbook, plugin, log);
         });
 
         app.MapPost("/api/log/entry", async (
             CreateLogEntryRequest req,
-            LogService logService,
+            LogbookPluginBridge logbook,
             QrzService qrz,
             WsjtxUdpBroadcaster wsjtx,
             Wsjtx.N1mmBroadcaster n1mm,
@@ -4017,49 +4040,82 @@ public static class ZeusEndpoints
                     req = req with { Name = enriched };
             }
 
-            var entry = await logService.CreateLogEntryAsync(req, ctx.RequestAborted);
-            // Push the just-logged QSO to every opted-in external logger. Each
-            // target is OFF by default and no-ops when disabled; this is the only
-            // logging path that egresses (ADIF bulk import never does).
-            // Fire-and-forget so a slow/blocked target (e.g. a free-text Host whose
-            // DNS is dead) can never delay the operator's log confirmation. Each
-            // client swallows its own failures internally; use a detached token so
-            // the post-response request abort doesn't cancel them.
-            _ = wsjtx.BroadcastLoggedQsoAsync(entry, CancellationToken.None);   // Class A: WSJT-X type-12 UDP
-            _ = n1mm.BroadcastLoggedQsoAsync(entry, CancellationToken.None);    // Class B: N1MM contactinfo UDP
-            _ = cloudLog.PublishAsync(entry, CancellationToken.None);           // Class C: Wavelog/Cloudlog + Club Log HTTP
-            return Results.Ok(entry);
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return LogbookPluginMappings.MissingPlugin();
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var entry = LogbookPluginMappings.ToContract(
+                    await plugin.CreateAsync(LogbookPluginMappings.ToPlugin(req), ctx.RequestAborted));
+                // Push the just-logged QSO to every opted-in external logger. Each
+                // target is OFF by default and no-ops when disabled; this is the only
+                // logging path that egresses (ADIF bulk import never does).
+                // Fire-and-forget so a slow/blocked target (e.g. a free-text Host whose
+                // DNS is dead) can never delay the operator's log confirmation. Each
+                // client swallows its own failures internally; use a detached token so
+                // the post-response request abort doesn't cancel them.
+                _ = wsjtx.BroadcastLoggedQsoAsync(entry, CancellationToken.None);   // Class A: WSJT-X type-12 UDP
+                _ = n1mm.BroadcastLoggedQsoAsync(entry, CancellationToken.None);    // Class B: N1MM contactinfo UDP
+                _ = cloudLog.PublishAsync(entry, CancellationToken.None);           // Class C: Wavelog/Cloudlog + Club Log HTTP
+                return Results.Ok(entry);
+            }, logbook, plugin, log);
         });
 
-        app.MapGet("/api/log/export/adif", async (LogService logService, HttpContext ctx) =>
+        app.MapGet("/api/log/export/adif", async (LogbookPluginBridge logbook, HttpContext ctx) =>
         {
-            var adif = await logService.ExportToAdifAsync(null, ctx.RequestAborted);
-            var fileName = $"zeus-log-{DateTime.UtcNow:yyyyMMdd-HHmmss}.adi";
-            return Results.File(
-                System.Text.Encoding.UTF8.GetBytes(adif),
-                "text/plain",
-                fileName);
+            var plugin = logbook.Current;
+            if (plugin is null)
+            {
+                var emptyAdif = LogbookPluginMappings.EmptyAdifExport();
+                var emptyFileName = $"zeus-log-{DateTime.UtcNow:yyyyMMdd-HHmmss}.adi";
+                return Results.File(
+                    System.Text.Encoding.UTF8.GetBytes(emptyAdif),
+                    "text/plain",
+                    emptyFileName);
+            }
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var adif = await plugin.ExportAdifAsync(null, ctx.RequestAborted);
+                var fileName = $"zeus-log-{DateTime.UtcNow:yyyyMMdd-HHmmss}.adi";
+                return Results.File(
+                    System.Text.Encoding.UTF8.GetBytes(adif),
+                    "text/plain",
+                    fileName);
+            }, logbook, plugin, log);
         });
 
         // Write the logbook (or a selected subset) to an ADIF file in a
         // directory on the machine running the backend, returning the path so
         // the Logbook panel can confirm where it landed (a silent browser
         // download gave the operator no feedback). Null directory => Downloads.
-        app.MapPost("/api/log/export/adif/file", async (AdifExportToFileRequest req, LogService logService, HttpContext ctx) =>
+        app.MapPost("/api/log/export/adif/file", async (AdifExportToFileRequest req, LogbookPluginBridge logbook, HttpContext ctx) =>
         {
-            try
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return LogbookPluginMappings.MissingPlugin();
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
             {
-                var result = await logService.ExportToAdifFileAsync(req.Directory, req.LogEntryIds, ctx.RequestAborted);
-                return Results.Ok(result);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-            {
-                return Results.BadRequest(new { error = $"Could not write ADIF file: {ex.Message}" });
-            }
+                try
+                {
+                    var result = await plugin.ExportAdifToFileAsync(req.Directory, req.LogEntryIds, ctx.RequestAborted);
+                    return Results.Ok(LogbookPluginMappings.ToContract(result));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+                {
+                    return Results.BadRequest(new { error = $"Could not write ADIF file: {ex.Message}" });
+                }
+            }, logbook, plugin, log);
         });
 
-        app.MapPost("/api/log/import/adif", async (LogService logService, HttpContext ctx) =>
+        app.MapPost("/api/log/import/adif", async (LogbookPluginBridge logbook, HttpContext ctx) =>
         {
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return LogbookPluginMappings.MissingPlugin();
+
             using var reader = new StreamReader(
                 ctx.Request.Body,
                 System.Text.Encoding.UTF8,
@@ -4068,58 +4124,77 @@ public static class ZeusEndpoints
             if (string.IsNullOrWhiteSpace(adif))
                 return Results.BadRequest(new { error = "ADIF file is empty" });
 
-            try
+            return await LogbookPluginMappings.GuardAsync(async () =>
             {
-                var response = await logService.ImportAdifAsync(adif, ctx.RequestAborted);
-                return Results.Ok(response);
-            }
-            catch (FormatException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
+                try
+                {
+                    var response = await plugin.ImportAdifAsync(adif, ctx.RequestAborted);
+                    return Results.Ok(LogbookPluginMappings.ToContract(response));
+                }
+                catch (FormatException ex)
+                {
+                    return Results.BadRequest(new { error = ex.Message });
+                }
+            }, logbook, plugin, log);
         });
 
-        app.MapPost("/api/log/publish/qrz", async (QrzPublishRequest req, QrzService qrz, LogService logService, HttpContext ctx) =>
+        app.MapPost("/api/log/publish/qrz", async (QrzPublishRequest req, QrzService qrz, LogbookPluginBridge logbook, HttpContext ctx) =>
         {
             if (req.LogEntryIds == null || !req.LogEntryIds.Any())
                 return Results.BadRequest(new { error = "no log entry IDs provided" });
 
-            var entries = await logService.GetLogEntriesByIdsAsync(req.LogEntryIds, ctx.RequestAborted);
-            var results = new List<QrzPublishResult>();
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return LogbookPluginMappings.MissingPlugin();
 
-            foreach (var entry in entries)
+            return await LogbookPluginMappings.GuardAsync(async () =>
             {
-                var result = await qrz.PublishLogEntryAsync(entry, ctx.RequestAborted);
-                results.Add(result);
+                var entries = (await plugin.GetByIdsAsync(req.LogEntryIds, ctx.RequestAborted))
+                    .Select(LogbookPluginMappings.ToContract)
+                    .ToList();
+                var results = new List<QrzPublishResult>();
 
-                // Update log entry with QRZ log ID if successful
-                if (result.Success && !string.IsNullOrEmpty(result.QrzLogId))
+                foreach (var entry in entries)
                 {
-                    await logService.UpdateQrzUploadStatusAsync(entry.Id, result.QrzLogId, ctx.RequestAborted);
+                    var result = await qrz.PublishLogEntryAsync(entry, ctx.RequestAborted);
+                    results.Add(result);
+
+                    // Update log entry with QRZ log ID if successful
+                    if (result.Success && !string.IsNullOrEmpty(result.QrzLogId))
+                    {
+                        await plugin.UpdateQrzUploadStatusAsync(entry.Id, result.QrzLogId, ctx.RequestAborted);
+                    }
                 }
-            }
 
-            var successCount = results.Count(r => r.Success);
-            var failedCount = results.Count - successCount;
+                var successCount = results.Count(r => r.Success);
+                var failedCount = results.Count - successCount;
 
-            return Results.Ok(new QrzPublishResponse(
-                TotalCount: results.Count,
-                SuccessCount: successCount,
-                FailedCount: failedCount,
-                Results: results));
+                return Results.Ok(new QrzPublishResponse(
+                    TotalCount: results.Count,
+                    SuccessCount: successCount,
+                    FailedCount: failedCount,
+                    Results: results));
+            }, logbook, plugin, log);
         });
 
         // Permanently delete selected logbook entries. Mirrors the publish
         // select-then-act pattern: the Logbook panel sends the ids of the
         // selected rows. Local-only delete — nothing is retracted from QRZ or
         // any cloud logger, only Zeus's own record is removed.
-        app.MapPost("/api/log/delete", async (LogDeleteRequest req, LogService logService, HttpContext ctx) =>
+        app.MapPost("/api/log/delete", async (LogDeleteRequest req, LogbookPluginBridge logbook, HttpContext ctx) =>
         {
             if (req.LogEntryIds == null || !req.LogEntryIds.Any())
                 return Results.BadRequest(new { error = "no log entry IDs provided" });
 
-            var deleted = await logService.DeleteLogEntriesAsync(req.LogEntryIds, ctx.RequestAborted);
-            return Results.Ok(new LogDeleteResponse(deleted));
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return LogbookPluginMappings.MissingPlugin();
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var deleted = await plugin.DeleteAsync(req.LogEntryIds, ctx.RequestAborted);
+                return Results.Ok(new LogDeleteResponse(deleted));
+            }, logbook, plugin, log);
         });
 
         // -- Logging v2: HTTP cloud-log uploaders (Wavelog/Cloudlog + Club Log) --
@@ -4149,21 +4224,31 @@ public static class ZeusEndpoints
         });
 
         app.MapPost("/api/log/publish/cloud", async (
-            QrzPublishRequest req, CloudLog.CloudLogService cloud, LogService logService, HttpContext ctx) =>
+            QrzPublishRequest req, CloudLog.CloudLogService cloud, LogbookPluginBridge logbook, HttpContext ctx) =>
         {
             if (req.LogEntryIds == null || !req.LogEntryIds.Any())
                 return Results.BadRequest(new { error = "no log entry IDs provided" });
-            var entries = await logService.GetLogEntriesByIdsAsync(req.LogEntryIds, ctx.RequestAborted);
-            var results = new List<CloudLog.CloudLogResult>();
-            foreach (var entry in entries)
-                results.AddRange(await cloud.PublishOnceAsync(entry, ctx.RequestAborted));
-            return Results.Ok(new
+
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return LogbookPluginMappings.MissingPlugin();
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
             {
-                total = results.Count,
-                successCount = results.Count(r => r.Success),
-                failedCount = results.Count(r => !r.Success),
-                results,
-            });
+                var entries = (await plugin.GetByIdsAsync(req.LogEntryIds, ctx.RequestAborted))
+                    .Select(LogbookPluginMappings.ToContract)
+                    .ToList();
+                var results = new List<CloudLog.CloudLogResult>();
+                foreach (var entry in entries)
+                    results.AddRange(await cloud.PublishOnceAsync(entry, ctx.RequestAborted));
+                return Results.Ok(new
+                {
+                    total = results.Count,
+                    successCount = results.Count(r => r.Success),
+                    failedCount = results.Count(r => !r.Success),
+                    results,
+                });
+            }, logbook, plugin, log);
         });
 
         // -- Logging v2: N1MM-format UDP broadcaster (HRD / DXKeeper gateway) -----
