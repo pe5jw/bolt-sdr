@@ -48,6 +48,7 @@ import { useLoggerStore } from '../../state/logger-store';
 import type { LogEntry } from '../../api/log';
 import { formatQsoDateUtc, formatQsoTimeUtc } from './logbook-formatters';
 import { filterLogEntries } from './logbook-search';
+import { countryToFlag } from './logbook-flag';
 
 function compactList(parts: Array<string | null | undefined>): string {
   return parts.filter((p): p is string => !!p).join(' · ');
@@ -98,9 +99,17 @@ function logRowTitle(entry: LogEntry): string {
 type LogbookLiveProps = {
   searchText: string;
   hideQrzPublished: boolean;
+  /**
+   * Rich (popped-out) mode only: the QSO whose detail card is open. When an
+   * `onActivate` handler is supplied a row click *focuses* the row (opens its
+   * detail) and the checkbox alone drives multi-select; without it the row
+   * click toggles selection, preserving the compact panel's behaviour.
+   */
+  activeId?: string | null;
+  onActivate?: (id: string) => void;
 };
 
-export function LogbookLive({ searchText, hideQrzPublished }: LogbookLiveProps) {
+export function LogbookLive({ searchText, hideQrzPublished, activeId, onActivate }: LogbookLiveProps) {
   const entries = useLoggerStore((s) => s.entries);
   const totalCount = useLoggerStore((s) => s.totalCount);
   const loading = useLoggerStore((s) => s.loading);
@@ -208,52 +217,65 @@ export function LogbookLive({ searchText, hideQrzPublished }: LogbookLiveProps) 
               : 'No unpublished log entries to show.'}
           </div>
         )}
-        {filteredEntries.map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            className={`log-row mono ${selectedIds.has(entry.id) ? 'selected' : ''} ${isQrzPublished(entry) ? 'log-row--qrz' : ''}`}
-            onClick={() => toggleSelected(entry.id)}
-            title={logRowTitle(entry)}
-          >
-            <span>
-              <input
-                type="checkbox"
-                checked={selectedIds.has(entry.id)}
-                readOnly
-                tabIndex={-1}
-                style={{ cursor: 'pointer', pointerEvents: 'none' }}
-              />
-            </span>
-            <span className="t-date" title={entry.qsoDateTimeUtc}>
-              {formatQsoDateUtc(entry.qsoDateTimeUtc)}
-            </span>
-            <span className="t-time" title={entry.qsoDateTimeUtc}>
-              {formatQsoTimeUtc(entry.qsoDateTimeUtc)}
-            </span>
-            <span className="t-call">{entry.callsign}</span>
-            <span className="t-freq log-cell-stack">
-              <span>{formatFrequencyMhz(entry.frequencyMhz) ?? '—'}</span>
-              <span className="log-sub">{entry.band || '—'}</span>
-            </span>
-            <span className="t-mode">{entry.mode}</span>
-            <span className="log-cell-stack">
-              <span>{entry.rstSent}/{entry.rstRcvd}</span>
-              <span className="log-sub">{entry.grid || '—'}</span>
-            </span>
-            <span className="t-name log-cell-stack">
-              <span className="log-name-line">
-                <span className="log-name-text">
-                  {entry.name ?? '—'}
-                </span>
-                {isQrzPublished(entry) && (
-                  <span className="log-sync-pill">✓ QRZ</span>
-                )}
+        {filteredEntries.map((entry) => {
+          const isActive = activeId != null && entry.id === activeId;
+          return (
+            <button
+              key={entry.id}
+              type="button"
+              className={`log-row mono ${selectedIds.has(entry.id) ? 'selected' : ''} ${isQrzPublished(entry) ? 'log-row--qrz' : ''} ${isActive ? 'is-active' : ''}`}
+              onClick={() => (onActivate ? onActivate(entry.id) : toggleSelected(entry.id))}
+              aria-pressed={onActivate ? isActive : selectedIds.has(entry.id)}
+              title={logRowTitle(entry)}
+            >
+              <span className="log-row-check">
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(entry.id)}
+                  // The checkbox always drives multi-select, independently of
+                  // whether the row body focuses (rich) or selects (compact).
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggleSelected(entry.id);
+                  }}
+                  onChange={() => { /* click handler owns the toggle */ }}
+                  aria-label={`Select QSO with ${entry.callsign}`}
+                  style={{ cursor: 'pointer' }}
+                />
               </span>
-              <span className="log-meta-line">{logMeta(entry)}</span>
-            </span>
-          </button>
-        ))}
+              <span className="t-date" title={entry.qsoDateTimeUtc}>
+                {formatQsoDateUtc(entry.qsoDateTimeUtc)}
+              </span>
+              <span className="t-time" title={entry.qsoDateTimeUtc}>
+                {formatQsoTimeUtc(entry.qsoDateTimeUtc)}
+              </span>
+              <span className="t-call">{entry.callsign}</span>
+              <span className="t-freq log-cell-stack">
+                <span className="log-freq-val">{formatFrequencyMhz(entry.frequencyMhz) ?? '—'}</span>
+                <span className="log-sub">{entry.band || '—'}</span>
+              </span>
+              <span className="t-mode">{entry.mode}</span>
+              <span className="log-cell-stack">
+                <span className="log-rst">{entry.rstSent}/{entry.rstRcvd}</span>
+                <span className="log-sub">{entry.grid || '—'}</span>
+              </span>
+              <span className="t-name log-cell-stack">
+                <span className="log-name-line">
+                  {entry.country && (
+                    <span className="log-flag" aria-hidden="true">{countryToFlag(entry.country)}</span>
+                  )}
+                  <span className="log-name-text">
+                    {entry.name ?? '—'}
+                  </span>
+                  {isQrzPublished(entry) && (
+                    <span className="log-sync-pill">✓ QRZ</span>
+                  )}
+                </span>
+                <span className="log-meta-line">{logMeta(entry)}</span>
+              </span>
+            </button>
+          );
+        })}
       </div>
       <div className="log-foot">
         <span className="log-legend" title="Rows tinted green are already on QRZ.com — uploaded by Zeus or imported as already sent">
