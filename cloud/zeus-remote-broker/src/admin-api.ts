@@ -33,6 +33,13 @@ import {
   insertAudit,
   countAdmins,
   countEnabledAdmins,
+  listManagedUsers,
+  upsertManagedUser,
+  updateManagedUser,
+  listManagedPlugins,
+  upsertManagedPlugin,
+  type ManagedUserRow,
+  type ManagedPluginRow,
 } from './admin-db';
 
 /** Resolved identity of an authenticated caller. */
@@ -103,6 +110,34 @@ export async function handleAdmin(
     const adminDel = /^\/admin\/admins\/([^/]+)$/.exec(path);
     if (adminDel && request.method === 'DELETE') {
       return await handleDisableAdmin(decodeURIComponent(adminDel[1]), env, auth, cors);
+    }
+
+    // app users / subscriptions
+    if (path === '/admin/users' && request.method === 'GET') {
+      const [users, plugins] = await Promise.all([
+        listManagedUsers(env.ADMIN_DB),
+        listManagedPlugins(env.ADMIN_DB),
+      ]);
+      return json({ users: users.map(toManagedUserDto), plugins: plugins.map(toManagedPluginDto) }, 200, cors);
+    }
+    if (path === '/admin/users' && request.method === 'POST') {
+      return await handleUpsertManagedUser(request, env, auth, cors);
+    }
+    const userPut = /^\/admin\/users\/([^/]+)$/.exec(path);
+    if (userPut && request.method === 'PUT') {
+      return await handleUpdateManagedUser(decodeURIComponent(userPut[1]), request, env, auth, cors);
+    }
+
+    // plugin catalog / pricing
+    if (path === '/admin/plugins' && request.method === 'GET') {
+      return json({ plugins: (await listManagedPlugins(env.ADMIN_DB)).map(toManagedPluginDto) }, 200, cors);
+    }
+    if (path === '/admin/plugins' && request.method === 'POST') {
+      return await handleUpsertManagedPlugin(null, request, env, auth, cors);
+    }
+    const pluginPut = /^\/admin\/plugins\/([^/]+)$/.exec(path);
+    if (pluginPut && request.method === 'PUT') {
+      return await handleUpsertManagedPlugin(decodeURIComponent(pluginPut[1]), request, env, auth, cors);
     }
 
     // presence
@@ -300,6 +335,62 @@ async function handleDisableAdmin(
   return json({ ok: true }, 200, cors);
 }
 
+// --- managed app users ------------------------------------------------------
+
+async function handleUpsertManagedUser(
+  request: Request,
+  env: Env,
+  auth: AuthCtx,
+  cors: Record<string, string>,
+): Promise<Response> {
+  const body = await safeJson(request);
+  const callsign = norm((body.callsign as string) ?? '');
+  if (!callsign) return json({ error: 'callsign required' }, 400, cors);
+
+  const user = await upsertManagedUser(env.ADMIN_DB, normalizedUserRow(callsign, body));
+  await insertAudit(env.ADMIN_DB, { actor: auth.callsign, action: 'user.upsert', target: callsign });
+  return json(toManagedUserDto(user), 200, cors);
+}
+
+async function handleUpdateManagedUser(
+  target: string,
+  request: Request,
+  env: Env,
+  auth: AuthCtx,
+  cors: Record<string, string>,
+): Promise<Response> {
+  const callsign = norm(target);
+  if (!callsign) return json({ error: 'callsign required' }, 400, cors);
+  const body = await safeJson(request);
+  const user = await updateManagedUser(env.ADMIN_DB, callsign, normalizedUserPatch(body));
+  if (!user) return json({ error: 'not found' }, 404, cors);
+  await insertAudit(env.ADMIN_DB, { actor: auth.callsign, action: 'user.update', target: callsign });
+  return json(toManagedUserDto(user), 200, cors);
+}
+
+// --- managed plugins --------------------------------------------------------
+
+async function handleUpsertManagedPlugin(
+  targetPluginId: string | null,
+  request: Request,
+  env: Env,
+  auth: AuthCtx,
+  cors: Record<string, string>,
+): Promise<Response> {
+  const body = await safeJson(request);
+  const pluginId = normPluginId(targetPluginId ?? ((body.pluginId as string) || ''));
+  if (!pluginId) return json({ error: 'plugin id required' }, 400, cors);
+
+  const plugin = await upsertManagedPlugin(env.ADMIN_DB, normalizedPluginRow(pluginId, body));
+  await insertAudit(env.ADMIN_DB, {
+    actor: auth.callsign,
+    action: 'plugin.upsert',
+    target: pluginId,
+    detail: String(plugin.monthly_price_cents),
+  });
+  return json(toManagedPluginDto(plugin), 200, cors);
+}
+
 // --- support request --------------------------------------------------------
 
 /**
@@ -418,8 +509,136 @@ async function ensureBootstrap(env: Env): Promise<void> {
 
 // --- helpers ----------------------------------------------------------------
 
+function toManagedUserDto(row: ManagedUserRow) {
+  return {
+    callsign: row.callsign,
+    displayName: row.display_name ?? row.callsign,
+    accessAllowed: row.access_allowed === 1,
+    isAdmin: row.is_admin === 1,
+    subscriptionStatus: row.subscription_status || 'manual',
+    subscriptionExpiresAt: row.subscription_expires_at,
+    pluginAccessMode: row.plugin_access_mode === 'selected' ? 'selected' : 'all',
+    pluginEntitlements: parseEntitlements(row.plugin_entitlements),
+    notes: row.notes,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastLoginAt: row.last_login_at,
+  };
+}
+
+function toManagedPluginDto(row: ManagedPluginRow) {
+  return {
+    pluginId: row.plugin_id,
+    displayName: row.display_name || row.plugin_id,
+    subscriptionRequired: row.subscription_required === 1,
+    monthlyPriceCents: row.monthly_price_cents,
+    currency: row.currency || 'USD',
+    active: row.active === 1,
+    checkoutUrl: row.checkout_url,
+    notes: row.notes,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function normalizedUserRow(callsign: string, body: Record<string, unknown>) {
+  return {
+    callsign,
+    display_name: optionalString(body.displayName) ?? callsign,
+    access_allowed: bool01(body.accessAllowed, true),
+    is_admin: bool01(body.isAdmin, false),
+    subscription_status: normalizedStatus(body.subscriptionStatus),
+    subscription_expires_at: optionalNumber(body.subscriptionExpiresAt),
+    plugin_access_mode: body.pluginAccessMode === 'selected' ? 'selected' : 'all',
+    plugin_entitlements: stringifyEntitlements(body.pluginEntitlements),
+    notes: optionalString(body.notes),
+  };
+}
+
+function normalizedUserPatch(body: Record<string, unknown>) {
+  const patch: Partial<ManagedUserRow> = {};
+  if ('displayName' in body) patch.display_name = optionalString(body.displayName);
+  if ('accessAllowed' in body) patch.access_allowed = bool01(body.accessAllowed, true);
+  if ('isAdmin' in body) patch.is_admin = bool01(body.isAdmin, false);
+  if ('subscriptionStatus' in body) patch.subscription_status = normalizedStatus(body.subscriptionStatus);
+  if ('subscriptionExpiresAt' in body) patch.subscription_expires_at = optionalNumber(body.subscriptionExpiresAt);
+  if ('pluginAccessMode' in body) patch.plugin_access_mode = body.pluginAccessMode === 'selected' ? 'selected' : 'all';
+  if ('pluginEntitlements' in body) patch.plugin_entitlements = stringifyEntitlements(body.pluginEntitlements);
+  if ('notes' in body) patch.notes = optionalString(body.notes);
+  return patch;
+}
+
+function normalizedPluginRow(pluginId: string, body: Record<string, unknown>) {
+  const cents = optionalNumber(body.monthlyPriceCents);
+  return {
+    plugin_id: pluginId,
+    display_name: optionalString(body.displayName) ?? pluginId,
+    subscription_required: bool01(body.subscriptionRequired, false),
+    monthly_price_cents: Math.max(0, Math.round(cents ?? 0)),
+    currency: (optionalString(body.currency) ?? 'USD').toUpperCase(),
+    active: bool01(body.active, true),
+    checkout_url: optionalString(body.checkoutUrl),
+    notes: optionalString(body.notes),
+  };
+}
+
 function norm(callsign: string): string {
   return callsign.trim().toUpperCase();
+}
+
+function normPluginId(pluginId: string): string {
+  return pluginId.trim().toLowerCase();
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function optionalNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function bool01(value: unknown, fallback: boolean): number {
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  return fallback ? 1 : 0;
+}
+
+function normalizedStatus(value: unknown): string {
+  const status = optionalString(value)?.toLowerCase();
+  return status || 'manual';
+}
+
+function parseEntitlements(raw: string): unknown[] {
+  try {
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function stringifyEntitlements(value: unknown): string {
+  if (!Array.isArray(value)) return '[]';
+  const entitlements = value
+    .map((item) => {
+      const raw = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+      const pluginId = normPluginId(String(raw.pluginId ?? ''));
+      if (!pluginId) return null;
+      return {
+        pluginId,
+        accessAllowed: raw.accessAllowed !== false,
+        subscriptionStatus: normalizedStatus(raw.subscriptionStatus),
+        subscriptionExpiresAt: optionalNumber(raw.subscriptionExpiresAt),
+        denialReason: optionalString(raw.denialReason),
+      };
+    })
+    .filter(Boolean);
+  return JSON.stringify(entitlements);
 }
 
 async function safeJson(request: Request): Promise<Record<string, unknown>> {
@@ -471,7 +690,7 @@ async function loginRateLimited(env: Env, callsign: string): Promise<boolean> {
  */
 export function corsHeaders(env: Env, request?: Request): Record<string, string> {
   const headers: Record<string, string> = {
-    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'content-type, authorization, x-qrz-session, x-qrz-callsign',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',
