@@ -77,6 +77,35 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** How long the "Installed …" confirmation stays visible before the reload. */
+const POST_INSTALL_RELOAD_DELAY_MS = 1200;
+
+/**
+ * Full app reload after a successful plugin install — the automatic
+ * equivalent of the operator hard-refreshing (Ctrl/Cmd+Shift+R). A freshly
+ * installed plugin's backend routes go live immediately, but frontend state
+ * that was decided at boot (per-plugin gate probes, mode buttons, panel
+ * wake-up) can be stale until the app re-runs its boot path; reloading is the
+ * one mechanism that refreshes ALL of it, for every plugin, on every
+ * platform (the desktop webview and the browser reload identically).
+ * The delay lets the "Installed X — reloading" confirmation render first.
+ *
+ * `reload` is injectable for tests; jsdom's location.reload throws.
+ */
+export function schedulePostInstallReload(
+  reload: () => void = () => window.location.reload(),
+  delayMs: number = POST_INSTALL_RELOAD_DELAY_MS,
+): void {
+  if (import.meta.env.MODE === 'test') return;
+  setTimeout(() => {
+    try {
+      reload();
+    } catch {
+      // Non-browser host (tests, SSR) — nothing to reload.
+    }
+  }, delayMs);
+}
+
 async function refreshRuntimePanels() {
   try {
     await reloadInstalledPluginUis();
@@ -188,11 +217,15 @@ export const usePluginsStore = create<PluginsStoreState>((set, get) => ({
       set({
         installInflight: false,
         lastInstallError: null,
-        lastInstallOk: `Installed ${dto.name} ${dto.version}`,
+        lastInstallOk: `Installed ${dto.name} ${dto.version} — reloading…`,
       });
       // Refresh the installed list so the new plugin appears immediately.
       await get().refreshInstalled();
       await refreshRuntimePanels();
+      // Then reload the whole app so every boot-time gate (plugin probes,
+      // mode buttons, dormant panels) picks the new plugin up — the automatic
+      // hard-refresh operators otherwise had to do by hand.
+      schedulePostInstallReload();
       return dto;
     } catch (err) {
       set({

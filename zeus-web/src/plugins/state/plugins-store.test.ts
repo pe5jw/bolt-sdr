@@ -255,6 +255,9 @@ describe('usePluginsStore', () => {
     expect(dto?.id).toBe('demo');
     const s = usePluginsStore.getState();
     expect(s.lastInstallOk).toMatch(/Installed Demo 0\.1\.0/);
+    // The success notice announces the automatic post-install app reload
+    // (suppressed in the test environment itself).
+    expect(s.lastInstallOk).toMatch(/reloading/i);
     expect(s.installed).toHaveLength(1);
     expect(s.installedVsts).toHaveLength(0);
     expect(fetchMock).toHaveBeenCalledTimes(3);
