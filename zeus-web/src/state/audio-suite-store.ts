@@ -34,6 +34,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { openAudioSuiteWindow } from '../layout/workspace-windows';
 import { useTxStore } from './tx-store';
 import { uninstallPlugin as apiUninstall } from '../plugins/api/plugins';
 import { reloadInstalledPluginUis } from '../plugins/runtime/pluginRuntime';
@@ -450,26 +451,12 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         if (route === 'rx') get().openRx();
         else get().openTx();
       },
-      openTx: () =>
-        set((s) => ({
-          isOpen: true,
-          txOpen: true,
-          suiteRoute: 'tx',
-          x: s.txX,
-          y: s.txY,
-          width: s.txWidth,
-          height: s.txHeight,
-        })),
-      openRx: () =>
-        set((s) => ({
-          isOpen: true,
-          rxOpen: true,
-          suiteRoute: 'rx',
-          x: s.rxX,
-          y: s.rxY,
-          width: s.rxWidth,
-          height: s.rxHeight,
-        })),
+      // The suite pops out as its own independent OS window (like a hosted
+      // VST plugin's editor), not a fixed panel inside the main Zeus window.
+      // openAudioSuiteWindow is fire-and-forget — the operator closes it via
+      // the window chrome — so the main window keeps no open/closed flag.
+      openTx: () => openAudioSuiteWindow('tx'),
+      openRx: () => openAudioSuiteWindow('rx'),
       close: () => set({ isOpen: false, txOpen: false, rxOpen: false }),
       closeTx: () =>
         set((s) => ({

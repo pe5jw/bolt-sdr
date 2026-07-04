@@ -118,7 +118,6 @@ export function DspPanel() {
   const setSmartNrMode = useSmartNrStore((s) => s.setAutomationMode);
   const setSmartNrStatus = useSmartNrStore((s) => s.setStatus);
   const openRxSuite = useAudioSuiteStore((s) => s.openRx);
-  const rxSuiteOpen = useAudioSuiteStore((s) => s.rxOpen);
 
   const inflightAbort = useRef<AbortController | null>(null);
 
@@ -269,9 +268,8 @@ export function DspPanel() {
         <button
           type="button"
           onClick={openRxSuite}
-          aria-pressed={rxSuiteOpen}
-          className={`btn sm ${rxSuiteOpen ? 'active' : ''}`}
-          title="Open RX Audio Suite for receive VST inserts"
+          className="btn sm"
+          title="Pop out the RX Audio Suite window for receive VST inserts"
         >
           RX Suite
         </button>

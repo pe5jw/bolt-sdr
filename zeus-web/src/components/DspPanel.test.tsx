@@ -4,22 +4,31 @@
 // one-shot. Operators expect it to visibly select and expose the automation
 // status row when clicked.
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
+// The RX Suite button pops out an independent OS window; stub the opener.
+vi.mock('../layout/workspace-windows', () => ({
+  openAudioSuiteWindow: vi.fn(),
+}));
+
 import { NR_CONFIG_DEFAULT } from '../api/client';
 import { useAudioSuiteStore } from '../state/audio-suite-store';
+import { openAudioSuiteWindow } from '../layout/workspace-windows';
 import { useConnectionStore } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
 import { useSmartNrStore } from '../state/smart-nr-store';
 import { DspPanel } from './DspPanel';
+
+const openAudioSuiteWindowMock = vi.mocked(openAudioSuiteWindow);
 
 describe('DspPanel SMART control', () => {
   let container: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
+    openAudioSuiteWindowMock.mockClear();
     useSmartNrStore.getState().resetSettings();
     useConnectionStore.setState({
       status: 'Connected',
@@ -167,7 +176,7 @@ describe('DspPanel SMART control', () => {
     expect(nrButton()!.textContent?.trim()).toBe('NR4');
   });
 
-  it('opens the RX Audio Suite from the DSP panel', () => {
+  it('pops the RX Audio Suite out into its own window from the DSP panel', () => {
     act(() => {
       root.render(<DspPanel />);
     });
@@ -176,15 +185,14 @@ describe('DspPanel SMART control', () => {
       .find((b) => b.textContent?.trim() === 'RX Suite');
 
     expect(rxSuite).toBeDefined();
-    expect(rxSuite!.getAttribute('aria-pressed')).toBe('false');
-    expect(useAudioSuiteStore.getState().rxOpen).toBe(false);
 
     act(() => {
       rxSuite!.click();
     });
 
-    expect(useAudioSuiteStore.getState().rxOpen).toBe(true);
-    expect(useAudioSuiteStore.getState().suiteRoute).toBe('rx');
-    expect(rxSuite!.getAttribute('aria-pressed')).toBe('true');
+    // The suite pops out into an independent OS window (openRx →
+    // openAudioSuiteWindow), so no in-app open flag is toggled.
+    expect(openAudioSuiteWindowMock).toHaveBeenCalledWith('rx');
+    expect(useAudioSuiteStore.getState().rxOpen).toBe(false);
   });
 });

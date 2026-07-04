@@ -3,11 +3,13 @@
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
-// Regression coverage for #1269: an OPEN floating AudioSuiteWindow must stay
-// MOUNTED (hidden via display:none) while Settings replaces the workspace, so
-// its live chain state isn't torn down on a Settings open/close. Only a CLOSED
-// floating window unmounts. The EMBEDDED instance IS the settings pane content,
-// so it must stay visible regardless of settingsViewOpen.
+// Regression coverage: the floating AudioSuiteWindow is opened via the TX/RX
+// Suite buttons that live inside Settings → Audio Tools, so an OPEN floating
+// window MUST stay visible while Settings replaces the workspace — otherwise
+// clicking those buttons opens a window the operator can never see (regression
+// from #1274, which hid it via display:none). Only a CLOSED floating window
+// unmounts. The EMBEDDED instance IS the settings pane content, so it is always
+// visible too.
 
 /** @vitest-environment jsdom */
 
@@ -57,7 +59,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('AudioSuiteWindow — mounted-but-hidden while Settings is open (#1269)', () => {
+describe('AudioSuiteWindow — stays visible when opened from Settings (#1274 regression)', () => {
   it('unmounts the floating window entirely when closed', () => {
     const { container, unmount } = render(<AudioSuiteWindow route="tx" />);
     expect(suiteEl(container, 'TX Audio Suite')).toBeNull();
@@ -76,7 +78,7 @@ describe('AudioSuiteWindow — mounted-but-hidden while Settings is open (#1269)
     unmount();
   });
 
-  it('stays mounted but hidden (display:none) when Settings opens', () => {
+  it('stays mounted and visible (display:flex) when Settings opens — its open button lives in Settings', () => {
     act(() => {
       useAudioSuiteStore.setState({ txOpen: true });
     });
@@ -91,7 +93,7 @@ describe('AudioSuiteWindow — mounted-but-hidden while Settings is open (#1269)
 
     const during = suiteEl(container, 'TX Audio Suite');
     expect(during).toBe(before); // reused DOM node — not a remount
-    expect(during!.style.display).toBe('none');
+    expect(during!.style.display).toBe('flex'); // visible over the Settings page
 
     act(() => {
       useLayoutStore.setState({ settingsViewOpen: false });
@@ -100,6 +102,18 @@ describe('AudioSuiteWindow — mounted-but-hidden while Settings is open (#1269)
     expect(after).toBe(before);
     expect(after!.style.display).toBe('flex');
 
+    unmount();
+  });
+
+  it('RX suite is visible too when opened while Settings is open', () => {
+    act(() => {
+      useAudioSuiteStore.setState({ rxOpen: true });
+      useLayoutStore.setState({ settingsViewOpen: true });
+    });
+    const { container, unmount } = render(<AudioSuiteWindow route="rx" />);
+    const el = suiteEl(container, 'RX Audio Suite');
+    expect(el).not.toBeNull();
+    expect(el!.style.display).toBe('flex');
     unmount();
   });
 
