@@ -3727,6 +3727,81 @@ public static class ZeusEndpoints
             return Results.Ok(qrz.GetStatus());
         });
 
+        app.MapGet("/api/users/session", (QrzService qrz, UserManagementStore users) =>
+            Results.Ok(users.GetSession(qrz.GetStatus())));
+
+        app.MapGet("/api/admin/users", (QrzService qrz, UserManagementStore users) =>
+        {
+            var session = users.GetSession(qrz.GetStatus());
+            var denied = RequireAdminSession(session);
+            if (denied is not null) return denied;
+            return Results.Ok(new ZeusUsersAdminResponse(session, users.ListUsers()));
+        });
+
+        app.MapPost("/api/admin/users", (ZeusUserUpsertRequest req, QrzService qrz, UserManagementStore users) =>
+        {
+            var session = users.GetSession(qrz.GetStatus());
+            var denied = RequireAdminSession(session);
+            if (denied is not null) return denied;
+
+            try
+            {
+                var user = users.Upsert(req);
+                log.LogInformation(
+                    "api.admin.users.upsert actor={Actor} callsign={Callsign} access={Access} admin={Admin} subscription={Subscription}",
+                    session.Callsign,
+                    user.Callsign,
+                    user.AccessAllowed,
+                    user.IsAdmin,
+                    user.SubscriptionStatus);
+                return Results.Ok(user);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Conflict(new { error = ex.Message });
+            }
+        });
+
+        app.MapPut("/api/admin/users/{callsign}", (
+            string callsign,
+            ZeusUserUpdateRequest req,
+            QrzService qrz,
+            UserManagementStore users) =>
+        {
+            var session = users.GetSession(qrz.GetStatus());
+            var denied = RequireAdminSession(session);
+            if (denied is not null) return denied;
+
+            try
+            {
+                var user = users.Update(callsign, req);
+                log.LogInformation(
+                    "api.admin.users.update actor={Actor} callsign={Callsign} access={Access} admin={Admin} subscription={Subscription}",
+                    session.Callsign,
+                    user.Callsign,
+                    user.AccessAllowed,
+                    user.IsAdmin,
+                    user.SubscriptionStatus);
+                return Results.Ok(user);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return Results.NotFound(new { error = ex.Message });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Conflict(new { error = ex.Message });
+            }
+        });
+
         // ── ZeusChat — operator-to-operator chat over the Cloudflare relay ──
         app.MapGet("/api/chat/status", (ChatService chat) => chat.GetStatus());
 
@@ -4419,6 +4494,32 @@ public static class ZeusEndpoints
     }
 
     // ---------- helpers (formerly local functions in Program.cs) -------------
+
+    private static IResult? RequireAdminSession(ZeusUserSession session)
+    {
+        if (!session.QrzConnected)
+        {
+            return Results.Json(
+                new { error = "QRZ login required", session },
+                statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        if (!session.AccessAllowed)
+        {
+            return Results.Json(
+                new { error = session.DenialReason ?? "Zeus access disabled", session },
+                statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        if (!session.IsAdmin)
+        {
+            return Results.Json(
+                new { error = "Admin privileges required", session },
+                statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Best-effort QRZ lookup that returns the operator's full display name

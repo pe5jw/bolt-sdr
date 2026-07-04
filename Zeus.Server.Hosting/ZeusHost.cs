@@ -751,6 +751,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<OpenWorkspaceWindowsStore>();
         builder.Services.AddSingleton<RadioStateStore>();
         builder.Services.AddSingleton<QrzService>();
+        builder.Services.AddSingleton<UserManagementStore>();
         builder.Services.AddSingleton<LogService>();
         builder.Services.AddSingleton<FrontendDspSceneDiagnosticsService>();
         builder.Services.AddSingleton<FrontendAudioPlaybackDiagnosticsService>();
@@ -1267,6 +1268,11 @@ public static class ZeusHost
         // Initialize QrzService to restore stored credentials (silent login).
         var qrzService = app.Services.GetRequiredService<QrzService>();
         await qrzService.InitializeAsync(cancellationToken);
+
+        // If silent QRZ re-login succeeded, make sure the QRZ callsign exists in
+        // the user-management ledger before the first browser session asks.
+        var users = app.Services.GetRequiredService<UserManagementStore>();
+        _ = users.GetSession(qrzService.GetStatus());
     }
 
     static void PrintBanner(
