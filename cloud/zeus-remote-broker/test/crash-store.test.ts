@@ -74,7 +74,7 @@ test('CrashStore put/list/index persists through storage-backed instances', asyn
   assert.deepEqual(index.operators, [{ callsign: 'N9WAR', count: 1, lastReceivedAt: list.crashes[0].receivedAt, lastIp: '1.2.3.4' }]);
 });
 
-test('CrashStore cap-at-20 eviction persists and deletes old chunks', async () => {
+test('CrashStore cap-at-5 eviction persists and deletes old chunks', async () => {
   const storage = new MemoryStorage();
   const store = crashStore(storage);
 
@@ -99,4 +99,58 @@ test('CrashStore cap-at-20 eviction persists and deletes old chunks', async () =
     await crashStore(storage).fetch(new Request('https://do/index')),
   );
   assert.deepEqual(index.operators.map((o) => [o.callsign, o.count]), [['KB2UKA', MAX_CRASH_PER_CALLSIGN]]);
+});
+
+test('CrashStore clear removes one callsign and preserves other operators', async () => {
+  const storage = new MemoryStorage();
+  const store = crashStore(storage);
+
+  for (const callsign of ['N9WAR', 'N9WAR', 'KB2UKA']) {
+    const res = await store.fetch(
+      new Request(`https://do/put?callsign=${callsign}`, {
+        method: 'POST',
+        body: JSON.stringify({ callsign }),
+      }),
+    );
+    assert.equal(res.status, 200);
+  }
+
+  const clear = await crashStore(storage).fetch(
+    new Request('https://do/clear?callsign=N9WAR', { method: 'DELETE' }),
+  );
+  assert.equal(clear.status, 200);
+  assert.deepEqual(await json(clear), { ok: true, callsign: 'N9WAR', cleared: 2 });
+  assert.equal([...storage.values.keys()].some((k) => k.startsWith('crash:N9WAR:')), false);
+
+  const index = await json<{ operators: Array<{ callsign: string; count: number }> }>(
+    await crashStore(storage).fetch(new Request('https://do/index')),
+  );
+  assert.deepEqual(index.operators.map((o) => [o.callsign, o.count]), [['KB2UKA', 1]]);
+});
+
+test('CrashStore clear without callsign removes every retained crash log', async () => {
+  const storage = new MemoryStorage();
+  const store = crashStore(storage);
+
+  for (const callsign of ['N9WAR', 'KB2UKA', 'SA7BXW']) {
+    const res = await store.fetch(
+      new Request(`https://do/put?callsign=${callsign}`, {
+        method: 'POST',
+        body: JSON.stringify({ callsign }),
+      }),
+    );
+    assert.equal(res.status, 200);
+  }
+
+  const clear = await crashStore(storage).fetch(
+    new Request('https://do/clear', { method: 'DELETE' }),
+  );
+  assert.equal(clear.status, 200);
+  assert.deepEqual(await json(clear), { ok: true, callsign: null, cleared: 3 });
+  assert.equal([...storage.values.keys()].some((k) => k.startsWith('crash:')), false);
+
+  const index = await json<{ operators: Array<{ callsign: string; count: number }> }>(
+    await crashStore(storage).fetch(new Request('https://do/index')),
+  );
+  assert.deepEqual(index.operators, []);
 });

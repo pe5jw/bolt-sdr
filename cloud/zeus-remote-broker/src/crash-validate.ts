@@ -9,7 +9,7 @@
 export const MAX_CRASH_BYTES = 256 * 1024;
 
 /** Max retained crash records per operator callsign (newest win). */
-export const MAX_CRASH_PER_CALLSIGN = 20;
+export const MAX_CRASH_PER_CALLSIGN = 5;
 
 export type CrashBodyVerdict =
   | { ok: true }

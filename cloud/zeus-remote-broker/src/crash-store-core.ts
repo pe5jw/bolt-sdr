@@ -97,6 +97,15 @@ export class CrashStoreCore {
           .sort((a, b) => b.lastReceivedAt - a.lastReceivedAt);
         return Response.json({ operators });
       }
+      case 'clear': {
+        let cleared = 0;
+        await this.storage.transaction(async (txn) => {
+          cleared = callsign
+            ? await clearOperatorCrashes(txn, callsign)
+            : await clearAllCrashes(txn);
+        });
+        return Response.json({ ok: true, callsign: callsign || null, cleared });
+      }
       default:
         return new Response('not found', { status: 404 });
     }
@@ -117,6 +126,28 @@ async function loadCrashIndex(storage: CrashStorage, callsign: string): Promise<
 
 async function loadOperatorIndex(storage: CrashStorage): Promise<OperatorCrashSummary[]> {
   return (await storage.get<OperatorCrashSummary[]>(OPERATOR_INDEX_KEY)) ?? [];
+}
+
+async function clearOperatorCrashes(storage: CrashStorage, callsign: string): Promise<number> {
+  const index = await loadCrashIndex(storage, callsign);
+  for (const entry of index) {
+    await deleteRecordChunks(storage, callsign, entry);
+  }
+  await storage.delete(crashIndexKey(callsign));
+  const operators = (await loadOperatorIndex(storage)).filter((o) => o.callsign !== callsign);
+  await storage.put(OPERATOR_INDEX_KEY, operators);
+  return index.length;
+}
+
+async function clearAllCrashes(storage: CrashStorage): Promise<number> {
+  const operators = await loadOperatorIndex(storage);
+  let cleared = 0;
+  for (const op of operators) {
+    const callsign = (op.callsign ?? '').trim().toUpperCase();
+    if (callsign) cleared += await clearOperatorCrashes(storage, callsign);
+  }
+  await storage.put(OPERATOR_INDEX_KEY, []);
+  return cleared;
 }
 
 async function saveOperatorSummary(

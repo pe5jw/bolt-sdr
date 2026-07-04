@@ -264,10 +264,11 @@ async function verifyOperator(
 
 /**
  * GET /admin/crashes?callsign=<cs> — maintainer view of a consented operator's
- * auto-shared crash records. Admin-only: same Bearer-token credential auth as the
- * rest of /admin (reused via verifyAdminToken), NOT the operator's QRZ identity.
- * The operator opted in by enabling auto-share; the admin store proves the caller
- * is authorised to read it.
+ * auto-shared crash records. DELETE /admin/crashes clears all retained crash logs;
+ * DELETE with callsign clears that operator only. Admin-only: same Bearer-token
+ * credential auth as the rest of /admin (reused via verifyAdminToken), NOT the
+ * operator's QRZ identity. The operator opted in by enabling auto-share; the admin
+ * store proves the caller is authorised to read or clear it.
  */
 async function handleAdminCrashes(
   request: Request,
@@ -280,7 +281,7 @@ async function handleAdminCrashes(
   // dashboard's /admin/crashes fetch with a CORS preflight failure.
   const cors = adminCorsHeaders(env, request);
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
-  if (request.method !== 'GET') {
+  if (request.method !== 'GET' && request.method !== 'DELETE') {
     return Response.json({ error: 'method not allowed' }, { status: 405, headers: cors });
   }
 
@@ -294,11 +295,15 @@ async function handleAdminCrashes(
   void ctx; // reserved (audit logging could go here as the admin-api routes do)
   const id = env.CRASH_STORE.idFromName('global');
   // No callsign → the crash-bearing-operator index (overview); with a callsign →
-  // that operator's records. Both are admin-Bearer-gated above.
-  const internalUrl = callsign
-    ? `https://crash.internal/list?callsign=${encodeURIComponent(callsign)}`
-    : 'https://crash.internal/index';
-  const res = await env.CRASH_STORE.get(id).fetch(internalUrl);
+  // that operator's records. DELETE mirrors the shape but clears instead.
+  const internalUrl = request.method === 'DELETE'
+    ? callsign
+      ? `https://crash.internal/clear?callsign=${encodeURIComponent(callsign)}`
+      : 'https://crash.internal/clear'
+    : callsign
+      ? `https://crash.internal/list?callsign=${encodeURIComponent(callsign)}`
+      : 'https://crash.internal/index';
+  const res = await env.CRASH_STORE.get(id).fetch(new Request(internalUrl, { method: request.method }));
   const body = await res.json<unknown>();
   return Response.json(body, { status: res.status, headers: cors });
 }
