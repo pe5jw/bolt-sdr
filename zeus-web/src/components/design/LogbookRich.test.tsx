@@ -33,6 +33,17 @@ function entry(over: Partial<LogEntry> & Pick<LogEntry, 'id' | 'callsign'>): Log
     createdUtc: '2026-05-24T15:12:05Z',
     qrzLogId: null,
     qrzUploadedUtc: null,
+    tags: null,
+    qslSent: null,
+    qslRcvd: null,
+    qslSentDate: null,
+    qslRcvdDate: null,
+    lotwQslSentUtc: null,
+    lotwQslRcvdUtc: null,
+    qrzQslRcvdUtc: null,
+    rig: null,
+    antenna: null,
+    txPowerW: null,
     ...over,
   };
 }
@@ -87,8 +98,8 @@ describe('LogbookDashboard', () => {
     expect(text).toContain('United States');
     // A conic-gradient ring is built for the mode mix.
     expect(container.querySelector('.lb-donut')).not.toBeNull();
-    // Every gridded QSO becomes a map dot.
-    expect(container.querySelectorAll('.lb-map-dots circle').length).toBeGreaterThan(0);
+    // The rich workspace mounts the offline globe; canvas drawing is a browser concern.
+    expect(container.querySelector('.zeus-globe')).not.toBeNull();
     unmount();
   });
 

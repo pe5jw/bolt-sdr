@@ -64,7 +64,18 @@ public sealed record LogEntry(
     string? Comment,
     DateTime CreatedUtc,
     string? QrzLogId = null,
-    DateTime? QrzUploadedUtc = null);
+    DateTime? QrzUploadedUtc = null,
+    IReadOnlyList<string>? Tags = null,
+    string? QslSent = null,
+    string? QslRcvd = null,
+    DateTime? QslSentDate = null,
+    DateTime? QslRcvdDate = null,
+    DateTime? LotwQslSentUtc = null,
+    DateTime? LotwQslRcvdUtc = null,
+    DateTime? QrzQslRcvdUtc = null,
+    string? Rig = null,
+    string? Antenna = null,
+    double? TxPowerW = null);
 
 public sealed record CreateLogEntryRequest(
     string Callsign,
@@ -82,6 +93,37 @@ public sealed record CreateLogEntryRequest(
     string? State = null,
     string? Comment = null,
     DateTime? QsoDateTimeUtc = null);
+
+/// <summary>
+/// Partial QSO update. Null leaves a field unchanged; empty strings and empty
+/// lists explicitly clear text/list fields. Nullable value fields use explicit
+/// clear flags where a null update value otherwise means "leave unchanged".
+/// </summary>
+public sealed record UpdateLogEntryRequest(
+    string? Name = null,
+    string? Grid = null,
+    string? Country = null,
+    string? State = null,
+    string? Comment = null,
+    IReadOnlyList<string>? Tags = null,
+    string? QslSent = null,
+    string? QslRcvd = null,
+    DateTime? QslSentDate = null,
+    DateTime? QslRcvdDate = null,
+    string? Rig = null,
+    string? Antenna = null,
+    double? TxPowerW = null,
+    string? RstSent = null,
+    string? RstRcvd = null,
+    string? Mode = null,
+    string? Band = null,
+    double? FrequencyMhz = null,
+    DateTime? QsoDateTimeUtc = null,
+    bool ClearQslSentDate = false,
+    bool ClearQslRcvdDate = false,
+    bool ClearTxPowerW = false,
+    bool ClearFrequencyMhz = false,
+    bool ClearQsoDateTimeUtc = false);
 
 public sealed record LogEntriesResponse(
     IEnumerable<LogEntry> Entries,

@@ -21,6 +21,7 @@ internal static class LogbookPluginMappings
 {
     public const string MissingPluginError = "logbook plugin not installed";
     public const string PluginGoneError = "logbook plugin was uninstalled during the request";
+    public const string EditingUnsupportedError = "logbook plugin does not support editing — update the Logbook plugin";
 
     public static IResult MissingPlugin() =>
         Results.Json(new { error = MissingPluginError }, statusCode: StatusCodes.Status503ServiceUnavailable);
@@ -71,6 +72,32 @@ internal static class LogbookPluginMappings
         Comment: req.Comment,
         QsoDateTimeUtc: req.QsoDateTimeUtc);
 
+    public static LogbookEntryUpdate ToPlugin(UpdateLogEntryRequest req) => new(
+        Name: req.Name,
+        Grid: req.Grid,
+        Country: req.Country,
+        State: req.State,
+        Comment: req.Comment,
+        Tags: req.Tags,
+        QslSent: req.QslSent,
+        QslRcvd: req.QslRcvd,
+        QslSentDate: req.QslSentDate,
+        QslRcvdDate: req.QslRcvdDate,
+        Rig: req.Rig,
+        Antenna: req.Antenna,
+        TxPowerW: req.TxPowerW,
+        RstSent: req.RstSent,
+        RstRcvd: req.RstRcvd,
+        Mode: req.Mode,
+        Band: req.Band,
+        FrequencyMhz: req.FrequencyMhz,
+        QsoDateTimeUtc: req.QsoDateTimeUtc,
+        ClearQslSentDate: req.ClearQslSentDate,
+        ClearQslRcvdDate: req.ClearQslRcvdDate,
+        ClearTxPowerW: req.ClearTxPowerW,
+        ClearFrequencyMhz: req.ClearFrequencyMhz,
+        ClearQsoDateTimeUtc: req.ClearQsoDateTimeUtc);
+
     public static LogEntry ToContract(LogbookEntrySnapshot entry) => new(
         Id: entry.Id,
         QsoDateTimeUtc: entry.QsoDateTimeUtc,
@@ -90,7 +117,18 @@ internal static class LogbookPluginMappings
         Comment: entry.Comment,
         CreatedUtc: entry.CreatedUtc,
         QrzLogId: entry.QrzLogId,
-        QrzUploadedUtc: entry.QrzUploadedUtc);
+        QrzUploadedUtc: entry.QrzUploadedUtc,
+        Tags: entry.Tags,
+        QslSent: entry.QslSent,
+        QslRcvd: entry.QslRcvd,
+        QslSentDate: entry.QslSentDate,
+        QslRcvdDate: entry.QslRcvdDate,
+        LotwQslSentUtc: entry.LotwQslSentUtc,
+        LotwQslRcvdUtc: entry.LotwQslRcvdUtc,
+        QrzQslRcvdUtc: entry.QrzQslRcvdUtc,
+        Rig: entry.Rig,
+        Antenna: entry.Antenna,
+        TxPowerW: entry.TxPowerW);
 
     public static LogEntriesResponse ToContract(LogbookPage page) =>
         new(page.Entries.Select(ToContract).ToList(), page.TotalCount);

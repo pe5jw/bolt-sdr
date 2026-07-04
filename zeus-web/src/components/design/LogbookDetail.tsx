@@ -8,16 +8,15 @@
 // Licensed under the GNU General Public License v2.0-or-later. See the LICENSE
 // file at the repository root for the full text.
 
-import type { LogEntry } from '../../api/log';
+import { useEffect, useMemo, useState, type HTMLAttributes } from 'react';
+import type { LogEntry, UpdateLogEntryRequest } from '../../api/log';
 import { useOperatorStore } from '../../state/operator-store';
+import { useLoggerStore } from '../../state/logger-store';
 import { countryToFlag } from './logbook-flag';
 import { isQrzPublished } from './LogbookLive';
 
 // The station-detail card for the popped-out Logbook workspace: the full read of
 // the QSO focused in the table. Every value shown here is a real logged field.
-// A few surfaces (QSL exchange, rig/antenna, tags, note editing) are the "next"
-// features and render as honest, clearly-labelled empty states rather than
-// fabricated data — see the linked follow-up issue in the workspace.
 
 function fmtLongDateUtc(iso: string): string {
   const d = new Date(iso);
@@ -55,8 +54,103 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
   );
 }
 
+function qslLabel(value: string | null | undefined): string {
+  const v = (value ?? 'N').toUpperCase();
+  if (v === 'Y') return 'Yes';
+  if (v === 'R') return 'Requested';
+  if (v === 'Q') return 'Queued';
+  if (v === 'I') return 'Ignored';
+  return 'No';
+}
+
+function nextQsl(value: string | null | undefined): string {
+  const v = (value ?? 'N').toUpperCase();
+  if (v === 'N') return 'Y';
+  if (v === 'Y') return 'R';
+  return 'N';
+}
+
+function isoDateOnly(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
+}
+
+function todayUtcDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function InlineText({
+  label,
+  value,
+  enabled,
+  onSave,
+  inputMode,
+}: {
+  label: string;
+  value: string | number | null | undefined;
+  enabled: boolean;
+  onSave: (value: string) => void;
+  inputMode?: HTMLAttributes<HTMLInputElement>['inputMode'];
+}) {
+  const [draft, setDraft] = useState(value == null ? '' : String(value));
+  useEffect(() => setDraft(value == null ? '' : String(value)), [value]);
+  const commit = () => {
+    if (!enabled) return;
+    const next = draft.trim();
+    if (next !== (value == null ? '' : String(value).trim())) onSave(next);
+  };
+  return (
+    <label className="lbd-inline-field">
+      <span className="lbd-field-label">{label}</span>
+      {enabled ? (
+        <input
+          value={draft}
+          inputMode={inputMode}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') event.currentTarget.blur();
+            if (event.key === 'Escape') {
+              setDraft(value == null ? '' : String(value));
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      ) : (
+        <span className="lbd-field-value">{orDash(value == null ? null : String(value))}</span>
+      )}
+    </label>
+  );
+}
+
 export function LogbookDetail({ entry }: { entry: LogEntry | null }) {
   const operatorCall = useOperatorStore((s) => s.resolvedCall);
+  const capabilities = useLoggerStore((s) => s.capabilities);
+  const tagList = useLoggerStore((s) => s.tagList);
+  const updateEntry = useLoggerStore((s) => s.updateEntry);
+  const canEdit = Boolean(capabilities?.canEdit);
+  const canTags = Boolean(capabilities?.canTags);
+  const canQsl = Boolean(capabilities?.canQsl);
+  const [editingNote, setEditingNote] = useState(false);
+  const [noteDraft, setNoteDraft] = useState('');
+  const [tagDraft, setTagDraft] = useState('');
+  const tags = useMemo(() => entry?.tags ?? [], [entry?.tags]);
+  const tagOptions = useMemo(() => {
+    const used = new Set(tags.map((tag) => tag.toLowerCase()));
+    const q = tagDraft.trim().toLowerCase();
+    return tagList
+      .filter((tag) => !used.has(tag.toLowerCase()))
+      .filter((tag) => !q || tag.toLowerCase().includes(q))
+      .slice(0, 6);
+  }, [tagDraft, tagList, tags]);
+
+  useEffect(() => {
+    setEditingNote(false);
+    setNoteDraft(entry?.comment ?? '');
+    setTagDraft('');
+  }, [entry?.id, entry?.comment]);
 
   if (!entry) {
     return (
@@ -70,6 +164,28 @@ export function LogbookDetail({ entry }: { entry: LogEntry | null }) {
   const published = isQrzPublished(entry);
   const location = [entry.grid, entry.state, entry.country].filter(Boolean).join(' · ') || '—';
   const qrzUrl = `https://www.qrz.com/db/${encodeURIComponent(entry.callsign)}`;
+  const save = (patch: UpdateLogEntryRequest) => void updateEntry(entry.id, patch);
+  const commitNote = () => {
+    const next = noteDraft.trim();
+    if (next !== (entry.comment ?? '').trim()) save({ comment: next });
+    setEditingNote(false);
+  };
+  const addTag = (raw: string) => {
+    const tag = raw.trim();
+    if (!tag || tags.some((t) => t.toLowerCase() === tag.toLowerCase())) return;
+    save({ tags: [...tags, tag] });
+    setTagDraft('');
+  };
+  const removeTag = (tag: string) => save({ tags: tags.filter((t) => t !== tag) });
+  const patchQsl = (field: 'qslSent' | 'qslRcvd', value: string | null | undefined) => {
+    const next = nextQsl(value);
+    const dateField = field === 'qslSent' ? 'qslSentDate' : 'qslRcvdDate';
+    const clearField = field === 'qslSent' ? 'clearQslSentDate' : 'clearQslRcvdDate';
+    save({
+      [field]: next,
+      ...(next === 'Y' ? { [dateField]: todayUtcDate() } : { [clearField]: true }),
+    } as UpdateLogEntryRequest);
+  };
 
   return (
     <div className="lbd">
@@ -101,25 +217,109 @@ export function LogbookDetail({ entry }: { entry: LogEntry | null }) {
 
       <div className="lbd-section">
         <div className="lbd-section-label">Notes</div>
-        <div className={`lbd-note${entry.comment ? '' : ' lbd-note--empty'}`}>
-          {entry.comment || 'No note recorded'}
-        </div>
+        {editingNote && canEdit ? (
+          <textarea
+            className="lbd-note-edit"
+            value={noteDraft}
+            autoFocus
+            onChange={(event) => setNoteDraft(event.target.value)}
+            onBlur={commitNote}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') event.currentTarget.blur();
+              if (event.key === 'Escape') {
+                setNoteDraft(entry.comment ?? '');
+                setEditingNote(false);
+              }
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            className={`lbd-note${entry.comment ? '' : ' lbd-note--empty'} ${canEdit ? 'is-editable' : ''}`}
+            disabled={!canEdit}
+            onClick={() => canEdit && setEditingNote(true)}
+          >
+            {entry.comment || 'No note recorded'}
+          </button>
+        )}
       </div>
 
       <div className="lbd-section">
         <div className="lbd-section-label">Tags</div>
-        <div className="lbd-tags-empty" title="QSO tags arrive in an upcoming Logbook update">
-          Tagging coming soon
-        </div>
+        {canTags ? (
+          <div className="lbd-tag-editor">
+            <div className="lbd-tags">
+              {tags.length === 0 && <span className="lbd-tags-empty">No tags</span>}
+              {tags.map((tag) => (
+                <span key={tag} className="lbd-tag">
+                  {tag}
+                  <button type="button" onClick={() => removeTag(tag)} aria-label={`Remove ${tag}`}>
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+            <input
+              value={tagDraft}
+              onChange={(event) => setTagDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  addTag(tagDraft);
+                }
+              }}
+              placeholder="Add tag"
+              list="logbook-known-tags"
+            />
+            <datalist id="logbook-known-tags">
+              {tagOptions.map((tag) => <option key={tag} value={tag} />)}
+            </datalist>
+          </div>
+        ) : (
+          <div className="lbd-tags-empty" title="Update the Logbook plugin to enable QSO tags">
+            Tagging coming soon
+          </div>
+        )}
       </div>
 
       <div className="lbd-section">
         <div className="lbd-section-label">QSL Info</div>
         <div className="lbd-grid2">
-          <Field label="QSL Sent" value="Not Sent" />
-          <Field label="QSL Received" value="Not Received" />
-          <Field label="Rig" value="—" />
-          <Field label="Antenna" value="—" />
+          <button
+            type="button"
+            className="lbd-qsl-toggle"
+            disabled={!canQsl}
+            onClick={() => patchQsl('qslSent', entry.qslSent)}
+          >
+            <span>Paper Sent</span>
+            <strong>{qslLabel(entry.qslSent)}</strong>
+            <small>{isoDateOnly(entry.qslSentDate) ?? '—'}</small>
+          </button>
+          <button
+            type="button"
+            className="lbd-qsl-toggle"
+            disabled={!canQsl}
+            onClick={() => patchQsl('qslRcvd', entry.qslRcvd)}
+          >
+            <span>Paper Rcvd</span>
+            <strong>{qslLabel(entry.qslRcvd)}</strong>
+            <small>{isoDateOnly(entry.qslRcvdDate) ?? '—'}</small>
+          </button>
+          <Field label="LoTW Sent" value={fmtStampUtc(entry.lotwQslSentUtc)} mono />
+          <Field label="LoTW Rcvd" value={fmtStampUtc(entry.lotwQslRcvdUtc)} mono />
+          <Field label="QRZ Rcvd" value={fmtStampUtc(entry.qrzQslRcvdUtc)} mono />
+          <InlineText label="Rig" value={entry.rig} enabled={canEdit} onSave={(value) => save({ rig: value })} />
+          <InlineText label="Antenna" value={entry.antenna} enabled={canEdit} onSave={(value) => save({ antenna: value })} />
+          <InlineText
+            label="Power W"
+            value={entry.txPowerW}
+            enabled={canEdit}
+            inputMode="decimal"
+            onSave={(value) => {
+              const parsed = Number(value);
+              save(value ? { txPowerW: Number.isFinite(parsed) ? parsed : entry.txPowerW } : { clearTxPowerW: true });
+            }}
+          />
         </div>
       </div>
 

@@ -45,7 +45,59 @@ public sealed record LogbookEntrySnapshot(
     DateTime CreatedUtc,
     string? QrzLogId = null,
     DateTime? QrzUploadedUtc = null,
-    Dictionary<string, string>? AdifFields = null);
+    Dictionary<string, string>? AdifFields = null)
+{
+    public IReadOnlyList<string>? Tags { get; init; }
+    public string? QslSent { get; init; }
+    public string? QslRcvd { get; init; }
+    public DateTime? QslSentDate { get; init; }
+    public DateTime? QslRcvdDate { get; init; }
+    public DateTime? LotwQslSentUtc { get; init; }
+    public DateTime? LotwQslRcvdUtc { get; init; }
+    public DateTime? QrzQslRcvdUtc { get; init; }
+    public string? Rig { get; init; }
+    public string? Antenna { get; init; }
+    public double? TxPowerW { get; init; }
+}
+
+/// <summary>
+/// Partial QSO update. Null leaves a field unchanged; empty strings and empty
+/// lists explicitly clear text/list fields. Nullable value fields use explicit
+/// clear flags where a null update value otherwise means "leave unchanged".
+/// </summary>
+public sealed record LogbookEntryUpdate(
+    string? Name = null,
+    string? Grid = null,
+    string? Country = null,
+    string? State = null,
+    string? Comment = null,
+    IReadOnlyList<string>? Tags = null,
+    string? QslSent = null,
+    string? QslRcvd = null,
+    DateTime? QslSentDate = null,
+    DateTime? QslRcvdDate = null,
+    string? Rig = null,
+    string? Antenna = null,
+    double? TxPowerW = null,
+    string? RstSent = null,
+    string? RstRcvd = null,
+    string? Mode = null,
+    string? Band = null,
+    double? FrequencyMhz = null,
+    DateTime? QsoDateTimeUtc = null,
+    bool ClearQslSentDate = false,
+    bool ClearQslRcvdDate = false,
+    bool ClearTxPowerW = false,
+    bool ClearFrequencyMhz = false,
+    bool ClearQsoDateTimeUtc = false);
+
+public sealed record LogbookQslStatusUpdate(
+    string Id,
+    DateTime? LotwQslRcvdUtc,
+    DateTime? LotwQslSentUtc,
+    DateTime? QrzQslRcvdUtc,
+    string? QslRcvd,
+    DateTime? QslRcvdDate);
 
 public sealed record LogbookPage(
     IReadOnlyList<LogbookEntrySnapshot> Entries,

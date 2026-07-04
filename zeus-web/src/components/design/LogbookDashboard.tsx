@@ -15,11 +15,11 @@ import {
   modeBreakdown,
   topCountries,
   countThisMonth,
-  geoPoints,
+  awardStats,
   type ModeCount,
 } from './logbook-stats';
 import { countryToFlag } from './logbook-flag';
-import { LogbookMiniMap } from './LogbookMiniMap';
+import { ZeusGlobe } from './ZeusGlobe';
 
 // Ordered, token-only palette for the mode/breakdown slices (no raw hex — the
 // global palette owns these). Slice N gets colour N; "Other" lands on the muted
@@ -73,8 +73,8 @@ export function LogbookDashboard({
   const bands = useMemo(() => bandHistogram(entries), [entries]);
   const modes = useMemo<ModeCount[]>(() => modeBreakdown(entries, 3), [entries]);
   const countries = useMemo(() => topCountries(entries, 5), [entries]);
-  const geo = useMemo(() => geoPoints(entries), [entries]);
   const thisMonth = useMemo(() => countThisMonth(entries, new Date()), [entries]);
+  const awards = useMemo(() => awardStats(entries), [entries]);
 
   const maxBand = bands.reduce((m, b) => Math.max(m, b.count), 1);
   // The "total" ring is decorative — it mirrors the mode mix so the headline
@@ -149,8 +149,29 @@ export function LogbookDashboard({
         </div>
       </div>
 
+      <div className="lb-dash-tile lb-dash-awards">
+        <div className="lb-dash-title">Awards</div>
+        <div className="lb-awards-grid">
+          <div className="lb-award">
+            <span className="lb-award-num">{awards.dxccWorked}</span>
+            <span className="lb-award-label">DXCC worked</span>
+            <small>{awards.dxccConfirmed} confirmed</small>
+          </div>
+          <div className="lb-award">
+            <span className="lb-award-num">{awards.statesWorked}/50</span>
+            <span className="lb-award-label">WAS</span>
+            <small>US states</small>
+          </div>
+          <div className="lb-award">
+            <span className="lb-award-num">{awards.gridsWorked}</span>
+            <span className="lb-award-label">Grids</span>
+            <small>4-char squares</small>
+          </div>
+        </div>
+      </div>
+
       <div className="lb-dash-tile lb-dash-map">
-        <LogbookMiniMap points={geo} />
+        <ZeusGlobe entries={entries} />
       </div>
 
       {!fullyLoaded && (

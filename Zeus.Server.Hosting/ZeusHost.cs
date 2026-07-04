@@ -689,6 +689,7 @@ public static class ZeusHost
         // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
         // hung login surfaces quickly in the UI.
         builder.Services.AddHttpClient("Qrz", c => c.Timeout = TimeSpan.FromSeconds(10));
+        builder.Services.AddHttpClient(LotwService.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(60));
         // Per-QSO HTTP cloud-log uploaders (Wavelog/Cloudlog + Club Log realtime).
         // SEND-ONLY, default OFF. Tight timeouts so a slow/blocked endpoint never
         // delays the operator's log confirmation.
@@ -1137,6 +1138,10 @@ public static class ZeusHost
         builder.Services.AddSingleton<CloudLog.WavelogClient>();
         builder.Services.AddSingleton<CloudLog.ClubLogClient>();
         builder.Services.AddSingleton<CloudLog.CloudLogService>();
+        builder.Services.AddSingleton<LotwSettingsStore>();
+        builder.Services.AddSingleton<ILotwTqslLocator, LotwTqslLocator>();
+        builder.Services.AddSingleton<ILotwProcessRunner, LotwProcessRunner>();
+        builder.Services.AddSingleton<LotwService>();
 
         // ZeusChat — operator-to-operator chat over the Cloudflare relay.
         // Singleton (API surface) + hosted service (relay connection lifecycle),

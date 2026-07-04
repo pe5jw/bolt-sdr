@@ -9,6 +9,7 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.Net;
 using Zeus.Contracts;
+using Zeus.Plugins.Contracts.Extensions;
 using Zeus.Plugins.Host;
 using Zeus.Dsp;
 using Zeus.Dsp.Wdsp;
@@ -4033,6 +4034,34 @@ public static class ZeusEndpoints
             }, logbook, plugin, log);
         });
 
+        app.MapGet("/api/log/capabilities", (LogbookPluginBridge logbook) =>
+        {
+            var plugin = logbook.Current;
+            var v2 = plugin is ILogbookPluginV2;
+            return Results.Ok(new
+            {
+                pluginInstalled = plugin is not null,
+                canEdit = v2,
+                canQsl = v2,
+                canTags = v2,
+            });
+        });
+
+        app.MapGet("/api/log/tags", async (LogbookPluginBridge logbook, HttpContext ctx) =>
+        {
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return Results.Ok(Array.Empty<string>());
+            if (plugin is not ILogbookPluginV2 v2)
+                return Results.Ok(Array.Empty<string>());
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var tags = await v2.GetAllTagsAsync(ctx.RequestAborted);
+                return Results.Ok(tags);
+            }, logbook, plugin, log);
+        });
+
         app.MapGet("/api/log/worked", async (LogbookPluginBridge logbook, HttpContext ctx, string callsign, int recent = 5) =>
         {
             if (string.IsNullOrWhiteSpace(callsign))
@@ -4076,6 +4105,7 @@ public static class ZeusEndpoints
             WsjtxUdpBroadcaster wsjtx,
             Wsjtx.N1mmBroadcaster n1mm,
             CloudLog.CloudLogService cloudLog,
+            LotwService lotw,
             HttpContext ctx) =>
         {
             if (string.IsNullOrWhiteSpace(req.Callsign))
@@ -4100,8 +4130,15 @@ public static class ZeusEndpoints
 
             return await LogbookPluginMappings.GuardAsync(async () =>
             {
-                var entry = LogbookPluginMappings.ToContract(
-                    await plugin.CreateAsync(LogbookPluginMappings.ToPlugin(req), ctx.RequestAborted));
+                var snapshot = await plugin.CreateAsync(LogbookPluginMappings.ToPlugin(req), ctx.RequestAborted);
+                var entry = LogbookPluginMappings.ToContract(snapshot);
+                if (plugin is ILogbookPluginV2 v2 && lotw.HasStationDefaults())
+                {
+                    var updated = await v2.UpdateAsync(entry.Id, lotw.BuildDefaultUpdate(), ctx.RequestAborted);
+                    if (updated is not null)
+                        entry = LogbookPluginMappings.ToContract(updated);
+                }
+
                 // Push the just-logged QSO to every opted-in external logger. Each
                 // target is OFF by default and no-ops when disabled; this is the only
                 // logging path that egresses (ADIF bulk import never does).
@@ -4113,6 +4150,32 @@ public static class ZeusEndpoints
                 _ = n1mm.BroadcastLoggedQsoAsync(entry, CancellationToken.None);    // Class B: N1MM contactinfo UDP
                 _ = cloudLog.PublishAsync(entry, CancellationToken.None);           // Class C: Wavelog/Cloudlog + Club Log HTTP
                 return Results.Ok(entry);
+            }, logbook, plugin, log);
+        });
+
+        app.MapPatch("/api/log/entry/{id}", async (
+            string id,
+            UpdateLogEntryRequest req,
+            LogbookPluginBridge logbook,
+            HttpContext ctx) =>
+        {
+            if (string.IsNullOrWhiteSpace(id))
+                return Results.BadRequest(new { error = "log entry id required" });
+
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return LogbookPluginMappings.MissingPlugin();
+            if (plugin is not ILogbookPluginV2 v2)
+                return Results.Json(
+                    new { error = LogbookPluginMappings.EditingUnsupportedError },
+                    statusCode: StatusCodes.Status501NotImplemented);
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var updated = await v2.UpdateAsync(id, LogbookPluginMappings.ToPlugin(req), ctx.RequestAborted);
+                return updated is null
+                    ? Results.NotFound(new { error = "log entry not found" })
+                    : Results.Ok(LogbookPluginMappings.ToContract(updated));
             }, logbook, plugin, log);
         });
 
@@ -4249,6 +4312,82 @@ public static class ZeusEndpoints
                 var deleted = await plugin.DeleteAsync(req.LogEntryIds, ctx.RequestAborted);
                 return Results.Ok(new LogDeleteResponse(deleted));
             }, logbook, plugin, log);
+        });
+
+        app.MapGet("/api/log/lotw/status", async (LotwService lotw, HttpContext ctx) =>
+            Results.Ok(await lotw.GetStatusAsync(ctx.RequestAborted)));
+
+        app.MapPost("/api/log/lotw/credentials", async (
+            LotwCredentialsRequest req,
+            LotwService lotw,
+            HttpContext ctx) =>
+        {
+            try
+            {
+                return Results.Ok(await lotw.SetCredentialsAsync(req, ctx.RequestAborted));
+            }
+            catch (LotwBadRequestException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
+        app.MapPost("/api/log/lotw/settings", async (
+            LotwSettingsRequest req,
+            LotwService lotw,
+            HttpContext ctx) =>
+            Results.Ok(await lotw.SetSettingsAsync(req, ctx.RequestAborted)));
+
+        app.MapPost("/api/log/lotw/sync", async (LotwService lotw, HttpContext ctx) =>
+        {
+            try
+            {
+                return Results.Ok(await lotw.SyncAsync(ctx.RequestAborted));
+            }
+            catch (InvalidOperationException ex) when (ex.Message == LogbookPluginMappings.MissingPluginError)
+            {
+                return LogbookPluginMappings.MissingPlugin();
+            }
+            catch (NotSupportedException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status501NotImplemented);
+            }
+            catch (LotwAuthException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+            }
+            catch (HttpRequestException ex)
+            {
+                return Results.Json(new { error = $"Confirmation sync unreachable: {ex.Message}" }, statusCode: StatusCodes.Status502BadGateway);
+            }
+        });
+
+        app.MapPost("/api/log/lotw/upload", async (
+            LotwUploadRequest req,
+            LotwService lotw,
+            HttpContext ctx) =>
+        {
+            try
+            {
+                var result = await lotw.UploadAsync(req, ctx.RequestAborted);
+                if (result.TqslMissing)
+                    return Results.Json(result, statusCode: StatusCodes.Status409Conflict);
+                if (!result.Success)
+                    return Results.Json(result, statusCode: StatusCodes.Status502BadGateway);
+                return Results.Ok(result);
+            }
+            catch (InvalidOperationException ex) when (ex.Message == LogbookPluginMappings.MissingPluginError)
+            {
+                return LogbookPluginMappings.MissingPlugin();
+            }
+            catch (NotSupportedException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status501NotImplemented);
+            }
+            catch (LotwBadRequestException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
         });
 
         // -- Logging v2: HTTP cloud-log uploaders (Wavelog/Cloudlog + Club Log) --

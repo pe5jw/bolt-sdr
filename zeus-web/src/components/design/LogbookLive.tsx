@@ -271,7 +271,12 @@ export function LogbookLive({ searchText, hideQrzPublished, activeId, onActivate
                     <span className="log-sync-pill">✓ QRZ</span>
                   )}
                 </span>
-                <span className="log-meta-line">{logMeta(entry)}</span>
+                <span className="log-meta-line">
+                  <span>{logMeta(entry)}</span>
+                  {(entry.tags ?? []).slice(0, 3).map((tag) => (
+                    <span key={tag} className="log-tag-chip">{tag}</span>
+                  ))}
+                </span>
               </span>
             </button>
           );

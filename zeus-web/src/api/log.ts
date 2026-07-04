@@ -65,6 +65,17 @@ export type LogEntry = {
   createdUtc: string;
   qrzLogId: string | null;
   qrzUploadedUtc: string | null;
+  tags: string[] | null;
+  qslSent: string | null;
+  qslRcvd: string | null;
+  qslSentDate: string | null;
+  qslRcvdDate: string | null;
+  lotwQslSentUtc: string | null;
+  lotwQslRcvdUtc: string | null;
+  qrzQslRcvdUtc: string | null;
+  rig: string | null;
+  antenna: string | null;
+  txPowerW: number | null;
 };
 
 export type CreateLogEntryRequest = {
@@ -88,6 +99,40 @@ export type CreateLogEntryRequest = {
 export type LogEntriesResponse = {
   entries: LogEntry[];
   totalCount: number;
+};
+
+export type LogCapabilities = {
+  pluginInstalled: boolean;
+  canEdit: boolean;
+  canQsl: boolean;
+  canTags: boolean;
+};
+
+export type UpdateLogEntryRequest = {
+  name?: string | null;
+  grid?: string | null;
+  country?: string | null;
+  state?: string | null;
+  comment?: string | null;
+  tags?: string[] | null;
+  qslSent?: string | null;
+  qslRcvd?: string | null;
+  qslSentDate?: string | null;
+  qslRcvdDate?: string | null;
+  rig?: string | null;
+  antenna?: string | null;
+  txPowerW?: number | null;
+  rstSent?: string | null;
+  rstRcvd?: string | null;
+  mode?: string | null;
+  band?: string | null;
+  frequencyMhz?: number | null;
+  qsoDateTimeUtc?: string | null;
+  clearQslSentDate?: boolean;
+  clearQslRcvdDate?: boolean;
+  clearTxPowerW?: boolean;
+  clearFrequencyMhz?: boolean;
+  clearQsoDateTimeUtc?: boolean;
 };
 
 export type WorkedCallsignRecentQso = {
@@ -166,6 +211,31 @@ export type LogDeleteResponse = {
 
 // API functions
 
+async function errorFromResponse(response: Response): Promise<Error> {
+  const text = await response.text();
+  let message = text;
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown; message?: unknown };
+    if (typeof parsed.error === 'string') message = parsed.error;
+    else if (typeof parsed.message === 'string') message = parsed.message;
+  } catch {
+    /* keep the raw response text */
+  }
+  return new Error(message || `HTTP ${response.status}`);
+}
+
+export async function getLogCapabilities(signal?: AbortSignal): Promise<LogCapabilities> {
+  const response = await fetch('/api/log/capabilities', { signal });
+  if (!response.ok) throw await errorFromResponse(response);
+  return await response.json();
+}
+
+export async function getLogTags(signal?: AbortSignal): Promise<string[]> {
+  const response = await fetch('/api/log/tags', { signal });
+  if (!response.ok) throw await errorFromResponse(response);
+  return await response.json();
+}
+
 export async function getLogEntries(
   skip = 0,
   take = 100,
@@ -198,6 +268,21 @@ export async function createLogEntry(
     signal,
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return await response.json();
+}
+
+export async function updateLogEntry(
+  id: string,
+  patch: UpdateLogEntryRequest,
+  signal?: AbortSignal,
+): Promise<LogEntry> {
+  const response = await fetch(`/api/log/entry/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+    signal,
+  });
+  if (!response.ok) throw await errorFromResponse(response);
   return await response.json();
 }
 
