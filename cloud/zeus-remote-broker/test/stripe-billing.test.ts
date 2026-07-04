@@ -7,6 +7,10 @@ import {
   stripeForm,
   verifyStripeWebhookSignature,
 } from '../src/stripe-billing.ts';
+import {
+  mergeSubscriptionEntitlements,
+  stripeInvoiceSubscriptionId,
+} from '../src/billing-api.ts';
 
 test('stripeForm encodes nested line items using Stripe bracket notation', () => {
   const form = stripeForm({
@@ -49,6 +53,59 @@ test('parseStripeSubscription maps expanded subscription item prices', () => {
     currentPeriodEndMs: 1_772_000_000_000,
     priceIds: ['price_a', 'price_b'],
   });
+});
+
+test('stripeInvoiceSubscriptionId reads direct and nested invoice subscription ids', () => {
+  assert.equal(
+    stripeInvoiceSubscriptionId({ subscription: 'sub_direct' }),
+    'sub_direct',
+  );
+  assert.equal(
+    stripeInvoiceSubscriptionId({
+      lines: {
+        data: [
+          {
+            parent: {
+              subscription_item_details: {
+                subscription: 'sub_nested',
+              },
+            },
+          },
+        ],
+      },
+    }),
+    'sub_nested',
+  );
+});
+
+test('mergeSubscriptionEntitlements extends expiration on paid subscription renewal', () => {
+  const oldExpiry = 1_772_000_000_000;
+  const renewedExpiry = 1_774_678_400_000;
+
+  const entitlements = mergeSubscriptionEntitlements(
+    [
+      {
+        pluginId: 'com.openhpsdr.paid',
+        accessAllowed: true,
+        subscriptionStatus: 'active',
+        subscriptionExpiresAt: oldExpiry,
+        denialReason: null,
+      },
+    ],
+    ['com.openhpsdr.paid'],
+    'active',
+    renewedExpiry,
+  );
+
+  assert.deepEqual(entitlements, [
+    {
+      pluginId: 'com.openhpsdr.paid',
+      accessAllowed: true,
+      subscriptionStatus: 'active',
+      subscriptionExpiresAt: renewedExpiry,
+      denialReason: null,
+    },
+  ]);
 });
 
 test('verifyStripeWebhookSignature accepts valid v1 signature and rejects stale signatures', async () => {

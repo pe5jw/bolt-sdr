@@ -168,6 +168,22 @@ export async function handleBillingWebhook(request: Request, env: Env): Promise<
     return json({ ok: true }, 200);
   }
 
+  if (type === 'invoice.paid' || type === 'invoice.payment_succeeded') {
+    const customerId = objectId(object.customer);
+    const subscriptionId = stripeInvoiceSubscriptionId(object);
+    if (subscriptionId) {
+      const user = customerId
+        ? await getManagedUserByStripeCustomer(env.ADMIN_DB, customerId)
+          ?? await userFromStripeMetadata(env, object)
+        : await userFromStripeMetadata(env, object);
+      if (user) {
+        const subscription = await retrieveStripeSubscription(env, subscriptionId);
+        await applySubscriptionToUser(env, user.callsign, subscription);
+      }
+    }
+    return json({ ok: true }, 200);
+  }
+
   if (type === 'customer.subscription.created'
       || type === 'customer.subscription.updated'
       || type === 'customer.subscription.deleted') {
@@ -231,7 +247,7 @@ async function applySubscriptionToUser(
   });
 }
 
-function mergeSubscriptionEntitlements(
+export function mergeSubscriptionEntitlements(
   existing: PluginEntitlement[],
   pluginIds: string[],
   status: string,
@@ -256,6 +272,41 @@ function mergeSubscriptionEntitlements(
   }
 
   return [...byId.values()].sort((a, b) => a.pluginId.localeCompare(b.pluginId));
+}
+
+export function stripeInvoiceSubscriptionId(invoice: Record<string, unknown>): string {
+  const direct = objectId(invoice.subscription);
+  if (direct) return direct;
+
+  const parent = invoice.parent && typeof invoice.parent === 'object'
+    ? invoice.parent as JsonRecord
+    : {};
+  const parentSubscription = subscriptionIdFromInvoiceParent(parent);
+  if (parentSubscription) return parentSubscription;
+
+  const lines = invoice.lines && typeof invoice.lines === 'object'
+    ? (invoice.lines as JsonRecord).data
+    : null;
+  if (!Array.isArray(lines)) return '';
+  for (const line of lines) {
+    if (!line || typeof line !== 'object') continue;
+    const row = line as JsonRecord;
+    const lineSubscription = objectId(row.subscription);
+    if (lineSubscription) return lineSubscription;
+    const lineParent = row.parent && typeof row.parent === 'object'
+      ? row.parent as JsonRecord
+      : {};
+    const nested = subscriptionIdFromInvoiceParent(lineParent);
+    if (nested) return nested;
+  }
+  return '';
+}
+
+function subscriptionIdFromInvoiceParent(parent: JsonRecord): string {
+  const details = parent.subscription_item_details && typeof parent.subscription_item_details === 'object'
+    ? parent.subscription_item_details as JsonRecord
+    : {};
+  return objectId(details.subscription);
 }
 
 function managedUserDto(row: ManagedUserRow) {
