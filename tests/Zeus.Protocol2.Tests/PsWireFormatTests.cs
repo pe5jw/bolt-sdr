@@ -38,6 +38,7 @@ namespace Zeus.Protocol2.Tests;
 ///   - p[24..25] = 0x00 0xC0  DDC1 sample rate = 192 kHz BE
 ///   - p[28]   = 24           DDC1 bit depth
 /// </summary>
+[Collection(Protocol2TimeMuxStateCollection.Name)]
 public class PsWireFormatTests
 {
     [Fact]

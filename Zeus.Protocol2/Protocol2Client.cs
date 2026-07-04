@@ -118,6 +118,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // RX IQ data arrives on UDP source ports RxDataPortBase + ddcIndex, i.e.
     // 1035 (DDC0) .. 1035 + MaxRxDdc - 1 (DDC7).
     private const int RxDataPortBase = 1035;
+    private const int RxSilenceBeforeRecoveryMs = 3000;
+    private const int RxRecoveryAttemptSpacingMs = 2000;
+    private const int RxRecoveryMaxAttempts = 2;
+    // Upper bound on how long KeepaliveLoop may skip sends while a recovery
+    // restart is in flight. The burst itself lasts ~200 ms; if the queued
+    // restart task is delayed past this window (thread-pool saturation), the
+    // keepalive must resume so the radio's ~1 s hardware watchdog is never
+    // starved by our own recovery machinery — a late burst still toggles
+    // run 0→1 and remains effective.
+    private const int RxRecoveryKeepaliveSkipMaxMs = 600;
 
     // Protocol-2 wideband ADC snapshots arrive on source ports 1027..1034.
     // CmdGeneral below enables ADC0 only for the display mode; the firmware
@@ -159,6 +169,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private CancellationTokenSource? _rxCts;
     private Task? _rxTask;
     private Task? _keepaliveTask;
+    private int _rxRecoveryRestartActive;
+    private long _rxRecoveryRestartSetMs;
     private int _sampleRateKhz = 48;
     private uint _rxFreqHz = 14_200_000;
     // Second receiver (RX2) on its own DDC. When enabled, a second DDC
@@ -408,8 +420,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public const byte MicControlMicBias  = 0x10; // bit4 — Orion mic bias enable
     public const byte MicControlXlr      = 0x20; // bit5 — balanced/XLR input
 
-    private bool _moxOn;
-    private bool _tuneActive;
+    private volatile bool _moxOn;
+    private volatile bool _tuneActive;
 
     private static int PackOcMasks(byte txMask, byte rxMask, byte tuneMask) =>
         (txMask & 0x7F)
@@ -749,6 +761,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             radioEndpoint.Address,
             localBind.Equals(IPAddress.Any) ? "ANY (no subnet match)" : localBind.ToString(),
             localPort);
+        if (NetworkAddressSelection.IsLinkLocal(radioEndpoint.Address))
+        {
+            _log.LogWarning(
+                "net.linklocal radio={Radio} - self-assigned address detected (direct-connect or DHCP-less segment); " +
+                "connection is functional but this topology is drop-prone; a switch with a DHCP router is recommended",
+                radioEndpoint.Address);
+        }
         return Task.CompletedTask;
     }
 
@@ -1976,8 +1995,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // router, etc.) — the caller falls back to IPAddress.Any in that case.
     internal static IPAddress? FindLocalAddressForSubnet(IPAddress radioIp)
     {
-        if (radioIp.AddressFamily != AddressFamily.InterNetwork) return null;
-        var radioBytes = radioIp.GetAddressBytes();
+        return NetworkAddressSelection.FindLocalAddressForSubnet(radioIp, EnumerateLocalIpv4Addresses());
+    }
+
+    private static IEnumerable<LocalIpv4Address> EnumerateLocalIpv4Addresses()
+    {
         foreach (var iface in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (iface.OperationalStatus != OperationalStatus.Up) continue;
@@ -1987,15 +2009,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 if (ua.Address.AddressFamily != AddressFamily.InterNetwork) continue;
                 var mask = ua.IPv4Mask;
                 if (mask is null || mask.Equals(IPAddress.Any)) continue;
-                var local = ua.Address.GetAddressBytes();
-                var m = mask.GetAddressBytes();
-                bool same = true;
-                for (int i = 0; i < 4; i++)
-                    if ((local[i] & m[i]) != (radioBytes[i] & m[i])) { same = false; break; }
-                if (same) return ua.Address;
+                yield return new LocalIpv4Address(ua.Address, mask);
             }
         }
-        return null;
     }
 
     /// <summary>
@@ -3521,6 +3537,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             while (!ct.IsCancellationRequested)
             {
                 await Task.Delay(100, ct).ConfigureAwait(false);
+                // Skip sends only while a recovery restart is actually in
+                // flight, and never for longer than the bounded window — a
+                // stuck/delayed restart task must not starve the radio's
+                // hardware watchdog of keepalives.
+                if (Volatile.Read(ref _rxRecoveryRestartActive) != 0
+                    && Environment.TickCount64 - Volatile.Read(ref _rxRecoveryRestartSetMs) < RxRecoveryKeepaliveSkipMaxMs)
+                    continue;
                 cycle = (cycle % 8) + 1;
                 SendCmdHighPriority(run: true);
                 switch (cycle)
@@ -3543,6 +3566,60 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         {
             _log.LogWarning(ex, "p2.keepalive exited with error");
         }
+    }
+
+    private bool IsRxRecoveryBlocked(out string reason)
+    {
+        bool psArmed = _psFeedbackEnabled;
+        bool txActive = _moxOn || _tuneActive;
+        reason = (psArmed, txActive) switch
+        {
+            (true, true) => "ps-armed,tx-active",
+            (true, false) => "ps-armed",
+            (false, true) => "tx-active",
+            _ => "none"
+        };
+        return psArmed || txActive;
+    }
+
+    private void RequestStreamRestartForRecovery(CancellationToken ct)
+    {
+        if (Interlocked.Exchange(ref _rxRecoveryRestartActive, 1) != 0)
+            return;
+        Volatile.Write(ref _rxRecoveryRestartSetMs, Environment.TickCount64);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (ct.IsCancellationRequested) return;
+                if (IsRxRecoveryBlocked(out _)) return;
+
+                SendCmdHighPriority(run: false);
+                await Task.Delay(50, ct).ConfigureAwait(false);
+                SendCmdGeneral();
+                await Task.Delay(50, ct).ConfigureAwait(false);
+                SendCmdRx();
+                await Task.Delay(50, ct).ConfigureAwait(false);
+                SendCmdTx();
+                await Task.Delay(50, ct).ConfigureAwait(false);
+                SendCmdHighPriority(run: true);
+            }
+            catch (OperationCanceledException) { }
+            catch (ObjectDisposedException) { }
+            catch (SocketException ex)
+            {
+                _log.LogWarning(ex, "p2.rx.recover restart failed");
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "p2.rx.recover restart failed");
+            }
+            finally
+            {
+                Volatile.Write(ref _rxRecoveryRestartActive, 0);
+            }
+        }, CancellationToken.None);
     }
 
     private void RxLoop(CancellationToken ct)
@@ -3582,6 +3659,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         bool haveDdc0Arrival = false;
         long lastDroppedSnapshot = Interlocked.Read(ref _droppedFrames);
         double usPerTick = 1_000_000.0 / Stopwatch.Frequency;
+        var recoveryPolicy = new RxSilenceRecoveryPolicy(
+            Environment.TickCount64,
+            RxSilenceBeforeRecoveryMs,
+            RxRecoveryAttemptSpacingMs,
+            RxRecoveryMaxAttempts);
+        int toleratedConnectionResets = 0;
+        long lastConnectionResetLogMs = 0;
 
         try
         {
@@ -3595,6 +3679,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 }
                 catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
                 {
+                    HandleRxSilenceRecovery(Environment.TickCount64);
                     continue;
                 }
                 catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
@@ -3603,6 +3688,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                     // port-unreachable and Windows surfaces it on the next recv.
                     // Linux silently discards this; without the catch here the IQ
                     // loop dies on the first stray ICMP → frozen panadapter.
+                    toleratedConnectionResets++;
+                    long nowMs = Environment.TickCount64;
+                    if (lastConnectionResetLogMs == 0 || nowMs - lastConnectionResetLogMs >= 1000)
+                    {
+                        lastConnectionResetLogMs = nowMs;
+                        _log.LogInformation(
+                            "p2.rx.connreset tolerated count={Count}",
+                            toleratedConnectionResets);
+                    }
+                    HandleRxSilenceRecovery(nowMs);
                     continue;
                 }
                 catch (SocketException ex) when (ex.SocketErrorCode == SocketError.Interrupted
@@ -3615,6 +3710,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 if (srcPort >= RxDataPortBase && srcPort < RxDataPortBase + MaxRxDdc)
                 {
                     int ddc = srcPort - RxDataPortBase;
+                    if (n == BufLen)
+                    {
+                        long packetNowMs = Environment.TickCount64;
+                        if (recoveryPolicy.RecordPacket(packetNowMs) is { } recovered
+                            && recovered.Attempts > 0)
+                        {
+                            _log.LogInformation(
+                                "p2.rx.recover ok attempts={Attempts} silenceMs={Silence}",
+                                recovered.Attempts,
+                                recovered.SilenceMs);
+                        }
+                    }
                     portPkts[ddc]++;
 
                     // Measure inter-arrival on DDC0 only — the primary RX stream
@@ -3740,6 +3847,48 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         finally
         {
             _iqFrames.Writer.TryComplete();
+        }
+
+        void HandleRxSilenceRecovery(long nowMs)
+        {
+            bool blocked = IsRxRecoveryBlocked(out var reason);
+            var decision = recoveryPolicy.Tick(
+                nowMs,
+                streamingExpected: !ct.IsCancellationRequested,
+                recoveryBlocked: blocked);
+            switch (decision.Action)
+            {
+                case RxSilenceRecoveryAction.None:
+                    return;
+                case RxSilenceRecoveryAction.Blocked:
+                    _log.LogWarning(
+                        "p2.rx.recover skip reason={Reason} silenceMs={Silence} - no DDC IQ packets; automatic restart is disabled while PS or TX is active",
+                        reason,
+                        decision.SilenceMs);
+                    return;
+                case RxSilenceRecoveryAction.AttemptRestart:
+                    if (IsRxRecoveryBlocked(out reason))
+                    {
+                        _log.LogWarning(
+                            "p2.rx.recover skip reason={Reason} silenceMs={Silence} - no DDC IQ packets; automatic restart is disabled while PS or TX is active",
+                            reason,
+                            decision.SilenceMs);
+                        return;
+                    }
+                    _log.LogWarning(
+                        "p2.rx.recover attempt={Attempt}/{Max} silenceMs={Silence} - no DDC IQ packets; restarting stream",
+                        decision.Attempt,
+                        decision.MaxAttempts,
+                        decision.SilenceMs);
+                    RequestStreamRestartForRecovery(ct);
+                    return;
+                case RxSilenceRecoveryAction.Exhausted:
+                    _log.LogWarning(
+                        "p2.rx.recover failed attempts={Max} silenceMs={Silence} - no DDC IQ packets after stream restart attempts; likely network causes include direct-connect/link-local addressing, an isolated switch, DHCP renewal, NIC power management, firewall filtering, or WiFi/Ethernet route selection",
+                        decision.MaxAttempts,
+                        decision.SilenceMs);
+                    return;
+            }
         }
     }
 

@@ -58,6 +58,7 @@ namespace Zeus.Protocol2.Tests;
 ///  - Thetis Console/console.cs groups HermesC10 with Hermes/HermesII in P2
 ///    channel setup.
 /// </summary>
+[Collection(Protocol2TimeMuxStateCollection.Name)]
 public class PsFeedbackDdcRoutingTests
 {
     // ---- ReservesPsFeedbackDdcs predicate (pins the board set) ----

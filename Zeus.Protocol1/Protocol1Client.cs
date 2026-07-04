@@ -210,6 +210,8 @@ public sealed class Protocol1Client : IProtocol1Client
     // tests can shrink the wall-clock without weakening the logic.
     internal int StartHandshakeTimeoutMs = 1000;
     internal int StartHandshakeAttempts = 3;
+    internal int RxSoftRecoveryAttempts = 2;
+    internal int RxRecoveryTransitionGuardWaitMs = 2000;
     internal int PsTransitionDrainMs = 120;
     // PS feedback watchdog (F4): while PS is armed on C10, zero successfully
     // parsed 4-DDC packets for this long — while datagrams ARE arriving —
@@ -832,51 +834,71 @@ public sealed class Protocol1Client : IProtocol1Client
             SendBufferSize = 64 * 1024,
             ReceiveTimeout = RxSocketTimeoutMs,
         };
-        sock.Bind(new IPEndPoint(LocalAddressForRemote(radioEndpoint.Address), 0));
+        DisableUdpConnReset(sock);
+        var localBind = LocalAddressForRemote(radioEndpoint.Address);
+        sock.Bind(new IPEndPoint(localBind, 0));
 
         _socket = sock;
         _remote = radioEndpoint;
-        _log.LogInformation("Protocol1 bound local={Local} remote={Remote}", sock.LocalEndPoint, radioEndpoint);
+        _log.LogInformation(
+            "p1.connect radio={Radio} localBind={LocalBind} local={Local}",
+            radioEndpoint.Address,
+            localBind.Equals(IPAddress.Any) ? "ANY (no subnet match)" : localBind.ToString(),
+            sock.LocalEndPoint);
+        if (NetworkAddressSelection.IsLinkLocal(radioEndpoint.Address))
+        {
+            _log.LogWarning(
+                "net.linklocal radio={Radio} - self-assigned address detected (direct-connect or DHCP-less segment); " +
+                "connection is functional but this topology is drop-prone; a switch with a DHCP router is recommended",
+                radioEndpoint.Address);
+        }
         return Task.CompletedTask;
     }
 
-    // When the radio is on a link-local address (169.254.0.0/16, direct-connect
-    // without a router), IPAddress.Any lets the OS pick the bind address — which
-    // on macOS is the default-route interface (Wi-Fi), a different subnet from the
-    // direct Ethernet link. The radio then streams IQ back to that unreachable
-    // address and Zeus gets nothing. Find the local link-local unicast on the same
-    // /16 and bind there instead so the Metis start command carries a reachable
-    // return address.
+    // Prefer the local IPv4 unicast whose subnet contains the radio. This
+    // subsumes the original link-local case (169.254.0.0/16 direct-connect /
+    // DHCP-less segment), where IPAddress.Any lets the OS pick the default-route
+    // interface and the radio streams IQ to an unreachable source address.
+    // Routers stay unchanged: no local subnet match means bind ANY.
     private static IPAddress LocalAddressForRemote(IPAddress remote)
     {
-        if (!IsLinkLocal(remote)) return IPAddress.Any;
+        return NetworkAddressSelection.FindLocalAddressForSubnet(remote, EnumerateLocalIpv4Addresses())
+               ?? IPAddress.Any;
+    }
+
+    private static IEnumerable<LocalIpv4Address> EnumerateLocalIpv4Addresses()
+    {
         foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (nic.OperationalStatus != OperationalStatus.Up) continue;
+            if (nic.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
             foreach (var uni in nic.GetIPProperties().UnicastAddresses)
             {
                 if (uni.Address.AddressFamily != AddressFamily.InterNetwork) continue;
-                if (!IsLinkLocal(uni.Address)) continue;
-                if (SameSubnet(remote, uni.Address, uni.IPv4Mask)) return uni.Address;
+                var mask = uni.IPv4Mask;
+                if (mask is null || mask.Equals(IPAddress.Any)) continue;
+                yield return new LocalIpv4Address(uni.Address, mask);
             }
         }
-        return IPAddress.Any;
     }
 
-    private static bool IsLinkLocal(IPAddress a)
+    // Windows surfaces ICMP port-unreachable as SocketError 10054 on the next recv.
+    // Disabling it at the ioctl level keeps transient radio-side UDP resets from
+    // poisoning the receive socket; the RxLoop ConnectionReset policy below is the
+    // fallback if the ioctl is unavailable.
+    private const int SIO_UDP_CONNRESET = -1744830452; // 0x9800000C
+
+    internal static void DisableUdpConnReset(Socket s)
     {
-        var b = a.GetAddressBytes();
-        return b[0] == 169 && b[1] == 254;
+        if (!OperatingSystem.IsWindows()) return;
+        try { s.IOControl(SIO_UDP_CONNRESET, new byte[4], null); }
+        catch (SocketException) { /* best effort */ }
     }
 
-    private static bool SameSubnet(IPAddress a, IPAddress b, IPAddress mask)
+    private enum StartWatchdogMode
     {
-        var ab = a.GetAddressBytes();
-        var bb = b.GetAddressBytes();
-        var mb = mask.GetAddressBytes();
-        for (int i = 0; i < 4; i++)
-            if ((ab[i] & mb[i]) != (bb[i] & mb[i])) return false;
-        return true;
+        InitialStart,
+        RxRecovery
     }
 
     public async Task StartAsync(StreamConfig config, CancellationToken ct)
@@ -954,7 +976,7 @@ public sealed class Protocol1Client : IProtocol1Client
         // up to 3 attempts — piHPSDR retries the whole start sequence 10×
         // (old_protocol.c:2894-2918). After the final failed attempt the
         // existing consecutive-timeout teardown takes over unchanged.
-        BeginStartHandshakeWatchdog(_loopCts.Token);
+        BeginStartHandshakeWatchdog(_loopCts.Token, StartWatchdogMode.InitialStart);
         }
         finally
         {
@@ -1283,7 +1305,7 @@ public sealed class Protocol1Client : IProtocol1Client
             Volatile.Write(ref _rxDiscard, 0);
 
             SendStartStop(start: true);
-            BeginStartHandshakeWatchdog(loopCts.Token);
+            BeginStartHandshakeWatchdog(loopCts.Token, StartWatchdogMode.InitialStart);
         }
         catch (OperationCanceledException) when (loopCts.IsCancellationRequested)
         {
@@ -1389,14 +1411,16 @@ public sealed class Protocol1Client : IProtocol1Client
     }
 
     /// <summary>
-    /// F3 start-handshake watchdog: waits for the first VALID parsed EP6
-    /// packet after a start command; re-sends start on a ~1 s timeout, up to
-    /// <see cref="StartHandshakeAttempts"/> total attempts. While active,
-    /// RxLoop suppresses its consecutive-timeout give-up so the retries get
-    /// their chance; after the final failure the existing timeout →
-    /// Disconnected teardown fires unchanged.
+    /// Start watchdog with two modes. InitialStart waits for the first valid
+    /// parsed EP6 packet after the caller's start command, then re-sends start
+    /// on a timeout up to <see cref="StartHandshakeAttempts"/> total attempts.
+    /// RxRecovery owns each bounded soft-recovery start re-send after an RX
+    /// silence budget is exhausted. While either mode is active, RxLoop
+    /// suppresses its consecutive-timeout give-up so the retries get their
+    /// chance; after the final failure the existing timeout-to-Disconnected
+    /// teardown fires unchanged.
     /// </summary>
-    private void BeginStartHandshakeWatchdog(CancellationToken ct)
+    private void BeginStartHandshakeWatchdog(CancellationToken ct, StartWatchdogMode mode)
     {
         // Supersede any prior watchdog (see the _handshakeCts field comment):
         // exactly one watchdog may own start re-sends at a time. Capture the
@@ -1412,25 +1436,50 @@ public sealed class Protocol1Client : IProtocol1Client
         int gen = Interlocked.Increment(ref _handshakeGeneration);
         Volatile.Write(ref _startHandshakeActive, 1);
         long baseline = Interlocked.Read(ref _totalFrames);
+        int maxAttempts = mode == StartWatchdogMode.RxRecovery
+            ? Math.Max(1, RxSoftRecoveryAttempts)
+            : Math.Max(1, StartHandshakeAttempts);
         _ = Task.Run(async () =>
         {
             try
             {
-                for (int attempt = 1; attempt <= StartHandshakeAttempts; attempt++)
+                for (int attempt = 1; attempt <= maxAttempts; attempt++)
                 {
+                    if (mode == StartWatchdogMode.RxRecovery)
+                    {
+                        if (!await WaitForRxRecoveryGuardAsync(token).ConfigureAwait(false))
+                        {
+                            if (token.IsCancellationRequested) return;
+                            _log.LogWarning(
+                                "p1.rx.recover skipped - transition guard held for {Timeout}ms; firing Disconnected on next RX timeout",
+                                RxRecoveryTransitionGuardWaitMs);
+                            return;
+                        }
+                        _log.LogWarning(
+                            "p1.rx.recover attempt={Attempt}/{Max} - no RX packets from radio; re-sending start",
+                            attempt,
+                            maxAttempts);
+                        SendStartStop(start: true);
+                    }
                     long deadline = Environment.TickCount64 + StartHandshakeTimeoutMs;
                     while (Environment.TickCount64 < deadline)
                     {
                         if (token.IsCancellationRequested) return;
                         if (Interlocked.Read(ref _totalFrames) > baseline)
                         {
-                            if (attempt > 1)
+                            if (mode == StartWatchdogMode.RxRecovery)
+                            {
+                                _log.LogInformation("p1.rx.recover ok attempt={Attempt}", attempt);
+                            }
+                            else if (attempt > 1)
+                            {
                                 _log.LogInformation("p1.start.handshake ok on attempt {Attempt}", attempt);
+                            }
                             return;
                         }
                         await Task.Delay(50, token).ConfigureAwait(false);
                     }
-                    if (attempt < StartHandshakeAttempts)
+                    if (mode == StartWatchdogMode.InitialStart && attempt < maxAttempts)
                     {
                         // Belt-and-braces: a PS transition cancels this
                         // watchdog before its stop, but never re-send start
@@ -1440,13 +1489,22 @@ public sealed class Protocol1Client : IProtocol1Client
                             continue;
                         _log.LogWarning(
                             "p1.start.handshake no valid EP6 within {Timeout}ms — re-sending start (attempt {Next}/{Max})",
-                            StartHandshakeTimeoutMs, attempt + 1, StartHandshakeAttempts);
+                            StartHandshakeTimeoutMs, attempt + 1, maxAttempts);
                         SendStartStop(start: true);
                     }
                 }
-                _log.LogWarning(
-                    "p1.start.handshake no valid EP6 after {Max} attempts — RX-timeout teardown takes over",
-                    StartHandshakeAttempts);
+                if (mode == StartWatchdogMode.RxRecovery)
+                {
+                    _log.LogWarning(
+                        "p1.rx.recover failed attempts={Max} - no RX packets after start re-sends; firing Disconnected on next RX timeout",
+                        maxAttempts);
+                }
+                else
+                {
+                    _log.LogWarning(
+                        "p1.start.handshake no valid EP6 after {Max} attempts — RX-timeout teardown takes over",
+                        maxAttempts);
+                }
             }
             catch (OperationCanceledException) { /* stop/dispose/superseded */ }
             finally
@@ -1459,6 +1517,20 @@ public sealed class Protocol1Client : IProtocol1Client
                 linked.Dispose();
             }
         }, CancellationToken.None);
+
+        async Task<bool> WaitForRxRecoveryGuardAsync(CancellationToken token)
+        {
+            long start = Environment.TickCount64;
+            while (Volatile.Read(ref _txPaused) == 1 || Volatile.Read(ref _rxDiscard) == 1)
+            {
+                if (token.IsCancellationRequested)
+                    return false;
+                if (Environment.TickCount64 - start >= RxRecoveryTransitionGuardWaitMs)
+                    return false;
+                await Task.Delay(50, token).ConfigureAwait(false);
+            }
+            return true;
+        }
     }
 
     /// <summary>Cancel the current F3 start-handshake watchdog (if any) so it
@@ -1706,7 +1778,9 @@ public sealed class Protocol1Client : IProtocol1Client
         // ReceiveFrom overload that fills a reusable SocketAddress in
         // place, eliminating the per-call allocation entirely.
         var sockAddr = new SocketAddress(sock.AddressFamily);
-        int consecutiveTimeouts = 0;
+        var failurePolicy = new RxFailurePolicy(ConsecutiveTimeoutsBeforeGiveUp);
+        int toleratedConnectionResets = 0;
+        long lastConnectionResetLogMs = 0;
         // TX-pacing counter — every Nth successfully-parsed RX packet signals
         // TxLoopAsync to emit one EP2 packet. N = rxRate / 48 kHz because the
         // HL2's TX DAC clock runs at a fixed 48 kHz regardless of the RX rate.
@@ -1726,34 +1800,7 @@ public sealed class Protocol1Client : IProtocol1Client
                 }
                 catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
                 {
-                    // Keep the armed-period observability + stall watchdog
-                    // ticking even when no datagrams arrive at all.
-                    Ps4DdcHousekeeping();
-                    if (++consecutiveTimeouts >= ConsecutiveTimeoutsBeforeGiveUp)
-                    {
-                        // Start-handshake window (#1302 F3): the watchdog owns
-                        // failure while it is re-sending start commands — do
-                        // not tear down between its attempts. Timeouts keep
-                        // counting, so the moment the handshake gives up the
-                        // very next timeout lands here and fires Disconnected
-                        // exactly like before.
-                        if (Volatile.Read(ref _startHandshakeActive) == 1)
-                            continue;
-                        if (OperatingSystem.IsWindows())
-                            _log.LogWarning(
-                                "p1.rx.timeout count={N} — no RX packets from radio. " +
-                                "If TX works but RX is silent, Windows Firewall may be blocking " +
-                                "inbound UDP. This is common when Tailscale or another VPN is " +
-                                "installed (it reclassifies the LAN adapter as Public network). " +
-                                "Temporarily disable Windows Firewall to confirm, then add a " +
-                                "permanent inbound rule for OpenhpsdrZeus.exe.",
-                                consecutiveTimeouts);
-                        else
-                            _log.LogWarning("p1.rx.timeout count={N} — no RX packets from radio", consecutiveTimeouts);
-                        try { Disconnected?.Invoke(); }
-                        catch (Exception handlerEx) { _log.LogWarning(handlerEx, "p1.rx Disconnected handler threw"); }
-                        return;
-                    }
+                    if (HandleTransientRxFailure(ex.SocketErrorCode)) return;
                     continue;
                 }
                 catch (ObjectDisposedException)
@@ -1763,6 +1810,21 @@ public sealed class Protocol1Client : IProtocol1Client
                 catch (SocketException) when (ct.IsCancellationRequested)
                 {
                     return;
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+                {
+                    toleratedConnectionResets++;
+                    long nowMs = Environment.TickCount64;
+                    if (lastConnectionResetLogMs == 0 || nowMs - lastConnectionResetLogMs >= 1000)
+                    {
+                        lastConnectionResetLogMs = nowMs;
+                        _log.LogInformation(
+                            "p1.rx.connreset tolerated count={Count} consecutive={Consecutive}",
+                            toleratedConnectionResets,
+                            failurePolicy.ConsecutiveTransientFailures + 1);
+                    }
+                    if (HandleTransientRxFailure(ex.SocketErrorCode)) return;
+                    continue;
                 }
                 catch (SocketException ex)
                 {
@@ -1786,7 +1848,6 @@ public sealed class Protocol1Client : IProtocol1Client
                     catch (Exception handlerEx) { _log.LogWarning(handlerEx, "p1.rx Disconnected handler threw"); }
                     return;
                 }
-                consecutiveTimeouts = 0;
                 Volatile.Write(ref _lastDatagramTicks, Environment.TickCount64);
                 // NOTE: Ps4DdcHousekeeping (stall watchdog + 1 Hz stats) runs
                 // AFTER the parse outcome below, never here. Running it
@@ -1847,6 +1908,7 @@ public sealed class Protocol1Client : IProtocol1Client
                     bool parsedOk = HandlePs4DdcPacket(buffer.AsSpan(0, n), micScratch);
                     if (parsedOk)
                     {
+                        failurePolicy.RecordSuccess();
                         Interlocked.Increment(ref _ps4DdcOkTotal);
                         Volatile.Write(ref _lastPs4OkTicks, Environment.TickCount64);
                         Volatile.Write(ref _psStallFired, 0);
@@ -1921,6 +1983,7 @@ public sealed class Protocol1Client : IProtocol1Client
                     bool parsedOk = HandlePs2DdcPacket(buffer.AsSpan(0, n), micScratch);
                     if (parsedOk)
                     {
+                        failurePolicy.RecordSuccess();
                         Interlocked.Increment(ref _ps4DdcOkTotal);
                         Volatile.Write(ref _lastPs4OkTicks, Environment.TickCount64);
                         Volatile.Write(ref _psStallFired, 0);
@@ -1962,6 +2025,7 @@ public sealed class Protocol1Client : IProtocol1Client
                 }
 
                 ObserveSequence(seq);
+                failurePolicy.RecordSuccess();
                 Interlocked.Increment(ref _totalFrames);
 
                 // Fire per-frame: each USB frame's C&C is processed independently,
@@ -2057,6 +2121,54 @@ public sealed class Protocol1Client : IProtocol1Client
         finally
         {
             _channel.Writer.TryComplete();
+        }
+
+        bool HandleTransientRxFailure(SocketError code)
+        {
+            // Keep the armed-period observability + stall watchdog ticking even
+            // when no datagrams arrive at all, and count Windows ICMP reset
+            // echoes against the same budget as ordinary receive timeouts.
+            Ps4DdcHousekeeping();
+            var decision = failurePolicy.RecordSocketFailure(code, ct.IsCancellationRequested);
+            // Deliberate interplay: while a start watchdog is active, this may
+            // consume the StartSoftRestart decision unseen. That is intended
+            // for InitialStart: it already re-sent starts, and the next timeout
+            // after it clears fires Disconnected with the pre-change #1302 timing.
+            if (Volatile.Read(ref _startHandshakeActive) == 1
+                && decision is not RxFailureDecision.Exit)
+            {
+                return false;
+            }
+
+            switch (decision)
+            {
+                case RxFailureDecision.Continue:
+                    return false;
+                case RxFailureDecision.StartSoftRestart:
+                    BeginStartHandshakeWatchdog(ct, StartWatchdogMode.RxRecovery);
+                    return false;
+                case RxFailureDecision.Exit:
+                    return true;
+                case RxFailureDecision.Disconnect:
+                    if (OperatingSystem.IsWindows())
+                        _log.LogWarning(
+                            "p1.rx.timeout count={N} — no RX packets from radio. " +
+                            "If TX works but RX is silent, Windows Firewall may be blocking " +
+                            "inbound UDP. This is common when Tailscale or another VPN is " +
+                            "installed (it reclassifies the LAN adapter as Public network). " +
+                            "Temporarily disable Windows Firewall to confirm, then add a " +
+                            "permanent inbound rule for OpenhpsdrZeus.exe.",
+                            failurePolicy.ConsecutiveTransientFailures);
+                    else
+                        _log.LogWarning(
+                            "p1.rx.timeout count={N} — no RX packets from radio",
+                            failurePolicy.ConsecutiveTransientFailures);
+                    try { Disconnected?.Invoke(); }
+                    catch (Exception handlerEx) { _log.LogWarning(handlerEx, "p1.rx Disconnected handler threw"); }
+                    return true;
+                default:
+                    return false;
+            }
         }
     }
 
