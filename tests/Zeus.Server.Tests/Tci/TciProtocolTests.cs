@@ -315,4 +315,41 @@ public class TciProtocolTests
         var result = TciProtocol.Command("tx_alc", 25);
         Assert.Equal("tx_alc:25;", result);
     }
+
+    [Theory]
+    [InlineData(AgcMode.Fixed, "FIXED")]
+    [InlineData(AgcMode.Long, "LONG")]
+    [InlineData(AgcMode.Slow, "SLOW")]
+    [InlineData(AgcMode.Med, "MEDIUM")]
+    [InlineData(AgcMode.Fast, "FAST")]
+    [InlineData(AgcMode.Custom, "CUSTOM")]
+    public void AgcModeToTci_AllModes_UpperCase(AgcMode mode, string expected)
+    {
+        Assert.Equal(expected, TciProtocol.AgcModeToTci(mode));
+    }
+
+    [Theory]
+    [InlineData("OFF", AgcMode.Fixed)]
+    [InlineData("off", AgcMode.Fixed)]
+    [InlineData("FIXED", AgcMode.Fixed)]
+    [InlineData("LONG", AgcMode.Long)]
+    [InlineData("SLOW", AgcMode.Slow)]
+    [InlineData("MED", AgcMode.Med)]
+    [InlineData("MEDIUM", AgcMode.Med)]
+    [InlineData("NORMAL", AgcMode.Med)]
+    [InlineData("normal", AgcMode.Med)]
+    [InlineData("FAST", AgcMode.Fast)]
+    [InlineData("CUSTOM", AgcMode.Custom)]
+    public void TciToAgcMode_ValidModes_CaseInsensitive(string tciMode, AgcMode expected)
+    {
+        var result = TciProtocol.TciToAgcMode(tciMode);
+        Assert.NotNull(result);
+        Assert.Equal(expected, result.Value);
+    }
+
+    [Fact]
+    public void TciToAgcMode_UnknownMode_ReturnsNull()
+    {
+        Assert.Null(TciProtocol.TciToAgcMode("INVALID"));
+    }
 }
