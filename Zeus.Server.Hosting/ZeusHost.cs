@@ -428,6 +428,14 @@ public static class ZeusHost
                 c.Timeout = TimeSpan.FromSeconds(8);
                 c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus");
             });
+        builder.Services.AddHttpClient(
+            Zeus.Server.Hosting.RemoteUserAccessClient.HttpClientName,
+            c =>
+            {
+                c.Timeout = TimeSpan.FromSeconds(10);
+                c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus");
+            });
+        builder.Services.AddSingleton<Zeus.Server.Hosting.RemoteUserAccessClient>();
         builder.Services.AddHostedService<Zeus.Server.Hosting.UserDirectoryReporter>();
         // Remote-access WebRTC signaling (Phase 1). Answers offers with a session
         // gated behind the SPAKE2+ password handshake. The read-only API tunnel
@@ -831,6 +839,7 @@ public static class ZeusHost
             {
                 HostDataDirectory = Path.GetDirectoryName(PrefsDbPath.LogbookPath()),
             });
+        builder.Services.AddSingleton<IPluginInstallAccessGate, Zeus.Server.Hosting.PluginInstallAccessGate>();
 
         // LogbookPluginBridge publishes the one active ILogbookPlugin to the
         // stable /api/log/* endpoints. The UI and egress paths stay in core;

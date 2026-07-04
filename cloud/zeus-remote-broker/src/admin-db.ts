@@ -43,6 +43,11 @@ export interface ManagedUserRow {
   created_at: number;
   updated_at: number;
   last_login_at: number | null;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  stripe_subscription_status: string | null;
+  stripe_current_period_end: number | null;
+  credit_balance_cents: number;
 }
 
 /** A plugin catalog row with pricing/subscription metadata. */
@@ -57,6 +62,10 @@ export interface ManagedPluginRow {
   notes: string | null;
   created_at: number;
   updated_at: number;
+  stripe_product_id: string | null;
+  stripe_price_id: string | null;
+  stripe_price_cents: number | null;
+  stripe_price_currency: string | null;
 }
 
 // --- admins ----------------------------------------------------------------
@@ -227,6 +236,15 @@ export async function getManagedUser(db: D1Database, callsign: string): Promise<
   return db.prepare('SELECT * FROM admin_users WHERE callsign = ?').bind(callsign).first<ManagedUserRow>();
 }
 
+export async function getManagedUserByStripeCustomer(
+  db: D1Database,
+  stripeCustomerId: string,
+): Promise<ManagedUserRow | null> {
+  return db.prepare('SELECT * FROM admin_users WHERE stripe_customer_id = ?')
+    .bind(stripeCustomerId)
+    .first<ManagedUserRow>();
+}
+
 /**
  * Record a QRZ-authenticated Zeus operator without changing admin-managed
  * controls. Presence heartbeats use this so every real Zeus user becomes
@@ -331,6 +349,68 @@ export async function updateManagedUser(
   return getManagedUser(db, callsign);
 }
 
+export async function setManagedUserStripeCustomer(
+  db: D1Database,
+  callsign: string,
+  stripeCustomerId: string,
+): Promise<ManagedUserRow | null> {
+  await db
+    .prepare('UPDATE admin_users SET stripe_customer_id = ?, updated_at = ? WHERE callsign = ?')
+    .bind(stripeCustomerId, Date.now(), callsign)
+    .run();
+  return getManagedUser(db, callsign);
+}
+
+export async function setManagedUserStripeSubscription(
+  db: D1Database,
+  callsign: string,
+  row: {
+    stripe_subscription_id?: string | null;
+    stripe_subscription_status?: string | null;
+    stripe_current_period_end?: number | null;
+    plugin_entitlements?: string;
+  },
+): Promise<ManagedUserRow | null> {
+  const existing = await getManagedUser(db, callsign);
+  if (!existing) return null;
+  await db
+    .prepare(
+      'UPDATE admin_users SET stripe_subscription_id = ?, stripe_subscription_status = ?, ' +
+        'stripe_current_period_end = ?, plugin_entitlements = ?, subscription_status = ?, ' +
+        'subscription_expires_at = ?, updated_at = ? WHERE callsign = ?',
+    )
+    .bind(
+      row.stripe_subscription_id !== undefined ? row.stripe_subscription_id : existing.stripe_subscription_id,
+      row.stripe_subscription_status !== undefined
+        ? row.stripe_subscription_status
+        : existing.stripe_subscription_status,
+      row.stripe_current_period_end !== undefined
+        ? row.stripe_current_period_end
+        : existing.stripe_current_period_end,
+      row.plugin_entitlements ?? existing.plugin_entitlements,
+      row.stripe_subscription_status ?? existing.subscription_status,
+      row.stripe_current_period_end !== undefined
+        ? row.stripe_current_period_end
+        : existing.subscription_expires_at,
+      Date.now(),
+      callsign,
+    )
+    .run();
+  return getManagedUser(db, callsign);
+}
+
+export async function addManagedUserCreditCents(
+  db: D1Database,
+  callsign: string,
+  amountCents: number,
+): Promise<ManagedUserRow | null> {
+  await db
+    .prepare('UPDATE admin_users SET credit_balance_cents = credit_balance_cents + ?, updated_at = ? WHERE callsign = ?')
+    .bind(Math.max(0, Math.round(amountCents)), Date.now(), callsign)
+    .run();
+  return getManagedUser(db, callsign);
+}
+
 // --- managed plugins --------------------------------------------------------
 
 export async function listManagedPlugins(db: D1Database): Promise<ManagedPluginRow[]> {
@@ -384,4 +464,31 @@ export async function upsertManagedPlugin(
   const saved = await getManagedPlugin(db, row.plugin_id);
   if (!saved) throw new Error('managed plugin upsert failed');
   return saved;
+}
+
+export async function setManagedPluginStripeCatalog(
+  db: D1Database,
+  pluginId: string,
+  row: {
+    stripe_product_id: string;
+    stripe_price_id: string;
+    stripe_price_cents: number;
+    stripe_price_currency: string;
+  },
+): Promise<ManagedPluginRow | null> {
+  await db
+    .prepare(
+      'UPDATE managed_plugins SET stripe_product_id = ?, stripe_price_id = ?, ' +
+        'stripe_price_cents = ?, stripe_price_currency = ?, updated_at = ? WHERE plugin_id = ?',
+    )
+    .bind(
+      row.stripe_product_id,
+      row.stripe_price_id,
+      row.stripe_price_cents,
+      row.stripe_price_currency,
+      Date.now(),
+      pluginId,
+    )
+    .run();
+  return getManagedPlugin(db, pluginId);
 }

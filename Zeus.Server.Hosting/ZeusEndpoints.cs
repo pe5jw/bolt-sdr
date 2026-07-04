@@ -3727,8 +3727,58 @@ public static class ZeusEndpoints
             return Results.Ok(qrz.GetStatus());
         });
 
-        app.MapGet("/api/users/session", (QrzService qrz, UserManagementStore users) =>
-            Results.Ok(users.GetSession(qrz.GetStatus())));
+        app.MapGet("/api/users/session", async (
+            QrzService qrz,
+            UserManagementStore users,
+            Zeus.Server.Hosting.RemoteUserAccessClient remoteUsers,
+            HttpContext ctx) =>
+        {
+            var qrzStatus = qrz.GetStatus();
+            if (!qrzStatus.Connected)
+                return Results.Ok(users.GetSession(qrzStatus));
+
+            var remoteSession = await remoteUsers.TryGetSessionAsync(qrz, qrzStatus, ctx.RequestAborted)
+                .ConfigureAwait(false);
+            if (remoteSession is not null) return Results.Ok(remoteSession);
+
+            if (remoteUsers.Enabled)
+                return Results.Ok(remoteUsers.RemoteUnavailableSession(qrzStatus));
+
+            return Results.Ok(users.GetSession(qrzStatus));
+        });
+
+        app.MapPost("/api/plugins/checkout", async (
+            Zeus.Server.Hosting.PluginCheckoutRequest req,
+            QrzService qrz,
+            Zeus.Server.Hosting.RemoteUserAccessClient remoteUsers,
+            HttpContext ctx) =>
+        {
+            var pluginIds = req.PluginIds
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id.Trim().ToLowerInvariant())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (pluginIds.Length == 0)
+                return Results.BadRequest(new { error = "pluginId required" });
+
+            try
+            {
+                var response = await remoteUsers.CreateCheckoutAsync(
+                    qrz,
+                    pluginIds,
+                    req.ReturnUrl,
+                    ctx.RequestAborted).ConfigureAwait(false);
+                return Results.Ok(response);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status402PaymentRequired);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
 
         app.MapGet("/api/admin/users", (QrzService qrz, UserManagementStore users) =>
         {

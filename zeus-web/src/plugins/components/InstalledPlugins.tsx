@@ -8,8 +8,9 @@ import { useEffect, useState } from 'react';
 
 import { usePluginsStore } from '../state/plugins-store';
 import type { PluginDto } from '../api/plugins';
+import { createPluginCheckout } from '../api/plugins';
 import { ConfirmDialog } from '../../layout/ConfirmDialog';
-import { pluginAccessFor } from '../../state/user-access-store';
+import { pluginAccessFor, useUserAccessStore } from '../../state/user-access-store';
 
 type InstalledListKind = 'plugins' | 'vsts';
 
@@ -124,9 +125,15 @@ export function InstalledPlugins({
   const blocked = usePluginsStore((s) => s.blocked);
   const load = usePluginsStore((s) => s.installedLoad);
   const refresh = usePluginsStore((s) => s.refreshInstalled);
+  const uninstall = usePluginsStore((s) => s.uninstall);
+  const uninstallInflight = usePluginsStore((s) => s.uninstallInflight);
   const uninstallError = usePluginsStore((s) => s.lastUninstallError);
   const uninstallNotice = usePluginsStore((s) => s.lastUninstallNotice);
   const clearUninstall = usePluginsStore((s) => s.clearUninstallFeedback);
+  const refreshUserSession = useUserAccessStore((s) => s.refreshSession);
+  const [blockedRemove, setBlockedRemove] = useState<PluginDto | null>(null);
+  const [checkoutPluginId, setCheckoutPluginId] = useState<string | null>(null);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!load.loaded && !load.inflight) {
@@ -136,6 +143,29 @@ export function InstalledPlugins({
 
   const copy = LIST_COPY[kind];
   const items = kind === 'vsts' ? installedVsts : installed;
+
+  async function keepBlockedAccess(plugin: PluginDto) {
+    if (checkoutPluginId) return;
+    setCheckoutPluginId(plugin.id);
+    setCheckoutError(null);
+    try {
+      const checkout = await createPluginCheckout([plugin.id]);
+      if (checkout.url) {
+        window.location.href = checkout.url;
+        return;
+      }
+      if (checkout.subscriptionUpdated) {
+        await refreshUserSession();
+        await refresh();
+        return;
+      }
+      setCheckoutError('Subscription checkout did not return a billing session.');
+    } catch (err) {
+      setCheckoutError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCheckoutPluginId(null);
+    }
+  }
 
   return (
     <div
@@ -263,6 +293,14 @@ export function InstalledPlugins({
           }}
         >
           <strong style={{ fontSize: 12 }}>Plugin subscriptions required</strong>
+          <span style={{ color: 'var(--fg-2)', fontSize: 12 }}>
+            These installed plugins are now managed as paid subscriptions. Keep access by subscribing, or remove the plugin.
+          </span>
+          {checkoutError && (
+            <span role="alert" style={{ color: 'var(--tx)', fontSize: 12 }}>
+              {checkoutError}
+            </span>
+          )}
           {blocked.map((p) => {
             const access = pluginAccessFor(p.id);
             const managed = access.managedPlugin;
@@ -270,17 +308,60 @@ export function InstalledPlugins({
               ? `${managed.currency} ${(managed.monthlyPriceCents / 100).toFixed(2)}/mo`
               : null;
             return (
-              <div key={p.id} style={{ display: 'grid', gap: 2 }}>
-                <span style={{ fontWeight: 700 }}>{p.name}</span>
-                <span style={{ color: 'var(--fg-2)', fontSize: 12 }}>
-                  {price
-                    ? `${access.reason ?? 'Plugin subscription required'} - ${price}`
-                    : access.reason ?? 'Plugin subscription required'}
+              <div
+                key={p.id}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1fr) auto auto',
+                  gap: 8,
+                  alignItems: 'center',
+                }}
+              >
+                <span style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                  <span style={{ fontWeight: 700 }}>{p.name}</span>
+                  <span style={{ color: 'var(--fg-2)', fontSize: 12 }}>
+                    {price
+                      ? `${access.reason ?? 'Plugin subscription required'} - ${price}`
+                      : access.reason ?? 'Plugin subscription required'}
+                  </span>
                 </span>
+                <button
+                  type="button"
+                  className="btn sm active"
+                  onClick={() => void keepBlockedAccess(p)}
+                  disabled={checkoutPluginId !== null || uninstallInflight}
+                >
+                  {checkoutPluginId === p.id ? 'WORKING…' : 'KEEP ACCESS'}
+                </button>
+                <button
+                  type="button"
+                  className="btn sm"
+                  onClick={() => setBlockedRemove(p)}
+                  disabled={checkoutPluginId !== null || uninstallInflight}
+                >
+                  REMOVE
+                </button>
               </div>
             );
           })}
         </div>
+      )}
+
+      {blockedRemove && (
+        <ConfirmDialog
+          title="Remove paid plugin"
+          confirmLabel="Remove"
+          onCancel={() => setBlockedRemove(null)}
+          onConfirm={() => {
+            void uninstall(blockedRemove.id);
+            setBlockedRemove(null);
+          }}
+        >
+          <p>Remove {blockedRemove.name}?</p>
+          <p>
+            Access is currently blocked by subscription policy. Removing it keeps Zeus compliant with the admin plugin policy.
+          </p>
+        </ConfirmDialog>
       )}
     </div>
   );

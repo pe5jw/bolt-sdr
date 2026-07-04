@@ -20,6 +20,7 @@ import { PluginBrowser } from './PluginBrowser';
 import { InstallFromUrl } from './InstallFromUrl';
 import { usePluginsStore } from '../state/plugins-store';
 import type { PluginDto, RegistryCatalog } from '../api/plugins';
+import { useUserAccessStore } from '../../state/user-access-store';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -31,6 +32,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 const EMPTY_INSTALLED = {
   installed: [] as PluginDto[],
   installedVsts: [] as PluginDto[],
+  blocked: [] as PluginDto[],
   sdkAbi: 1,
   sdkVersion: '0.6.0',
   installedLoad: { loaded: true, inflight: false, loadError: null },
@@ -50,6 +52,7 @@ function resetStore() {
   usePluginsStore.setState({
     installed: [],
     installedVsts: [],
+    blocked: [],
     sdkAbi: 0,
     sdkVersion: '',
     installedLoad: { loaded: false, inflight: false, loadError: null },
@@ -62,6 +65,53 @@ function resetStore() {
     uninstallInflight: false,
     lastUninstallError: null,
     lastUninstallNotice: null,
+  });
+  useUserAccessStore.setState({
+    checked: true,
+    loading: false,
+    adminLoading: false,
+    saving: false,
+    error: null,
+    adminError: null,
+    session: null,
+    users: [],
+    managedPlugins: [],
+  });
+}
+
+function setPluginSession(plugin: {
+  pluginId: string;
+  displayName: string;
+  subscriptionRequired: boolean;
+  monthlyPriceCents: number;
+}) {
+  useUserAccessStore.setState({
+    checked: true,
+    session: {
+      qrzConnected: true,
+      callsign: 'N9WAR',
+      displayName: 'N9WAR',
+      accessAllowed: true,
+      isAdmin: false,
+      hasQrzXmlSubscription: true,
+      subscriptionStatus: 'manual',
+      subscriptionExpiresUtc: null,
+      pluginAccessMode: 'all',
+      pluginEntitlements: [],
+      managedPlugins: [
+        {
+          ...plugin,
+          currency: 'USD',
+          active: true,
+          checkoutUrl: null,
+          notes: null,
+          createdUtc: '',
+          updatedUtc: '',
+        },
+      ],
+      denialReason: null,
+      user: null,
+    },
   });
 }
 
@@ -444,6 +494,173 @@ describe('InstalledPlugins', () => {
     expect(deleteCall).toBeDefined();
     expect(deleteCall![0]).toBe('/api/plugins/demo');
   });
+
+  it('prompts blocked installed plugins to keep access or remove', async () => {
+    const blockedPlugin: PluginDto = {
+      id: 'demo',
+      scanned: false,
+      name: 'Demo Plugin',
+      version: '0.1.0',
+      author: '',
+      description: '',
+      homepage: null,
+      license: '',
+      capabilities: [],
+      ui: null,
+      audio: null,
+    };
+    usePluginsStore.setState({
+      ...EMPTY_INSTALLED,
+      blocked: [blockedPlugin],
+    });
+    setPluginSession({
+      pluginId: 'demo',
+      displayName: 'Demo Plugin',
+      subscriptionRequired: true,
+      monthlyPriceCents: 500,
+    });
+
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
+      if (input === '/api/plugins/checkout') {
+        return Promise.resolve(jsonResponse({
+          url: null,
+          subscriptionUpdated: true,
+          pluginIds: ['demo'],
+        }));
+      }
+      if (input === '/api/users/session') {
+        return Promise.resolve(jsonResponse({
+          qrzConnected: true,
+          callsign: 'N9WAR',
+          displayName: 'N9WAR',
+          accessAllowed: true,
+          isAdmin: false,
+          hasQrzXmlSubscription: true,
+          subscriptionStatus: 'active',
+          subscriptionExpiresUtc: null,
+          pluginAccessMode: 'all',
+          pluginEntitlements: [
+            {
+              pluginId: 'demo',
+              accessAllowed: true,
+              subscriptionStatus: 'active',
+              subscriptionExpiresUtc: null,
+              denialReason: null,
+            },
+          ],
+          managedPlugins: [
+            {
+              pluginId: 'demo',
+              displayName: 'Demo Plugin',
+              subscriptionRequired: true,
+              monthlyPriceCents: 500,
+              currency: 'USD',
+              active: true,
+              checkoutUrl: null,
+              notes: null,
+              createdUtc: '',
+              updatedUtc: '',
+            },
+          ],
+          denialReason: null,
+          user: null,
+        }));
+      }
+      if (init?.method === 'DELETE') {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return Promise.resolve(jsonResponse({ sdkAbi: 1, sdkVersion: '', plugins: [] }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    act(() => {
+      root.render(<InstalledPlugins />);
+    });
+    expect(container.textContent).toContain('These installed plugins are now managed as paid subscriptions');
+    expect(container.textContent).toContain('Demo Plugin');
+    expect(container.textContent).toContain('USD 5.00/mo');
+
+    const findButton = (label: string) =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+        (b) => b.textContent?.trim() === label,
+      );
+
+    const keepButton = findButton('KEEP ACCESS');
+    expect(keepButton).toBeDefined();
+    await act(async () => {
+      keepButton!.click();
+    });
+    await flush();
+
+    const checkoutCall = fetchMock.mock.calls.find((c) => c[0] === '/api/plugins/checkout');
+    expect(checkoutCall).toBeDefined();
+    expect(JSON.parse(String(checkoutCall![1]?.body))).toMatchObject({
+      pluginIds: ['demo'],
+    });
+
+    expect(fetchMock.mock.calls.some(
+      (c) => (c[1] as RequestInit | undefined)?.method === 'DELETE',
+    )).toBe(false);
+  });
+
+  it('removes blocked installed plugins when the operator declines subscription', async () => {
+    const blockedPlugin: PluginDto = {
+      id: 'demo',
+      scanned: false,
+      name: 'Demo Plugin',
+      version: '0.1.0',
+      author: '',
+      description: '',
+      homepage: null,
+      license: '',
+      capabilities: [],
+      ui: null,
+      audio: null,
+    };
+    usePluginsStore.setState({
+      ...EMPTY_INSTALLED,
+      blocked: [blockedPlugin],
+    });
+    setPluginSession({
+      pluginId: 'demo',
+      displayName: 'Demo Plugin',
+      subscriptionRequired: true,
+      monthlyPriceCents: 500,
+    });
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((_input, init) => {
+      if (init?.method === 'DELETE') {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return Promise.resolve(jsonResponse({ sdkAbi: 1, sdkVersion: '', plugins: [] }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    act(() => {
+      root.render(<InstalledPlugins />);
+    });
+
+    const findButton = (label: string) =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+        (b) => b.textContent?.trim() === label,
+      );
+    const removeButton = findButton('REMOVE');
+    expect(removeButton).toBeDefined();
+    await act(async () => {
+      removeButton!.click();
+    });
+    await flush();
+    expect(container.querySelector<HTMLElement>('[role="alertdialog"]')?.textContent)
+      .toContain('Remove Demo Plugin');
+    const confirmRemove = findButton('Remove');
+    expect(confirmRemove).toBeDefined();
+    await act(async () => {
+      confirmRemove!.click();
+    });
+    await flush();
+    const deleteCall = fetchMock.mock.calls.find(
+      (c) => (c[1] as RequestInit | undefined)?.method === 'DELETE',
+    );
+    expect(deleteCall?.[0]).toBe('/api/plugins/demo');
+  });
 });
 
 describe('PluginBrowser', () => {
@@ -588,6 +805,78 @@ describe('PluginBrowser', () => {
     expect(body.source).toBe('registry');
     expect(body.id).toBe('demo');
     expect(body.version).toBe('0.1.0');
+  });
+
+  it('uses managed plugin pricing from the user session to gate Browse installs', async () => {
+    setPluginSession({
+      pluginId: 'demo',
+      displayName: 'Demo',
+      subscriptionRequired: true,
+      monthlyPriceCents: 700,
+    });
+    usePluginsStore.setState({
+      ...EMPTY_INSTALLED,
+      ...EMPTY_REGISTRY,
+      registry: {
+        schemaVersion: 1,
+        generated: '2026-05-17T00:00:00Z',
+        plugins: [
+          {
+            id: 'demo',
+            name: 'Demo',
+            description: '',
+            author: '',
+            license: '',
+            homepage: null,
+            categories: [],
+            verified: false,
+            subscription: null,
+            versions: [
+              {
+                version: '0.1.0',
+                sdkAbi: 1,
+                sdkMinVersion: '0.6.0',
+                platforms: ['any'],
+                downloadUrl: 'https://example.com/demo.zip',
+                sha256: 'a'.repeat(64),
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      if (input === '/api/plugins/checkout') {
+        return Promise.resolve(jsonResponse({
+          url: null,
+          subscriptionUpdated: false,
+          pluginIds: ['demo'],
+        }));
+      }
+      return Promise.resolve(jsonResponse({ sdkAbi: 1, sdkVersion: '', plugins: [] }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    act(() => {
+      root.render(<PluginBrowser />);
+    });
+    expect(container.textContent).toContain('Plugin subscription required - USD 7.00/mo');
+
+    const subscribeBtn = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button'),
+    ).find((b) => b.textContent?.trim() === 'SUBSCRIBE');
+    expect(subscribeBtn).toBeDefined();
+    await act(async () => {
+      subscribeBtn!.click();
+    });
+    await flush();
+
+    const checkoutCall = fetchMock.mock.calls.find((c) => c[0] === '/api/plugins/checkout');
+    expect(checkoutCall).toBeDefined();
+    expect(JSON.parse(String(checkoutCall![1]?.body))).toMatchObject({
+      pluginIds: ['demo'],
+    });
+    expect(fetchMock.mock.calls.some((c) => c[0] === '/api/plugins/install')).toBe(false);
   });
 
   it('renders a registry load error when the slice has one', () => {

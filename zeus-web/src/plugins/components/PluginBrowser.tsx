@@ -12,9 +12,9 @@ import type {
   RegistryPluginEntry,
   RegistryPluginVersion,
 } from '../api/plugins';
-import { registryEntryToManagedPlugin } from '../api/plugins';
+import { createPluginCheckout, registryEntryToManagedPlugin } from '../api/plugins';
 import { RestartRequiredModal } from '../../components/RestartRequiredModal';
-import { pluginAccessFor } from '../../state/user-access-store';
+import { pluginAccessFor, useUserAccessStore } from '../../state/user-access-store';
 
 function latestVersion(
   entry: RegistryPluginEntry,
@@ -96,11 +96,11 @@ function RegistryCard({
 }) {
   const install = usePluginsStore((s) => s.install);
   const installing = usePluginsStore((s) => s.installInflight);
+  const refreshUserSession = useUserAccessStore((s) => s.refreshSession);
   const latest = useMemo(() => latestVersion(entry), [entry]);
   const alreadyInstalled = installedIds.has(entry.id);
   const registryManagedPlugin = useMemo(() => registryEntryToManagedPlugin(entry), [entry]);
   const pluginAccess = pluginAccessFor(entry.id, false, registryManagedPlugin);
-  const checkoutUrl = pluginAccess.managedPlugin?.checkoutUrl;
   const price = subscriptionPrice(pluginAccess);
 
   // Restart-required modal — fires after a successful install of THIS
@@ -110,10 +110,31 @@ function RegistryCard({
   // Same modal the Download Audio Suite bundle install uses.
   const [restartModalOpen, setRestartModalOpen] = useState(false);
   const [installedDisplayName, setInstalledDisplayName] = useState<string | null>(null);
+  const [checkoutInflight, setCheckoutInflight] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
   const onInstall = async () => {
     if (!pluginAccess.allowed) {
-      if (checkoutUrl) window.location.href = checkoutUrl;
+      if (checkoutInflight) return;
+      setCheckoutInflight(true);
+      setCheckoutError(null);
+      try {
+        const checkout = await createPluginCheckout([entry.id]);
+        if (checkout.url) {
+          window.location.href = checkout.url;
+          return;
+        }
+        if (checkout.subscriptionUpdated) {
+          await refreshUserSession();
+          setCheckoutError(null);
+          return;
+        }
+        setCheckoutError('Subscription checkout did not return a billing session.');
+      } catch (err) {
+        setCheckoutError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setCheckoutInflight(false);
+      }
       return;
     }
     if (!latest || installing) return;
@@ -170,7 +191,7 @@ function RegistryCard({
           type="button"
           className="btn sm"
           onClick={onInstall}
-          disabled={!latest || installing || alreadyInstalled || (!pluginAccess.allowed && !checkoutUrl)}
+          disabled={!latest || installing || checkoutInflight || alreadyInstalled}
           title={!pluginAccess.allowed ? pluginAccess.reason ?? 'Plugin subscription required' : undefined}
           aria-label={
             !pluginAccess.allowed
@@ -181,10 +202,10 @@ function RegistryCard({
           }
         >
           {!pluginAccess.allowed
-            ? 'SUBSCRIBE'
+            ? checkoutInflight ? 'WORKING…' : 'SUBSCRIBE'
             : alreadyInstalled
               ? 'INSTALLED'
-              : installing
+              : installing || checkoutInflight
                 ? 'WORKING…'
                 : 'INSTALL'}
         </button>
@@ -195,6 +216,12 @@ function RegistryCard({
           {price
             ? `${pluginAccess.reason ?? 'Plugin subscription required'} - ${price}`
             : pluginAccess.reason ?? 'Plugin subscription required'}
+        </div>
+      )}
+
+      {checkoutError && (
+        <div style={{ color: 'var(--tx)', fontSize: 11 }}>
+          {checkoutError}
         </div>
       )}
 

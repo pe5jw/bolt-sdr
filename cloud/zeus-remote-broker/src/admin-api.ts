@@ -37,11 +37,18 @@ import {
   recordManagedUserLogin,
   upsertManagedUser,
   updateManagedUser,
+  addManagedUserCreditCents,
   listManagedPlugins,
+  setManagedPluginStripeCatalog,
   upsertManagedPlugin,
   type ManagedUserRow,
   type ManagedPluginRow,
 } from './admin-db';
+import {
+  ensureStripeCatalogForPlugin,
+  grantStripeCustomerCredit,
+  stripeConfigured,
+} from './stripe-billing';
 
 /** Resolved identity of an authenticated caller. */
 export interface AuthCtx {
@@ -68,7 +75,7 @@ interface RegistryPluginSeed {
   notes: string | null;
 }
 
-interface ManagedPluginDto {
+export interface ManagedPluginDto {
   pluginId: string;
   displayName: string;
   subscriptionRequired: boolean;
@@ -80,6 +87,9 @@ interface ManagedPluginDto {
   createdAt: number | null;
   updatedAt: number | null;
   source?: 'registry' | 'admin';
+  stripeProductId?: string | null;
+  stripePriceId?: string | null;
+  stripeSyncEnabled?: boolean;
 }
 
 interface PresenceOperatorDto {
@@ -177,6 +187,10 @@ export async function handleAdmin(
     const userPut = /^\/admin\/users\/([^/]+)$/.exec(path);
     if (userPut && request.method === 'PUT') {
       return await handleUpdateManagedUser(decodeURIComponent(userPut[1]), request, env, auth, cors);
+    }
+    const userCredit = /^\/admin\/users\/([^/]+)\/credits$/.exec(path);
+    if (userCredit && request.method === 'POST') {
+      return await handleGrantUserCredit(decodeURIComponent(userCredit[1]), request, env, auth, cors);
     }
 
     // plugin catalog / pricing
@@ -419,6 +433,40 @@ async function handleUpdateManagedUser(
   return json(toManagedUserDto(user), 200, cors);
 }
 
+async function handleGrantUserCredit(
+  target: string,
+  request: Request,
+  env: Env,
+  auth: AuthCtx,
+  cors: Record<string, string>,
+): Promise<Response> {
+  const callsign = norm(target);
+  if (!callsign) return json({ error: 'callsign required' }, 400, cors);
+  const body = await safeJson(request);
+  const amountCents = Math.max(0, Math.round(optionalNumber(body.amountCents) ?? 0));
+  if (amountCents <= 0) return json({ error: 'amountCents required' }, 400, cors);
+
+  const existing = (await updateManagedUser(env.ADMIN_DB, callsign, {}))
+    ?? (await upsertManagedUser(env.ADMIN_DB, normalizedUserRow(callsign, { callsign })));
+  if (existing.stripe_customer_id) {
+    await grantStripeCustomerCredit(
+      env,
+      existing.stripe_customer_id,
+      amountCents,
+      optionalString(body.currency) ?? 'USD',
+      optionalString(body.note),
+    );
+  }
+  const user = await addManagedUserCreditCents(env.ADMIN_DB, callsign, amountCents);
+  await insertAudit(env.ADMIN_DB, {
+    actor: auth.callsign,
+    action: 'user.credit',
+    target: callsign,
+    detail: String(amountCents),
+  });
+  return json(toManagedUserDto(user ?? existing), 200, cors);
+}
+
 // --- managed plugins --------------------------------------------------------
 
 async function handleUpsertManagedPlugin(
@@ -433,13 +481,26 @@ async function handleUpsertManagedPlugin(
   if (!pluginId) return json({ error: 'plugin id required' }, 400, cors);
 
   const plugin = await upsertManagedPlugin(env.ADMIN_DB, normalizedPluginRow(pluginId, body));
+  const synced = await maybeSyncStripeCatalog(env, plugin);
+  const responsePlugin = synced ?? plugin;
   await insertAudit(env.ADMIN_DB, {
     actor: auth.callsign,
     action: 'plugin.upsert',
     target: pluginId,
     detail: String(plugin.monthly_price_cents),
   });
-  return json(toManagedPluginDto(plugin), 200, cors);
+  return json(toManagedPluginDto(responsePlugin), 200, cors);
+}
+
+async function maybeSyncStripeCatalog(env: Env, plugin: ManagedPluginRow): Promise<ManagedPluginRow | null> {
+  const sync = await ensureStripeCatalogForPlugin(env, plugin);
+  if (!sync) return plugin;
+  return setManagedPluginStripeCatalog(env.ADMIN_DB, plugin.plugin_id, {
+    stripe_product_id: sync.productId,
+    stripe_price_id: sync.priceId,
+    stripe_price_cents: sync.priceCents,
+    stripe_price_currency: sync.priceCurrency,
+  });
 }
 
 // --- support request --------------------------------------------------------
@@ -560,7 +621,7 @@ async function ensureBootstrap(env: Env): Promise<void> {
 
 // --- helpers ----------------------------------------------------------------
 
-async function mergedManagedPlugins(env: Env) {
+export async function mergedManagedPlugins(env: Env) {
   const [rows, registry] = await Promise.all([
     listManagedPlugins(env.ADMIN_DB),
     fetchRegistryPluginSeeds(env),
@@ -574,11 +635,14 @@ async function mergedManagedPlugins(env: Env) {
       monthlyPriceCents: seed.monthlyPriceCents,
       currency: seed.currency,
       active: true,
-      checkoutUrl: seed.checkoutUrl,
+      checkoutUrl: null,
       notes: seed.notes,
       createdAt: null,
       updatedAt: null,
       source: 'registry',
+      stripeProductId: null,
+      stripePriceId: null,
+      stripeSyncEnabled: stripeConfigured(env),
     });
   }
   for (const row of rows) {
@@ -684,6 +748,11 @@ function toManagedUserDto(
     onlineSince: presence?.since ?? null,
     lastSeenAt: presence?.lastSeen ?? row.last_login_at,
     onlineSource: presence !== null ? 'presence' : directoryOnline ? 'directory' : 'none',
+    stripeCustomerId: row.stripe_customer_id ?? null,
+    stripeSubscriptionId: row.stripe_subscription_id ?? null,
+    stripeSubscriptionStatus: row.stripe_subscription_status ?? null,
+    stripeCurrentPeriodEnd: row.stripe_current_period_end ?? null,
+    creditBalanceCents: row.credit_balance_cents ?? 0,
     presence: presence
       ? {
           ip: presence.ip,
@@ -710,6 +779,9 @@ function toManagedPluginDto(row: ManagedPluginRow): ManagedPluginDto {
     notes: row.notes,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    stripeProductId: row.stripe_product_id ?? null,
+    stripePriceId: row.stripe_price_id ?? null,
+    stripeSyncEnabled: row.subscription_required === 1 && row.monthly_price_cents > 0,
   };
 }
 
@@ -749,7 +821,7 @@ function normalizedPluginRow(pluginId: string, body: Record<string, unknown>) {
     monthly_price_cents: Math.max(0, Math.round(cents ?? 0)),
     currency: (optionalString(body.currency) ?? 'USD').toUpperCase(),
     active: bool01(body.active, true),
-    checkout_url: optionalString(body.checkoutUrl),
+    checkout_url: null,
     notes: optionalString(body.notes),
   };
 }

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Zeus.Plugins.Host.Registry;
 
@@ -20,6 +21,7 @@ public static class ServiceCollectionExtensions
         RegistryClientOptions? registryOptions = null)
     {
         services.AddSingleton<PluginLoader>();
+        services.TryAddSingleton<IPluginInstallAccessGate, AllowAllPluginInstallAccessGate>();
         services.AddSingleton(sp => new PluginSettingsStore(
             prefsDbPathProvider(),
             sp.GetService<ILogger<PluginSettingsStore>>()));

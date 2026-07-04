@@ -10,6 +10,11 @@ import {
 import { validateCrashBody } from './crash-validate';
 import { sanitizeOperatorMeta, cleanCountry } from './presence-meta';
 import { recordManagedUserLogin } from './admin-db';
+import {
+  handleBillingCheckout,
+  handleBillingWebhook,
+  handleUserSession,
+} from './billing-api';
 
 export { SignalRoom } from './signal-room';
 export { RateLimiter } from './rate-limiter';
@@ -59,6 +64,13 @@ export default {
       return handleAdmin(request, env, ctx);
     }
 
+    // Stripe sends these without QRZ headers; authenticity is proven by the
+    // Stripe-Signature HMAC in handleBillingWebhook.
+    if (url.pathname === '/billing/webhook') {
+      if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
+      return handleBillingWebhook(request, env);
+    }
+
     // Operator presence: the radio's sidecar registers/heartbeats/drops here so a
     // maintainer can see it as "online" (read back via /admin/presence). Mirrors
     // the host-signaling QRZ gate in /signal: the verified callsign is the only
@@ -103,6 +115,28 @@ export default {
       if (!verified) return new Response('qrz auth required', { status: 401 });
       await recordManagedUserLogin(env.ADMIN_DB, verified);
       return Response.json({ ok: true, callsign: verified });
+    }
+
+    // QRZ-verified user-management snapshot consumed by the Zeus app. This is
+    // the central gate: app access, plugin pricing, and per-plugin entitlements
+    // stream from the admin D1 ledger into /api/users/session locally.
+    if (url.pathname === '/users/session') {
+      if (request.method !== 'GET') return new Response('method not allowed', { status: 405 });
+      if (await rateLimited(env, clientIp(request))) return new Response('rate limited', { status: 429 });
+      const verified = await verifyOperator(request, env, ctx);
+      if (!verified) return new Response('qrz auth required', { status: 401 });
+      return handleUserSession(verified, env);
+    }
+
+    // QRZ-verified billing checkout. The app asks here for a paid plugin; the
+    // broker either opens a new Stripe subscription or adds the plugin's price
+    // to the operator's existing subscription.
+    if (url.pathname === '/billing/checkout') {
+      if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
+      if (await rateLimited(env, clientIp(request))) return new Response('rate limited', { status: 429 });
+      const verified = await verifyOperator(request, env, ctx);
+      if (!verified) return new Response('qrz auth required', { status: 401 });
+      return handleBillingCheckout(request, env, verified);
     }
 
     // Crash auto-share upload: the sidecar POSTs a (already-redacted)

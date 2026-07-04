@@ -158,6 +158,7 @@ const MobileApp = lazy(async () => {
 // previous 333 ms cadence accounted for ~3 of the ~5 idle-RX fetches/sec and
 // drove repeated applyState/hydrateFromState fan-out into the React tree.
 const STATE_POLL_MS = 1000;
+const USER_ACCESS_REFRESH_MS = 30_000;
 // When MIDI is enabled the operator's physical knob/fader can change server
 // state at whatever rate they move it; the 1 s poll makes the on-screen
 // slider jump ~1 s behind their hand, which reads as broken. Speeding up
@@ -189,6 +190,14 @@ export default function App() {
   useEffect(() => {
     void refreshAccessSession();
   }, [refreshAccessSession]);
+
+  useEffect(() => {
+    if (!appShellEnabled) return;
+    const id = window.setInterval(() => {
+      void refreshAccessSession();
+    }, USER_ACCESS_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [appShellEnabled, refreshAccessSession]);
 
   useEffect(() => {
     if (!appShellEnabled) return;

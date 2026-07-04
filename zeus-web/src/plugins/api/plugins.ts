@@ -119,7 +119,7 @@ export function registryEntryToManagedPlugin(entry: RegistryPluginEntry) {
     monthlyPriceCents: subscription?.monthlyPriceCents ?? 0,
     currency: subscription?.currency ?? 'USD',
     active: true,
-    checkoutUrl: subscription?.checkoutUrl ?? null,
+    checkoutUrl: null,
     notes: subscription?.notes ?? null,
     createdUtc: '',
     updatedUtc: '',
@@ -135,6 +135,12 @@ export type InstallRequest = {
   sha256?: string;
   id?: string;
   version?: string;
+};
+
+export type PluginCheckoutResponse = {
+  url: string | null;
+  subscriptionUpdated: boolean;
+  pluginIds: string[];
 };
 
 // ---------------------------------------------------------------------------
@@ -361,6 +367,32 @@ export async function installPlugin(
   });
   if (!res.ok) await failWith(res, '/api/plugins/install');
   return parsePluginDto(await res.json());
+}
+
+function parsePluginCheckout(raw: unknown): PluginCheckoutResponse {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  return {
+    url: typeof o.url === 'string' && o.url.length > 0 ? o.url : null,
+    subscriptionUpdated: o.subscriptionUpdated === true,
+    pluginIds: asStringArray(o.pluginIds),
+  };
+}
+
+export async function createPluginCheckout(
+  pluginIds: string[],
+  signal?: AbortSignal,
+): Promise<PluginCheckoutResponse> {
+  const res = await fetch('/api/plugins/checkout', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      pluginIds,
+      returnUrl: typeof window !== 'undefined' ? window.location.href : undefined,
+    }),
+    signal,
+  });
+  if (!res.ok) await failWith(res, '/api/plugins/checkout');
+  return parsePluginCheckout(await res.json());
 }
 
 export type UninstallResult = {

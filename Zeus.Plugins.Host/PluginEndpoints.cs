@@ -54,10 +54,27 @@ public static class PluginEndpoints
         });
 
         app.MapPost("/api/plugins/install", async (
-            InstallRequest req, PluginInstaller installer, CancellationToken ct) =>
+            InstallRequest req,
+            PluginInstaller installer,
+            IServiceProvider services,
+            CancellationToken ct) =>
         {
             try
             {
+                if (string.Equals(req.Source, "registry", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(req.Id))
+                {
+                    var accessGate = services.GetService<IPluginInstallAccessGate>()
+                        ?? new AllowAllPluginInstallAccessGate();
+                    var access = await accessGate.CheckInstallAsync(req.Id, ct).ConfigureAwait(false);
+                    if (!access.Allowed)
+                    {
+                        return Results.Json(
+                            new { error = access.Reason ?? "Plugin subscription required" },
+                            statusCode: StatusCodes.Status402PaymentRequired);
+                    }
+                }
+
                 InstalledPlugin installed = req.Source switch
                 {
                     "url"      => await installer.InstallFromUrlAsync(req.Url ?? "", req.Sha256, ct),

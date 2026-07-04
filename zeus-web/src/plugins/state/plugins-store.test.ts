@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { usePluginsStore } from './plugins-store';
+import { useUserAccessStore } from '../../state/user-access-store';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -31,6 +32,17 @@ function resetStore() {
     uninstallInflight: false,
     lastUninstallError: null,
     lastUninstallNotice: null,
+  });
+  useUserAccessStore.setState({
+    checked: true,
+    loading: false,
+    adminLoading: false,
+    saving: false,
+    error: null,
+    adminError: null,
+    session: null,
+    users: [],
+    managedPlugins: [],
   });
 }
 
@@ -100,6 +112,65 @@ describe('usePluginsStore', () => {
       'com.openhpsdr.zeus.vst.tdrnova',
       'com.openhpsdr.zeus.rxau.clear',
     ]);
+  });
+
+  it('refreshInstalled moves newly paid installed plugins into blocked access', async () => {
+    useUserAccessStore.setState({
+      session: {
+        qrzConnected: true,
+        callsign: 'N9WAR',
+        displayName: 'N9WAR',
+        accessAllowed: true,
+        isAdmin: false,
+        hasQrzXmlSubscription: true,
+        subscriptionStatus: 'manual',
+        subscriptionExpiresUtc: null,
+        pluginAccessMode: 'all',
+        pluginEntitlements: [],
+        managedPlugins: [
+          {
+            pluginId: 'demo',
+            displayName: 'Demo',
+            subscriptionRequired: true,
+            monthlyPriceCents: 500,
+            currency: 'USD',
+            active: true,
+            checkoutUrl: null,
+            notes: null,
+            createdUtc: '',
+            updatedUtc: '',
+          },
+        ],
+        denialReason: null,
+        user: null,
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(
+        jsonResponse({
+          sdkAbi: 1,
+          sdkVersion: '0.6.0',
+          plugins: [
+            {
+              id: 'demo',
+              name: 'Demo',
+              version: '0.1.0',
+              author: '',
+              description: '',
+              license: 'GPL',
+              capabilities: [],
+            },
+          ],
+        }),
+      ),
+    );
+
+    await usePluginsStore.getState().refreshInstalled();
+
+    const s = usePluginsStore.getState();
+    expect(s.installed).toEqual([]);
+    expect(s.blocked.map((p) => p.id)).toEqual(['demo']);
   });
 
   it('refreshInstalled records loadError on a 500', async () => {
