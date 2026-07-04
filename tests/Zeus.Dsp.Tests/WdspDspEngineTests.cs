@@ -43,6 +43,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Contracts;
 using Zeus.Dsp;
 using Zeus.Dsp.Wdsp;
@@ -304,6 +305,53 @@ public class WdspDspEngineTests
         return false;
     }
 
+    private static void FeedTone(
+        WdspDspEngine engine,
+        int channel,
+        int sampleRateHz,
+        double toneHz,
+        double amplitude,
+        int totalComplex)
+    {
+        var iq = new double[totalComplex * 2];
+        for (int n = 0; n < totalComplex; n++)
+        {
+            double phase = 2.0 * Math.PI * toneHz * n / sampleRateHz;
+            iq[2 * n] = amplitude * Math.Cos(phase);
+            iq[2 * n + 1] = amplitude * Math.Sin(phase);
+        }
+
+        const int ChunkComplex = 126;
+        for (int off = 0; off < totalComplex; off += ChunkComplex)
+        {
+            int take = Math.Min(ChunkComplex, totalComplex - off);
+            engine.FeedIq(channel, iq.AsSpan(2 * off, 2 * take));
+        }
+    }
+
+    private static int WaitForAudio(WdspDspEngine engine, int channel)
+    {
+        var audio = new float[2048];
+        int totalDrained = 0;
+        for (int i = 0; i < 50; i++)
+        {
+            Thread.Sleep(20);
+            totalDrained += engine.ReadAudio(channel, audio);
+            if (totalDrained > 0) break;
+        }
+
+        return totalDrained;
+    }
+
+    private static float[] BuildTone(int samples, float frequencyHz, float amplitude)
+    {
+        var tone = new float[samples];
+        double phaseStep = 2.0 * Math.PI * frequencyHz / 48_000.0;
+        for (int i = 0; i < tone.Length; i++)
+            tone[i] = amplitude * (float)Math.Sin(i * phaseStep);
+        return tone;
+    }
+
     [SkippableFact]
     public void ReadAudio_DrainsSamplesAfterIqFed()
     {
@@ -400,6 +448,93 @@ public class WdspDspEngineTests
         finally
         {
             engine.CloseChannel(rx);
+        }
+    }
+
+    [SkippableFact]
+    public void NativeChannelSlots_AreProcessGlobalAcrossLiveEngines()
+    {
+        Skip.IfNot(WdspAvailable(), "libwdsp not available");
+
+        using var first = new WdspDspEngine();
+        using var second = new WdspDspEngine();
+        var liveIds = new HashSet<int>();
+
+        int firstRx = first.OpenChannel(48_000, 1024);
+        int secondRx = second.OpenChannel(48_000, 1024);
+        int firstTx = first.OpenTxChannel(outputRateHz: 48_000);
+        int secondTx = second.OpenTxChannel(outputRateHz: 48_000);
+
+        Assert.True(liveIds.Add(firstRx), $"duplicate WDSP id {firstRx}");
+        Assert.True(liveIds.Add(secondRx), $"duplicate WDSP id {secondRx}");
+        Assert.True(liveIds.Add(firstTx), $"duplicate WDSP id {firstTx}");
+        Assert.True(liveIds.Add(secondTx), $"duplicate WDSP id {secondTx}");
+    }
+
+    [SkippableFact]
+    public void OfflinePreviewDispose_DoesNotTearDownLiveRealEngineChannels()
+    {
+        Skip.IfNot(WdspAvailable(), "libwdsp not available");
+
+        OfflinePreviewDspEngine? preview = null;
+        WdspDspEngine? real = null;
+        int realRx = -1;
+
+        try
+        {
+            preview = new OfflinePreviewDspEngine(NullLogger<WdspDspEngine>.Instance);
+            int previewRx = preview.OpenChannel(sampleRateHz: 192_000, pixelWidth: 1024);
+            _ = previewRx;
+            preview.OpenTxChannel(outputRateHz: 192_000);
+
+            real = new WdspDspEngine();
+            realRx = real.OpenChannel(sampleRateHz: 192_000, pixelWidth: 1024);
+            int realTx = real.OpenTxChannel(outputRateHz: 192_000);
+            Assert.NotEqual(realRx, realTx);
+
+            preview.Dispose();
+            preview = null;
+
+            FeedTone(real, realRx, sampleRateHz: 192_000, toneHz: 1_500.0, amplitude: 0.3, totalComplex: 32 * 1024);
+            int drained = WaitForAudio(real, realRx);
+            Assert.True(drained > 0, "expected real RXA to keep draining after preview disposal");
+
+            real.SetTxMode(RxMode.USB);
+            real.SetMox(true);
+            try
+            {
+                float[] mic = BuildTone(real.TxBlockSamples, 1_000.0f, 0.01f);
+                float[] iq = new float[2 * real.TxOutputSamples];
+                int produced = 0;
+                for (int i = 0; i < 8; i++)
+                    produced = real.ProcessTxBlock(mic, iq);
+
+                Assert.Equal(real.TxOutputSamples, produced);
+            }
+            finally
+            {
+                real.SetMox(false);
+            }
+        }
+        finally
+        {
+            preview?.Dispose();
+            real?.Dispose();
+        }
+    }
+
+    [SkippableFact]
+    public void NativeChannelSlots_AreReleasedAcrossEngineLifetimes()
+    {
+        Skip.IfNot(WdspAvailable(), "libwdsp not available");
+
+        for (int i = 0; i < 40; i++)
+        {
+            using var engine = new WdspDspEngine();
+            int rx = engine.OpenChannel(48_000, 1024);
+            int tx = engine.OpenTxChannel(outputRateHz: 48_000);
+
+            Assert.NotEqual(rx, tx);
         }
     }
 

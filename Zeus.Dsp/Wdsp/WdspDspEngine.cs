@@ -586,6 +586,37 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
             _reservedNativeSlots.Remove(id);
     }
 
+    private void TryCleanupNativeResource(int id, string resource, Action<int> cleanup)
+    {
+        try
+        {
+            cleanup(id);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "wdsp.cleanup {Resource} failed id={Id}", resource, id);
+        }
+    }
+
+    private void ReleaseFailedNativeOpen(
+        int id,
+        bool nativeChannelOpened,
+        bool analyzerOpened,
+        bool anbExtOpened = false,
+        bool nobExtOpened = false)
+    {
+        // No AnalyzerLock is needed: failed opens never publish a live channel/worker for this id.
+        if (analyzerOpened)
+            TryCleanupNativeResource(id, nameof(NativeMethods.DestroyAnalyzer), NativeMethods.DestroyAnalyzer);
+        if (anbExtOpened)
+            TryCleanupNativeResource(id, nameof(NativeMethods.DestroyAnbEXT), NativeMethods.DestroyAnbEXT);
+        if (nobExtOpened)
+            TryCleanupNativeResource(id, nameof(NativeMethods.DestroyNobEXT), NativeMethods.DestroyNobEXT);
+        if (nativeChannelOpened)
+            TryCleanupNativeResource(id, nameof(NativeMethods.CloseChannel), NativeMethods.CloseChannel);
+        ReleaseNativeSlot(id);
+    }
+
     public int OpenChannel(int sampleRateHz, int pixelWidth)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
@@ -593,115 +624,149 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         if (sampleRateHz <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRateHz));
 
         int id = ReserveNativeSlot();
+        bool nativeChannelOpened = false;
+        bool anbExtOpened = false;
+        bool nobExtOpened = false;
+        bool analyzerOpened = false;
+        bool workerStarted = false;
+        ChannelState? openedState = null;
 
-        int outSamples = (int)((long)InSize * OutputRate / sampleRateHz);
-        int outDoubles = Math.Max(2, outSamples * 2);
-
-        // Thetis pattern: open channel quiescent (state=0), apply all config,
-        // then explicitly transition to state=1 with SetChannelState at the end.
-        // Mirrors cmaster.c:80 (// initial state = 0) and rxa.cs:63
-        // (WDSP.SetChannelState(chid + 0, 1, 0); // main rcvr ON). A fresh
-        // channel opened at state=1 does set the exchange bit correctly
-        // in-vitro, but runtime observation shows it can land clear — SAv/ADC
-        // pin at -400 — suggesting the open→configure window allows the flag
-        // to be stomped. Opening at 0 and flipping on last guarantees exchange
-        // is set after all setters have run.
-        NativeMethods.OpenChannel(
-            channel: id,
-            in_size: InSize,
-            dsp_size: DspSize,
-            input_samplerate: sampleRateHz,
-            dsp_rate: DspRate,
-            output_samplerate: OutputRate,
-            type: 0,
-            state: 0,
-            tdelayup: 0.010,
-            tslewup: 0.025,
-            tdelaydown: 0.0,
-            tslewdown: 0.010,
-            bfo: 1);
-
-        NativeMethods.SetRXABandpassWindow(id, 1);
-        NativeMethods.SetRXABandpassRun(id, 1);
-        NativeMethods.SetRXAAMDSBMode(id, 0);
-        NativeMethods.SetRXAPanelRun(id, 1);
-        // select=3 → route both I and Q into the panel. Without this WDSP
-        // demodulates a single real-valued channel and can't separate sidebands
-        // (LSB/USB become audibly identical mush).
-        NativeMethods.SetRXAPanelSelect(id, 3);
-        NativeMethods.SetRXAPanelBinaural(id, 0);
-        NativeMethods.SetRXAPanelGain1(id, 1.0);
-        NativeMethods.SetRXAMode(id, (int)RxaMode.USB);
-        NativeMethods.SetRXABandpassFreqs(id, 150.0, 2850.0);
-        NativeMethods.RXANBPSetFreqs(id, 150.0, 2850.0);
-        NativeMethods.SetRXASNBAOutputBandwidth(id, 150.0, 2850.0);
-
-        ApplyAgcDefaults(id);
-        ApplySquelchDefaults(id);
-
-        // Pre-RXA blankers: create run=0 so the setters / xanbEXT slots are
-        // allocated before any SetNoiseReduction call touches them (EXT
-        // setters deref panb[id]/pnob[id]). Create-time knob values are
-        // passed through here too so the struct is self-consistent on return,
-        // but the authoritative knob state comes from ApplyNbDefaults right
-        // after — same approach a future advanced-NB panel will take.
-        NativeMethods.CreateAnbEXT(
-            id: id, run: 0, buffsize: InSize, samplerate: sampleRateHz,
-            tau: NrDefaults.NbTau, hangtime: NrDefaults.NbHangtime,
-            advtime: NrDefaults.NbAdvtime, backtau: NrDefaults.NbBacktau,
-            threshold: NrDefaults.NbDefaultThresholdScaled);
-        NativeMethods.CreateNobEXT(
-            id: id, run: 0, mode: 0, buffsize: InSize, samplerate: sampleRateHz,
-            slewtime: NrDefaults.NbTau, hangtime: NrDefaults.NbHangtime,
-            advtime: NrDefaults.NbAdvtime, backtau: NrDefaults.NbBacktau,
-            threshold: NrDefaults.NbDefaultThresholdScaled);
-        ApplyNbDefaults(id);
-
-        NativeMethods.XCreateAnalyzer(id, out int rc, MaxFftSize, 1, 1, null);
-        if (rc != 0) throw new InvalidOperationException($"XCreateAnalyzer failed rc={rc}");
-
-        ConfigureAnalyzer(id, sampleRateHz, InSize, pixelWidth, zoomLevel: 1, AnalyzerFftSize, AnalyzerWindow, AnalyzerKaiserPi);
-        ConfigureDisplayAveraging(id);
-
-        int inQueueCapacity = ComputeInQueueCapacity(sampleRateHz);
-        var state = new ChannelState
+        try
         {
-            Id = id,
-            Generation = Interlocked.Increment(ref _channelGeneration),
-            SampleRateHz = sampleRateHz,
-            PixelWidth = pixelWidth,
-            OutDoubles = outDoubles,
-            InQueue = new BlockingCollection<double[]>(boundedCapacity: inQueueCapacity),
-            InQueueCapacity = inQueueCapacity,
-            Worker = null!,
-        };
+            int outSamples = (int)((long)InSize * OutputRate / sampleRateHz);
+            int outDoubles = Math.Max(2, outSamples * 2);
 
-        var worker = new Thread(() => RunWorker(state))
+            // Thetis pattern: open channel quiescent (state=0), apply all config,
+            // then explicitly transition to state=1 with SetChannelState at the end.
+            // Mirrors cmaster.c:80 (// initial state = 0) and rxa.cs:63
+            // (WDSP.SetChannelState(chid + 0, 1, 0); // main rcvr ON). A fresh
+            // channel opened at state=1 does set the exchange bit correctly
+            // in-vitro, but runtime observation shows it can land clear — SAv/ADC
+            // pin at -400 — suggesting the open→configure window allows the flag
+            // to be stomped. Opening at 0 and flipping on last guarantees exchange
+            // is set after all setters have run.
+            NativeMethods.OpenChannel(
+                channel: id,
+                in_size: InSize,
+                dsp_size: DspSize,
+                input_samplerate: sampleRateHz,
+                dsp_rate: DspRate,
+                output_samplerate: OutputRate,
+                type: 0,
+                state: 0,
+                tdelayup: 0.010,
+                tslewup: 0.025,
+                tdelaydown: 0.0,
+                tslewdown: 0.010,
+                bfo: 1);
+            nativeChannelOpened = true;
+
+            NativeMethods.SetRXABandpassWindow(id, 1);
+            NativeMethods.SetRXABandpassRun(id, 1);
+            NativeMethods.SetRXAAMDSBMode(id, 0);
+            NativeMethods.SetRXAPanelRun(id, 1);
+            // select=3 → route both I and Q into the panel. Without this WDSP
+            // demodulates a single real-valued channel and can't separate sidebands
+            // (LSB/USB become audibly identical mush).
+            NativeMethods.SetRXAPanelSelect(id, 3);
+            NativeMethods.SetRXAPanelBinaural(id, 0);
+            NativeMethods.SetRXAPanelGain1(id, 1.0);
+            NativeMethods.SetRXAMode(id, (int)RxaMode.USB);
+            NativeMethods.SetRXABandpassFreqs(id, 150.0, 2850.0);
+            NativeMethods.RXANBPSetFreqs(id, 150.0, 2850.0);
+            NativeMethods.SetRXASNBAOutputBandwidth(id, 150.0, 2850.0);
+
+            ApplyAgcDefaults(id);
+            ApplySquelchDefaults(id);
+
+            // Pre-RXA blankers: create run=0 so the setters / xanbEXT slots are
+            // allocated before any SetNoiseReduction call touches them (EXT
+            // setters deref panb[id]/pnob[id]). Create-time knob values are
+            // passed through here too so the struct is self-consistent on return,
+            // but the authoritative knob state comes from ApplyNbDefaults right
+            // after — same approach a future advanced-NB panel will take.
+            NativeMethods.CreateAnbEXT(
+                id: id, run: 0, buffsize: InSize, samplerate: sampleRateHz,
+                tau: NrDefaults.NbTau, hangtime: NrDefaults.NbHangtime,
+                advtime: NrDefaults.NbAdvtime, backtau: NrDefaults.NbBacktau,
+                threshold: NrDefaults.NbDefaultThresholdScaled);
+            anbExtOpened = true;
+            NativeMethods.CreateNobEXT(
+                id: id, run: 0, mode: 0, buffsize: InSize, samplerate: sampleRateHz,
+                slewtime: NrDefaults.NbTau, hangtime: NrDefaults.NbHangtime,
+                advtime: NrDefaults.NbAdvtime, backtau: NrDefaults.NbBacktau,
+                threshold: NrDefaults.NbDefaultThresholdScaled);
+            nobExtOpened = true;
+            ApplyNbDefaults(id);
+
+            NativeMethods.XCreateAnalyzer(id, out int rc, MaxFftSize, 1, 1, null);
+            if (rc != 0) throw new InvalidOperationException($"XCreateAnalyzer failed rc={rc}");
+            analyzerOpened = true;
+
+            ConfigureAnalyzer(id, sampleRateHz, InSize, pixelWidth, zoomLevel: 1, AnalyzerFftSize, AnalyzerWindow, AnalyzerKaiserPi);
+            ConfigureDisplayAveraging(id);
+
+            int inQueueCapacity = ComputeInQueueCapacity(sampleRateHz);
+            var state = new ChannelState
+            {
+                Id = id,
+                Generation = Interlocked.Increment(ref _channelGeneration),
+                SampleRateHz = sampleRateHz,
+                PixelWidth = pixelWidth,
+                OutDoubles = outDoubles,
+                InQueue = new BlockingCollection<double[]>(boundedCapacity: inQueueCapacity),
+                InQueueCapacity = inQueueCapacity,
+                Worker = null!,
+            };
+            openedState = state;
+
+            var worker = new Thread(() => RunWorker(state))
+            {
+                IsBackground = true,
+                Name = $"WdspDsp-{id}",
+                Priority = ThreadPriority.AboveNormal,
+            };
+            state.Worker = worker;
+
+            _channels[id] = state;
+            worker.Start();
+            workerStarted = true;
+
+            // Thetis rxa.cs:63 — "main rcvr ON". The OpenChannel call above used
+            // state=0 so the slew.upflag / ch_upslew / exchange-bit initialisation
+            // block in channel.c:94-99 did NOT run. SetChannelState(id, 1, 0) is
+            // the canonical transition: it sets slew.upflag, ch_upslew, clears
+            // exec_bypass, and sets exchange (channel.c:278-283). After this
+            // returns, fexchange0's `if (_InterlockedAnd (&ch[channel].exchange, 1))`
+            // guard (iobuffs.c:484) will be satisfied and xrxa → xmeter will run.
+            NativeMethods.SetChannelState(id, 1, 0);
+
+            // Re-apply any manual notches to the freshly-opened channel. A sample-
+            // rate or mode change rebuilds the WDSP channel with an empty notch DB;
+            // the engine holds the authoritative list so notches persist across it.
+            ApplyNotchesToChannel(id);
+
+            return id;
+        }
+        catch
         {
-            IsBackground = true,
-            Name = $"WdspDsp-{id}",
-            Priority = ThreadPriority.AboveNormal,
-        };
-        state.Worker = worker;
-
-        _channels[id] = state;
-        worker.Start();
-
-        // Thetis rxa.cs:63 — "main rcvr ON". The OpenChannel call above used
-        // state=0 so the slew.upflag / ch_upslew / exchange-bit initialisation
-        // block in channel.c:94-99 did NOT run. SetChannelState(id, 1, 0) is
-        // the canonical transition: it sets slew.upflag, ch_upslew, clears
-        // exec_bypass, and sets exchange (channel.c:278-283). After this
-        // returns, fexchange0's `if (_InterlockedAnd (&ch[channel].exchange, 1))`
-        // guard (iobuffs.c:484) will be satisfied and xrxa → xmeter will run.
-        NativeMethods.SetChannelState(id, 1, 0);
-
-        // Re-apply any manual notches to the freshly-opened channel. A sample-
-        // rate or mode change rebuilds the WDSP channel with an empty notch DB;
-        // the engine holds the authoritative list so notches persist across it.
-        ApplyNotchesToChannel(id);
-
-        return id;
+            if (workerStarted && openedState is not null)
+            {
+                _channels.TryRemove(id, out _);
+                StopChannel(openedState);
+            }
+            else
+            {
+                _channels.TryRemove(id, out _);
+                if (openedState is not null)
+                {
+                    openedState.InQueue.Dispose();
+                    openedState.Cts.Dispose();
+                }
+                ReleaseFailedNativeOpen(id, nativeChannelOpened, analyzerOpened, anbExtOpened, nobExtOpened);
+            }
+            throw;
+        }
     }
 
     public void CloseChannel(int channelId)
@@ -1790,259 +1855,292 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
             }
 
             int id = ReserveNativeSlot();
+            bool nativeChannelOpened = false;
+            bool txAnalyzerOpened = false;
 
-            // type: 1 (TX), state: 0 (stays quiescent until SetMox). Rates
-            // chosen above so P1 keeps its 48/48/48 shape (rated power
-            // confirmed on Hermes) and P2 matches pihpsdr transmitter.c's
-            // 48/96/192 profile with ratio=4 so the G2 DUC sees samples at
-            // its expected 192 kHz clock.
-            NativeMethods.OpenChannel(
-                channel: id,
-                in_size: _txaInSize,
-                dsp_size: _txaDspSize,
-                input_samplerate: _txaInputRateHz,
-                dsp_rate: _txaDspRateHz,
-                output_samplerate: _txaOutputRateHz,
-                type: 1,
-                state: 0,
-                tdelayup: 0.010,
-                tslewup: 0.025,
-                tdelaydown: 0.0,
-                tslewdown: 0.010,
-                bfo: 1);
-
-            // SSB USB default + 150-2850 passband: wider than the classic SSB
-            // 300-2700 to keep low-frequency voice energy through the chain
-            // (task C.0 spec). Phase-C mic ingest drives fexchange2 once
-            // SetMox(true) flips the TXA state to 1; until then the TXA sits
-            // at state=0 and consumes nothing.
-            NativeMethods.SetTXAMode(id, (int)RxaMode.USB);
-            _txCurrentMode = RxaMode.USB;
-            // Default passband matches the stock SSB TX width. DspPipelineService
-            // re-asserts this from the live StateDto (TxFilterLowHz/HighHz)
-            // immediately after OpenTxChannel so operator-edited widths survive
-            // a protocol switch / engine reopen.
-            NativeMethods.SetTXABandpassFreqs(id, 150.0, 2850.0);
-            NativeMethods.SetTXABandpassWindow(id, 1);
-            // Intentionally NOT calling SetTXABandpassRun(id, 1): despite the
-            // name it sets bp1.run (the compressor-only aux bandpass), not bp0,
-            // and bp1 ships with stale LSB-direction coefs that reject the USB
-            // mic on first MOX — that's the "TX 0 W until mode toggle" symptom
-            // the operator saw return after this branch first restored the call.
-            // bp0 is always on from create_bandpass; nothing to enable here.
-            NativeMethods.SetTXAPanelRun(id, 1);
-            NativeMethods.SetTXAPanelGain1(id, 1.0);
-            // pihpsdr transmitter.c:1298 routes mic to both I and Q via
-            // PanelSelect=2 ("Mic I sample"). Without this, WDSP's default
-            // may leave Q unassigned, allowing a secondary signal path to
-            // leak into the TXA output.
-            NativeMethods.SetTXAPanelSelect(id, 2);
-
-            // Explicitly disable the PreGen stage and zero its state — pihpsdr
-            // transmitter.c:1293-1296 does this on every TXA open. WDSP's
-            // create_channel does not guarantee these defaults, and a residual
-            // non-zero PreGen tone shows up alongside the PostGen tune carrier
-            // as a second discrete frequency on the air (reported as
-            // "2-tone-like output" during TUN on the G2 MkII).
-            NativeMethods.SetTXAPreGenMode(id, 0);
-            NativeMethods.SetTXAPreGenToneMag(id, 0.0);
-            NativeMethods.SetTXAPreGenToneFreq(id, 0.0);
-            NativeMethods.SetTXAPreGenRun(id, 0);
-
-            // Clamp PostGen off at open time too — TUN will re-enable it via
-            // SetTxTune. Same rationale: WDSP state from a previous channel
-            // open can leak through if we don't zero it.
-            NativeMethods.SetTXAPostGenRun(id, 0);
-
-            // Explicit clean-slate TX chain state. WDSP initializes these
-            // "off" at channel-create, but asserting them makes the baseline
-            // deterministic and independent of the library build. Leveler is
-            // Thetis-factory-ON (radio.cs:3018 tx_leveler_on = true) and is
-            // enabled here to match that default — a disabled Leveler stage
-            // also leaves GetTXAMeter(LVLR_PK) stuck at WDSP's -400 silence
-            // sentinel, which made the frontend LVLR bar look broken. Other
-            // optional stages (Compressor, CFC, PHROT, EQ, AMSQ) remain OFF
-            // until they're wired to operator UI and tuned — enabling them
-            // with library-default parameters can mask or create distortion.
-            // ALC stays on (see SetTXAALCSt below; never 0). AMSQ is the mic
-            // noise gate and shouldn't shape SSB audio. CESSB (osctrl) is
-            // unconditionally ON — see SetTXAosctrlRun below.
-            // ALC run state — MUST stay ON (never 0). Disabling it silences the
-            // SSB modulator (NativeMethods.SetTXAALCSt warning). ApplyTxLeveling
-            // below sets the ALC max-gain/decay but deliberately never touches
-            // this St; assert it here so the baseline is unambiguous.
-            NativeMethods.SetTXAALCSt(id, 1);
-            // ALC attack — not part of the operator TxLevelingConfig (Thetis
-            // doesn't surface it). 1 ms matches both pihpsdr
-            // (transmitter.c:1290) and the WDSP factory Thetis inherits
-            // (TXA.c:319). A slower 2 ms attack missed plosive onset and the
-            // follow-up ALC chop sounded "brittle." Set once at open.
-            NativeMethods.SetTXAALCAttack(id, 1);
-            // Leveler max-gain default. WDSP's create_wcpagc ships with
-            // max_gain = 1.778 linear (≈ +5 dB) at TXA.c:169; we assert the
-            // value explicitly so the baseline stays deterministic and the
-            // init log confirms what the Leveler's headroom is set to.
-            // +5 dB matches the W1AEX / softerhardware community default
-            // (milder than Thetis's +15 dB stock — see task #13 notes).
-            // Operator-settable at runtime via POST /api/tx/leveler-max-gain;
-            // intentionally NOT part of TxLevelingConfig.
-            NativeMethods.SetTXALevelerTop(id, DefaultLevelerMaxGainDb);
-            // ALC max-gain/decay, Leveler St/decay, Compressor run/gain all come
-            // from the TxLevelingConfig defaults so a fresh channel and a runtime
-            // SetTxLeveling use identical WDSP calls. Defaults: ALC 3 dB/10 ms
-            // (Thetis database.cs:4596 + TXA.c attack/decay), Leveler ON/100 ms
-            // (radio.cs:3018 tx_leveler_on + radio.cs leveler decay 100),
-            // Compressor OFF/0 dB. DspPipelineService force-applies the operator's
-            // persisted config on top via SetTxLeveling at channel open.
-            ApplyTxLevelingLocked(id, new TxLevelingConfig());
-            NativeMethods.SetTXACFCOMPRun(id, 0);
-            ApplyTxPhaseRotatorLocked(id, new TxPhaseRotatorConfig());
-            // CESSB / osctrl — ON at TXA open (Brian's default, ~1-1.5 dB
-            // average voice-SSB power; bd zeus-5cg). PS isn't armed at open, so
-            // this is the correct non-PS state. It is then toggled OFF while PS
-            // is armed and back ON on disarm in SetPsEnabled — because osctrl
-            // (a non-linear lookahead peak divisor) standalone in front of the
-            // ALC makes the peak envelope non-stationary on voice and breaks PS
-            // voice-peak correction (Thetis/pi/desk keep it out of the PS path).
-            // #559.
-            NativeMethods.SetTXAosctrlRun(id, 1);
-            NativeMethods.SetTXAEQRun(id, 0);
-            NativeMethods.SetTXAAMSQRun(id, 0);
-
-            // CFIR compensates the sinc droop introduced by the TXA upsample
-            // to the output rate. Thetis (audio.cs:1808) turns it ON for P2,
-            // OFF for P1; pihpsdr (transmitter.c:1288) does the same. Wiring
-            // this on P1 would over-correct the flat 48k chain and tilt the
-            // passband, so it's conditional on the P2 profile.
-            if (_txaCfirRun)
+            try
             {
-                NativeMethods.SetTXACFIRRun(id, 1);
-            }
+                // type: 1 (TX), state: 0 (stays quiescent until SetMox). Rates
+                // chosen above so P1 keeps its 48/48/48 shape (rated power
+                // confirmed on Hermes) and P2 matches pihpsdr transmitter.c's
+                // 48/96/192 profile with ratio=4 so the G2 DUC sees samples at
+                // its expected 192 kHz clock.
+                NativeMethods.OpenChannel(
+                    channel: id,
+                    in_size: _txaInSize,
+                    dsp_size: _txaDspSize,
+                    input_samplerate: _txaInputRateHz,
+                    dsp_rate: _txaDspRateHz,
+                    output_samplerate: _txaOutputRateHz,
+                    type: 1,
+                    state: 0,
+                    tdelayup: 0.010,
+                    tslewup: 0.025,
+                    tdelaydown: 0.0,
+                    tslewdown: 0.010,
+                    bfo: 1);
+                nativeChannelOpened = true;
 
-            _txaChannelId = id;
+                // SSB USB default + 150-2850 passband: wider than the classic SSB
+                // 300-2700 to keep low-frequency voice energy through the chain
+                // (task C.0 spec). Phase-C mic ingest drives fexchange2 once
+                // SetMox(true) flips the TXA state to 1; until then the TXA sits
+                // at state=0 and consumes nothing.
+                NativeMethods.SetTXAMode(id, (int)RxaMode.USB);
+                _txCurrentMode = RxaMode.USB;
+                // Default passband matches the stock SSB TX width. DspPipelineService
+                // re-asserts this from the live StateDto (TxFilterLowHz/HighHz)
+                // immediately after OpenTxChannel so operator-edited widths survive
+                // a protocol switch / engine reopen.
+                NativeMethods.SetTXABandpassFreqs(id, 150.0, 2850.0);
+                NativeMethods.SetTXABandpassWindow(id, 1);
+                // Intentionally NOT calling SetTXABandpassRun(id, 1): despite the
+                // name it sets bp1.run (the compressor-only aux bandpass), not bp0,
+                // and bp1 ships with stale LSB-direction coefs that reject the USB
+                // mic on first MOX — that's the "TX 0 W until mode toggle" symptom
+                // the operator saw return after this branch first restored the call.
+                // bp0 is always on from create_bandpass; nothing to enable here.
+                NativeMethods.SetTXAPanelRun(id, 1);
+                NativeMethods.SetTXAPanelGain1(id, 1.0);
+                // pihpsdr transmitter.c:1298 routes mic to both I and Q via
+                // PanelSelect=2 ("Mic I sample"). Without this, WDSP's default
+                // may leave Q unassigned, allowing a secondary signal path to
+                // leak into the TXA output.
+                NativeMethods.SetTXAPanelSelect(id, 2);
 
-            // PureSignal seed. The TXA channel already owns `calcc.p` and
-            // `iqc.p0/p1` as a side effect of create_txa() (TXA.c:405,424);
-            // these setters tune the WDSP state machine to safe defaults so
-            // arming PS later just needs SetPSRunCal(1) + SetPSControl mode-on.
-            //
-            // HW-peak is *not* set here — RadioService.SetPsHwPeak runs after
-            // discovery so the right value (P1=0.4072 / G2=0.6121 / ANAN-7000
-            // =0.2899) is applied per actual connected radio. The 0.4072 in
-            // `_psHwPeak` is just a neutral default.
-            //
-            // See `docs/lessons/wdsp-init-gotchas.md`: setters before state-
-            // flip is the load-bearing pattern. PS setters are independent of
-            // `SetChannelState`, so they're safe to run unconditionally at
-            // TXA open time.
-            NativeMethods.SetPSFeedbackRate(id, _psFeedbackRateHz);
-            // pihpsdr semantic (transmitter.c:2517): ps_ptol=0 (default) → 0.8
-            // strict; ps_ptol=1 → 0.4 relaxed. Same convention in Thetis
-            // PSForm.designer.cs.
-            NativeMethods.SetPSPtol(id, _psPtol ? 0.4 : 0.8);
-            // pihpsdr/Thetis defaults: PinMode=1, MapMode=1 (transmitter.c:
-            // 1041-1042 ps_map=1 / ps_pin=1; PSForm.designer.cs chkPSPin /
-            // chkPSMap = Checked = true).
-            NativeMethods.SetPSPinMode(id, 1);
-            NativeMethods.SetPSMapMode(id, 1);
-            // calcc rx_scale + coefficient IIR smoothing (alpha 0.9). ON for the
-            // P2 profile so continuous automode converges to a STEADY correction
-            // instead of applying each raw pass-to-pass fit — the latter makes
-            // the predistorted two-tone visibly jump on the TX panadapter and
-            // holds IMD short of its settled depth (#559, G2). DeskHPSDR ships
-            // this on for SATURN/new-protocol. OFF on P1/HL2 to keep the
-            // mi0bot-matched behaviour. _txaCfirRun is the existing P2-profile
-            // discriminator (CFIR runs only on P2; see above).
-            NativeMethods.SetPSStabilize(id, _txaCfirRun ? 1 : 0);
-            NativeMethods.SetPSIntsAndSpi(id, _psInts, _psSpi);
-            NativeMethods.SetPSMoxDelay(id, _psMoxDelaySec);
-            NativeMethods.SetPSLoopDelay(id, _psLoopDelaySec);
-            _ = NativeMethods.SetPSTXDelay(id, _psAmpDelayNs * 1e-9);
-            NativeMethods.SetPSHWPeak(id, _psHwPeak);
-            NativeMethods.SetPSControl(id, 1, 0, 0, 0);   // RESET state
-            // SetPSRunCal stays 0 until the operator arms PS.
-            // Bring-up diagnostic — drop once PS is confirmed stable on rack.
-            _log.LogInformation(
-                "wdsp.psSeed pinMode=1 mapMode=1 ptol={Ptol} hwPeak={Peak:F4} feedbackRate={FbRate}",
-                _psPtol ? 0.4 : 0.8, _psHwPeak, _psFeedbackRateHz);
+                // Explicitly disable the PreGen stage and zero its state — pihpsdr
+                // transmitter.c:1293-1296 does this on every TXA open. WDSP's
+                // create_channel does not guarantee these defaults, and a residual
+                // non-zero PreGen tone shows up alongside the PostGen tune carrier
+                // as a second discrete frequency on the air (reported as
+                // "2-tone-like output" during TUN on the G2 MkII).
+                NativeMethods.SetTXAPreGenMode(id, 0);
+                NativeMethods.SetTXAPreGenToneMag(id, 0.0);
+                NativeMethods.SetTXAPreGenToneFreq(id, 0.0);
+                NativeMethods.SetTXAPreGenRun(id, 0);
 
-            // TX panadapter analyzer — issue #81. Match the first RXA's pixel
-            // width and zoom so the TX trace renders into the same widget
-            // without a span change on MOX. If no RXA exists yet (shouldn't
-            // happen in practice — RadioService opens RX before TX), skip
-            // analyzer creation and leave _txDispAlive false so the server
-            // falls back to the RX pixels during MOX.
-            int rxPixelWidth = 0;
-            int rxSampleRateHz = 0;
-            int rxZoom = 1;
-            foreach (var st in _channels.Values)
-            {
-                rxPixelWidth = st.PixelWidth;
-                rxSampleRateHz = st.SampleRateHz;
-                rxZoom = Math.Max(1, st.ZoomLevel);
-                break;
-            }
-            if (rxPixelWidth > 0)
-            {
-                // Analyzer disp index reuses the TXA channel id — WDSP keeps
-                // channels and analyzers in separate arrays so the collision
-                // between RXA's channel=0 / disp=0 and TXA's channel=id /
-                // disp=id is purely in our bookkeeping, not in the library.
-                NativeMethods.XCreateAnalyzer(id, out int txRc, MaxFftSize, 1, 1, null);
-                if (txRc == 0)
+                // Clamp PostGen off at open time too — TUN will re-enable it via
+                // SetTxTune. Same rationale: WDSP state from a previous channel
+                // open can leak through if we don't zero it.
+                NativeMethods.SetTXAPostGenRun(id, 0);
+
+                // Explicit clean-slate TX chain state. WDSP initializes these
+                // "off" at channel-create, but asserting them makes the baseline
+                // deterministic and independent of the library build. Leveler is
+                // Thetis-factory-ON (radio.cs:3018 tx_leveler_on = true) and is
+                // enabled here to match that default — a disabled Leveler stage
+                // also leaves GetTXAMeter(LVLR_PK) stuck at WDSP's -400 silence
+                // sentinel, which made the frontend LVLR bar look broken. Other
+                // optional stages (Compressor, CFC, PHROT, EQ, AMSQ) remain OFF
+                // until they're wired to operator UI and tuned — enabling them
+                // with library-default parameters can mask or create distortion.
+                // ALC stays on (see SetTXAALCSt below; never 0). AMSQ is the mic
+                // noise gate and shouldn't shape SSB audio. CESSB (osctrl) is
+                // unconditionally ON — see SetTXAosctrlRun below.
+                // ALC run state — MUST stay ON (never 0). Disabling it silences the
+                // SSB modulator (NativeMethods.SetTXAALCSt warning). ApplyTxLeveling
+                // below sets the ALC max-gain/decay but deliberately never touches
+                // this St; assert it here so the baseline is unambiguous.
+                NativeMethods.SetTXAALCSt(id, 1);
+                // ALC attack — not part of the operator TxLevelingConfig (Thetis
+                // doesn't surface it). 1 ms matches both pihpsdr
+                // (transmitter.c:1290) and the WDSP factory Thetis inherits
+                // (TXA.c:319). A slower 2 ms attack missed plosive onset and the
+                // follow-up ALC chop sounded "brittle." Set once at open.
+                NativeMethods.SetTXAALCAttack(id, 1);
+                // Leveler max-gain default. WDSP's create_wcpagc ships with
+                // max_gain = 1.778 linear (≈ +5 dB) at TXA.c:169; we assert the
+                // value explicitly so the baseline stays deterministic and the
+                // init log confirms what the Leveler's headroom is set to.
+                // +5 dB matches the W1AEX / softerhardware community default
+                // (milder than Thetis's +15 dB stock — see task #13 notes).
+                // Operator-settable at runtime via POST /api/tx/leveler-max-gain;
+                // intentionally NOT part of TxLevelingConfig.
+                NativeMethods.SetTXALevelerTop(id, DefaultLevelerMaxGainDb);
+                // ALC max-gain/decay, Leveler St/decay, Compressor run/gain all come
+                // from the TxLevelingConfig defaults so a fresh channel and a runtime
+                // SetTxLeveling use identical WDSP calls. Defaults: ALC 3 dB/10 ms
+                // (Thetis database.cs:4596 + TXA.c attack/decay), Leveler ON/100 ms
+                // (radio.cs:3018 tx_leveler_on + radio.cs leveler decay 100),
+                // Compressor OFF/0 dB. DspPipelineService force-applies the operator's
+                // persisted config on top via SetTxLeveling at channel open.
+                ApplyTxLevelingLocked(id, new TxLevelingConfig());
+                NativeMethods.SetTXACFCOMPRun(id, 0);
+                ApplyTxPhaseRotatorLocked(id, new TxPhaseRotatorConfig());
+                // CESSB / osctrl — ON at TXA open (Brian's default, ~1-1.5 dB
+                // average voice-SSB power; bd zeus-5cg). PS isn't armed at open, so
+                // this is the correct non-PS state. It is then toggled OFF while PS
+                // is armed and back ON on disarm in SetPsEnabled — because osctrl
+                // (a non-linear lookahead peak divisor) standalone in front of the
+                // ALC makes the peak envelope non-stationary on voice and breaks PS
+                // voice-peak correction (Thetis/pi/desk keep it out of the PS path).
+                // #559.
+                NativeMethods.SetTXAosctrlRun(id, 1);
+                NativeMethods.SetTXAEQRun(id, 0);
+                NativeMethods.SetTXAAMSQRun(id, 0);
+
+                // CFIR compensates the sinc droop introduced by the TXA upsample
+                // to the output rate. Thetis (audio.cs:1808) turns it ON for P2,
+                // OFF for P1; pihpsdr (transmitter.c:1288) does the same. Wiring
+                // this on P1 would over-correct the flat 48k chain and tilt the
+                // passband, so it's conditional on the P2 profile.
+                if (_txaCfirRun)
                 {
-                    bool configured;
-                    lock (_txDispLock)
+                    NativeMethods.SetTXACFIRRun(id, 1);
+                }
+
+                _txaChannelId = id;
+
+                // PureSignal seed. The TXA channel already owns `calcc.p` and
+                // `iqc.p0/p1` as a side effect of create_txa() (TXA.c:405,424);
+                // these setters tune the WDSP state machine to safe defaults so
+                // arming PS later just needs SetPSRunCal(1) + SetPSControl mode-on.
+                //
+                // HW-peak is *not* set here — RadioService.SetPsHwPeak runs after
+                // discovery so the right value (P1=0.4072 / G2=0.6121 / ANAN-7000
+                // =0.2899) is applied per actual connected radio. The 0.4072 in
+                // `_psHwPeak` is just a neutral default.
+                //
+                // See `docs/lessons/wdsp-init-gotchas.md`: setters before state-
+                // flip is the load-bearing pattern. PS setters are independent of
+                // `SetChannelState`, so they're safe to run unconditionally at
+                // TXA open time.
+                NativeMethods.SetPSFeedbackRate(id, _psFeedbackRateHz);
+                // pihpsdr semantic (transmitter.c:2517): ps_ptol=0 (default) → 0.8
+                // strict; ps_ptol=1 → 0.4 relaxed. Same convention in Thetis
+                // PSForm.designer.cs.
+                NativeMethods.SetPSPtol(id, _psPtol ? 0.4 : 0.8);
+                // pihpsdr/Thetis defaults: PinMode=1, MapMode=1 (transmitter.c:
+                // 1041-1042 ps_map=1 / ps_pin=1; PSForm.designer.cs chkPSPin /
+                // chkPSMap = Checked = true).
+                NativeMethods.SetPSPinMode(id, 1);
+                NativeMethods.SetPSMapMode(id, 1);
+                // calcc rx_scale + coefficient IIR smoothing (alpha 0.9). ON for the
+                // P2 profile so continuous automode converges to a STEADY correction
+                // instead of applying each raw pass-to-pass fit — the latter makes
+                // the predistorted two-tone visibly jump on the TX panadapter and
+                // holds IMD short of its settled depth (#559, G2). DeskHPSDR ships
+                // this on for SATURN/new-protocol. OFF on P1/HL2 to keep the
+                // mi0bot-matched behaviour. _txaCfirRun is the existing P2-profile
+                // discriminator (CFIR runs only on P2; see above).
+                NativeMethods.SetPSStabilize(id, _txaCfirRun ? 1 : 0);
+                NativeMethods.SetPSIntsAndSpi(id, _psInts, _psSpi);
+                NativeMethods.SetPSMoxDelay(id, _psMoxDelaySec);
+                NativeMethods.SetPSLoopDelay(id, _psLoopDelaySec);
+                _ = NativeMethods.SetPSTXDelay(id, _psAmpDelayNs * 1e-9);
+                NativeMethods.SetPSHWPeak(id, _psHwPeak);
+                NativeMethods.SetPSControl(id, 1, 0, 0, 0);   // RESET state
+                                                              // SetPSRunCal stays 0 until the operator arms PS.
+                                                              // Bring-up diagnostic — drop once PS is confirmed stable on rack.
+                _log.LogInformation(
+                    "wdsp.psSeed pinMode=1 mapMode=1 ptol={Ptol} hwPeak={Peak:F4} feedbackRate={FbRate}",
+                    _psPtol ? 0.4 : 0.8, _psHwPeak, _psFeedbackRateHz);
+
+                // TX panadapter analyzer — issue #81. Match the first RXA's pixel
+                // width and zoom so the TX trace renders into the same widget
+                // without a span change on MOX. If no RXA exists yet (shouldn't
+                // happen in practice — RadioService opens RX before TX), skip
+                // analyzer creation and leave _txDispAlive false so the server
+                // falls back to the RX pixels during MOX.
+                int rxPixelWidth = 0;
+                int rxSampleRateHz = 0;
+                int rxZoom = 1;
+                foreach (var st in _channels.Values)
+                {
+                    rxPixelWidth = st.PixelWidth;
+                    rxSampleRateHz = st.SampleRateHz;
+                    rxZoom = Math.Max(1, st.ZoomLevel);
+                    break;
+                }
+                if (rxPixelWidth > 0)
+                {
+                    // Analyzer disp index reuses the TXA channel id — WDSP keeps
+                    // channels and analyzers in separate arrays so the collision
+                    // between RXA's channel=0 / disp=0 and TXA's channel=id /
+                    // disp=id is purely in our bookkeeping, not in the library.
+                    NativeMethods.XCreateAnalyzer(id, out int txRc, MaxFftSize, 1, 1, null);
+                    if (txRc == 0)
                     {
-                        _txDispPixelWidth = rxPixelWidth;
-                        _txDispZoomLevel = rxZoom;
-                        _txDispRxSampleRateHz = rxSampleRateHz;
-                        // Configure for the SIPHON tap point (xsiphon position
-                        // in xtxa — BEFORE iqc/cfir/rsmpout). dsp_rate / dsp_size
-                        // describe the IQ at that stage. Pulling pre-iqc samples
-                        // gives the operator's clean voice spectrum on the
-                        // panadapter, matching Thetis (cmaster.cs:544-545,
-                        // TXA.c:586). Pre-fix the analyzer was configured at
-                        // the OUTPUT (post-cfir/rsmpout) rate and got fed the
-                        // predistorted IQ — cosmetically dirty by design.
-                        configured = TryConfigureTxAnalyzer(id, _txaDspRateHz, _txaDspSize, rxSampleRateHz, rxPixelWidth, rxZoom, _txFftSize, _txWinType, AnalyzerKaiserPi);
-                        if (configured)
+                        txAnalyzerOpened = true;
+                        bool configured;
+                        lock (_txDispLock)
                         {
-                            ConfigureDisplayAveragingTau(id, _txAvgTauSec);
-                            _txDispAlive = true;
+                            _txDispPixelWidth = rxPixelWidth;
+                            _txDispZoomLevel = rxZoom;
+                            _txDispRxSampleRateHz = rxSampleRateHz;
+                            // Configure for the SIPHON tap point (xsiphon position
+                            // in xtxa — BEFORE iqc/cfir/rsmpout). dsp_rate / dsp_size
+                            // describe the IQ at that stage. Pulling pre-iqc samples
+                            // gives the operator's clean voice spectrum on the
+                            // panadapter, matching Thetis (cmaster.cs:544-545,
+                            // TXA.c:586). Pre-fix the analyzer was configured at
+                            // the OUTPUT (post-cfir/rsmpout) rate and got fed the
+                            // predistorted IQ — cosmetically dirty by design.
+                            configured = TryConfigureTxAnalyzer(id, _txaDspRateHz, _txaDspSize, rxSampleRateHz, rxPixelWidth, rxZoom, _txFftSize, _txWinType, AnalyzerKaiserPi);
+                            if (configured)
+                            {
+                                ConfigureDisplayAveragingTau(id, _txAvgTauSec);
+                                _txDispAlive = true;
+                            }
+                        }
+                        if (!configured)
+                        {
+                            // Rate relationship doesn't support bin-clip (e.g. TX narrower
+                            // than RX, or non-integer ratio). Destroy the unused analyzer
+                            // slot and leave _txDispAlive false so the panadapter falls
+                            // back to the RX analyzer on MOX.
+                            NativeMethods.DestroyAnalyzer(id);
+                            txAnalyzerOpened = false;
+                            // Log the DSP rate — that's what the rate rule actually
+                            // compares (the analyzer taps the SIPHON at dsp_rate,
+                            // not the output rate), so at RX 192k this reads
+                            // "tx=96000", making the failed 96k-vs-192k relation
+                            // visible instead of a baffling "192000 vs 192000".
+                            _log.LogWarning(
+                                "wdsp.openTxChannel tx-analyzer skipped — rx={RxRate} txDsp={TxDspRate} not an integer multiple; panadapter will fall back to RX trace (and to PS-feedback pixels while keyed with PS armed)",
+                                rxSampleRateHz, _txaDspRateHz);
                         }
                     }
-                    if (!configured)
+                    else
                     {
-                        // Rate relationship doesn't support bin-clip (e.g. TX narrower
-                        // than RX, or non-integer ratio). Destroy the unused analyzer
-                        // slot and leave _txDispAlive false so the panadapter falls
-                        // back to the RX analyzer on MOX.
-                        NativeMethods.DestroyAnalyzer(id);
-                        // Log the DSP rate — that's what the rate rule actually
-                        // compares (the analyzer taps the SIPHON at dsp_rate,
-                        // not the output rate), so at RX 192k this reads
-                        // "tx=96000", making the failed 96k-vs-192k relation
-                        // visible instead of a baffling "192000 vs 192000".
                         _log.LogWarning(
-                            "wdsp.openTxChannel tx-analyzer skipped — rx={RxRate} txDsp={TxDspRate} not an integer multiple; panadapter will fall back to RX trace (and to PS-feedback pixels while keyed with PS armed)",
-                            rxSampleRateHz, _txaDspRateHz);
+                            "wdsp.openTxChannel tx-analyzer XCreateAnalyzer rc={Rc} — TX panadapter will fall back to RX trace",
+                            txRc);
                     }
                 }
-                else
-                {
-                    _log.LogWarning(
-                        "wdsp.openTxChannel tx-analyzer XCreateAnalyzer rc={Rc} — TX panadapter will fall back to RX trace",
-                        txRc);
-                }
-            }
 
-            _log.LogInformation(
-                "wdsp.openTxChannel id={Id} rates={InRate}/{DspRate}/{OutRate} sizes={InSz}/{OutSz} cfir={Cfir} chain=[alc=1 lvlr=1 lvlrMax={LvlrMax:F1}dB cpdr=0 cfc=0 phrot=0 osctrl=1 eq=0 amsq=0] bp=150..2850 panelGain=1.0 txDisp={TxDisp}(pix={Pix} rxRate={RxRate} txRate={TxRate} zoom={Zoom})",
-                id, _txaInputRateHz, _txaDspRateHz, _txaOutputRateHz,
-                _txaInSize, _txaOutSize, _txaCfirRun ? 1 : 0, DefaultLevelerMaxGainDb,
-                _txDispAlive ? "on" : "off", _txDispPixelWidth, _txDispRxSampleRateHz, _txaOutputRateHz, _txDispZoomLevel);
-            return id;
+                _log.LogInformation(
+                    "wdsp.openTxChannel id={Id} rates={InRate}/{DspRate}/{OutRate} sizes={InSz}/{OutSz} cfir={Cfir} chain=[alc=1 lvlr=1 lvlrMax={LvlrMax:F1}dB cpdr=0 cfc=0 phrot=0 osctrl=1 eq=0 amsq=0] bp=150..2850 panelGain=1.0 txDisp={TxDisp}(pix={Pix} rxRate={RxRate} txRate={TxRate} zoom={Zoom})",
+                    id, _txaInputRateHz, _txaDspRateHz, _txaOutputRateHz,
+                    _txaInSize, _txaOutSize, _txaCfirRun ? 1 : 0, DefaultLevelerMaxGainDb,
+                    _txDispAlive ? "on" : "off", _txDispPixelWidth, _txDispRxSampleRateHz, _txaOutputRateHz, _txDispZoomLevel);
+                return id;
+            }
+            catch
+            {
+                lock (_txDispLock)
+                {
+                    if (txAnalyzerOpened)
+                    {
+                        TryCleanupNativeResource(id, nameof(NativeMethods.DestroyAnalyzer), NativeMethods.DestroyAnalyzer);
+                        txAnalyzerOpened = false;
+                    }
+                    _txDispAlive = false;
+                    _txDispPixelWidth = 0;
+                    _txDispRxSampleRateHz = 0;
+                    _txDispZoomLevel = 1;
+                }
+
+                if (_txaChannelId == id)
+                    _txaChannelId = null;
+                // Failed TX open means no TXA channel exists, so keyed state must match engine reality.
+                _txaRunning = false;
+                _moxOn = false;
+                lock (_txMeterPublishLock) { _latestTxStageMeters = null; }
+
+                ReleaseFailedNativeOpen(id, nativeChannelOpened, analyzerOpened: false);
+                throw;
+            }
         }
     }
 

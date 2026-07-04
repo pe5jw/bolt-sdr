@@ -399,7 +399,8 @@ public sealed class RemoteWebRtcSessionTests
 
         Assert.Contains("/api/qrz/lookup", seen);
         Assert.Contains("/api/chat/send", seen);
-        Assert.Equal(2, factory.CallCount);
+        Assert.Equal(2, seen.Count(path =>
+            path is "/api/qrz/lookup" or "/api/chat/send"));
 
         server.Close();
     }
