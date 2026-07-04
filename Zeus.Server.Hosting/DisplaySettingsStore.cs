@@ -7,6 +7,7 @@
 // statement and per-component attribution.
 
 using LiteDB;
+using Microsoft.Extensions.Configuration;
 using Zeus.Contracts;
 
 namespace Zeus.Server;
@@ -72,11 +73,16 @@ public sealed class DisplaySettingsStore : IDisposable
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<DisplaySettingsEntry> _docs;
     private readonly ILogger<DisplaySettingsStore> _log;
+    private readonly double _defaultDisplayMaxFrameRateHz;
     private readonly object _sync = new();
 
-    public DisplaySettingsStore(ILogger<DisplaySettingsStore> log, string? dbPathOverride = null)
+    public DisplaySettingsStore(
+        ILogger<DisplaySettingsStore> log,
+        string? dbPathOverride = null,
+        IConfiguration? configuration = null)
     {
         _log = log;
+        _defaultDisplayMaxFrameRateHz = DisplayPerformanceOptions.Resolve(configuration).MaxFrameRateHz;
         var dbPath = dbPathOverride ?? PrefsDbPath.Get();
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -116,7 +122,8 @@ public sealed class DisplaySettingsStore : IDisposable
                     TxDisplayFftSize: null,
                     TxDisplayWindow: null,
                     TxDisplayAvgTauMs: null,
-                    WidebandDisplayEnabled: false);
+                    WidebandDisplayEnabled: false,
+                    DisplayMaxFrameRateHz: _defaultDisplayMaxFrameRateHz);
             }
             return new DisplaySettingsDto(
                 Mode: NormalizeMode(e.Mode),
@@ -136,7 +143,10 @@ public sealed class DisplaySettingsStore : IDisposable
                 TxDisplayFftSize: e.TxDisplayFftSize,
                 TxDisplayWindow: e.TxDisplayWindow,
                 TxDisplayAvgTauMs: e.TxDisplayAvgTauMs,
-                WidebandDisplayEnabled: e.WidebandDisplayEnabled);
+                WidebandDisplayEnabled: e.WidebandDisplayEnabled,
+                DisplayMaxFrameRateHz: DisplayPerformanceOptions.NormalizeFrameRate(
+                    e.DisplayMaxFrameRateHz,
+                    _defaultDisplayMaxFrameRateHz));
         }
     }
 
@@ -150,7 +160,8 @@ public sealed class DisplaySettingsStore : IDisposable
         double? wfTxDbMin = null, double? wfTxDbMax = null,
         double? txDisplayCalOffsetDb = null, int? txDisplayFftSize = null,
         int? txDisplayWindow = null, double? txDisplayAvgTauMs = null,
-        bool? widebandDisplayEnabled = null)
+        bool? widebandDisplayEnabled = null,
+        double? displayMaxFrameRateHz = null)
     {
         lock (_sync)
         {
@@ -174,6 +185,10 @@ public sealed class DisplaySettingsStore : IDisposable
             if (IsValidWindow(txDisplayWindow)) e.TxDisplayWindow = txDisplayWindow;
             if (IsValidAvgTauMs(txDisplayAvgTauMs)) e.TxDisplayAvgTauMs = txDisplayAvgTauMs;
             if (widebandDisplayEnabled.HasValue) e.WidebandDisplayEnabled = widebandDisplayEnabled.Value;
+            if (displayMaxFrameRateHz.HasValue && double.IsFinite(displayMaxFrameRateHz.Value))
+            {
+                e.DisplayMaxFrameRateHz = DisplayPerformanceOptions.NormalizeFrameRate(displayMaxFrameRateHz.Value);
+            }
             e.UpdatedUtc = DateTime.UtcNow;
             if (e.Id == 0) _docs.Insert(e);
             else _docs.Update(e);
@@ -290,5 +305,8 @@ public sealed class DisplaySettingsEntry
     // Protocol-2 ADC snapshot display mode. False on legacy rows because bool
     // defaults to false when LiteDB materialises rows written before this field.
     public bool WidebandDisplayEnabled { get; set; }
+    // Max generated panadapter/waterfall display frames per second. Null on
+    // legacy rows means "use the process/profile default".
+    public double? DisplayMaxFrameRateHz { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

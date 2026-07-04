@@ -129,6 +129,12 @@ function seed() {
       architecture: 'x64',
       version: 'test',
       lanHttpsUrls: [],
+      displayPerformance: {
+        profile: 'normal',
+        maxFrameRateHz: 30,
+        lowPower: false,
+        preferWebglWaterfall: false,
+      },
       features: {},
     },
     localToServer: false,

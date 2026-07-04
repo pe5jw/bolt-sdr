@@ -178,6 +178,14 @@ export const WATERFALL_SCROLL_SPEED_MIN = 0.25;
 export const WATERFALL_SCROLL_SPEED_MAX = 2.5;
 export const WATERFALL_SCROLL_SPEED_STEP = 0.05;
 export const DEFAULT_WF_SCROLL_SPEED = 1;
+export const DISPLAY_FRAME_RATES = [10, 15, 20, 30] as const;
+export const DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ = 30;
+
+export function normalizeDisplayMaxFrameRateHz(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ;
+  return Math.min(DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ, Math.max(1, n));
+}
 
 function normalizeWaterfallScrollSpeed(raw: unknown): number {
   const n = typeof raw === 'number' ? raw : Number(raw);
@@ -363,6 +371,9 @@ function scheduleDbRangeSave(): void {
       s.wfDbMax,
       s.wfTxDbMin,
       s.wfTxDbMax,
+      undefined,
+      s.widebandDisplayEnabled,
+      s.displayMaxFrameRateHz,
     );
   }, 1000);
 }
@@ -395,6 +406,8 @@ function scheduleTxDisplaySave(): void {
         window: s.txDisplayWindow,
         avgTauMs: s.txDisplayAvgTauMs,
       },
+      s.widebandDisplayEnabled,
+      s.displayMaxFrameRateHz,
     );
   }, 500);
 }
@@ -481,6 +494,9 @@ export type DisplaySettingsState = {
   // the bounded wideband ADC stream only while a display client is mounted and
   // renders RX0 panadapter/waterfall as a 0-60 MHz view.
   widebandDisplayEnabled: boolean;
+  // Backend display/analyzer frame cap. Audio and DSP ticks keep their native
+  // cadence; this only gates generated panadapter/waterfall frames.
+  displayMaxFrameRateHz: number;
   colormap: ColormapId;
   waterfallScrollSpeed: number;
   // Panadapter background overlay mode + (optional) user image. See the
@@ -541,6 +557,7 @@ export type DisplaySettingsState = {
   // windows (mirrors setAutoRange for RX).
   setTxAutoRange: (v: boolean) => void;
   setWidebandDisplayEnabled: (v: boolean) => Promise<void>;
+  setDisplayMaxFrameRateHz: (v: number) => Promise<void>;
   // Fit the TX windows to a frame of live TX pixels (no-op when off / empty).
   // Driven from the waterfall ingest while keyed.
   updateTxAutoRange: (pixels: Float32Array) => void;
@@ -632,6 +649,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   // via restoreSavedTxWindows().
   txAutoRange: DEFAULT_TX_AUTO_RANGE,
   widebandDisplayEnabled: false,
+  displayMaxFrameRateHz: DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ,
   colormap: 'blue',
   waterfallScrollSpeed: initialWaterfallScrollSpeed,
   // Defaults until the server-side fetch lands (see hydrateFromServer at the
@@ -845,12 +863,42 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
         s.wfTxDbMax,
         undefined,
         widebandDisplayEnabled,
+        s.displayMaxFrameRateHz,
       );
       if (result.widebandDisplayEnabled !== widebandDisplayEnabled) {
         set({ widebandDisplayEnabled: result.widebandDisplayEnabled });
       }
     } catch {
       set({ widebandDisplayEnabled: prev });
+    }
+  },
+  setDisplayMaxFrameRateHz: async (value) => {
+    const next = normalizeDisplayMaxFrameRateHz(value);
+    const prev = get().displayMaxFrameRateHz;
+    set({ displayMaxFrameRateHz: next });
+    try {
+      const s = get();
+      const result = await updateDisplaySettings(
+        s.panBackground,
+        s.backgroundImageFit,
+        s.rxTraceColor,
+        s.dbMin,
+        s.dbMax,
+        s.txDbMin,
+        s.txDbMax,
+        s.wfDbMin,
+        s.wfDbMax,
+        s.wfTxDbMin,
+        s.wfTxDbMax,
+        undefined,
+        s.widebandDisplayEnabled,
+        next,
+      );
+      if (result.displayMaxFrameRateHz !== next) {
+        set({ displayMaxFrameRateHz: result.displayMaxFrameRateHz });
+      }
+    } catch {
+      set({ displayMaxFrameRateHz: prev });
     }
   },
   restoreSavedTxWindows: () => {
@@ -1098,6 +1146,7 @@ async function hydrateFromServer(): Promise<void> {
     backgroundImageFit: server.fit,
     rxTraceColor: server.rxTraceColor,
     widebandDisplayEnabled: server.widebandDisplayEnabled,
+    displayMaxFrameRateHz: normalizeDisplayMaxFrameRateHz(server.displayMaxFrameRateHz),
     ...(serverHasDbRange
       ? {
           dbMin: panRange!.min,

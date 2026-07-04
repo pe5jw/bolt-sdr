@@ -62,18 +62,20 @@ function writeStored(enabled: boolean, key = STORAGE_KEY): void {
   }
 }
 
-/** Whether the WebGPU heightfield is the active waterfall. Default ON — the
- *  heightfield is the standard waterfall now; the legacy WebGL surface is the
- *  fallback. Force the legacy one with `?webgpuWaterfall=0` (sticky). Actual use
+/** Whether the WebGPU heightfield is the active waterfall. Default ON for the
+ *  normal profile; low-power hosts pass defaultEnabled=false so the flat WebGL
+ *  surface is preferred unless the operator explicitly opts back in. Actual use
  *  still requires the capability probe (caps.ts) and a clean renderer init; on
  *  any failure WaterfallSurface falls back to WebGL. */
-export function isWebGpuWaterfallEnabled(): boolean {
+export function isWebGpuWaterfallEnabled(defaultEnabled = true): boolean {
   const override = readUrlOverride();
   if (override !== null) {
     writeStored(override);
     return override;
   }
-  return readStored() !== '0';
+  const stored = readStored();
+  if (stored !== null) return stored === '1';
+  return defaultEnabled;
 }
 
 /** Programmatic toggle (e.g. a Settings switch). */

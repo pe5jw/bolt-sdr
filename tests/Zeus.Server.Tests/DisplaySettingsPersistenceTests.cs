@@ -52,6 +52,7 @@ public class DisplaySettingsPersistenceTests : IDisposable
         Assert.Null(dto.WfTxDbMin);
         Assert.Null(dto.WfTxDbMax);
         Assert.False(dto.WidebandDisplayEnabled);
+        Assert.Equal(DisplayPerformanceOptions.DefaultFrameRateHz, dto.DisplayMaxFrameRateHz);
     }
 
     [Fact]
@@ -142,6 +143,38 @@ public class DisplaySettingsPersistenceTests : IDisposable
         Assert.True(dto.WidebandDisplayEnabled);
         Assert.Equal("beam-map", dto.Mode);
         Assert.Equal("fit", dto.Fit);
+    }
+
+    [Fact]
+    public void SaveMode_DisplayMaxFrameRateHz_PersistsAndNullPreserves()
+    {
+        using (var store = BuildStore())
+        {
+            store.SaveMode("basic", "fill", "#FFA028", displayMaxFrameRateHz: 15);
+        }
+
+        using (var update = BuildStore())
+        {
+            update.SaveMode("beam-map", "fit", "#FF8800");
+        }
+
+        using var check = BuildStore();
+        var dto = check.Get();
+        Assert.Equal(15, dto.DisplayMaxFrameRateHz);
+        Assert.Equal("beam-map", dto.Mode);
+        Assert.Equal("fit", dto.Fit);
+    }
+
+    [Theory]
+    [InlineData(0, DisplayPerformanceOptions.MinFrameRateHz)]
+    [InlineData(60, DisplayPerformanceOptions.MaxFrameRateHz)]
+    public void SaveMode_DisplayMaxFrameRateHz_ClampsToSupportedRange(double raw, double expected)
+    {
+        using var store = BuildStore();
+
+        store.SaveMode("basic", "fill", "#FFA028", displayMaxFrameRateHz: raw);
+
+        Assert.Equal(expected, store.Get().DisplayMaxFrameRateHz);
     }
 
     // Regression for the "white waterfall" symptom: dragging the waterfall dB
