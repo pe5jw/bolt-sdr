@@ -1151,21 +1151,25 @@ public sealed class TciSession : IDisposable
     private void HandleMonEnable(string[] args)
     {
         // mon_enable:<bool> or mon_enable (query)
+        // TCI monitor controls stay placeholders until Zeus has a monitor
+        // volume backend to pair with its TX monitor enable path.
         if (args.Length == 0)
         {
             Send(TciProtocol.Command("mon_enable", false));
         }
-        // Ignore set — sidetone not implemented
+        // Ignore set for now.
     }
 
     private void HandleMonVolume(string[] args)
     {
         // mon_volume:<db> or mon_volume (query)
+        // TCI monitor controls stay placeholders until Zeus has a monitor
+        // volume backend to pair with its TX monitor enable path.
         if (args.Length == 0)
         {
             Send(TciProtocol.Command("mon_volume", -20));
         }
-        // Ignore set — sidetone not implemented
+        // Ignore set for now.
     }
 
     private void HandleAgcMode(string[] args)
@@ -1422,14 +1426,17 @@ public sealed class TciSession : IDisposable
     private void HandleLock(string[] args)
     {
         // lock:<rx>,<bool> or lock:<rx> (query)
+        // TCI exposes this per receiver, but Zeus has one global VFO lock.
         if (args.Length < 1) return;
         if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
 
         if (args.Length == 1)
         {
-            Send(TciProtocol.Command("lock", rx, false));
+            Send(TciProtocol.Command("lock", rx, _radio.Snapshot().VfoLocked));
+            return;
         }
-        // Ignore set — lock not implemented
+        if (TciProtocol.TryParseBool(args[1], out bool locked))
+            _radio.SetVfoLock(locked);
     }
 
     private void HandleStart(string[] args)
@@ -1738,17 +1745,18 @@ public sealed class TciSession : IDisposable
     private void HandleVfoLock(string[] args)
     {
         // vfo_lock:<trx>,<vfo>          GET → echo
-        // vfo_lock:<trx>,<vfo>,<bool>   SET → ack-only (Zeus has no per-VFO lock yet)
+        // vfo_lock:<trx>,<vfo>,<bool>   SET
+        // Zeus lock is global; both TCI VFO indices map to the one lock.
         if (args.Length < 2) return;
         if (!TciProtocol.TryParseInt(args[0], out int trx)) return;
         if (!TciProtocol.TryParseInt(args[1], out int vfo)) return;
         if (args.Length == 2)
         {
-            Send(TciProtocol.Command("vfo_lock", trx, vfo, false));
+            Send(TciProtocol.Command("vfo_lock", trx, vfo, _radio.Snapshot().VfoLocked));
             return;
         }
         if (TciProtocol.TryParseBool(args[2], out bool locked))
-            Send(TciProtocol.Command("vfo_lock", trx, vfo, locked));
+            _radio.SetVfoLock(locked);
     }
 
     private void HandleVfoSwapEx(string[] args)

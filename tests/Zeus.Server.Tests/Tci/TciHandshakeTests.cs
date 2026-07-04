@@ -307,6 +307,7 @@ public class TciHandshakeTests
             "trx:0,false;",
             "tune:0,false;",
             "rx_mute:0,false;",
+            "lock:0,false;",
             "rx_filter_band:0,150,2850;",
             "rit_enable:0,false;",
             "rit_offset:0,0;",
@@ -351,6 +352,15 @@ public class TciHandshakeTests
 
         Assert.Contains("mute:true;", handshake);
         Assert.Contains("rx_mute:0,true;", handshake);
+    }
+
+    [Fact]
+    public void BuildHandshake_IncludesLiveVfoLockState()
+    {
+        var state = CreateTestState() with { VfoLocked = true };
+        var handshake = TciHandshake.BuildHandshake(state, 192000, false, false, 50);
+
+        Assert.Contains("lock:0,true;", handshake);
     }
 
     [Theory]

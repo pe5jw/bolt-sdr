@@ -89,8 +89,9 @@ public static class TciHandshake
         // immediately on connect. Master mute mirrors the primary receiver
         // (RX1) mute so the client dashboard reads correctly after
         // reconnect. mon_volume is the TX sidetone bus (TCI spec §5.5) —
-        // independent of RX audio gain — so it stays a placeholder until
-        // Zeus has a real monitor path.
+        // independent of RX audio gain. Zeus has TX monitor enable, but no
+        // monitor-volume backend yet, so the TCI monitor fields remain
+        // placeholders for now.
         cmds.Add(TciProtocol.Command("volume", (int)Math.Round(state.RxAfGainDb)));
         cmds.Add(TciProtocol.Command("mute", state.Rx1Muted));
         cmds.Add(TciProtocol.Command("mon_volume", -20));
@@ -112,6 +113,7 @@ public static class TciHandshake
         cmds.Add(TciProtocol.Command("tune", 0, tunOn));
 
         cmds.Add(TciProtocol.Command("rx_mute", 0, state.Rx1Muted));
+        cmds.Add(TciProtocol.Command("lock", 0, state.VfoLocked));
         cmds.Add(TciProtocol.Command("rx_filter_band", 0, state.FilterLowHz, state.FilterHighHz));
 
         // Live RIT/XIT so a reconnecting client dashboard picks up any offset
