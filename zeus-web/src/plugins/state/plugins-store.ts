@@ -16,6 +16,7 @@ import {
   fetchInstalledPlugins,
   fetchRegistry,
   installPlugin,
+  registryEntryToManagedPlugin,
   uninstallPlugin,
   type InstallRequest,
   type PluginDto,
@@ -177,7 +178,8 @@ export const usePluginsStore = create<PluginsStoreState>((set, get) => ({
     });
     try {
       if (req.source === 'registry' && req.id) {
-        const access = pluginAccessFor(req.id);
+        const entry = get().registry?.plugins.find((plugin) => plugin.id === req.id) ?? null;
+        const access = pluginAccessFor(req.id, false, entry ? registryEntryToManagedPlugin(entry) : null);
         if (!access.allowed) {
           throw new Error(access.reason ?? 'Plugin subscription required');
         }

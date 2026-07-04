@@ -421,6 +421,14 @@ public static class ZeusHost
         builder.Services.AddHttpClient(
             Zeus.Server.Hosting.Remote.BrokerIceServers.TurnHttpClientName,
             c => c.Timeout = TimeSpan.FromSeconds(5));
+        builder.Services.AddHttpClient(
+            Zeus.Server.Hosting.UserDirectoryReporter.HttpClientName,
+            c =>
+            {
+                c.Timeout = TimeSpan.FromSeconds(8);
+                c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus");
+            });
+        builder.Services.AddHostedService<Zeus.Server.Hosting.UserDirectoryReporter>();
         // Remote-access WebRTC signaling (Phase 1). Answers offers with a session
         // gated behind the SPAKE2+ password handshake. The read-only API tunnel
         // loopback-proxies to this host's own Kestrel on HttpPort (or :0 disabled).

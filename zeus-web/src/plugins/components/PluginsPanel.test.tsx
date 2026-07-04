@@ -479,6 +479,7 @@ describe('PluginBrowser', () => {
             homepage: 'https://example.com/demo',
             categories: ['rx'],
             verified: true,
+            subscription: null,
             versions: [
               {
                 version: '0.1.0',
@@ -528,6 +529,7 @@ describe('PluginBrowser', () => {
             homepage: null,
             categories: [],
             verified: false,
+            subscription: null,
             versions: [
               {
                 version: '0.1.0',

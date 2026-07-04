@@ -20,7 +20,12 @@ import {
 } from 'lucide-react';
 import { useUserAccessStore } from '../state/user-access-store';
 import { QrzAccessGate } from './QrzAccessGate';
-import { fetchInstalledPlugins, type PluginDto } from '../plugins/api/plugins';
+import {
+  fetchInstalledPlugins,
+  fetchRegistry,
+  type PluginDto,
+  type RegistryPluginEntry,
+} from '../plugins/api/plugins';
 import type {
   ZeusManagedPluginRecord,
   ZeusManagedPluginUpdateRequest,
@@ -50,6 +55,7 @@ type PluginRowModel = {
   pluginId: string;
   displayName: string;
   installed: PluginDto | null;
+  registry: RegistryPluginEntry | null;
   managed: ZeusManagedPluginRecord | null;
 };
 
@@ -91,6 +97,14 @@ function priceLabel(plugin: ZeusManagedPluginRecord | null): string {
   return `${plugin.currency} ${dollarsFromCents(plugin.monthlyPriceCents)}/mo`;
 }
 
+function priceLabelForRow(model: PluginRowModel, managed: ZeusManagedPluginRecord | null): string {
+  if (managed) return priceLabel(managed);
+  const subscription = model.registry?.subscription;
+  if (!subscription?.required) return 'free';
+  if (subscription.monthlyPriceCents <= 0) return `${subscription.currency} manual`;
+  return `${subscription.currency} ${dollarsFromCents(subscription.monthlyPriceCents)}/mo`;
+}
+
 function StatusPill({ user }: { user: ZeusUserRecord }) {
   if (!user.accessAllowed) {
     return (
@@ -115,23 +129,28 @@ function ManagedPluginRow({
   saving: boolean;
   onSave: (pluginId: string, request: ZeusManagedPluginUpdateRequest) => Promise<ZeusManagedPluginRecord | null>;
 }) {
+  const registrySubscription = model.registry?.subscription ?? null;
   const [displayName, setDisplayName] = useState(model.displayName);
-  const [subscriptionRequired, setSubscriptionRequired] = useState(model.managed?.subscriptionRequired ?? false);
-  const [monthlyPrice, setMonthlyPrice] = useState(dollarsFromCents(model.managed?.monthlyPriceCents ?? 0));
-  const [currency, setCurrency] = useState(model.managed?.currency ?? 'USD');
+  const [subscriptionRequired, setSubscriptionRequired] = useState(
+    model.managed?.subscriptionRequired ?? registrySubscription?.required ?? false,
+  );
+  const [monthlyPrice, setMonthlyPrice] = useState(
+    dollarsFromCents(model.managed?.monthlyPriceCents ?? registrySubscription?.monthlyPriceCents ?? 0),
+  );
+  const [currency, setCurrency] = useState(model.managed?.currency ?? registrySubscription?.currency ?? 'USD');
   const [active, setActive] = useState(model.managed?.active ?? true);
-  const [checkoutUrl, setCheckoutUrl] = useState(model.managed?.checkoutUrl ?? '');
-  const [notes, setNotes] = useState(model.managed?.notes ?? '');
+  const [checkoutUrl, setCheckoutUrl] = useState(model.managed?.checkoutUrl ?? registrySubscription?.checkoutUrl ?? '');
+  const [notes, setNotes] = useState(model.managed?.notes ?? registrySubscription?.notes ?? '');
 
   useEffect(() => {
-    setDisplayName(model.managed?.displayName || model.installed?.name || model.pluginId);
-    setSubscriptionRequired(model.managed?.subscriptionRequired ?? false);
-    setMonthlyPrice(dollarsFromCents(model.managed?.monthlyPriceCents ?? 0));
-    setCurrency(model.managed?.currency ?? 'USD');
+    setDisplayName(model.managed?.displayName || model.installed?.name || model.registry?.name || model.pluginId);
+    setSubscriptionRequired(model.managed?.subscriptionRequired ?? registrySubscription?.required ?? false);
+    setMonthlyPrice(dollarsFromCents(model.managed?.monthlyPriceCents ?? registrySubscription?.monthlyPriceCents ?? 0));
+    setCurrency(model.managed?.currency ?? registrySubscription?.currency ?? 'USD');
     setActive(model.managed?.active ?? true);
-    setCheckoutUrl(model.managed?.checkoutUrl ?? '');
-    setNotes(model.managed?.notes ?? '');
-  }, [model.installed?.name, model.managed, model.pluginId]);
+    setCheckoutUrl(model.managed?.checkoutUrl ?? registrySubscription?.checkoutUrl ?? '');
+    setNotes(model.managed?.notes ?? registrySubscription?.notes ?? '');
+  }, [model.installed?.name, model.managed, model.pluginId, model.registry?.name, registrySubscription]);
 
   async function savePlugin() {
     await onSave(model.pluginId, {
@@ -149,7 +168,13 @@ function ManagedPluginRow({
     <div className="admin-managed-plugin-row">
       <div className="admin-managed-plugin-main">
         <strong>{model.pluginId}</strong>
-        <span>{model.installed ? `installed v${model.installed.version}` : 'catalog entry'}</span>
+        <span>
+          {model.installed
+            ? `installed v${model.installed.version}`
+            : model.registry
+              ? 'plugin repo'
+              : 'catalog entry'}
+        </span>
         <em>{priceLabel(model.managed)}</em>
       </div>
       <div className="admin-plugin-edit-grid">
@@ -220,6 +245,7 @@ export function AdminPage() {
   const [newPluginId, setNewPluginId] = useState('');
   const [newPluginName, setNewPluginName] = useState('');
   const [installedPlugins, setInstalledPlugins] = useState<PluginDto[]>([]);
+  const [registryPlugins, setRegistryPlugins] = useState<RegistryPluginEntry[]>([]);
   const [pluginsLoading, setPluginsLoading] = useState(false);
   const [pluginsError, setPluginsError] = useState<string | null>(null);
   const selected = useMemo(
@@ -238,8 +264,9 @@ export function AdminPage() {
     setPluginsLoading(true);
     setPluginsError(null);
     try {
-      const response = await fetchInstalledPlugins();
-      setInstalledPlugins(response.plugins.filter((plugin) => !plugin.scanned));
+      const [installed, registry] = await Promise.all([fetchInstalledPlugins(), fetchRegistry()]);
+      setInstalledPlugins(installed.plugins.filter((plugin) => !plugin.scanned));
+      setRegistryPlugins(registry.catalog.plugins);
     } catch (err) {
       setPluginsError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -294,7 +321,20 @@ export function AdminPage() {
         pluginId: plugin.pluginId,
         displayName: plugin.displayName || plugin.pluginId,
         installed: null,
+        registry: null,
         managed: plugin,
+      });
+    });
+
+    registryPlugins.forEach((plugin) => {
+      const key = plugin.id.toLowerCase();
+      const existing = map.get(key);
+      map.set(key, {
+        pluginId: plugin.id,
+        displayName: existing?.displayName || plugin.name || plugin.id,
+        installed: existing?.installed ?? null,
+        registry: plugin,
+        managed: existing?.managed ?? null,
       });
     });
 
@@ -305,6 +345,7 @@ export function AdminPage() {
         pluginId: plugin.id,
         displayName: existing?.displayName || plugin.name || plugin.id,
         installed: plugin,
+        registry: existing?.registry ?? null,
         managed: existing?.managed ?? null,
       });
     });
@@ -316,13 +357,14 @@ export function AdminPage() {
           pluginId: entitlement.pluginId,
           displayName: entitlement.pluginId,
           installed: null,
+          registry: null,
           managed: null,
         });
       }
     });
 
     return [...map.values()].sort((a, b) => a.pluginId.localeCompare(b.pluginId));
-  }, [installedPlugins, managedPlugins, selected?.pluginEntitlements]);
+  }, [installedPlugins, managedPlugins, registryPlugins, selected?.pluginEntitlements]);
 
   if (!checked || !session?.qrzConnected || !session.accessAllowed) {
     return <QrzAccessGate adminMode />;
@@ -618,7 +660,7 @@ export function AdminPage() {
                             <div className="admin-entitlement-plugin">
                               <strong>{plugin.displayName}</strong>
                               <span>{plugin.pluginId}</span>
-                              <em>{priceLabel(managed)}</em>
+                              <em>{priceLabelForRow(plugin, managed)}</em>
                             </div>
                             <label>
                               <span>Access</span>

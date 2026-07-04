@@ -12,6 +12,7 @@ import type {
   RegistryPluginEntry,
   RegistryPluginVersion,
 } from '../api/plugins';
+import { registryEntryToManagedPlugin } from '../api/plugins';
 import { RestartRequiredModal } from '../../components/RestartRequiredModal';
 import { pluginAccessFor } from '../../state/user-access-store';
 
@@ -97,7 +98,8 @@ function RegistryCard({
   const installing = usePluginsStore((s) => s.installInflight);
   const latest = useMemo(() => latestVersion(entry), [entry]);
   const alreadyInstalled = installedIds.has(entry.id);
-  const pluginAccess = pluginAccessFor(entry.id);
+  const registryManagedPlugin = useMemo(() => registryEntryToManagedPlugin(entry), [entry]);
+  const pluginAccess = pluginAccessFor(entry.id, false, registryManagedPlugin);
   const checkoutUrl = pluginAccess.managedPlugin?.checkoutUrl;
   const price = subscriptionPrice(pluginAccess);
 

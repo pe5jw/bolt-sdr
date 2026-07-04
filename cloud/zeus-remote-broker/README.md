@@ -32,7 +32,13 @@ radio access is gated end-to-end by the SPAKE2+ session password at the radio
   maintainer dashboard.
 - `GET/POST /admin/plugins` and `PUT /admin/plugins/<pluginId>` — plugin catalog
   and subscription pricing metadata: free/paid flag, monthly price, checkout URL,
-  active state, and notes.
+  active state, and notes. The list is automatically merged with
+  `OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins` `registry.json` so newly published
+  registry plugins appear in the admin dashboard as free until priced.
+- `POST /users/heartbeat` — QRZ-verified Zeus app directory heartbeat. The broker
+  validates `X-QRZ-Callsign` + `X-QRZ-Session` before upserting the durable user
+  row; this is separate from diagnostics presence and does not imply support
+  opt-in.
 - `GET /admin/presence` — online support-available operators.
 
 Signaling messages (JSON): client→host `offer`/`candidate`/`bye`; host→client

@@ -34,6 +34,7 @@ import {
   countAdmins,
   countEnabledAdmins,
   listManagedUsers,
+  recordManagedUserLogin,
   upsertManagedUser,
   updateManagedUser,
   listManagedPlugins,
@@ -51,6 +52,48 @@ export interface AuthCtx {
 
 /** Module-scoped guard so the (idempotent) bootstrap+migration runs at most once per isolate. */
 let bootstrapped = false;
+const DEFAULT_PLUGIN_REGISTRY_URL =
+  'https://raw.githubusercontent.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins/main/registry.json';
+const PLUGIN_REGISTRY_CACHE_MS = 5 * 60 * 1000;
+const USER_DIRECTORY_ONLINE_MS = 90 * 1000;
+let pluginRegistryCache: { url: string; fetchedAt: number; plugins: RegistryPluginSeed[] } | null = null;
+
+interface RegistryPluginSeed {
+  pluginId: string;
+  displayName: string;
+  subscriptionRequired: boolean;
+  monthlyPriceCents: number;
+  currency: string;
+  checkoutUrl: string | null;
+  notes: string | null;
+}
+
+interface ManagedPluginDto {
+  pluginId: string;
+  displayName: string;
+  subscriptionRequired: boolean;
+  monthlyPriceCents: number;
+  currency: string;
+  active: boolean;
+  checkoutUrl: string | null;
+  notes: string | null;
+  createdAt: number | null;
+  updatedAt: number | null;
+  source?: 'registry' | 'admin';
+}
+
+interface PresenceOperatorDto {
+  callsign: string;
+  since: number | null;
+  lastSeen: number | null;
+  ip: string | null;
+  country: string | null;
+  platform: string | null;
+  appVersion: string | null;
+  radioBoard: string | null;
+  radioModel: string | null;
+  radioConnected: boolean;
+}
 
 export async function handleAdmin(
   request: Request,
@@ -114,11 +157,19 @@ export async function handleAdmin(
 
     // app users / subscriptions
     if (path === '/admin/users' && request.method === 'GET') {
+      const presence = await listPresenceOperators(env);
+      await Promise.all(presence.map((op) => recordManagedUserLogin(env.ADMIN_DB, op.callsign)));
+      const presenceByCall = new Map(presence.map((op) => [op.callsign, op]));
+      const now = Date.now();
       const [users, plugins] = await Promise.all([
         listManagedUsers(env.ADMIN_DB),
-        listManagedPlugins(env.ADMIN_DB),
+        mergedManagedPlugins(env),
       ]);
-      return json({ users: users.map(toManagedUserDto), plugins: plugins.map(toManagedPluginDto) }, 200, cors);
+      return json({
+        users: users.map((user) => toManagedUserDto(user, presenceByCall.get(user.callsign) ?? null, now)),
+        plugins,
+        pluginRegistryUrl: pluginRegistryUrl(env),
+      }, 200, cors);
     }
     if (path === '/admin/users' && request.method === 'POST') {
       return await handleUpsertManagedUser(request, env, auth, cors);
@@ -130,7 +181,10 @@ export async function handleAdmin(
 
     // plugin catalog / pricing
     if (path === '/admin/plugins' && request.method === 'GET') {
-      return json({ plugins: (await listManagedPlugins(env.ADMIN_DB)).map(toManagedPluginDto) }, 200, cors);
+      return json({
+        plugins: await mergedManagedPlugins(env),
+        pluginRegistryUrl: pluginRegistryUrl(env),
+      }, 200, cors);
     }
     if (path === '/admin/plugins' && request.method === 'POST') {
       return await handleUpsertManagedPlugin(null, request, env, auth, cors);
@@ -142,10 +196,7 @@ export async function handleAdmin(
 
     // presence
     if (path === '/admin/presence' && request.method === 'GET') {
-      const id = env.PRESENCE.idFromName('global');
-      const res = await env.PRESENCE.get(id).fetch('https://presence.internal/list');
-      const body = await res.json<{ operators: unknown[] }>();
-      return json(body, 200, cors);
+      return json({ operators: await listPresenceOperators(env) }, 200, cors);
     }
 
     // diagnostics-session request (remote-diag P3): notify the target operator and
@@ -509,7 +560,113 @@ async function ensureBootstrap(env: Env): Promise<void> {
 
 // --- helpers ----------------------------------------------------------------
 
-function toManagedUserDto(row: ManagedUserRow) {
+async function mergedManagedPlugins(env: Env) {
+  const [rows, registry] = await Promise.all([
+    listManagedPlugins(env.ADMIN_DB),
+    fetchRegistryPluginSeeds(env),
+  ]);
+  const byId = new Map<string, ManagedPluginDto>();
+  for (const seed of registry) {
+    byId.set(seed.pluginId, {
+      pluginId: seed.pluginId,
+      displayName: seed.displayName,
+      subscriptionRequired: seed.subscriptionRequired,
+      monthlyPriceCents: seed.monthlyPriceCents,
+      currency: seed.currency,
+      active: true,
+      checkoutUrl: seed.checkoutUrl,
+      notes: seed.notes,
+      createdAt: null,
+      updatedAt: null,
+      source: 'registry',
+    });
+  }
+  for (const row of rows) {
+    byId.set(row.plugin_id, { ...toManagedPluginDto(row), source: 'admin' });
+  }
+  return [...byId.values()].sort((a, b) => a.pluginId.localeCompare(b.pluginId));
+}
+
+async function fetchRegistryPluginSeeds(env: Env): Promise<RegistryPluginSeed[]> {
+  const url = pluginRegistryUrl(env);
+  const now = Date.now();
+  if (pluginRegistryCache?.url === url && now - pluginRegistryCache.fetchedAt < PLUGIN_REGISTRY_CACHE_MS) {
+    return pluginRegistryCache.plugins;
+  }
+
+  try {
+    const res = await fetch(url, { headers: { accept: 'application/json' } });
+    if (!res.ok) return [];
+    const raw = (await res.json()) as Record<string, unknown>;
+    const plugins = Array.isArray(raw.plugins)
+      ? raw.plugins.map(registryPluginSeed).filter((p): p is RegistryPluginSeed => p !== null)
+      : [];
+    pluginRegistryCache = { url, fetchedAt: now, plugins };
+    return plugins;
+  } catch {
+    return [];
+  }
+}
+
+function registryPluginSeed(raw: unknown): RegistryPluginSeed | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const plugin = raw as Record<string, unknown>;
+  const pluginId = normPluginId(String(plugin.id ?? ''));
+  if (!pluginId) return null;
+  const subscription = plugin.subscription && typeof plugin.subscription === 'object'
+    ? (plugin.subscription as Record<string, unknown>)
+    : {};
+  const cents = optionalNumber(subscription.monthlyPriceCents) ?? 0;
+  return {
+    pluginId,
+    displayName: optionalString(plugin.name) ?? pluginId,
+    subscriptionRequired: subscription.required === true,
+    monthlyPriceCents: Math.max(0, Math.round(cents)),
+    currency: (optionalString(subscription.currency) ?? 'USD').toUpperCase(),
+    checkoutUrl: optionalString(subscription.checkoutUrl),
+    notes: optionalString(subscription.notes),
+  };
+}
+
+function pluginRegistryUrl(env: Env): string {
+  return optionalString(env.PLUGIN_REGISTRY_URL) ?? DEFAULT_PLUGIN_REGISTRY_URL;
+}
+
+async function listPresenceOperators(env: Env): Promise<PresenceOperatorDto[]> {
+  const id = env.PRESENCE.idFromName('global');
+  const res = await env.PRESENCE.get(id).fetch('https://presence.internal/list');
+  if (!res.ok) return [];
+  const body = await res.json<{ operators?: unknown[] }>().catch(() => ({ operators: [] }));
+  const operators = Array.isArray(body.operators) ? body.operators : [];
+  return operators.map(normalizedPresenceOperator).filter((op): op is PresenceOperatorDto => op !== null);
+}
+
+function normalizedPresenceOperator(raw: unknown): PresenceOperatorDto | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const callsign = norm(String(o.callsign ?? ''));
+  if (!callsign) return null;
+  return {
+    callsign,
+    since: optionalNumber(o.since),
+    lastSeen: optionalNumber(o.lastSeen),
+    ip: optionalString(o.ip),
+    country: optionalString(o.country),
+    platform: optionalString(o.platform),
+    appVersion: optionalString(o.appVersion),
+    radioBoard: optionalString(o.radioBoard),
+    radioModel: optionalString(o.radioModel),
+    radioConnected: o.radioConnected === true,
+  };
+}
+
+function toManagedUserDto(
+  row: ManagedUserRow,
+  presence: PresenceOperatorDto | null = null,
+  now: number = Date.now(),
+) {
+  const directoryOnline = row.last_login_at !== null && now - row.last_login_at <= USER_DIRECTORY_ONLINE_MS;
+  const online = presence !== null || directoryOnline;
   return {
     callsign: row.callsign,
     displayName: row.display_name ?? row.callsign,
@@ -523,10 +680,25 @@ function toManagedUserDto(row: ManagedUserRow) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastLoginAt: row.last_login_at,
+    online,
+    onlineSince: presence?.since ?? null,
+    lastSeenAt: presence?.lastSeen ?? row.last_login_at,
+    onlineSource: presence !== null ? 'presence' : directoryOnline ? 'directory' : 'none',
+    presence: presence
+      ? {
+          ip: presence.ip,
+          country: presence.country,
+          platform: presence.platform,
+          appVersion: presence.appVersion,
+          radioBoard: presence.radioBoard,
+          radioModel: presence.radioModel,
+          radioConnected: presence.radioConnected,
+        }
+      : null,
   };
 }
 
-function toManagedPluginDto(row: ManagedPluginRow) {
+function toManagedPluginDto(row: ManagedPluginRow): ManagedPluginDto {
   return {
     pluginId: row.plugin_id,
     displayName: row.display_name || row.plugin_id,

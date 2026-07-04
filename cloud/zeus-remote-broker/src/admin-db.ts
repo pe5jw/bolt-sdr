@@ -227,6 +227,32 @@ export async function getManagedUser(db: D1Database, callsign: string): Promise<
   return db.prepare('SELECT * FROM admin_users WHERE callsign = ?').bind(callsign).first<ManagedUserRow>();
 }
 
+/**
+ * Record a QRZ-authenticated Zeus operator without changing admin-managed
+ * controls. Presence heartbeats use this so every real Zeus user becomes
+ * visible in /admin/users while bans, roles, subscriptions, and plugin
+ * entitlements remain authoritative.
+ */
+export async function recordManagedUserLogin(
+  db: D1Database,
+  callsign: string,
+  displayName?: string | null,
+): Promise<void> {
+  const now = Date.now();
+  const safeDisplayName = displayName && displayName.trim() ? displayName.trim() : callsign;
+  await db
+    .prepare(
+      'INSERT INTO admin_users ' +
+        '(callsign, display_name, access_allowed, is_admin, subscription_status, subscription_expires_at, plugin_access_mode, plugin_entitlements, notes, created_at, updated_at, last_login_at) ' +
+        "VALUES (?, ?, 1, 0, 'manual', NULL, 'all', '[]', NULL, ?, ?, ?) " +
+        'ON CONFLICT(callsign) DO UPDATE SET ' +
+        "display_name = CASE WHEN admin_users.display_name IS NULL OR admin_users.display_name = '' THEN excluded.display_name ELSE admin_users.display_name END, " +
+        'updated_at = excluded.updated_at, last_login_at = excluded.last_login_at',
+    )
+    .bind(callsign, safeDisplayName, now, now, now)
+    .run();
+}
+
 export async function upsertManagedUser(
   db: D1Database,
   row: {

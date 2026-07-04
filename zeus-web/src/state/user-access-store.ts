@@ -90,17 +90,21 @@ function findManagedPlugin(
   return session?.managedPlugins.find((p) => p.pluginId.toLowerCase() === wanted) ?? null;
 }
 
-export function pluginAccessFor(pluginId: string, scanned = false): PluginAccessDecision {
+export function pluginAccessFor(
+  pluginId: string,
+  scanned = false,
+  registryPlugin: ZeusManagedPluginRecord | null = null,
+): PluginAccessDecision {
   if (scanned) {
     return { allowed: true, reason: null, entitlement: null, managedPlugin: null };
   }
 
   const session = useUserAccessStore.getState().session;
   if (!session) {
-    return { allowed: true, reason: null, entitlement: null, managedPlugin: null };
+    return { allowed: true, reason: null, entitlement: null, managedPlugin: registryPlugin };
   }
 
-  const managedPlugin = findManagedPlugin(session, pluginId);
+  const managedPlugin = findManagedPlugin(session, pluginId) ?? registryPlugin;
   if (!session.accessAllowed) {
     return {
       allowed: false,

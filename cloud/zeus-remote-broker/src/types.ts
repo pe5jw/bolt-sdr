@@ -61,6 +61,13 @@ export interface Env {
    */
   ADMIN_ORIGINS?: string;
 
+  /**
+   * Optional override for the plugin registry JSON used to auto-populate the
+   * maintainer dashboard's plugin management table. Defaults to the official
+   * OpenHPSDR-Zeus plugin repo.
+   */
+  PLUGIN_REGISTRY_URL?: string;
+
   /** Cloudflare Realtime TURN key id (set via `wrangler secret put`). */
   TURN_KEY_ID?: string;
   /** Cloudflare Realtime TURN API token (set via `wrangler secret put`). */

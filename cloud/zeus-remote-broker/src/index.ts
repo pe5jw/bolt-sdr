@@ -9,6 +9,7 @@ import {
 } from './admin-api';
 import { validateCrashBody } from './crash-validate';
 import { sanitizeOperatorMeta, cleanCountry } from './presence-meta';
+import { recordManagedUserLogin } from './admin-db';
 
 export { SignalRoom } from './signal-room';
 export { RateLimiter } from './rate-limiter';
@@ -81,6 +82,7 @@ export default {
         country: clientCountry(request),
         ...(meta ?? {}),
       };
+      ctx.waitUntil(recordManagedUserLogin(env.ADMIN_DB, verified).catch(() => undefined));
       const id = env.PRESENCE.idFromName('global');
       return env.PRESENCE.get(id).fetch(
         new Request(`https://presence.internal/${presenceAction}`, {
@@ -89,6 +91,18 @@ export default {
           body: JSON.stringify(upsert),
         }),
       );
+    }
+
+    // QRZ-verified user directory heartbeat. This is deliberately separate from
+    // support presence: every signed-in Zeus instance can populate the durable
+    // admin user ledger without implying the operator opted into live diagnostics.
+    if (url.pathname === '/users/heartbeat' || url.pathname === '/users/seen') {
+      if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
+      if (await rateLimited(env, clientIp(request))) return new Response('rate limited', { status: 429 });
+      const verified = await verifyOperator(request, env, ctx);
+      if (!verified) return new Response('qrz auth required', { status: 401 });
+      await recordManagedUserLogin(env.ADMIN_DB, verified);
+      return Response.json({ ok: true, callsign: verified });
     }
 
     // Crash auto-share upload: the sidecar POSTs a (already-redacted)
