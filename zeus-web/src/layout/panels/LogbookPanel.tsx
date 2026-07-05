@@ -79,7 +79,7 @@ function LogbookSettingsPopover({
   const qrzConnected = useQrzStore((s) => s.connected);
   const qrzCall = useQrzStore((s) => s.home?.callsign ?? null);
   const openSettings = useLayoutStore((s) => s.setSettingsView);
-  const selectedIds = useLoggerStore((s) => [...s.selectedIds]);
+  const selectedIds = useLoggerStore((s) => s.selectedIds);
   const refreshEntries = useLoggerStore((s) => s.refreshEntries);
   const [status, setStatus] = useState<LotwStatus | null>(null);
   const [username, setUsername] = useState('');
@@ -177,7 +177,8 @@ function LogbookSettingsPopover({
     setBusy(true);
     setMessage(null);
     try {
-      const result = await uploadLotwEntries(selectedIds.length ? selectedIds : null);
+      const ids = [...selectedIds];
+      const result = await uploadLotwEntries(ids.length ? ids : null);
       setMessage(result.message);
       await refreshEntries();
     } catch (err) {

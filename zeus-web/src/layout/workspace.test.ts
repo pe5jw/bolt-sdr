@@ -9,6 +9,7 @@ import {
   placeTileInPage,
   repairWorkspaceTileOverlaps,
   resolveWorkspaceColumnCount,
+  shouldRenderDetachedSingleTileFill,
   type WorkspaceTile,
 } from './workspace';
 
@@ -161,6 +162,32 @@ describe('resolveWorkspaceColumnCount', () => {
         monitorCols: 30,
       }),
     ).toBe(30);
+  });
+});
+
+describe('shouldRenderDetachedSingleTileFill', () => {
+  it('fills only detached layouts with exactly one tile', () => {
+    expect(
+      shouldRenderDetachedSingleTileFill({
+        isPrimary: false,
+        tileCount: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it('keeps the primary and multi-tile layouts on the grid path', () => {
+    expect(
+      shouldRenderDetachedSingleTileFill({
+        isPrimary: true,
+        tileCount: 1,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRenderDetachedSingleTileFill({
+        isPrimary: false,
+        tileCount: 2,
+      }),
+    ).toBe(false);
   });
 });
 

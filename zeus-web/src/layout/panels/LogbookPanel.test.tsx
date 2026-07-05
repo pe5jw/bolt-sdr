@@ -26,6 +26,47 @@ import { LogbookPanel } from './LogbookPanel';
 import { WorkspaceContext } from '../WorkspaceContext';
 import { useLogbookPluginStore } from '../../state/logbook-plugin-store';
 import { useLoggerStore } from '../../state/logger-store';
+import type { LotwStatus } from '../../api/lotw';
+
+const lotwMocks = vi.hoisted(() => {
+  const status = {
+    configured: false,
+    stationLocation: null,
+    lastSyncUtc: null,
+    lastQslSince: null,
+    lastResult: null,
+    tqslPath: null,
+    stationDefaults: {
+      rig: null,
+      antenna: null,
+      txPowerW: null,
+    },
+  } satisfies LotwStatus;
+  return {
+    getLotwStatus: vi.fn(async () => status),
+    saveLotwCredentials: vi.fn(async () => status),
+    saveLotwSettings: vi.fn(async () => status),
+    syncLotwConfirmations: vi.fn(async () => ({
+      lotw: { fetched: 0, matched: 0, unmatched: 0 },
+      qrz: { fetched: 0, matched: 0, unmatched: 0 },
+      lastQslSince: null,
+      lastSyncUtc: null,
+      message: 'Synced',
+    })),
+    uploadLotwEntries: vi.fn(async () => ({
+      success: true,
+      message: 'Uploaded',
+      uploadedCount: 0,
+      exportedPath: null,
+      tqslPath: null,
+      exitCode: null,
+      errorTail: null,
+      tqslMissing: false,
+    })),
+  };
+});
+
+vi.mock('../../api/lotw', () => lotwMocks);
 
 function makeWorkspaceCtx(): WorkspaceCtx {
   return {
@@ -118,5 +159,29 @@ describe('LogbookPanel plugin gate', () => {
     expect(mocks.liveRenders).toBe(1);
 
     unmount();
+  });
+
+  it('opens the settings popover without throwing when the plugin is live', () => {
+    act(() => {
+      useLogbookPluginStore.setState({ installed: true, live: true, probed: true });
+    });
+
+    const { container, unmount } = renderPanel();
+    const settings = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Logbook settings"]',
+    );
+    expect(settings).not.toBeNull();
+
+    act(() => {
+      settings!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const dialog = document.body.querySelector(
+      '[role="dialog"][aria-label="Logbook Settings"]',
+    );
+    expect(dialog).not.toBeNull();
+
+    unmount();
+    dialog?.remove();
   });
 });
