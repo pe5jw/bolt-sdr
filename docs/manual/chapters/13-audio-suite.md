@@ -34,7 +34,7 @@ As each plugin installs you'll see a progress list with a tick, a "skip" mark fo
 
 ### Opening the suite and reading the rack
 
-Open the suite from the **Audio Suite** button on the Audio Tools panel. It appears as a floating window titled **TX Audio Suite** that you can drag by its header and resize from any edge or corner. Press **Escape** to close it. (On a desktop install it can also render inline within the Audio Tools settings pane.)
+Open the suite from the **Audio Suite** button on the Audio Tools panel. It appears as a floating window titled **TX Audio Suite** that you can drag by its header and resize from any edge or corner. Press **Escape** to close it. On a desktop install you can also **pop the suite out into its own operating-system window** — park it on a second monitor like a VST rack; it keeps processing there, and the TX preview stays live even with no radio connected. (It can also render inline within the Audio Tools settings pane.)
 
 The window has three main areas:
 

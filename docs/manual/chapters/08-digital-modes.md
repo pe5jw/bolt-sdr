@@ -1,6 +1,6 @@
 ## Digital Modes — FreeDV, RADE & FT8/FT4
 
-Zeus runs the popular digital modes **natively** — there is no second program to launch, no virtual audio cable to wire up, and no CAT loop-back to configure. Two families live here: **FreeDV** (and the new neural **RADE** waveform) for digital *voice*, and **FT8 / FT4** for the weak-signal *data* modes that dominate today's HF bands. FreeDV is built into every Zeus download; FT8 and FT4 are delivered by the free **Zeus Digital plugin**, installed in a minute from **Settings → Plugins** — and once it is in, they run natively just the same. This chapter covers installing and selecting them, the panels that appear, and how Zeus logs and reports your contacts.
+Zeus runs the popular digital modes **natively** — there is no second program to launch, no virtual audio cable to wire up, and no CAT loop-back to configure. Two families live here: **FreeDV** (and the new neural **RADE** waveform) for digital *voice*, and **FT8 / FT4** for the weak-signal *data* modes that dominate today's HF bands. Both families are delivered as free plugins — **FreeDV** by the `org.openhpsdr.freedv` plugin and **FT8/FT4** by the **Zeus Digital** plugin — each installed in a minute from **Settings → Plugins**, and once they are in, they run natively just the same. This chapter covers installing and selecting them, the panels that appear, and how Zeus logs and reports your contacts.
 
 The classic data modes you drive with *external* software — RTTY, PSK31, JS8 — still use the **DIGL / DIGU** modes from the previous chapter together with CAT control (see *Connecting*). FreeDV and FT8/FT4 are different: Zeus decodes and transmits them itself.
 
@@ -8,7 +8,9 @@ The classic data modes you drive with *external* software — RTTY, PSK31, JS8 �
 
 **FreeDV** sends voice as data — your speech is compressed by a codec, modulated into a narrow SSB-width signal, and reconstructed at the far end. The result is clean, noise-free audio that either decodes perfectly or not at all, in the same bandwidth as an SSB phone signal.
 
-To use it, pick **FreeDV** from the Mode panel like any other mode. Zeus opens a dedicated **FreeDV** panel (and, if you prefer, a pop-out window) holding everything in one place:
+To use it, install the **FreeDV** plugin from **Settings → Plugins** (one
+restart to activate — until then the mode button stays greyed out with a
+tooltip), then pick **FreeDV** from the Mode panel like any other mode. Zeus opens a dedicated **FreeDV** panel (and, if you prefer, a pop-out window) holding everything in one place:
 
 - the **mode selector** for the FreeDV waveform (see below),
 - a **Stations / Reporter** list of who is active,
