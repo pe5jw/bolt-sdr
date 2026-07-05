@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  answerSupportAgreement,
   getSupportAvailability,
   getSupportStatus,
   setSupportAvailability,
@@ -25,25 +26,84 @@ afterEach(() => {
 
 describe('getSupportAvailability', () => {
   it('coerces a well-formed response', async () => {
-    mockFetchOnce({ available: true, autoShareCrashes: true });
+    mockFetchOnce({
+      available: true,
+      autoShareCrashes: true,
+      agreementVersion: 1,
+      currentAgreementVersion: 2,
+    });
     const s = await getSupportAvailability();
-    expect(s).toEqual({ available: true, autoShareCrashes: true });
+    expect(s).toEqual({
+      available: true,
+      autoShareCrashes: true,
+      agreementVersion: 1,
+      currentAgreementVersion: 2,
+    });
   });
 
-  it('defaults missing flags to false', async () => {
+  it('defaults missing flags and versions to false/zero', async () => {
     mockFetchOnce({});
     const s = await getSupportAvailability();
-    expect(s).toEqual({ available: false, autoShareCrashes: false });
+    expect(s).toEqual({
+      available: false,
+      autoShareCrashes: false,
+      agreementVersion: 0,
+      currentAgreementVersion: 0,
+    });
+  });
+
+  it('normalizes garbage agreement versions to zero', async () => {
+    mockFetchOnce({
+      agreementVersion: '1',
+      currentAgreementVersion: -3,
+    });
+    const s = await getSupportAvailability();
+    expect(s.agreementVersion).toBe(0);
+    expect(s.currentAgreementVersion).toBe(0);
   });
 });
 
 describe('setSupportAvailability', () => {
   it('PUTs the body and returns the new state', async () => {
-    const spy = mockFetchOnce({ available: true, autoShareCrashes: false });
+    const spy = mockFetchOnce({
+      available: true,
+      autoShareCrashes: false,
+      agreementVersion: 1,
+      currentAgreementVersion: 1,
+    });
     const s = await setSupportAvailability({ available: true, autoShareCrashes: false });
-    expect(s).toEqual({ available: true, autoShareCrashes: false });
+    expect(s).toEqual({
+      available: true,
+      autoShareCrashes: false,
+      agreementVersion: 1,
+      currentAgreementVersion: 1,
+    });
     const call = spy.mock.calls[0];
     expect(call?.[1]?.method).toBe('PUT');
+  });
+});
+
+describe('answerSupportAgreement', () => {
+  it('POSTs optIn and returns the normalized state', async () => {
+    const spy = mockFetchOnce({
+      available: true,
+      autoShareCrashes: true,
+      agreementVersion: 1,
+      currentAgreementVersion: 1,
+    });
+
+    const s = await answerSupportAgreement(true);
+
+    expect(s).toEqual({
+      available: true,
+      autoShareCrashes: true,
+      agreementVersion: 1,
+      currentAgreementVersion: 1,
+    });
+    const call = spy.mock.calls[0];
+    expect(call?.[0]).toBe('/api/support/agreement');
+    expect(call?.[1]?.method).toBe('POST');
+    expect(call?.[1]?.body).toBe(JSON.stringify({ optIn: true }));
   });
 });
 

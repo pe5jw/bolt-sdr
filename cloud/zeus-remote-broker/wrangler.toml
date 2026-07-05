@@ -90,3 +90,10 @@ new_sqlite_classes = ["CrashStore"]
 #   wrangler secret put ADMIN_BOOTSTRAP_PASSWORD
 # Optional — if unset, no bootstrap admin is created (legacy env.ADMINS, if set,
 # still migrates to password-less rows).
+
+# Stripe Billing for paid plugin subscriptions. Set secrets out of band:
+#   wrangler secret put STRIPE_SECRET_KEY
+#   wrangler secret put STRIPE_WEBHOOK_SECRET
+# Optional redirect overrides:
+#   STRIPE_SUCCESS_URL = "https://app.openhpsdrzeus.com/settings/plugins?billing=success"
+#   STRIPE_CANCEL_URL = "https://app.openhpsdrzeus.com/settings/plugins?billing=cancel"

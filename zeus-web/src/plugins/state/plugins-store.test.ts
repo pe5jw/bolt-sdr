@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { usePluginsStore } from './plugins-store';
+import { useUserAccessStore } from '../../state/user-access-store';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -17,6 +18,8 @@ function jsonResponse(body: unknown, status = 200): Response {
 function resetStore() {
   usePluginsStore.setState({
     installed: [],
+    installedVsts: [],
+    blocked: [],
     sdkAbi: 0,
     sdkVersion: '',
     installedLoad: { loaded: false, inflight: false, loadError: null },
@@ -29,6 +32,17 @@ function resetStore() {
     uninstallInflight: false,
     lastUninstallError: null,
     lastUninstallNotice: null,
+  });
+  useUserAccessStore.setState({
+    checked: true,
+    loading: false,
+    adminLoading: false,
+    saving: false,
+    error: null,
+    adminError: null,
+    session: null,
+    users: [],
+    managedPlugins: [],
   });
 }
 
@@ -88,11 +102,75 @@ describe('usePluginsStore', () => {
 
     const s = usePluginsStore.getState();
     expect(s.installedLoad.loaded).toBe(true);
-    // Both scanned audio plugins are filtered out; only the repo plugins remain.
+    // Both scanned audio plugins are filtered out of the regular list and
+    // retained in the separate VSTs list.
     expect(s.installed.map((p) => p.id)).toEqual([
       'com.openhpsdr.zeus.samples.eq',
       'com.example.repo',
     ]);
+    expect(s.installedVsts.map((p) => p.id)).toEqual([
+      'com.openhpsdr.zeus.vst.tdrnova',
+      'com.openhpsdr.zeus.rxau.clear',
+    ]);
+  });
+
+  it('refreshInstalled moves newly paid installed plugins into blocked access', async () => {
+    useUserAccessStore.setState({
+      session: {
+        qrzConnected: true,
+        callsign: 'N9WAR',
+        displayName: 'N9WAR',
+        accessAllowed: true,
+        isAdmin: false,
+        hasQrzXmlSubscription: true,
+        subscriptionStatus: 'manual',
+        subscriptionExpiresUtc: null,
+        pluginAccessMode: 'all',
+        pluginEntitlements: [],
+        managedPlugins: [
+          {
+            pluginId: 'demo',
+            displayName: 'Demo',
+            subscriptionRequired: true,
+            monthlyPriceCents: 500,
+            currency: 'USD',
+            active: true,
+            checkoutUrl: null,
+            notes: null,
+            createdUtc: '',
+            updatedUtc: '',
+          },
+        ],
+        denialReason: null,
+        user: null,
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(
+        jsonResponse({
+          sdkAbi: 1,
+          sdkVersion: '0.6.0',
+          plugins: [
+            {
+              id: 'demo',
+              name: 'Demo',
+              version: '0.1.0',
+              author: '',
+              description: '',
+              license: 'GPL',
+              capabilities: [],
+            },
+          ],
+        }),
+      ),
+    );
+
+    await usePluginsStore.getState().refreshInstalled();
+
+    const s = usePluginsStore.getState();
+    expect(s.installed).toEqual([]);
+    expect(s.blocked.map((p) => p.id)).toEqual(['demo']);
   });
 
   it('refreshInstalled records loadError on a 500', async () => {
@@ -177,7 +255,11 @@ describe('usePluginsStore', () => {
     expect(dto?.id).toBe('demo');
     const s = usePluginsStore.getState();
     expect(s.lastInstallOk).toMatch(/Installed Demo 0\.1\.0/);
+    // The success notice announces the automatic post-install app reload
+    // (suppressed in the test environment itself).
+    expect(s.lastInstallOk).toMatch(/reloading/i);
     expect(s.installed).toHaveLength(1);
+    expect(s.installedVsts).toHaveLength(0);
     expect(fetchMock).toHaveBeenCalledTimes(3);
 
     const installCall = fetchMock.mock.calls[0];
@@ -229,6 +311,7 @@ describe('usePluginsStore', () => {
     const s = usePluginsStore.getState();
     expect(s.lastUninstallNotice).toBe('restart required');
     expect(s.installed).toEqual([]);
+    expect(s.installedVsts).toEqual([]);
   });
 
   it('clearInstallFeedback / clearUninstallFeedback zero the flash slots', () => {

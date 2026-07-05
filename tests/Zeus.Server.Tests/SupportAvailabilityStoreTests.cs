@@ -9,6 +9,7 @@
 // statement and per-component attribution.
 
 using Microsoft.Extensions.Logging.Abstractions;
+using LiteDB;
 using Zeus.Server.Hosting.Support;
 
 namespace Zeus.Server.Tests;
@@ -27,6 +28,7 @@ public sealed class SupportAvailabilityStoreTests : IDisposable
         using var store = New();
         Assert.False(store.IsAvailable);
         Assert.False(store.AutoShareOnCrash);
+        Assert.Equal(0, store.AnsweredAgreementVersion);
     }
 
     [Fact]
@@ -63,6 +65,83 @@ public sealed class SupportAvailabilityStoreTests : IDisposable
         using var reopened = New();
         Assert.True(reopened.IsAvailable);
         Assert.True(reopened.AutoShareOnCrash);
+    }
+
+    [Fact]
+    public void AnswerAgreement_OptIn_TurnsOnBothFlags_AndStampsVersion()
+    {
+        using var store = New();
+        var (available, autoShare, version) = store.AnswerAgreement(optIn: true);
+
+        Assert.True(available);
+        Assert.True(autoShare);
+        Assert.Equal(SupportAvailabilityStore.CurrentAgreementVersion, version);
+        Assert.True(store.IsAvailable);
+        Assert.True(store.AutoShareOnCrash);
+        Assert.Equal(SupportAvailabilityStore.CurrentAgreementVersion, store.AnsweredAgreementVersion);
+    }
+
+    [Fact]
+    public void AnswerAgreement_OptOut_WithExistingFlagsOn_PreservesFlags_AndStampsVersion()
+    {
+        using var store = New();
+        store.Set(available: true, autoShareCrashes: true);
+
+        var (available, autoShare, version) = store.AnswerAgreement(optIn: false);
+
+        Assert.True(available);
+        Assert.True(autoShare);
+        Assert.Equal(SupportAvailabilityStore.CurrentAgreementVersion, version);
+        Assert.True(store.IsAvailable);
+        Assert.True(store.AutoShareOnCrash);
+        Assert.Equal(SupportAvailabilityStore.CurrentAgreementVersion, store.AnsweredAgreementVersion);
+    }
+
+    [Fact]
+    public void AnswerAgreement_OptOut_OnFreshStore_LeavesFlagsOff_AndStampsVersion()
+    {
+        using var store = New();
+        var (available, autoShare, version) = store.AnswerAgreement(optIn: false);
+
+        Assert.False(available);
+        Assert.False(autoShare);
+        Assert.Equal(SupportAvailabilityStore.CurrentAgreementVersion, version);
+        Assert.False(store.IsAvailable);
+        Assert.False(store.AutoShareOnCrash);
+        Assert.Equal(SupportAvailabilityStore.CurrentAgreementVersion, store.AnsweredAgreementVersion);
+    }
+
+    [Fact]
+    public void Set_AfterAgreement_PreservesAgreementVersion()
+    {
+        using var store = New();
+        store.AnswerAgreement(optIn: true);
+
+        store.Set(available: false, autoShareCrashes: false);
+
+        Assert.False(store.IsAvailable);
+        Assert.False(store.AutoShareOnCrash);
+        Assert.Equal(SupportAvailabilityStore.CurrentAgreementVersion, store.AnsweredAgreementVersion);
+    }
+
+    [Fact]
+    public void LegacyRow_WithoutAgreementVersion_DeserializesAsVersionZero()
+    {
+        using (var lease = Zeus.Data.SharedLiteDatabase.Acquire(_dbPath))
+        {
+            lease.Database.GetCollection<BsonDocument>("support_availability").Insert(new BsonDocument
+            {
+                ["_id"] = 1,
+                ["Available"] = true,
+                ["AutoShareCrashes"] = true,
+                ["UpdatedUtc"] = DateTime.UtcNow,
+            });
+        }
+
+        using var store = New();
+        Assert.True(store.IsAvailable);
+        Assert.True(store.AutoShareOnCrash);
+        Assert.Equal(0, store.AnsweredAgreementVersion);
     }
 
     [Fact]

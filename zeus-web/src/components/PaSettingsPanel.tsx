@@ -23,9 +23,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { HF_BANDS, usePaStore } from '../state/pa-store';
 import { useRadioStore } from '../state/radio-store';
+import { useTxStore } from '../state/tx-store';
 import { BOARD_LABELS } from '../api/radio';
+import { setTxTailDelay, setTxTimeout } from '../api/client';
 import type { PaBandSettings } from '../api/pa';
 import anvelinaLogo from '../assets/anvelina-logo.png';
+
+// TX timeout clamp — matches RadioService.MinTxTimeoutSec / MaxTxTimeoutSec.
+// Issue #1270.
+const TX_TIMEOUT_MIN_S = 30;
+const TX_TIMEOUT_MAX_S = 600;
+
+// TX tail (MOX hang) delay clamp — matches RadioService.MaxTailDelayMs. Issue #1294.
+const TX_TAIL_MAX_MS = 500;
 
 const OC_PINS = [1, 2, 3, 4, 5, 6, 7] as const;
 
@@ -64,7 +74,7 @@ const ANVELINA_EXT_TESTING_KEY = 'zeus.pa.showAnvelinaExtForTesting';
 // Persisted active tab for the Per Band section (design v2). Falls
 // back to 'tx' on first load and on any unrecognised value.
 const PERBAND_TAB_KEY = 'zeus.pa.activePerBandTab';
-type PerBandTab = 'tx' | 'rx' | 'auto';
+type PerBandTab = 'tx' | 'rx' | 'tune' | 'auto';
 
 // N2ADR LPF band-range hints — surfaced under each LPF pin number in
 // the AUTO tab so operators can see at a glance which filter bank the
@@ -296,6 +306,10 @@ export function PaSettingsPanel() {
   const copyOcMasks = usePaStore((s) => s.copyOcMasks);
   const selection = useRadioStore((s) => s.selection);
   const capabilities = useRadioStore((s) => s.capabilities);
+  const txTimeoutSec = useTxStore((s) => s.txTimeoutSec);
+  const setTxTimeoutSecLocal = useTxStore((s) => s.setTxTimeoutSec);
+  const txMoxTailDelayMs = useTxStore((s) => s.txMoxTailDelayMs);
+  const setTxMoxTailDelayMsLocal = useTxStore((s) => s.setTxMoxTailDelayMs);
 
   // Active inner tab — TX / RX / AUTO (HL2 only). Persisted in
   // localStorage so reload doesn't pop the operator back to TX on every
@@ -305,7 +319,7 @@ export function PaSettingsPanel() {
   const [activeTab, setActiveTab] = useState<PerBandTab>(() => {
     try {
       const stored = localStorage.getItem(PERBAND_TAB_KEY);
-      if (stored === 'tx' || stored === 'rx' || stored === 'auto') return stored;
+      if (stored === 'tx' || stored === 'rx' || stored === 'tune' || stored === 'auto') return stored;
     } catch {
       /* localStorage unavailable — fall through. */
     }
@@ -436,6 +450,7 @@ export function PaSettingsPanel() {
                   paMaxPowerWatts: clamp(Number(e.target.value) || 0, PA_MAX_W_MIN, PA_MAX_W_MAX),
                 })
               }
+              aria-label="Rated PA output in watts"
               className="pa-num-input w-20 rounded px-2 py-0.5 text-right text-xs"
             />
             {settings.global.paMaxPowerWatts === 0 && (
@@ -444,6 +459,73 @@ export function PaSettingsPanel() {
               </span>
             )}
           </label>
+
+          <div
+            className="pa-field flex items-center gap-2 text-xs"
+            title="Maximum length of a single MOX or TUN transmission in seconds. When exceeded, Zeus drops TX to protect the PA and shows an alert. Range 30..600; default 120. Tick Off to disable the timeout entirely. About 30 seconds before the timeout fires you'll see a pre-warning banner so you can un-key or reset. Issue #1270."
+          >
+            <span>TX Timeout (s)</span>
+            <input
+              type="number"
+              min={TX_TIMEOUT_MIN_S}
+              max={TX_TIMEOUT_MAX_S}
+              step={5}
+              value={txTimeoutSec === 0 ? '' : txTimeoutSec}
+              placeholder="Off"
+              disabled={txTimeoutSec === 0}
+              onChange={(e) => {
+                const v = clamp(Number(e.target.value) || 0, TX_TIMEOUT_MIN_S, TX_TIMEOUT_MAX_S);
+                // Optimistic; reconcile with server-applied value on success.
+                setTxTimeoutSecLocal(v);
+                setTxTimeout(v)
+                  .then((r) => setTxTimeoutSecLocal(r.txTimeoutSec))
+                  .catch(() => {});
+              }}
+              aria-label="TX timeout in seconds"
+              className="pa-num-input w-20 rounded px-2 py-0.5 text-right text-xs"
+            />
+            <label
+              className="flex items-center gap-1"
+              title="Disable the TX timeout entirely — no automatic drop, no pre-warning. Use with care: the guard is what catches a stuck PTT or jammed key."
+            >
+              <input
+                type="checkbox"
+                checked={txTimeoutSec === 0}
+                onChange={(e) => {
+                  // Off → 0 (disabled). On → restore the historical 120 s
+                  // default so the number field re-populates with a sane value.
+                  const v = e.target.checked ? 0 : 120;
+                  setTxTimeoutSecLocal(v);
+                  setTxTimeout(v)
+                    .then((r) => setTxTimeoutSecLocal(r.txTimeoutSec))
+                    .catch(() => {});
+                }}
+              />
+              Off
+            </label>
+          </div>
+
+          <div
+            className="pa-field flex items-center gap-2 text-xs"
+            title="Hold the wire MOX bit for a short moment after you release PTT so the last words don't get cut off. Zeus keys through the browser and the microphone audio takes a few ms to reach the radio; a small tail (50–200 ms is typical) lets that audio finish before PTT drops. Voice modes only (SSB / AM / FM) — CW is unaffected. 0 = off. Issue #1294."
+          >
+            <span>TX Tail Delay (ms)</span>
+            <input
+              type="number"
+              min={0}
+              max={TX_TAIL_MAX_MS}
+              step={10}
+              value={txMoxTailDelayMs}
+              onChange={(e) => {
+                const v = clamp(Number(e.target.value) || 0, 0, TX_TAIL_MAX_MS);
+                setTxMoxTailDelayMsLocal(v);
+                setTxTailDelay(v)
+                  .then((r) => setTxMoxTailDelayMsLocal(r.txMoxTailDelayMs))
+                  .catch(() => {});
+              }}
+              className="pa-num-input w-20 rounded px-2 py-0.5 text-right text-xs"
+            />
+          </div>
         </div>
       </section>
 
@@ -470,6 +552,17 @@ export function PaSettingsPanel() {
             >
               OC&nbsp;RX
               <span className="pa-tab-badge">{showAnvelinaExt ? '1–7 · 8–11' : '1–7'}</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'tune'}
+              className={'pa-tab' + (activeTab === 'tune' ? ' is-active' : '')}
+              onClick={() => setActiveTab('tune')}
+              title="Extra OC bits asserted only during TUN, ORed on top of OC TX (Wire = OC TX | OC TUNE). Use for external amp bypass, external tuner start, etc. Empty (default) = no change from OC TX during TUN."
+            >
+              OC&nbsp;TUNE
+              <span className="pa-tab-badge">1–7</span>
             </button>
             {showAutoCol && (
               <button
@@ -501,6 +594,14 @@ export function PaSettingsPanel() {
                 {COPY_ICON}
                 {activeTab === 'tx' ? 'Copy from OC RX' : 'Copy from OC TX'}
               </button>
+            </div>
+          )}
+          {activeTab === 'tune' && (
+            <div className="pa-perband-tools">
+              <span className="pa-perband-notice">
+                <strong>Additive mask.</strong>&nbsp; Wire = OC&nbsp;TX &nbsp;|&nbsp; OC&nbsp;TUNE
+                during TUN. Empty (all pins off) leaves TUN identical to regular TX.
+              </span>
             </div>
           )}
           {activeTab === 'auto' && (
@@ -538,6 +639,23 @@ export function PaSettingsPanel() {
             isHl2={isHl2}
             setBand={setBand}
             showAnvelinaExt={showAnvelinaExt}
+            anvelinaDxTooltip={anvelinaDxTooltip}
+          />
+        )}
+        {activeTab === 'tune' && (
+          <OcPane
+            side="tune"
+            settings={settings}
+            paFieldLabel={paFieldLabel}
+            paFieldMax={paFieldMax}
+            paFieldStep={paFieldStep}
+            paFieldTitle={paFieldTitle}
+            isHl2={isHl2}
+            setBand={setBand}
+            /* OcTune is a standard 7-pin additive mask only — no Anvelina
+               DX counterpart in this phase (would need a separate wire
+               field for TUN-specific DX bits). Hide the ext column. */
+            showAnvelinaExt={false}
             anvelinaDxTooltip={anvelinaDxTooltip}
           />
         )}
@@ -589,7 +707,7 @@ export function PaSettingsPanel() {
 // row collapses to four columns (no divider, no ext bar) via the
 // `.is-ext-hidden` modifier on the table shell.
 function OcPane(props: {
-  side: 'tx' | 'rx';
+  side: 'tx' | 'rx' | 'tune';
   settings: ReturnType<typeof usePaStore.getState>['settings'];
   paFieldLabel: string;
   paFieldMax: number;
@@ -612,7 +730,7 @@ function OcPane(props: {
     showAnvelinaExt,
     anvelinaDxTooltip,
   } = props;
-  const stdLabel = side === 'tx' ? 'OC TX' : 'OC RX';
+  const stdLabel = side === 'tx' ? 'OC TX' : side === 'rx' ? 'OC RX' : 'OC TUNE';
   return (
     <div className={'pa-card pa-table-shell oc' + (showAnvelinaExt ? '' : ' is-ext-hidden')}>
       <div className="pa-oc-row is-thead">
@@ -635,9 +753,11 @@ function OcPane(props: {
       {HF_BANDS.map((bandName) => {
         const b = settings.bands.find((x) => x.band === bandName);
         if (!b) return null;
-        const stdMask = side === 'tx' ? b.ocTx : b.ocRx;
-        const extMask = side === 'tx' ? b.ocDxTx : b.ocDxRx;
-        const stdKey = side === 'tx' ? ('ocTx' as const) : ('ocRx' as const);
+        const stdMask = side === 'tx' ? b.ocTx : side === 'rx' ? b.ocRx : b.ocTune;
+        // Anvelina DX ext bar is TX/RX-only — there is no TUN-specific DX wire
+        // slot, so the tune tab must never read or write the DX masks.
+        const extMask = side === 'tx' ? b.ocDxTx : side === 'rx' ? b.ocDxRx : 0;
+        const stdKey = side === 'tx' ? ('ocTx' as const) : side === 'rx' ? ('ocRx' as const) : ('ocTune' as const);
         const extKey = side === 'tx' ? ('ocDxTx' as const) : ('ocDxRx' as const);
         return (
           <div key={bandName} className="pa-oc-row">

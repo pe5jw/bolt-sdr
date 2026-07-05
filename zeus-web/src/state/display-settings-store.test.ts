@@ -45,6 +45,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ,
   DEFAULT_TX_AUTO_RANGE,
   DEFAULT_TX_DISPLAY_AVG_TAU_MS,
   DEFAULT_TX_DISPLAY_CAL_OFFSET_DB,
@@ -75,6 +76,8 @@ function resetStore() {
     wfTxDbMin: TX_FIXED_DB_MIN,
     wfTxDbMax: TX_FIXED_DB_MAX,
     waterfallScrollSpeed: DEFAULT_WF_SCROLL_SPEED,
+    widebandDisplayEnabled: false,
+    displayMaxFrameRateHz: DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ,
   });
 }
 
@@ -94,6 +97,38 @@ describe('display-settings-store', () => {
     const { dbMin, dbMax } = useDisplaySettingsStore.getState();
     expect(dbMin).toBe(FIXED_DB_MIN);
     expect(dbMax).toBe(FIXED_DB_MAX);
+  });
+
+  it('persists the wideband display toggle', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({ widebandDisplayEnabled: true }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await useDisplaySettingsStore.getState().setWidebandDisplayEnabled(true);
+      expect(useDisplaySettingsStore.getState().widebandDisplayEnabled).toBe(true);
+      const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? '{}'));
+      expect(body.widebandDisplayEnabled).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('persists the display refresh cap', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({ displayMaxFrameRateHz: 15 }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await useDisplaySettingsStore.getState().setDisplayMaxFrameRateHz(15);
+      expect(useDisplaySettingsStore.getState().displayMaxFrameRateHz).toBe(15);
+      const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? '{}'));
+      expect(body.displayMaxFrameRateHz).toBe(15);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('snaps back to fixed range when turned off', () => {

@@ -248,9 +248,22 @@ public sealed class TciServer : IHostedService, IDisposable
     // --- Event handlers: broadcast state changes to all connected clients ---
 
     private int _lastBroadcastAttenDb = int.MinValue;
+    private StateDto? _lastBroadcastState;
+    private readonly object _broadcastDiffSync = new();
 
     private void OnRadioStateChanged(StateDto state)
     {
+        // RadioService raises StateChanged outside its mutation lock, so two
+        // client commands can land here concurrently. Serialize diff + latch +
+        // enqueue so clients never receive the field pushes out of order
+        // (Broadcast only enqueues to per-session send queues — cheap).
+        lock (_broadcastDiffSync)
+        {
+            foreach (var cmd in TciStateBroadcast.DiffCommands(_lastBroadcastState, state))
+                Broadcast(cmd);
+            _lastBroadcastState = state;
+        }
+
         // Broadcast VFO, mode, filter changes to all clients
         // Use rate limiting for VFO (can fire rapidly during tuning)
         BroadcastRateLimited("vfo:0,0", TciProtocol.Command("vfo", 0, 0, state.VfoHz));

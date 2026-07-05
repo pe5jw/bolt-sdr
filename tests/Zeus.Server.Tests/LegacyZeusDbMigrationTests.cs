@@ -125,6 +125,17 @@ public sealed class LegacyZeusDbMigrationTests : IDisposable
     }
 
     [Fact]
+    public void Migration_ReleasesLogbookHandle_AfterRun()
+    {
+        WriteLegacyDb(credentials: 0, logs: 1);
+
+        LegacyZeusDbMigration.RunIfNeeded(_dir, _configPath, _logbookPath, NullLogger.Instance);
+
+        using var exclusive = new LiteDatabase($"Filename={_logbookPath}");
+        Assert.Equal(1, exclusive.GetCollection("logs").Count());
+    }
+
+    [Fact]
     public async Task DestinationWins_ExistingCredentialNotClobbered()
     {
         // Pre-seed the config DB with a credential for svc0 (through the real

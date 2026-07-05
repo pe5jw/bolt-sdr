@@ -9,6 +9,7 @@
 import { createElement, type ComponentType } from 'react';
 import { fetchInstalledPlugins, type PluginDto, type PluginPanelDto } from '../api/plugins';
 import { GenericVstPanel } from '../../components/GenericVstPanel';
+import { pluginAccessFor } from '../../state/user-access-store';
 
 // UI slots the Audio Suite rack + sidebar render. A plugin that targets
 // an audio chain but ships no UI module of its own (a scanned VST)
@@ -151,7 +152,7 @@ export async function loadInstalledPluginUis(): Promise<void> {
   if (loading) return loading;
   loading = (async () => {
     const list = await fetchInstalledPlugins();
-    await Promise.all(list.plugins.map(loadOne));
+    await Promise.all(list.plugins.filter((p) => pluginAccessFor(p.id, p.scanned).allowed).map(loadOne));
     emit();
   })();
   return loading;
@@ -170,11 +171,12 @@ export async function loadInstalledPluginUis(): Promise<void> {
  */
 export async function reloadInstalledPluginUis(): Promise<void> {
   const list = await fetchInstalledPlugins();
-  const liveIds = new Set(list.plugins.map((p) => p.id));
+  const entitledPlugins = list.plugins.filter((p) => pluginAccessFor(p.id, p.scanned).allowed);
+  const liveIds = new Set(entitledPlugins.map((p) => p.id));
   for (const [key, panel] of registered) {
     if (!liveIds.has(panel.pluginId)) registered.delete(key);
   }
-  await Promise.all(list.plugins.map(loadOne));
+  await Promise.all(entitledPlugins.map(loadOne));
   emit();
 }
 

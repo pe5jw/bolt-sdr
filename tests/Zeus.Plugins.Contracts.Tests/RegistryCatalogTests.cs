@@ -37,6 +37,13 @@ public class RegistryCatalogTests
               "homepage": "https://example.com",
               "categories": ["amplifier"],
               "verified": true,
+              "subscription": {
+                "required": true,
+                "monthlyPriceCents": 499,
+                "currency": "USD",
+                "checkoutUrl": "https://example.com/subscribe",
+                "notes": "monthly"
+              },
               "versions": [
                 {
                   "version": "1.0.0",
@@ -55,6 +62,10 @@ public class RegistryCatalogTests
         Assert.NotNull(cat);
         var entry = Assert.Single(cat!.Plugins);
         Assert.True(entry.Verified);
+        Assert.NotNull(entry.Subscription);
+        Assert.True(entry.Subscription!.Required);
+        Assert.Equal(499, entry.Subscription.MonthlyPriceCents);
+        Assert.Equal("https://example.com/subscribe", entry.Subscription.CheckoutUrl);
         var ver = Assert.Single(entry.Versions);
         Assert.Equal(1, ver.SdkAbi);
         Assert.Equal("deadbeef", ver.Sha256);

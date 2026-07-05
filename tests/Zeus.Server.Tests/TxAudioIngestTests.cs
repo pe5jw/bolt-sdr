@@ -63,6 +63,7 @@ public class TxAudioIngestTests
     private sealed class StubEngine : IDspEngine
     {
         public int BlockSize { get; set; } = 1024;
+        public bool MonitorOn { get; set; }
         public int TxBlockSamples => BlockSize;
         public int TxOutputSamples => BlockSize;
         public int ProcessedBlocks { get; private set; }
@@ -138,7 +139,7 @@ public class TxAudioIngestTests
         public void SetCfcConfig(CfcConfig cfg) { }
         public void SetTxMonitorEnabled(bool enabled) { }
         public int ReadTxMonitorAudio(Span<float> output) => 0;
-        public bool IsTxMonitorOn => false;
+        public bool IsTxMonitorOn => MonitorOn;
         public void Dispose() { }
     }
 
@@ -194,6 +195,28 @@ public class TxAudioIngestTests
         ingest.OnMicPcmBytes(payload);                    // should drain
         Assert.Equal(0, ring.Count);
         Assert.Equal(1, engine.ProcessedBlocks);           // no additional block processed
+    }
+
+    [Fact]
+    public void MonitorOn_MoxOff_ProcessesTxChainWithoutWritingRf()
+    {
+        var engine = new StubEngine { MonitorOn = true };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        float[]? p2Iq = null;
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => false, hub, new NullLogger<TxAudioIngest>(),
+            forwardP2: iq => p2Iq = iq.ToArray());
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytes(payload);                    // 960 in accumulator
+        ingest.OnMicPcmBytes(payload);                    // monitor path flushes one TXA block
+
+        Assert.Equal(1, engine.ProcessedBlocks);
+        Assert.Equal(1, ingest.TotalTxBlocks);
+        Assert.Equal(0, ring.Count);                      // no P1 RF IQ while unkeyed
+        Assert.Null(p2Iq);                                // no P2 RF IQ while unkeyed
+        Assert.NotNull(engine.LastMicBlock);
     }
 
     [Fact]
@@ -541,5 +564,72 @@ public class TxAudioIngestTests
         Assert.Equal(1, ingest.TotalTxBlocks);
         Assert.NotNull(lastP2);
         Assert.Contains(lastP2!, v => v == 0.5f);   // not muted
+    }
+
+    [Fact]
+    public void RogerBeepTail_EmitsToneThroughTxChain()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        var p2Blocks = new List<float[]>();
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>(),
+            forwardP2: iq => p2Blocks.Add(iq.ToArray()));
+
+        bool emitted = ingest.DrainRogerBeepTail();
+
+        Assert.True(emitted);
+        Assert.Equal(9, engine.ProcessedBlocks);
+        Assert.Equal(9, p2Blocks.Count);
+        Assert.All(p2Blocks, block => Assert.Equal(2048, block.Length));
+        Assert.Contains(p2Blocks.SelectMany(block => block), v => Math.Abs(v) > 0.2f);
+    }
+
+    [Fact]
+    public void PrimeTxDspForKeyDown_ProcessesZeroBlocksAndDiscardsIq()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        var p2Blocks = new List<float[]>();
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>(),
+            forwardP2: iq => p2Blocks.Add(iq.ToArray()));
+        ring.Write(new float[] { 0.5f, -0.5f, 0.25f, -0.25f });
+
+        bool primed = ingest.PrimeTxDspForKeyDown();
+
+        Assert.True(primed);
+        Assert.Equal(12, engine.ProcessedBlocks);
+        Assert.NotNull(engine.LastMicBlock);
+        Assert.All(engine.LastMicBlock!, sample => Assert.Equal(0f, sample));
+        Assert.Equal(0, ring.Count);
+        Assert.Empty(p2Blocks);
+    }
+
+    [Fact]
+    public void RogerBeepTail_WaitsForTransportDrainBeforeClearingRing()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        int drainCalls = 0;
+        int ringCountAtDrain = 0;
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>(),
+            drainTxTransport: _ =>
+            {
+                drainCalls++;
+                ringCountAtDrain = ring.Count;
+                return true;
+            });
+
+        bool emitted = ingest.DrainRogerBeepTail();
+
+        Assert.True(emitted);
+        Assert.Equal(1, drainCalls);
+        Assert.True(ringCountAtDrain > 0);
+        Assert.Equal(0, ring.Count);
     }
 }

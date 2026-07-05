@@ -64,7 +64,18 @@ public sealed record LogEntry(
     string? Comment,
     DateTime CreatedUtc,
     string? QrzLogId = null,
-    DateTime? QrzUploadedUtc = null);
+    DateTime? QrzUploadedUtc = null,
+    IReadOnlyList<string>? Tags = null,
+    string? QslSent = null,
+    string? QslRcvd = null,
+    DateTime? QslSentDate = null,
+    DateTime? QslRcvdDate = null,
+    DateTime? LotwQslSentUtc = null,
+    DateTime? LotwQslRcvdUtc = null,
+    DateTime? QrzQslRcvdUtc = null,
+    string? Rig = null,
+    string? Antenna = null,
+    double? TxPowerW = null);
 
 public sealed record CreateLogEntryRequest(
     string Callsign,
@@ -82,6 +93,36 @@ public sealed record CreateLogEntryRequest(
     string? State = null,
     string? Comment = null,
     DateTime? QsoDateTimeUtc = null);
+
+/// <summary>
+/// Partial QSO update. Null leaves a field unchanged; empty strings and empty
+/// lists explicitly clear text/list fields. Nullable value fields use explicit
+/// clear flags where a null update value otherwise means "leave unchanged".
+/// </summary>
+public sealed record UpdateLogEntryRequest(
+    string? Name = null,
+    string? Grid = null,
+    string? Country = null,
+    string? State = null,
+    string? Comment = null,
+    IReadOnlyList<string>? Tags = null,
+    string? QslSent = null,
+    string? QslRcvd = null,
+    DateTime? QslSentDate = null,
+    DateTime? QslRcvdDate = null,
+    string? Rig = null,
+    string? Antenna = null,
+    double? TxPowerW = null,
+    string? RstSent = null,
+    string? RstRcvd = null,
+    string? Mode = null,
+    string? Band = null,
+    double? FrequencyMhz = null,
+    DateTime? QsoDateTimeUtc = null,
+    bool ClearQslSentDate = false,
+    bool ClearQslRcvdDate = false,
+    bool ClearTxPowerW = false,
+    bool ClearFrequencyMhz = false);
 
 public sealed record LogEntriesResponse(
     IEnumerable<LogEntry> Entries,
@@ -114,6 +155,16 @@ public sealed record QrzPublishResult(
     string? Message);
 
 /// <summary>
+/// Delete one or more logbook entries by id. Mirrors <see cref="QrzPublishRequest"/>
+/// — the Logbook panel selects rows and acts on the whole selection at once.
+/// </summary>
+public sealed record LogDeleteRequest(
+    IEnumerable<string> LogEntryIds);
+
+public sealed record LogDeleteResponse(
+    int DeletedCount);
+
+/// <summary>
 /// Write the logbook (or a selected subset) to an ADIF file in a directory on
 /// the machine running the backend. <see cref="Directory"/> is optional — null
 /// or blank writes to the operator's Downloads folder. Used by the Logbook
@@ -128,3 +179,36 @@ public sealed record AdifExportToFileResponse(
     string Path,
     int Count,
     long Bytes);
+
+public sealed record WorkedCallsignSummary(
+    string Callsign,
+    bool WorkedBefore,
+    int TotalCount,
+    DateTime? LastWorkedUtc,
+    string? LastBand,
+    string? LastMode,
+    double? LastFrequencyMhz,
+    string? LastRstSent,
+    string? LastRstRcvd,
+    string? LastName,
+    string? LastGrid,
+    string? LastCountry,
+    string? LastState,
+    string? LastComment,
+    IReadOnlyList<string> Bands,
+    IReadOnlyList<string> Modes,
+    IReadOnlyList<WorkedCallsignRecentQso> RecentQsos);
+
+public sealed record WorkedCallsignRecentQso(
+    DateTime QsoDateTimeUtc,
+    string? Band,
+    string? Mode,
+    double? FrequencyMhz,
+    string? RstSent,
+    string? RstRcvd,
+    string? Name,
+    string? Grid,
+    string? Country,
+    string? State,
+    string? Comment,
+    string? QrzLogId);

@@ -11,6 +11,7 @@
 using System.Net;
 using System.Net.Sockets;
 using Zeus.Contracts;
+using Zeus.Server;
 
 namespace Zeus.Server.Wsjtx;
 
@@ -23,8 +24,9 @@ namespace Zeus.Server.Wsjtx;
 ///     optionally a structured QSOLogged (type 5), on each logged QSO. Wired ONLY
 ///     at /api/log/entry (live + manual QSOs); ADIF bulk import does NOT route
 ///     here, so re-importing a log never re-broadcasts.
-///   * <see cref="SendDatagramAsync"/> — used by <see cref="WsjtxLiveEmitter"/>
-///     for the live Heartbeat/Status/Decode/WSPRDecode stream.
+///   * <see cref="SendDatagramAsync"/> — the raw-datagram seam the (now
+///     plugin-hosted) live Heartbeat/Status/Decode/WSPRDecode emitter used;
+///     kept for any future core caller.
 ///
 /// SEND-ONLY: there is no inbound socket anywhere in this namespace. Zeus never
 /// honours Reply(4)/HaltTx(8)/FreeText(9) — those are network TX-triggers into a
@@ -47,8 +49,9 @@ public sealed class WsjtxUdpBroadcaster : IDisposable
 {
     private readonly ILogger<WsjtxUdpBroadcaster> _log;
     private readonly WsjtxManagementService _mgmt;
-    private readonly LogService _logService;
-    private readonly SpottingManagementService? _operator;
+    private readonly LogbookPluginBridge _logbook;
+    private readonly OperatorIdentityStore? _identity;
+    private readonly QrzService? _qrz;
 
     // One cached send socket for the broadcaster's lifetime. Created lazily on the
     // first enabled send so the disabled-default path allocates no socket at all.
@@ -63,16 +66,19 @@ public sealed class WsjtxUdpBroadcaster : IDisposable
     public WsjtxUdpBroadcaster(
         ILogger<WsjtxUdpBroadcaster> log,
         WsjtxManagementService mgmt,
-        LogService logService,
+        LogbookPluginBridge logbook,
         // Optional so the existing broadcaster tests (which exercise the type-12
         // path only) keep their 3-arg construction. Supplies operator call/grid for
-        // the MY_* fields of the optional QSOLogged (type 5) message.
-        SpottingManagementService? operatorIdentity = null)
+        // the MY_* fields of the optional QSOLogged (type 5) message via
+        // OperatorIdentityResolver (override → QRZ home fallback).
+        OperatorIdentityStore? identity = null,
+        QrzService? qrz = null)
     {
         _log = log;
         _mgmt = mgmt;
-        _logService = logService;
-        _operator = operatorIdentity;
+        _logbook = logbook;
+        _identity = identity;
+        _qrz = qrz;
     }
 
     /// <summary>Broadcast one logged QSO. No-op when the broadcaster is disabled;
@@ -84,13 +90,27 @@ public sealed class WsjtxUdpBroadcaster : IDisposable
 
         try
         {
-            var adif = await _logService.ExportToAdifAsync(new[] { entry.Id }, ct);
-            var datagram = WsjtxMessage.EncodeLoggedAdif(cfg.InstanceId, adif);
-            await SendInternalAsync(cfg, datagram, ct).ConfigureAwait(false);
+            var loggedAdifBytes = 0;
+            var loggedAdifSent = false;
+            var plugin = _logbook.Current;
+            if (plugin is null)
+            {
+                _log.LogDebug("wsjtx.broadcast skipped LoggedADIF; logbook plugin absent call={Call}", entry.Callsign);
+            }
+            else
+            {
+                var adif = await plugin.ExportAdifAsync(new[] { entry.Id }, ct);
+                var datagram = WsjtxMessage.EncodeLoggedAdif(cfg.InstanceId, adif);
+                await SendInternalAsync(cfg, datagram, ct).ConfigureAwait(false);
+                loggedAdifBytes = datagram.Length;
+                loggedAdifSent = true;
+            }
 
             if (cfg.SendQsoLogged)
             {
-                var (call, grid) = _operator?.ResolveOperator() ?? ("", "");
+                var (call, grid) = _identity is not null && _qrz is not null
+                    ? OperatorIdentityResolver.Resolve(_identity, _qrz)
+                    : ("", "");
                 var qso = WsjtxMessage.EncodeQsoLogged(
                     instanceId: cfg.InstanceId,
                     dateTimeOffUtc: entry.QsoDateTimeUtc,
@@ -116,8 +136,8 @@ public sealed class WsjtxUdpBroadcaster : IDisposable
             }
 
             _log.LogInformation(
-                "wsjtx.broadcast call={Call} -> {Transport} {Host}:{Port} bytes={Bytes} type5={T5}",
-                entry.Callsign, cfg.Transport, TargetHost(cfg), cfg.Port, datagram.Length, cfg.SendQsoLogged);
+                "wsjtx.broadcast call={Call} -> {Transport} {Host}:{Port} bytes={Bytes} type12={T12} type5={T5}",
+                entry.Callsign, cfg.Transport, TargetHost(cfg), cfg.Port, loggedAdifBytes, loggedAdifSent, cfg.SendQsoLogged);
         }
         catch (Exception ex)
         {

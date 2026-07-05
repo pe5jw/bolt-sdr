@@ -33,7 +33,22 @@ import {
   insertAudit,
   countAdmins,
   countEnabledAdmins,
+  listManagedUsers,
+  recordManagedUserLogin,
+  upsertManagedUser,
+  updateManagedUser,
+  addManagedUserCreditCents,
+  listManagedPlugins,
+  setManagedPluginStripeCatalog,
+  upsertManagedPlugin,
+  type ManagedUserRow,
+  type ManagedPluginRow,
 } from './admin-db';
+import {
+  ensureStripeCatalogForPlugin,
+  grantStripeCustomerCredit,
+  stripeConfigured,
+} from './stripe-billing';
 
 /** Resolved identity of an authenticated caller. */
 export interface AuthCtx {
@@ -44,6 +59,51 @@ export interface AuthCtx {
 
 /** Module-scoped guard so the (idempotent) bootstrap+migration runs at most once per isolate. */
 let bootstrapped = false;
+const DEFAULT_PLUGIN_REGISTRY_URL =
+  'https://raw.githubusercontent.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins/main/registry.json';
+const PLUGIN_REGISTRY_CACHE_MS = 5 * 60 * 1000;
+const USER_DIRECTORY_ONLINE_MS = 90 * 1000;
+let pluginRegistryCache: { url: string; fetchedAt: number; plugins: RegistryPluginSeed[] } | null = null;
+
+interface RegistryPluginSeed {
+  pluginId: string;
+  displayName: string;
+  subscriptionRequired: boolean;
+  monthlyPriceCents: number;
+  currency: string;
+  checkoutUrl: string | null;
+  notes: string | null;
+}
+
+export interface ManagedPluginDto {
+  pluginId: string;
+  displayName: string;
+  subscriptionRequired: boolean;
+  monthlyPriceCents: number;
+  currency: string;
+  active: boolean;
+  checkoutUrl: string | null;
+  notes: string | null;
+  createdAt: number | null;
+  updatedAt: number | null;
+  source?: 'registry' | 'admin';
+  stripeProductId?: string | null;
+  stripePriceId?: string | null;
+  stripeSyncEnabled?: boolean;
+}
+
+interface PresenceOperatorDto {
+  callsign: string;
+  since: number | null;
+  lastSeen: number | null;
+  ip: string | null;
+  country: string | null;
+  platform: string | null;
+  appVersion: string | null;
+  radioBoard: string | null;
+  radioModel: string | null;
+  radioConnected: boolean;
+}
 
 export async function handleAdmin(
   request: Request,
@@ -105,12 +165,52 @@ export async function handleAdmin(
       return await handleDisableAdmin(decodeURIComponent(adminDel[1]), env, auth, cors);
     }
 
+    // app users / subscriptions
+    if (path === '/admin/users' && request.method === 'GET') {
+      const presence = await listPresenceOperators(env);
+      await Promise.all(presence.map((op) => recordManagedUserLogin(env.ADMIN_DB, op.callsign)));
+      const presenceByCall = new Map(presence.map((op) => [op.callsign, op]));
+      const now = Date.now();
+      const [users, plugins] = await Promise.all([
+        listManagedUsers(env.ADMIN_DB),
+        mergedManagedPlugins(env),
+      ]);
+      return json({
+        users: users.map((user) => toManagedUserDto(user, presenceByCall.get(user.callsign) ?? null, now)),
+        plugins,
+        pluginRegistryUrl: pluginRegistryUrl(env),
+      }, 200, cors);
+    }
+    if (path === '/admin/users' && request.method === 'POST') {
+      return await handleUpsertManagedUser(request, env, auth, cors);
+    }
+    const userPut = /^\/admin\/users\/([^/]+)$/.exec(path);
+    if (userPut && request.method === 'PUT') {
+      return await handleUpdateManagedUser(decodeURIComponent(userPut[1]), request, env, auth, cors);
+    }
+    const userCredit = /^\/admin\/users\/([^/]+)\/credits$/.exec(path);
+    if (userCredit && request.method === 'POST') {
+      return await handleGrantUserCredit(decodeURIComponent(userCredit[1]), request, env, auth, cors);
+    }
+
+    // plugin catalog / pricing
+    if (path === '/admin/plugins' && request.method === 'GET') {
+      return json({
+        plugins: await mergedManagedPlugins(env),
+        pluginRegistryUrl: pluginRegistryUrl(env),
+      }, 200, cors);
+    }
+    if (path === '/admin/plugins' && request.method === 'POST') {
+      return await handleUpsertManagedPlugin(null, request, env, auth, cors);
+    }
+    const pluginPut = /^\/admin\/plugins\/([^/]+)$/.exec(path);
+    if (pluginPut && request.method === 'PUT') {
+      return await handleUpsertManagedPlugin(decodeURIComponent(pluginPut[1]), request, env, auth, cors);
+    }
+
     // presence
     if (path === '/admin/presence' && request.method === 'GET') {
-      const id = env.PRESENCE.idFromName('global');
-      const res = await env.PRESENCE.get(id).fetch('https://presence.internal/list');
-      const body = await res.json<{ operators: unknown[] }>();
-      return json(body, 200, cors);
+      return json({ operators: await listPresenceOperators(env) }, 200, cors);
     }
 
     // diagnostics-session request (remote-diag P3): notify the target operator and
@@ -300,6 +400,109 @@ async function handleDisableAdmin(
   return json({ ok: true }, 200, cors);
 }
 
+// --- managed app users ------------------------------------------------------
+
+async function handleUpsertManagedUser(
+  request: Request,
+  env: Env,
+  auth: AuthCtx,
+  cors: Record<string, string>,
+): Promise<Response> {
+  const body = await safeJson(request);
+  const callsign = norm((body.callsign as string) ?? '');
+  if (!callsign) return json({ error: 'callsign required' }, 400, cors);
+
+  const user = await upsertManagedUser(env.ADMIN_DB, normalizedUserRow(callsign, body));
+  await insertAudit(env.ADMIN_DB, { actor: auth.callsign, action: 'user.upsert', target: callsign });
+  return json(toManagedUserDto(user), 200, cors);
+}
+
+async function handleUpdateManagedUser(
+  target: string,
+  request: Request,
+  env: Env,
+  auth: AuthCtx,
+  cors: Record<string, string>,
+): Promise<Response> {
+  const callsign = norm(target);
+  if (!callsign) return json({ error: 'callsign required' }, 400, cors);
+  const body = await safeJson(request);
+  const user = await updateManagedUser(env.ADMIN_DB, callsign, normalizedUserPatch(body));
+  if (!user) return json({ error: 'not found' }, 404, cors);
+  await insertAudit(env.ADMIN_DB, { actor: auth.callsign, action: 'user.update', target: callsign });
+  return json(toManagedUserDto(user), 200, cors);
+}
+
+async function handleGrantUserCredit(
+  target: string,
+  request: Request,
+  env: Env,
+  auth: AuthCtx,
+  cors: Record<string, string>,
+): Promise<Response> {
+  const callsign = norm(target);
+  if (!callsign) return json({ error: 'callsign required' }, 400, cors);
+  const body = await safeJson(request);
+  const amountCents = Math.max(0, Math.round(optionalNumber(body.amountCents) ?? 0));
+  if (amountCents <= 0) return json({ error: 'amountCents required' }, 400, cors);
+
+  const existing = (await updateManagedUser(env.ADMIN_DB, callsign, {}))
+    ?? (await upsertManagedUser(env.ADMIN_DB, normalizedUserRow(callsign, { callsign })));
+  if (existing.stripe_customer_id) {
+    await grantStripeCustomerCredit(
+      env,
+      existing.stripe_customer_id,
+      amountCents,
+      optionalString(body.currency) ?? 'USD',
+      optionalString(body.note),
+    );
+  }
+  const user = await addManagedUserCreditCents(env.ADMIN_DB, callsign, amountCents);
+  await insertAudit(env.ADMIN_DB, {
+    actor: auth.callsign,
+    action: 'user.credit',
+    target: callsign,
+    detail: String(amountCents),
+  });
+  return json(toManagedUserDto(user ?? existing), 200, cors);
+}
+
+// --- managed plugins --------------------------------------------------------
+
+async function handleUpsertManagedPlugin(
+  targetPluginId: string | null,
+  request: Request,
+  env: Env,
+  auth: AuthCtx,
+  cors: Record<string, string>,
+): Promise<Response> {
+  const body = await safeJson(request);
+  const pluginId = normPluginId(targetPluginId ?? ((body.pluginId as string) || ''));
+  if (!pluginId) return json({ error: 'plugin id required' }, 400, cors);
+
+  const plugin = await upsertManagedPlugin(env.ADMIN_DB, normalizedPluginRow(pluginId, body));
+  const synced = await maybeSyncStripeCatalog(env, plugin);
+  const responsePlugin = synced ?? plugin;
+  await insertAudit(env.ADMIN_DB, {
+    actor: auth.callsign,
+    action: 'plugin.upsert',
+    target: pluginId,
+    detail: String(plugin.monthly_price_cents),
+  });
+  return json(toManagedPluginDto(responsePlugin), 200, cors);
+}
+
+async function maybeSyncStripeCatalog(env: Env, plugin: ManagedPluginRow): Promise<ManagedPluginRow | null> {
+  const sync = await ensureStripeCatalogForPlugin(env, plugin);
+  if (!sync) return plugin;
+  return setManagedPluginStripeCatalog(env.ADMIN_DB, plugin.plugin_id, {
+    stripe_product_id: sync.productId,
+    stripe_price_id: sync.priceId,
+    stripe_price_cents: sync.priceCents,
+    stripe_price_currency: sync.priceCurrency,
+  });
+}
+
 // --- support request --------------------------------------------------------
 
 /**
@@ -418,8 +621,268 @@ async function ensureBootstrap(env: Env): Promise<void> {
 
 // --- helpers ----------------------------------------------------------------
 
+export async function mergedManagedPlugins(env: Env) {
+  const [rows, registry] = await Promise.all([
+    listManagedPlugins(env.ADMIN_DB),
+    fetchRegistryPluginSeeds(env),
+  ]);
+  const byId = new Map<string, ManagedPluginDto>();
+  for (const seed of registry) {
+    byId.set(seed.pluginId, {
+      pluginId: seed.pluginId,
+      displayName: seed.displayName,
+      subscriptionRequired: seed.subscriptionRequired,
+      monthlyPriceCents: seed.monthlyPriceCents,
+      currency: seed.currency,
+      active: true,
+      checkoutUrl: null,
+      notes: seed.notes,
+      createdAt: null,
+      updatedAt: null,
+      source: 'registry',
+      stripeProductId: null,
+      stripePriceId: null,
+      stripeSyncEnabled: stripeConfigured(env),
+    });
+  }
+  for (const row of rows) {
+    byId.set(row.plugin_id, { ...toManagedPluginDto(row), source: 'admin' });
+  }
+  return [...byId.values()].sort((a, b) => a.pluginId.localeCompare(b.pluginId));
+}
+
+async function fetchRegistryPluginSeeds(env: Env): Promise<RegistryPluginSeed[]> {
+  const url = pluginRegistryUrl(env);
+  const now = Date.now();
+  if (pluginRegistryCache?.url === url && now - pluginRegistryCache.fetchedAt < PLUGIN_REGISTRY_CACHE_MS) {
+    return pluginRegistryCache.plugins;
+  }
+
+  try {
+    const res = await fetch(url, { headers: { accept: 'application/json' } });
+    if (!res.ok) return [];
+    const raw = (await res.json()) as Record<string, unknown>;
+    const plugins = Array.isArray(raw.plugins)
+      ? raw.plugins.map(registryPluginSeed).filter((p): p is RegistryPluginSeed => p !== null)
+      : [];
+    pluginRegistryCache = { url, fetchedAt: now, plugins };
+    return plugins;
+  } catch {
+    return [];
+  }
+}
+
+function registryPluginSeed(raw: unknown): RegistryPluginSeed | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const plugin = raw as Record<string, unknown>;
+  const pluginId = normPluginId(String(plugin.id ?? ''));
+  if (!pluginId) return null;
+  const subscription = plugin.subscription && typeof plugin.subscription === 'object'
+    ? (plugin.subscription as Record<string, unknown>)
+    : {};
+  const cents = optionalNumber(subscription.monthlyPriceCents) ?? 0;
+  return {
+    pluginId,
+    displayName: optionalString(plugin.name) ?? pluginId,
+    subscriptionRequired: subscription.required === true,
+    monthlyPriceCents: Math.max(0, Math.round(cents)),
+    currency: (optionalString(subscription.currency) ?? 'USD').toUpperCase(),
+    checkoutUrl: optionalString(subscription.checkoutUrl),
+    notes: optionalString(subscription.notes),
+  };
+}
+
+function pluginRegistryUrl(env: Env): string {
+  return optionalString(env.PLUGIN_REGISTRY_URL) ?? DEFAULT_PLUGIN_REGISTRY_URL;
+}
+
+async function listPresenceOperators(env: Env): Promise<PresenceOperatorDto[]> {
+  const id = env.PRESENCE.idFromName('global');
+  const res = await env.PRESENCE.get(id).fetch('https://presence.internal/list');
+  if (!res.ok) return [];
+  const body = await res.json<{ operators?: unknown[] }>().catch(() => ({ operators: [] }));
+  const operators = Array.isArray(body.operators) ? body.operators : [];
+  return operators.map(normalizedPresenceOperator).filter((op): op is PresenceOperatorDto => op !== null);
+}
+
+function normalizedPresenceOperator(raw: unknown): PresenceOperatorDto | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const callsign = norm(String(o.callsign ?? ''));
+  if (!callsign) return null;
+  return {
+    callsign,
+    since: optionalNumber(o.since),
+    lastSeen: optionalNumber(o.lastSeen),
+    ip: optionalString(o.ip),
+    country: optionalString(o.country),
+    platform: optionalString(o.platform),
+    appVersion: optionalString(o.appVersion),
+    radioBoard: optionalString(o.radioBoard),
+    radioModel: optionalString(o.radioModel),
+    radioConnected: o.radioConnected === true,
+  };
+}
+
+function toManagedUserDto(
+  row: ManagedUserRow,
+  presence: PresenceOperatorDto | null = null,
+  now: number = Date.now(),
+) {
+  const directoryOnline = row.last_login_at !== null && now - row.last_login_at <= USER_DIRECTORY_ONLINE_MS;
+  const online = presence !== null || directoryOnline;
+  return {
+    callsign: row.callsign,
+    displayName: row.display_name ?? row.callsign,
+    accessAllowed: row.access_allowed === 1,
+    isAdmin: row.is_admin === 1,
+    subscriptionStatus: row.subscription_status || 'manual',
+    subscriptionExpiresAt: row.subscription_expires_at,
+    pluginAccessMode: row.plugin_access_mode === 'selected' ? 'selected' : 'all',
+    pluginEntitlements: parseEntitlements(row.plugin_entitlements),
+    notes: row.notes,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastLoginAt: row.last_login_at,
+    online,
+    onlineSince: presence?.since ?? null,
+    lastSeenAt: presence?.lastSeen ?? row.last_login_at,
+    onlineSource: presence !== null ? 'presence' : directoryOnline ? 'directory' : 'none',
+    stripeCustomerId: row.stripe_customer_id ?? null,
+    stripeSubscriptionId: row.stripe_subscription_id ?? null,
+    stripeSubscriptionStatus: row.stripe_subscription_status ?? null,
+    stripeCurrentPeriodEnd: row.stripe_current_period_end ?? null,
+    creditBalanceCents: row.credit_balance_cents ?? 0,
+    presence: presence
+      ? {
+          ip: presence.ip,
+          country: presence.country,
+          platform: presence.platform,
+          appVersion: presence.appVersion,
+          radioBoard: presence.radioBoard,
+          radioModel: presence.radioModel,
+          radioConnected: presence.radioConnected,
+        }
+      : null,
+  };
+}
+
+function toManagedPluginDto(row: ManagedPluginRow): ManagedPluginDto {
+  return {
+    pluginId: row.plugin_id,
+    displayName: row.display_name || row.plugin_id,
+    subscriptionRequired: row.subscription_required === 1,
+    monthlyPriceCents: row.monthly_price_cents,
+    currency: row.currency || 'USD',
+    active: row.active === 1,
+    checkoutUrl: row.checkout_url,
+    notes: row.notes,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    stripeProductId: row.stripe_product_id ?? null,
+    stripePriceId: row.stripe_price_id ?? null,
+    stripeSyncEnabled: row.subscription_required === 1 && row.monthly_price_cents > 0,
+  };
+}
+
+function normalizedUserRow(callsign: string, body: Record<string, unknown>) {
+  return {
+    callsign,
+    display_name: optionalString(body.displayName) ?? callsign,
+    access_allowed: bool01(body.accessAllowed, true),
+    is_admin: bool01(body.isAdmin, false),
+    subscription_status: normalizedStatus(body.subscriptionStatus),
+    subscription_expires_at: optionalNumber(body.subscriptionExpiresAt),
+    plugin_access_mode: body.pluginAccessMode === 'selected' ? 'selected' : 'all',
+    plugin_entitlements: stringifyEntitlements(body.pluginEntitlements),
+    notes: optionalString(body.notes),
+  };
+}
+
+function normalizedUserPatch(body: Record<string, unknown>) {
+  const patch: Partial<ManagedUserRow> = {};
+  if ('displayName' in body) patch.display_name = optionalString(body.displayName);
+  if ('accessAllowed' in body) patch.access_allowed = bool01(body.accessAllowed, true);
+  if ('isAdmin' in body) patch.is_admin = bool01(body.isAdmin, false);
+  if ('subscriptionStatus' in body) patch.subscription_status = normalizedStatus(body.subscriptionStatus);
+  if ('subscriptionExpiresAt' in body) patch.subscription_expires_at = optionalNumber(body.subscriptionExpiresAt);
+  if ('pluginAccessMode' in body) patch.plugin_access_mode = body.pluginAccessMode === 'selected' ? 'selected' : 'all';
+  if ('pluginEntitlements' in body) patch.plugin_entitlements = stringifyEntitlements(body.pluginEntitlements);
+  if ('notes' in body) patch.notes = optionalString(body.notes);
+  return patch;
+}
+
+function normalizedPluginRow(pluginId: string, body: Record<string, unknown>) {
+  const cents = optionalNumber(body.monthlyPriceCents);
+  return {
+    plugin_id: pluginId,
+    display_name: optionalString(body.displayName) ?? pluginId,
+    subscription_required: bool01(body.subscriptionRequired, false),
+    monthly_price_cents: Math.max(0, Math.round(cents ?? 0)),
+    currency: (optionalString(body.currency) ?? 'USD').toUpperCase(),
+    active: bool01(body.active, true),
+    checkout_url: null,
+    notes: optionalString(body.notes),
+  };
+}
+
 function norm(callsign: string): string {
   return callsign.trim().toUpperCase();
+}
+
+function normPluginId(pluginId: string): string {
+  return pluginId.trim().toLowerCase();
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function optionalNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function bool01(value: unknown, fallback: boolean): number {
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  return fallback ? 1 : 0;
+}
+
+function normalizedStatus(value: unknown): string {
+  const status = optionalString(value)?.toLowerCase();
+  return status || 'manual';
+}
+
+function parseEntitlements(raw: string): unknown[] {
+  try {
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function stringifyEntitlements(value: unknown): string {
+  if (!Array.isArray(value)) return '[]';
+  const entitlements = value
+    .map((item) => {
+      const raw = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+      const pluginId = normPluginId(String(raw.pluginId ?? ''));
+      if (!pluginId) return null;
+      return {
+        pluginId,
+        accessAllowed: raw.accessAllowed !== false,
+        subscriptionStatus: normalizedStatus(raw.subscriptionStatus),
+        subscriptionExpiresAt: optionalNumber(raw.subscriptionExpiresAt),
+        denialReason: optionalString(raw.denialReason),
+      };
+    })
+    .filter(Boolean);
+  return JSON.stringify(entitlements);
 }
 
 async function safeJson(request: Request): Promise<Record<string, unknown>> {
@@ -471,7 +934,7 @@ async function loginRateLimited(env: Env, callsign: string): Promise<boolean> {
  */
 export function corsHeaders(env: Env, request?: Request): Record<string, string> {
   const headers: Record<string, string> = {
-    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'content-type, authorization, x-qrz-session, x-qrz-callsign',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',

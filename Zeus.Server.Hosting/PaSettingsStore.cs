@@ -97,7 +97,7 @@ public sealed class PaSettingsStore : IDisposable
                     if (existing.TryGetValue(b, out var e))
                     {
                         var gain = ResolvePaGainDbForBoard(e.PaGainDb, e.Band, board, variant);
-                        return new PaBandSettingsDto(e.Band, gain, e.DisablePa, e.OcTx, e.OcRx, auto, e.OcDxTx, e.OcDxRx);
+                        return new PaBandSettingsDto(e.Band, gain, e.DisablePa, e.OcTx, e.OcRx, auto, e.OcDxTx, e.OcDxRx, e.OcTune);
                     }
                     return new PaBandSettingsDto(b, PaGainDb: PaDefaults.GetPaGainDb(board, b, variant), AutoOcMask: auto);
                 })
@@ -140,7 +140,7 @@ public sealed class PaSettingsStore : IDisposable
             if (e is null)
                 return new PaBandSettingsDto(band, PaGainDb: PaDefaults.GetPaGainDb(board, band, variant), AutoOcMask: auto);
             var gain = ResolvePaGainDbForBoard(e.PaGainDb, e.Band, board, variant);
-            return new PaBandSettingsDto(e.Band, gain, e.DisablePa, e.OcTx, e.OcRx, auto, e.OcDxTx, e.OcDxRx);
+            return new PaBandSettingsDto(e.Band, gain, e.DisablePa, e.OcTx, e.OcRx, auto, e.OcDxTx, e.OcDxRx, e.OcTune);
         }
     }
 
@@ -228,6 +228,11 @@ public sealed class PaSettingsStore : IDisposable
                 // bench API can't smuggle bits the wire path will drop.
                 byte dxTx = (byte)(band.OcDxTx & 0x0F);
                 byte dxRx = (byte)(band.OcDxRx & 0x0F);
+                // OcTune is a 7-bit additive mask (issue #1325); mirror the
+                // OcTx/OcRx narrowing so a bench PUT can't smuggle bit 7.
+                byte tune = (byte)(band.OcTune & 0x7F);
+                byte tx = (byte)(band.OcTx & 0x7F);
+                byte rx = (byte)(band.OcRx & 0x7F);
                 if (existing is null)
                 {
                     _bands.Insert(new PaBandEntry
@@ -235,10 +240,11 @@ public sealed class PaSettingsStore : IDisposable
                         Band = band.Band,
                         PaGainDb = band.PaGainDb,
                         DisablePa = band.DisablePa,
-                        OcTx = band.OcTx,
-                        OcRx = band.OcRx,
+                        OcTx = tx,
+                        OcRx = rx,
                         OcDxTx = dxTx,
                         OcDxRx = dxRx,
+                        OcTune = tune,
                         UpdatedUtc = DateTime.UtcNow,
                     });
                 }
@@ -246,10 +252,11 @@ public sealed class PaSettingsStore : IDisposable
                 {
                     existing.PaGainDb = band.PaGainDb;
                     existing.DisablePa = band.DisablePa;
-                    existing.OcTx = band.OcTx;
-                    existing.OcRx = band.OcRx;
+                    existing.OcTx = tx;
+                    existing.OcRx = rx;
                     existing.OcDxTx = dxTx;
                     existing.OcDxRx = dxRx;
+                    existing.OcTune = tune;
                     existing.UpdatedUtc = DateTime.UtcNow;
                     _bands.Update(existing);
                 }
@@ -277,6 +284,9 @@ public sealed class PaSettingsStore : IDisposable
 // on HasTxAntennaRelays and routes the operator RX-aux strictly BEFORE the PS
 // coupler OR (the PS-K36 firewall). All defaulted so existing constructions stay
 // valid (default ANT1/ANT1/None = byte-identical to today).
+//
+// RfFilters carries the normalized Thetis-style RF filter matrix. Null means
+// Protocol2Client uses its built-in Alex BPF/LPF tables exactly as before.
 public sealed record PaRuntimeSnapshot(
     byte DriveByte,
     byte OcTxMask,
@@ -288,7 +298,12 @@ public sealed record PaRuntimeSnapshot(
     HpsdrAntenna RxAntenna = HpsdrAntenna.Ant1,
     bool HasTxAntennaRelays = false,
     int RxAuxInput = 0,
-    bool MkiiBpfRxSelect = false);
+    bool MkiiBpfRxSelect = false,
+    RfFilterRuntimeSettings? RfFilters = null,
+    // Per-band OC-TUNE additive mask (issue #1325). OR'd on top of OcTxMask
+    // while TUN is active; ignored during regular MOX / RX. Default 0 keeps
+    // pre-#1325 behaviour byte-for-byte.
+    byte OcTuneMask = 0);
 
 public sealed class PaBandEntry
 {
@@ -304,6 +319,10 @@ public sealed class PaBandEntry
     // only when the active radio is OrionMkII + AnvelinaPro3 on P2.
     public byte OcDxTx { get; set; }
     public byte OcDxRx { get; set; }
+    // Per-band additive mask asserted ON TOP OF OcTx while TUN is active
+    // (issue #1325). Rows persisted before #1325 hydrate as 0, which is the
+    // pre-#1325 wire behaviour.
+    public byte OcTune { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }
 

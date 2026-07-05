@@ -52,18 +52,25 @@ the FreeDV RX gain staging.
 The DSP changes are unit-tested (incl. against the real codec2/zeus_rade libs),
 but the TX-tail TIMING needs on-air confirmation. Knobs:
 
-- `TxAudioIngest.FreeDvTxTailMaxMs` (350) — hard ceiling on how long un-key blocks
-  while the final frame clocks out.
-- `TxAudioIngest.FreeDvTxTailGuardMs` (60) — extra hold after the last block so the
-  radio FIFO finishes before PTT drops. **Tune this first:** if the very end is
-  still clipped, raise it; if there is dead carrier at the end, lower it.
+- `TxAudioIngest.FreeDvTxTailDrainSlackMs` (120) / `FreeDvTxTailCeilingMs` (1200) —
+  the drain budget is now **backlog-derived**: `min(pendingMs + slack, ceiling)`,
+  where `pendingMs` is the real tail `FinishTx` queued (residual + RADE EOO). This
+  replaced the old fixed 350 ms budget, which guillotined any larger tail
+  mid-symbol (the far-station "garble at end of over"). Only touch the ceiling if a
+  pathologically long tail is being cut (`term=ceiling` in the log).
+- `TxAudioIngest.FreeDvTxTailGuardMs` (160) — extra hold after the last block so the
+  radio ring/FIFO finishes transmitting before PTT drops. **Tune this for a residual
+  clip:** if the very end is still clipped on air with `term=drained`, raise it; if
+  there is dead carrier at the end, lower it.
 - `FreeDvResampler.TapsPerPhase` / `CutoffHz` — raise the cutoff toward 3.6–3.8 kHz
   if more brightness is wanted (keep stopband < 4 kHz).
 
 Validation steps:
 1. Key FreeDV (700D) on the G2 into a dummy load; have a second FreeDV RX decode.
    Confirm the end of each over decodes cleanly (no tail garble).
-2. Watch the server log for `freedv.tx.tail drained, dropping PTT` per un-key.
+2. Watch the server log for `freedv.tx.tail dropping PTT: pendingMs=… term=…` per
+   un-key. `term=ceiling` → the backlog outran the budget (raise the ceiling);
+   `term=drained` with a residual on-air clip → FIFO latency (raise the guard).
 3. On RADE V1, confirm the decoding station shows the EOO callsign.
 4. Work some real stations; watch for `freedv.rx.in clipping` warnings. If they
    appear on strong signals, add headroom to the Fixed RX AGC seed (red-light:
@@ -169,6 +176,82 @@ never a fixed time window. For fully deterministic clean-channel scoring,
 `rade_api.h` exposes `rade_set_disable_unsync(seconds)` (radae's own test hook) —
 not yet surfaced through the shim; wire it through if a no-unsync fidelity sweep
 is wanted.
+
+### Channel-sim SNR sweep — the RADE V2 readiness gate
+
+A managed **channel simulator** takes the RADE-methodology one step further:
+instead of only a clean loopback, it degrades a clean modem waveform to a target
+SNR with calibrated AWGN (+ optional 2-ray multipath) and sweeps the REAL decoder
+across an SNR range, so "does the modem still acquire above threshold" becomes a
+reproducible CI assertion. This is the RADE V2 readiness gate.
+
+- **`FreeDvChannelSim`** (test-scoped, `tests/Zeus.Dsp.FreeDv.Tests/`): the
+  channel model. `AddAwgn` adds Gaussian noise (Box–Muller, seeded `Random` →
+  byte-deterministic) calibrated to an **in-band SNR** — signal and noise power
+  are both measured over the modem passband (0–4 kHz at 48 kHz, where all of the
+  narrowband RADE/codec2 modem energy lives), not the full 24 kHz soundcard
+  Nyquist. The noise is band-limited to that same passband and scaled by its
+  empirically-measured post-filter power so the target lands exactly. This matches
+  an on-air SSB-passband SNR and is directly comparable to radae's upstream AWGN
+  thresholds. `AddMultipath` is a deterministic **2-ray** model (direct path +
+  one delayed, fixed-attenuation echo, energy-normalised by `1/√(1+g²)`) — a
+  defensible frequency-selective-fading proxy for the MPP regime, NOT a full
+  Watterson model (no Doppler, so perfectly reproducible).
+- **`FreeDvChannelSimTests`** (pure, no native lib): calibrate the instrument
+  before using it — round-trips a known SNR back out within ±0.75 dB across
+  +12…−3 dB, checks determinism for a fixed seed, and that the 2-ray path is
+  energy-preserving on a broadband source and correctly delayed.
+- **`FreeDvChannelSweepTests`** (native, skippable): the gate. Sweeps
+  {+10, +6, +3, 0, −2, −4} dB through the real RADE decoder (AWGN and 2-ray+AWGN)
+  and the codec2 700D decoder (AWGN). Assertions lock the **robust shape** — syncs
+  at a comfortable margin above threshold (+6 dB RADE AWGN, +10 dB RADE MPP, +3 dB
+  codec2 700D), the top-of-sweep near-clean anchor decodes with energy, and (AWGN)
+  decoded energy trends down with SNR — never a brittle exact cliff. Deep-negative
+  points are allowed to fail to sync. Fixed seed per SNR point; the actual cliff is
+  logged to test output, not asserted, so the gate is stable.
+
+Observed on win-x64 (informational — not asserted): with the sticky RADE/codec2
+acquisition and the strong synthetic excitation, **sync held across the entire
+sweep down to −4 dB** in all three cases, with decoded RMS staying healthy
+(~2.5–3.9 E-2). The modems are comfortably above their quoted thresholds
+(RADE V1 ≈ −2 dB AWGN / ~0 dB MPP), so the +6/+10/+3 dB sync-margin assertions
+have ample headroom.
+
+**Deliverable 2 (follow-up, out of scope here):** for deterministic clean-channel
+*loss scoring* (feature-distortion vs. SNR, radae's `loss.py` analogue), surface
+`rade_set_disable_unsync(seconds)` through the `zeus_rade` shim so the decoder
+holds sync across the whole degraded stream and the decoded features can be scored
+against the clean reference without the acquisition state machine gating stretches
+out. That is a native change; this deliverable is managed-side only.
+
+## End-of-over garble in Zeus's OWN audio — reset the RX modem on the MOX edge
+
+A third operator report (zeus-japz): a garbled burst in **Zeus's own RX audio**
+at the end of **every** FreeDV over, on **both** RADE and codec2. This is a
+different failure from the stop-talk `RxSquelchGate` above — that gate mutes
+decoded **noise** when the *far* station unkeys (their signal lost → *unsynced*).
+Here the *local* operator unkeys, and the modem was genuinely **synced on its own
+transmitted signal**, so the gate stays open.
+
+Root cause: the FreeDV **receiver** was never reset across the MOX transition.
+`DspPipelineService` drains WDSP RX every tick (`engine.ReadAudio`) regardless of
+MOX — "RX is drained anyway so the audio ring doesn't back up" — and
+`FreeDvService.ProcessRx` is gated only by `!txMonitorOn` + `audioSampleCount>0`,
+**not** by `_keyed`. So while keyed the modem keeps decoding the RXA stream (the
+operator's own TX bleed/residual), holds sync, and stockpiles decoded speech in
+`_rxOut48` (capped ~250 ms). `OnRadioMoxChanged` only armed a 5 ms RX fade — it
+never cleared that FIFO or the sync state — so at un-key the resuming receiver
+dumped the self-decoded backlog into the output.
+
+Fix: a lightweight `FlushRx()` on `FreeDvModem` and `RadeModem` (mirror of
+`FlushTx`: seqlock the RX hot path out, clear `_rx8In`/`_rxOut48`, reset the
+resamplers + `RxSquelchGate`, set `_synced=false`, **no** native close/reopen),
+routed through `FreeDvService.FlushRx()` (flushes both modems so a submode change
+across the edge can't strand a backlog), and called from `OnRadioMoxChanged` on
+**both** edges. Key-down drops any pre-TX residual; key-up clears anything decoded
+from TX bleed — so RX always resumes empty and unsynced (gate closed → silent
+until it genuinely re-syncs on band audio). Validated end-to-end through the real
+decoder in `RadeFidelityTests.FlushRx_AfterSync_ResumesSilentAndUnsynced`.
 
 ## Not yet changed (deliberately)
 

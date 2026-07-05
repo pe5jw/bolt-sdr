@@ -51,20 +51,44 @@ public static class SupportIpc
     private const string PipePrefix = "zeus-support";
 
     /// <summary>
+    /// Max characters of the (sanitised) session token folded into the pipe name.
+    /// This is a macOS constraint: .NET realises a named pipe as a Unix-domain
+    /// socket at <c>{TMPDIR}/CoreFxPipe_{pipeName}</c>, and macOS caps that socket
+    /// path (<c>sun_path</c>) at 104 chars. A deep macOS temp dir
+    /// (<c>/var/folders/xx/&lt;24&gt;/T/</c> ≈ 49) + <c>CoreFxPipe_</c> (11) + the
+    /// <c>zeus-support-</c> prefix (13) leaves only ~31 chars for the token, so a
+    /// full 32-hex GUID token tips the realised path to 105 and the socket endpoint
+    /// throws <see cref="ArgumentOutOfRangeException"/> — the sidecar IPC then never
+    /// connects on macOS (presence never registers, crash auto-share never fires),
+    /// while Windows (256-char <c>\\.\pipe\</c> namespace) and Linux (108-char
+    /// <c>sun_path</c> under the short <c>/tmp</c>) are unaffected. Capping at 16 hex
+    /// chars (64 bits — ample to keep two Zeus instances on one machine from
+    /// colliding) keeps the realised path (~89) well under the cap on macOS and is a
+    /// no-op on Windows/Linux. Both the backend connect side and the sidecar listen
+    /// side derive the name from this one function, so they still agree.
+    /// </summary>
+    private const int MaxTokenChars = 16;
+
+    /// <summary>
     /// Stable pipe name for a Zeus session. The desktop host mints a random
     /// session token at launch, passes it to the sidecar (its listen name) and
     /// exposes it to the backend (its connect target) so two Zeus instances on
     /// one machine never collide. The token is sanitised to the pipe-safe
-    /// alphabet; a null/blank token falls back to the bare prefix (single-instance
-    /// dev default).
+    /// alphabet and bounded to <see cref="MaxTokenChars"/> so the realised
+    /// Unix-domain-socket path stays inside macOS's 104-char limit; a null/blank
+    /// token falls back to the bare prefix (single-instance dev default).
     /// </summary>
     public static string PipeNameForSession(string? sessionToken)
     {
         if (string.IsNullOrWhiteSpace(sessionToken)) return PipePrefix;
-        var sb = new System.Text.StringBuilder(PipePrefix.Length + 1 + sessionToken.Length);
+        var take = Math.Min(sessionToken.Length, MaxTokenChars);
+        var sb = new System.Text.StringBuilder(PipePrefix.Length + 1 + take);
         sb.Append(PipePrefix).Append('-');
-        foreach (var ch in sessionToken)
+        for (var i = 0; i < take; i++)
+        {
+            var ch = sessionToken[i];
             sb.Append(char.IsLetterOrDigit(ch) ? ch : '_');
+        }
         return sb.ToString();
     }
 

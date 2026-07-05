@@ -47,25 +47,75 @@ import { create } from 'zustand';
 import type {
   LogEntry,
   CreateLogEntryRequest,
+  UpdateLogEntryRequest,
+  LogCapabilities,
   AdifImportResponse,
   AdifExportToFileResponse,
   QrzPublishResponse,
+  LogDeleteResponse,
   WorkedCallsignSummary,
 } from '../api/log';
 import {
   getLogEntries,
+  getLogCapabilities,
+  getLogTags,
   getWorkedCallsignSummary,
   createLogEntry,
+  updateLogEntry,
   exportAdifToDirectory,
   exportToAdif,
   importAdif,
   publishToQrz,
+  deleteLogEntries,
 } from '../api/log';
 import { useCapabilitiesStore } from './capabilities-store';
+import { isLogbookPluginReady, logbookPluginUnavailableReason } from './logbook-plugin-store';
+
+let logbookUnavailableNoticeShown = false;
+const LOGBOOK_UNAVAILABLE_FALLBACK = 'Logbook plugin unavailable';
+const LOGBOOK_INSTALL_REASON = 'Install the Logbook plugin from Settings → Plugins';
+
+function isLogbookUnavailableMessage(message: string | null): boolean {
+  return message === LOGBOOK_UNAVAILABLE_FALLBACK || message === LOGBOOK_INSTALL_REASON;
+}
+
+function applyLogPatch(entry: LogEntry, patch: UpdateLogEntryRequest): LogEntry {
+  return {
+    ...entry,
+    ...(patch.name !== undefined ? { name: patch.name } : {}),
+    ...(patch.grid !== undefined ? { grid: patch.grid } : {}),
+    ...(patch.country !== undefined ? { country: patch.country } : {}),
+    ...(patch.state !== undefined ? { state: patch.state } : {}),
+    ...(patch.comment !== undefined ? { comment: patch.comment } : {}),
+    ...(patch.tags !== undefined ? { tags: patch.tags } : {}),
+    ...(patch.qslSent !== undefined ? { qslSent: patch.qslSent } : {}),
+    ...(patch.qslRcvd !== undefined ? { qslRcvd: patch.qslRcvd } : {}),
+    ...(patch.qslSentDate !== undefined ? { qslSentDate: patch.qslSentDate } : {}),
+    ...(patch.qslRcvdDate !== undefined ? { qslRcvdDate: patch.qslRcvdDate } : {}),
+    ...(patch.clearQslSentDate ? { qslSentDate: null } : {}),
+    ...(patch.clearQslRcvdDate ? { qslRcvdDate: null } : {}),
+    ...(patch.rig !== undefined ? { rig: patch.rig } : {}),
+    ...(patch.antenna !== undefined ? { antenna: patch.antenna } : {}),
+    ...(patch.txPowerW !== undefined ? { txPowerW: patch.txPowerW } : {}),
+    ...(patch.clearTxPowerW ? { txPowerW: null } : {}),
+    ...(patch.rstSent !== undefined ? { rstSent: patch.rstSent ?? entry.rstSent } : {}),
+    ...(patch.rstRcvd !== undefined ? { rstRcvd: patch.rstRcvd ?? entry.rstRcvd } : {}),
+    ...(patch.mode !== undefined ? { mode: patch.mode ?? entry.mode } : {}),
+    ...(patch.band !== undefined ? { band: patch.band ?? entry.band } : {}),
+    ...(patch.frequencyMhz !== undefined ? { frequencyMhz: patch.frequencyMhz } : {}),
+    ...(patch.clearFrequencyMhz ? { frequencyMhz: null } : {}),
+    ...(patch.qsoDateTimeUtc !== undefined ? { qsoDateTimeUtc: patch.qsoDateTimeUtc ?? entry.qsoDateTimeUtc } : {}),
+  };
+}
 
 type LoggerState = {
   entries: LogEntry[];
   totalCount: number;
+  capabilities: LogCapabilities | null;
+  tagList: string[];
+  /** True once `entries` holds the complete log (via loadAllEntries), not just
+   *  the 100-row quick page. The dashboard stats are only honest when set. */
+  fullyLoaded: boolean;
   loading: boolean;
   error: string | null;
   importInFlight: boolean;
@@ -77,22 +127,36 @@ type LoggerState = {
   exportInFlight: boolean;
   exportError: string | null;
   lastExportResult: AdifExportToFileResponse | null;
+  deleteInFlight: boolean;
+  deleteError: string | null;
+  lastDeleteResult: LogDeleteResponse | null;
   selectedIds: Set<string>;
   workedSummary: WorkedCallsignSummary | null;
   workedSummaryLoading: boolean;
   workedSummaryError: string | null;
 
   // Actions
+  loadCapabilities: () => Promise<void>;
+  loadTags: () => Promise<void>;
   loadEntries: () => Promise<void>;
+  /** Load the ENTIRE log (paged) for the popped-out Logbook workspace so its
+   *  table and dashboard stats cover every QSO, not the quick 100-row page. */
+  loadAllEntries: () => Promise<void>;
+  /** Reload after a mutation, preserving whichever depth is currently loaded:
+   *  the full log if the workspace has hydrated it, otherwise the quick page. */
+  refreshEntries: () => Promise<void>;
   loadWorkedSummary: (callsign: string, signal?: AbortSignal) => Promise<WorkedCallsignSummary | null>;
   clearWorkedSummary: () => void;
   addLogEntry: (request: CreateLogEntryRequest) => Promise<LogEntry | null>;
+  updateEntry: (id: string, patch: UpdateLogEntryRequest) => Promise<LogEntry | null>;
   exportAdif: () => Promise<void>;
   clearExportResult: () => void;
   importAdifFile: (file: File) => Promise<AdifImportResponse | null>;
   clearImportResult: () => void;
   publishSelectedToQrz: (logEntryIds: string[]) => Promise<void>;
   clearPublishResult: () => void;
+  deleteSelected: (logEntryIds: string[]) => Promise<void>;
+  clearDeleteResult: () => void;
   toggleSelected: (id: string) => void;
   setSelectedIds: (ids: Iterable<string>) => void;
   clearSelected: () => void;
@@ -101,6 +165,9 @@ type LoggerState = {
 export const useLoggerStore = create<LoggerState>((set, get) => ({
   entries: [],
   totalCount: 0,
+  capabilities: null,
+  tagList: [],
+  fullyLoaded: false,
   loading: false,
   error: null,
   importInFlight: false,
@@ -112,18 +179,81 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
   exportInFlight: false,
   exportError: null,
   lastExportResult: null,
+  deleteInFlight: false,
+  deleteError: null,
+  lastDeleteResult: null,
   selectedIds: new Set<string>(),
   workedSummary: null,
   workedSummaryLoading: false,
   workedSummaryError: null,
 
+  loadCapabilities: async () => {
+    try {
+      const capabilities = await getLogCapabilities();
+      set({ capabilities });
+      if (capabilities.canTags) void get().loadTags();
+    } catch {
+      set({ capabilities: null, tagList: [] });
+    }
+  },
+
+  loadTags: async () => {
+    try {
+      const tags = await getLogTags();
+      set({ tagList: tags });
+    } catch {
+      set({ tagList: [] });
+    }
+  },
+
   loadEntries: async () => {
     set({ loading: true, error: null });
     try {
       const response = await getLogEntries(0, 100);
-      set({ entries: response.entries, totalCount: response.totalCount, loading: false });
+      set({
+        entries: response.entries,
+        totalCount: response.totalCount,
+        // The quick page is "complete" only when the whole log fits in it.
+        fullyLoaded: response.entries.length >= response.totalCount,
+        loading: false,
+      });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Failed to load log entries', loading: false });
+    }
+  },
+
+  loadAllEntries: async () => {
+    set({ loading: true, error: null });
+    // Page through the log in chunks. Capped so a pathological log can't pin the
+    // UI thread forever; if the cap is hit the dashboard simply reflects the
+    // rows we have (the count readout still shows the true total).
+    const PAGE = 500;
+    const MAX = 20000;
+    try {
+      const all: LogEntry[] = [];
+      let total = 0;
+      for (let skip = 0; skip < MAX; skip += PAGE) {
+        const response = await getLogEntries(skip, PAGE);
+        total = response.totalCount;
+        all.push(...response.entries);
+        if (response.entries.length < PAGE || all.length >= total) break;
+      }
+      set({
+        entries: all,
+        totalCount: total,
+        fullyLoaded: all.length >= total,
+        loading: false,
+      });
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Failed to load log entries', loading: false });
+    }
+  },
+
+  refreshEntries: async () => {
+    if (get().fullyLoaded) {
+      await get().loadAllEntries();
+    } else {
+      await get().loadEntries();
     }
   },
 
@@ -156,11 +286,25 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
   },
 
   addLogEntry: async (request: CreateLogEntryRequest) => {
-    set({ error: null });
+    if (isLogbookPluginReady()) {
+      if (logbookUnavailableNoticeShown) {
+        logbookUnavailableNoticeShown = false;
+        if (isLogbookUnavailableMessage(get().error)) set({ error: null });
+      }
+      set({ error: null });
+    } else {
+      const message = logbookPluginUnavailableReason() ?? LOGBOOK_UNAVAILABLE_FALLBACK;
+      if (!logbookUnavailableNoticeShown) {
+        logbookUnavailableNoticeShown = true;
+        set({ error: message });
+      }
+      return null;
+    }
+
     try {
       const entry = await createLogEntry(request);
-      // Reload entries to get the updated list
-      await get().loadEntries();
+      // Reload the list (full log if the workspace hydrated it, else quick page).
+      await get().refreshEntries();
       const activeSummaryCall = get().workedSummary?.callsign;
       if (activeSummaryCall && activeSummaryCall === entry.callsign.trim().toUpperCase()) {
         await get().loadWorkedSummary(activeSummaryCall);
@@ -168,6 +312,33 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
       return entry;
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Failed to create log entry' });
+      return null;
+    }
+  },
+
+  updateEntry: async (id: string, patch: UpdateLogEntryRequest) => {
+    const prevEntries = get().entries;
+    const previous = prevEntries.find((entry) => entry.id === id) ?? null;
+    if (!previous) return null;
+
+    const optimistic = applyLogPatch(previous, patch);
+    set({
+      entries: prevEntries.map((entry) => (entry.id === id ? optimistic : entry)),
+      error: null,
+    });
+
+    try {
+      const saved = await updateLogEntry(id, patch);
+      set((state) => ({
+        entries: state.entries.map((entry) => (entry.id === id ? saved : entry)),
+      }));
+      if (patch.tags) void get().loadTags();
+      return saved;
+    } catch (err) {
+      set((state) => ({
+        entries: state.entries.map((entry) => (entry.id === id ? previous : entry)),
+        error: err instanceof Error ? err.message : 'Failed to update log entry',
+      }));
       return null;
     }
   },
@@ -210,7 +381,7 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
     try {
       const result = await importAdif(file);
       set({ lastImportResult: result, importInFlight: false });
-      await get().loadEntries();
+      await get().refreshEntries();
       return result;
     } catch (err) {
       set({
@@ -230,8 +401,8 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
     try {
       const result = await publishToQrz({ logEntryIds });
       set({ lastPublishResult: result, publishInFlight: false, selectedIds: new Set<string>() });
-      // Reload entries to update QRZ sync status
-      await get().loadEntries();
+      // Reload so QRZ sync status refreshes.
+      await get().refreshEntries();
     } catch (err) {
       set({
         publishError: err instanceof Error ? err.message : 'Failed to publish to QRZ',
@@ -242,6 +413,26 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
 
   clearPublishResult: () => {
     set({ lastPublishResult: null, publishError: null });
+  },
+
+  deleteSelected: async (logEntryIds: string[]) => {
+    if (logEntryIds.length === 0) return;
+    set({ deleteInFlight: true, deleteError: null, lastDeleteResult: null });
+    try {
+      const result = await deleteLogEntries({ logEntryIds });
+      set({ lastDeleteResult: result, deleteInFlight: false, selectedIds: new Set<string>() });
+      // Reload so the deleted rows disappear from the table.
+      await get().refreshEntries();
+    } catch (err) {
+      set({
+        deleteError: err instanceof Error ? err.message : 'Failed to delete log entries',
+        deleteInFlight: false,
+      });
+    }
+  },
+
+  clearDeleteResult: () => {
+    set({ lastDeleteResult: null, deleteError: null });
   },
 
   toggleSelected: (id: string) => {

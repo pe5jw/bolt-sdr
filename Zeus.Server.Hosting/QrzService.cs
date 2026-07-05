@@ -478,6 +478,16 @@ public sealed class QrzService
         }
     }
 
+    internal async Task<string?> GetLogbookApiKeyAsync(CancellationToken ct = default)
+    {
+        if (!string.IsNullOrWhiteSpace(_apiKey))
+            return _apiKey;
+
+        var stored = await _credStore.GetAsync(ApiKeyServiceName, ct).ConfigureAwait(false);
+        _apiKey = string.IsNullOrWhiteSpace(stored?.Password) ? null : stored.Password;
+        return _apiKey;
+    }
+
     public async Task<QrzPublishResult> PublishLogEntryAsync(LogEntry logEntry, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
@@ -566,9 +576,8 @@ public sealed class QrzService
 
         // Required fields
         AppendAdifField(sb, "CALL", entry.Callsign);
-        // .ToUniversalTime() guards against the LiteDB round-trip stripping
-        // the UTC kind off QsoDateTimeUtc — see LogService.AppendAdifRecord
-        // for the full story. Without it QRZ.com receives local-clock times
+        // .ToUniversalTime() guards against a LiteDB round-trip stripping the
+        // UTC kind off QsoDateTimeUtc. Without it QRZ.com receives local-clock times
         // and stamps the QSOs at the operator's wall-clock hour, breaking
         // award credit and DXCC matching for anyone outside UTC.
         AppendAdifField(sb, "QSO_DATE", entry.QsoDateTimeUtc.ToUniversalTime().ToString("yyyyMMdd"));

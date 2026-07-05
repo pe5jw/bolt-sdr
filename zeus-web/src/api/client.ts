@@ -48,6 +48,7 @@ import {
   parseBoardCapabilities,
   type BoardCapabilities,
 } from './board-capabilities';
+import { FREEDV_PLUGIN_BASE } from './freedv-plugin';
 
 export type ConnectionStatus =
   | 'Disconnected'
@@ -420,6 +421,18 @@ export type RadioStateDto = {
   // key-down so an external amp's T/R relay settles before RF. Server-clamped
   // below the PS MOX hold-off; hydrated on connect like the drive sliders.
   txMoxPreKeyDelayMs: number;
+  // TX tail (MOX hang) delay in ms (issue #1294). After a UI PTT release, holds
+  // the wire MOX bit asserted so audio still in the browser→WDSP→IQ pipeline
+  // finishes clocking out before the radio drops off the air. Legacy servers
+  // without this field fall back to 0 in normalizeState.
+  txMoxTailDelayMs: number;
+  // Old-school end-of-over roger beep. Default off on older servers.
+  rogerBeepEnabled: boolean;
+  // TX timeout in seconds (issue #1270). Maximum single-transmission length
+  // before the PA-protection guard fires. 0 = disabled (no guard); otherwise
+  // server-clamped to [30, 600]. Legacy servers without this field fall back to
+  // 120 in normalizeState.
+  txTimeoutSec: number;
   twoToneFreq1: number;
   twoToneFreq2: number;
   twoToneMag: number;
@@ -657,6 +670,13 @@ export type Protocol3PresenceDto = {
   capabilityFlags: string | null;
   firmwareVersion: number | null;
   gatewareVersion: number | null;
+};
+
+export type Protocol3SidecarStatusDto = {
+  configured: boolean;
+  running: boolean;
+  diagnosticsUrl: string | null;
+  sidecarOutput: string | null;
 };
 
 export type HardwareDiagnosticItemDto = {
@@ -2544,6 +2564,15 @@ export function normalizeState(raw: unknown): RadioStateDto {
     tunePercent: typeof r.tunePct === 'number' ? r.tunePct : 10,
     txMoxPreKeyDelayMs:
       typeof r.txMoxPreKeyDelayMs === 'number' ? r.txMoxPreKeyDelayMs : 0,
+    txMoxTailDelayMs:
+      typeof r.txMoxTailDelayMs === 'number' ? r.txMoxTailDelayMs : 0,
+    rogerBeepEnabled:
+      typeof r.rogerBeepEnabled === 'boolean' ? r.rogerBeepEnabled : false,
+    // 0 = disabled must be preserved (>=0), not coerced back to the 120 default.
+    txTimeoutSec:
+      typeof r.txTimeoutSec === 'number' && r.txTimeoutSec >= 0
+        ? Math.round(r.txTimeoutSec)
+        : 120,
     twoToneFreq1: typeof r.twoToneFreq1 === 'number' ? r.twoToneFreq1 : 700,
     twoToneFreq2: typeof r.twoToneFreq2 === 'number' ? r.twoToneFreq2 : 1900,
     twoToneMag: typeof r.twoToneMag === 'number' ? r.twoToneMag : 0.49,
@@ -2766,6 +2795,20 @@ function normalizeProtocol3Presence(raw: unknown): Protocol3PresenceDto {
     capabilityFlags: typeof r.capabilityFlags === 'string' ? r.capabilityFlags : null,
     firmwareVersion: typeof r.firmwareVersion === 'number' ? r.firmwareVersion : null,
     gatewareVersion: typeof r.gatewareVersion === 'number' ? r.gatewareVersion : null,
+  };
+}
+
+function normalizeProtocol3SidecarStatus(raw: unknown): Protocol3SidecarStatusDto {
+  const root = (raw ?? {}) as Record<string, unknown>;
+  const bridge =
+    root.bridge && typeof root.bridge === 'object'
+      ? (root.bridge as Record<string, unknown>)
+      : root;
+  return {
+    configured: Boolean(bridge.configured),
+    running: Boolean(bridge.running),
+    diagnosticsUrl: typeof bridge.diagnosticsUrl === 'string' ? bridge.diagnosticsUrl : null,
+    sidecarOutput: typeof bridge.sidecarOutput === 'string' ? bridge.sidecarOutput : null,
   };
 }
 
@@ -4889,6 +4932,16 @@ export function fetchProtocol3Presence(
   );
 }
 
+export function fetchProtocol3SidecarStatus(
+  signal?: AbortSignal,
+): Promise<Protocol3SidecarStatusDto> {
+  return jsonFetch(
+    '/api/protocol3/sidecar',
+    { signal },
+    normalizeProtocol3SidecarStatus,
+  );
+}
+
 /** A POTA / SOTA / DX activation spot from GET /api/spots/activations. `freqHz`
  *  is absolute Hz (server normalizes POTA kHz / SOTA MHz / DX kHz). `mode` is
  *  the raw upstream string (SSB/CW/FT8/…) — map it to an RxMode at tune time. */
@@ -5297,6 +5350,9 @@ export interface RepoUpdateStatus {
   updateAvailable: boolean;
   updateAction: UpdateAction;
   latestVersion: string | null;
+  minVersion: string | null;
+  forceUpdate: boolean;
+  forceReason: 'minVersion' | 'downgrade' | string | null;
   releaseTag: string | null;
   releaseName: string | null;
   releaseUrl: string | null;
@@ -6573,6 +6629,67 @@ export function setTxPreKeyDelay(
   );
 }
 
+// TX tail (MOX hang) delay: POST /api/tx/tail-delay { delayMs }. Returns the
+// server-applied value (clamped 0..500). Issue #1294.
+export function setTxTailDelay(
+  delayMs: number,
+  signal?: AbortSignal,
+): Promise<{ txMoxTailDelayMs: number }> {
+  return jsonFetch(
+    '/api/tx/tail-delay',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ delayMs: Math.round(delayMs) }),
+      signal,
+    },
+    (raw) => {
+      const v = (raw as { txMoxTailDelayMs?: unknown }).txMoxTailDelayMs;
+      return { txMoxTailDelayMs: typeof v === 'number' ? v : 0 };
+    },
+  );
+}
+
+export function setRogerBeep(
+  enabled: boolean,
+  signal?: AbortSignal,
+): Promise<{ rogerBeepEnabled: boolean }> {
+  return jsonFetch(
+    '/api/tx/roger-beep',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+      signal,
+    },
+    (raw) => ({
+      rogerBeepEnabled: Boolean((raw as { rogerBeepEnabled?: unknown }).rogerBeepEnabled),
+    }),
+  );
+}
+
+// TX timeout: POST /api/tx/timeout { seconds }. Returns { txTimeoutSec }.
+// seconds=0 disables the guard; otherwise the server clamps to [30, 600] s and
+// the echoed value reflects what was applied. Issue #1270.
+export function setTxTimeout(
+  seconds: number,
+  signal?: AbortSignal,
+): Promise<{ txTimeoutSec: number }> {
+  return jsonFetch(
+    '/api/tx/timeout',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ seconds: Math.round(seconds) }),
+      signal,
+    },
+    (raw) => {
+      const v = (raw as { txTimeoutSec?: unknown }).txTimeoutSec;
+      return { txTimeoutSec: typeof v === 'number' ? v : 120 };
+    },
+  );
+}
+
 // Tune-drive endpoint: POST /api/tx/tune-drive { percent }. Returns
 // { tunePercent }. Backend picks this in place of drivePercent while TUN is
 // keyed; same PA-gain calibration applies.
@@ -7188,9 +7305,9 @@ export function setMicGain(
 
 // ---- FreeDV digital-voice telemetry / config ----
 // FreeDV is a normal selectable RxMode ('FREEDV', byte 10); selecting it goes
-// through setMode like any other mode. The backend forces USB underneath and
-// runs the codec2/FreeDV modem. These endpoints carry the modem telemetry +
-// config that drive the native FreeDV panel — they are NOT part of StateDto.
+// through setMode like any other mode. The plugin runs the codec2/FreeDV modem.
+// These endpoints carry the modem telemetry + config that drive the native
+// FreeDV panel — they are NOT part of StateDto.
 
 export type FreeDvSubmode =
   | 'RadeV1'
@@ -7215,7 +7332,7 @@ export const FREEDV_SUBMODES: ReadonlyArray<{
   { value: 'Mode1600', label: '1600' },
 ];
 
-// Mirrors the server-side FreeDvStatusDto (GET /api/freedv/status).
+// Mirrors the plugin-side FreeDvStatusDto (GET /api/plugins/org.openhpsdr.freedv/status).
 export type FreeDvStatusDto = {
   nativeAvailable: boolean;
   active: boolean;
@@ -7237,7 +7354,7 @@ export type FreeDvStatusDto = {
   radeAvailable: boolean;
 };
 
-// PUT /api/freedv/config body — all fields optional, null = leave unchanged.
+// PUT /config body — all fields optional, null = leave unchanged.
 export type FreeDvConfigRequest = {
   submode?: FreeDvSubmode;
   squelchEnabled?: boolean;
@@ -7305,20 +7422,20 @@ function normalizeFreeDvStatus(raw: unknown): FreeDvStatusDto {
   };
 }
 
-// GET /api/freedv/status. Callers should catch and fall back to an
-// "unavailable" UI state — the backend may 404 transiently while it's wired.
+// GET /status. Callers should catch and fall back to an unavailable UI state
+// while the plugin is absent or inactive.
 export function getFreeDvStatus(signal?: AbortSignal): Promise<FreeDvStatusDto> {
-  return jsonFetch('/api/freedv/status', { signal }, normalizeFreeDvStatus);
+  return jsonFetch(`${FREEDV_PLUGIN_BASE}/status`, { signal }, normalizeFreeDvStatus);
 }
 
-// PUT /api/freedv/config. Only the supplied fields change; returns the updated
+// PUT /config. Only the supplied fields change; returns the updated
 // status so the panel can reconcile in one round-trip.
 export function setFreeDvConfig(
   req: FreeDvConfigRequest,
   signal?: AbortSignal,
 ): Promise<FreeDvStatusDto> {
   return jsonFetch(
-    '/api/freedv/config',
+    `${FREEDV_PLUGIN_BASE}/config`,
     {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
@@ -7335,11 +7452,8 @@ export function setFreeDvConfig(
   );
 }
 
-// FreeDV codec2-library install (GET status / POST start). Mirrors the server
-// FreeDvInstallDto. codec2 can't be built on an operator's machine, so when the
-// bundled binary is missing the backend downloads the prebuilt one Zeus
-// committed for this platform and reloads the modem live. The panel polls the
-// GET while installing until `phase` is 'done' or 'failed'.
+// FreeDV native status compatibility endpoint. Natives are bundled inside the
+// plugin zip; the backend returns an already-installed shape for UI parity.
 export type FreeDvInstallPhase = 'idle' | 'downloading' | 'staging' | 'done' | 'failed';
 
 export type FreeDvInstallStatusDto = {
@@ -7372,15 +7486,15 @@ function normalizeFreeDvInstallStatus(raw: unknown): FreeDvInstallStatusDto {
 }
 
 export function getFreeDvInstallStatus(signal?: AbortSignal): Promise<FreeDvInstallStatusDto> {
-  return jsonFetch('/api/freedv/install', { signal }, normalizeFreeDvInstallStatus);
+  return jsonFetch(`${FREEDV_PLUGIN_BASE}/install`, { signal }, normalizeFreeDvInstallStatus);
 }
 
 export function startFreeDvInstall(signal?: AbortSignal): Promise<FreeDvInstallStatusDto> {
-  return jsonFetch('/api/freedv/install', { method: 'POST', signal }, normalizeFreeDvInstallStatus);
+  return jsonFetch(`${FREEDV_PLUGIN_BASE}/install`, { method: 'POST', signal }, normalizeFreeDvInstallStatus);
 }
 
-// ---- FreeDV Reporter — live station list (GET /api/freedv/stations) ----
-// Mirrors the server-side FreeDvStationDto / FreeDvStationsResponseDto records
+// ---- FreeDV Reporter — live station list (GET /stations) ----
+// Mirrors the plugin-side FreeDvStationDto / FreeDvStationsResponseDto records
 // (System.Text.Json camelCase serialisation).
 
 export type FreeDvStationDto = {
@@ -7408,8 +7522,8 @@ export type FreeDvStationsResponseDto = {
   mySid: string | null;    // operator's own session id while reporting
 };
 
-// ---- FreeDV Reporter "report mode" settings (GET/POST /api/freedv/reporter/settings) ----
-// Mirrors the server-side FreeDvReporterSettings record. Strictly opt-in:
+// ---- FreeDV Reporter "report mode" settings (GET/POST /reporter/settings) ----
+// Mirrors the plugin-side FreeDvReporterSettings record. Strictly opt-in:
 // reportEnabled defaults false and the backend only joins the public map in
 // "report" role when enabled AND callsign + grid are present.
 export type FreeDvReporterSettings = {
@@ -7462,24 +7576,24 @@ function normalizeFreeDvStationsResponse(raw: unknown): FreeDvStationsResponseDt
   };
 }
 
-// GET /api/freedv/stations — live FreeDV Reporter station list.
+// GET /stations — live FreeDV Reporter station list.
 export function fetchFreeDvStations(signal?: AbortSignal): Promise<FreeDvStationsResponseDto> {
-  return jsonFetch('/api/freedv/stations', { signal }, normalizeFreeDvStationsResponse);
+  return jsonFetch(`${FREEDV_PLUGIN_BASE}/stations`, { signal }, normalizeFreeDvStationsResponse);
 }
 
-// GET /api/freedv/reporter/settings — current report-mode opt-in settings.
+// GET /reporter/settings — current report-mode opt-in settings.
 export function getFreeDvReporterSettings(signal?: AbortSignal): Promise<FreeDvReporterSettings> {
-  return jsonFetch('/api/freedv/reporter/settings', { signal }, normalizeFreeDvReporterSettings);
+  return jsonFetch(`${FREEDV_PLUGIN_BASE}/reporter/settings`, { signal }, normalizeFreeDvReporterSettings);
 }
 
-// POST /api/freedv/reporter/settings — save report-mode settings (the backend
+// POST /reporter/settings — save report-mode settings (the backend
 // normalizes, persists, and reconnects in the new role). Returns what was saved.
 export function setFreeDvReporterSettings(
   settings: FreeDvReporterSettings,
   signal?: AbortSignal,
 ): Promise<FreeDvReporterSettings> {
   return jsonFetch(
-    '/api/freedv/reporter/settings',
+    `${FREEDV_PLUGIN_BASE}/reporter/settings`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -7495,12 +7609,12 @@ export function setFreeDvReporterSettings(
   );
 }
 
-// POST /api/freedv/stations/{sid}/qsy — ask that station to QSY to my current
+// POST /stations/{sid}/qsy — ask that station to QSY to my current
 // VFO frequency. Resolves on success; rejects (jsonFetch throws on non-2xx) when
 // not reporting or the sid is unknown.
 export function freeDvStationQsy(sid: string, signal?: AbortSignal): Promise<void> {
   return jsonFetch(
-    `/api/freedv/stations/${encodeURIComponent(sid)}/qsy`,
+    `${FREEDV_PLUGIN_BASE}/stations/${encodeURIComponent(sid)}/qsy`,
     { method: 'POST', signal },
     () => undefined,
   );

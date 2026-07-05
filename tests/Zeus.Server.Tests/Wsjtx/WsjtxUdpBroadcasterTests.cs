@@ -15,6 +15,7 @@ using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Contracts;
+using Zeus.Plugins.Contracts.Extensions;
 using Zeus.Server;
 using Zeus.Server.Wsjtx;
 
@@ -24,29 +25,39 @@ public sealed class WsjtxUdpBroadcasterTests : IDisposable
 {
     private readonly string _prefsDbPath =
         Path.Combine(Path.GetTempPath(), $"zeus-prefs-wsjtxbc-{Guid.NewGuid():N}.db");
-    private readonly string _logDbPath =
-        Path.Combine(Path.GetTempPath(), $"zeus-log-wsjtxbc-{Guid.NewGuid():N}.db");
 
     public void Dispose()
     {
         try { if (File.Exists(_prefsDbPath)) File.Delete(_prefsDbPath); } catch { }
-        try { if (File.Exists(_logDbPath)) File.Delete(_logDbPath); } catch { }
     }
 
-    private async Task<(WsjtxUdpBroadcaster bc, WsjtxManagementService mgmt, LogEntry entry, LogService log)>
-        BuildAsync(WsjtxConfigStore store)
+    private static (WsjtxUdpBroadcaster bc, WsjtxManagementService mgmt, LogEntry entry, FakeLogbookPlugin log)
+        Build(WsjtxConfigStore store)
     {
         var mgmt = new WsjtxManagementService(NullLogger<WsjtxManagementService>.Instance, store);
-        var log = new LogService(NullLogger<LogService>.Instance, _logDbPath);
-        var entry = await log.CreateLogEntryAsync(new CreateLogEntryRequest(
+        var log = new FakeLogbookPlugin();
+        var bridge = new LogbookPluginBridge(NullLogger<LogbookPluginBridge>.Instance);
+        bridge.Attach(log);
+        var entry = new LogEntry(
+            Id: "qso-1",
+            QsoDateTimeUtc: new DateTime(2026, 5, 1, 12, 0, 0, DateTimeKind.Utc),
             Callsign: "K1ABC",
             Name: null,
             FrequencyMhz: 14.074,
             Band: "20M",
             Mode: "FT8",
             RstSent: "-12",
-            RstRcvd: "-07"));
-        var bc = new WsjtxUdpBroadcaster(NullLogger<WsjtxUdpBroadcaster>.Instance, mgmt, log);
+            RstRcvd: "-07",
+            Grid: null,
+            Country: null,
+            Dxcc: null,
+            CqZone: null,
+            ItuZone: null,
+            State: null,
+            Comment: null,
+            CreatedUtc: new DateTime(2026, 5, 1, 12, 0, 1, DateTimeKind.Utc));
+        log.AdifById[entry.Id] = "<CALL:5>K1ABC <EOR>";
+        var bc = new WsjtxUdpBroadcaster(NullLogger<WsjtxUdpBroadcaster>.Instance, mgmt, bridge);
         return (bc, mgmt, entry, log);
     }
 
@@ -57,7 +68,7 @@ public sealed class WsjtxUdpBroadcasterTests : IDisposable
         var port = ((IPEndPoint)listener.Client.LocalEndPoint!).Port;
 
         using var store = new WsjtxConfigStore(NullLogger<WsjtxConfigStore>.Instance, _prefsDbPath);
-        var (bc, mgmt, entry, _) = await BuildAsync(store);
+        var (bc, mgmt, entry, _) = Build(store);
         mgmt.SetConfig(new WsjtxRuntimeConfig(Enabled: false, Host: "127.0.0.1", Port: port));
 
         await bc.BroadcastLoggedQsoAsync(entry);
@@ -75,7 +86,7 @@ public sealed class WsjtxUdpBroadcasterTests : IDisposable
         var port = ((IPEndPoint)listener.Client.LocalEndPoint!).Port;
 
         using var store = new WsjtxConfigStore(NullLogger<WsjtxConfigStore>.Instance, _prefsDbPath);
-        var (bc, mgmt, entry, _) = await BuildAsync(store);
+        var (bc, mgmt, entry, _) = Build(store);
         mgmt.SetConfig(new WsjtxRuntimeConfig(Enabled: true, Host: "127.0.0.1", Port: port, InstanceId: "Zeus"));
 
         await bc.BroadcastLoggedQsoAsync(entry);
@@ -95,7 +106,7 @@ public sealed class WsjtxUdpBroadcasterTests : IDisposable
         var port = ((IPEndPoint)listener.Client.LocalEndPoint!).Port;
 
         using var store = new WsjtxConfigStore(NullLogger<WsjtxConfigStore>.Instance, _prefsDbPath);
-        var (bc, mgmt, entry, _) = await BuildAsync(store);
+        var (bc, mgmt, entry, _) = Build(store);
         mgmt.SetConfig(new WsjtxRuntimeConfig(
             Enabled: true, Host: "127.0.0.1", Port: port, SendQsoLogged: true));
 
@@ -119,7 +130,7 @@ public sealed class WsjtxUdpBroadcasterTests : IDisposable
     public async Task Multicast_Broadcast_Never_Throws()
     {
         using var store = new WsjtxConfigStore(NullLogger<WsjtxConfigStore>.Instance, _prefsDbPath);
-        var (bc, mgmt, entry, _) = await BuildAsync(store);
+        var (bc, mgmt, entry, _) = Build(store);
         mgmt.SetConfig(new WsjtxRuntimeConfig(
             Enabled: true, Transport: "multicast", MulticastGroup: "224.0.0.73", MulticastTtl: 1, Port: 2237));
 
@@ -138,10 +149,48 @@ public sealed class WsjtxUdpBroadcasterTests : IDisposable
             deadPort = ((IPEndPoint)probe.Client.LocalEndPoint!).Port;
 
         using var store = new WsjtxConfigStore(NullLogger<WsjtxConfigStore>.Instance, _prefsDbPath);
-        var (bc, mgmt, entry, _) = await BuildAsync(store);
+        var (bc, mgmt, entry, _) = Build(store);
         mgmt.SetConfig(new WsjtxRuntimeConfig(Enabled: true, Host: "127.0.0.1", Port: deadPort));
 
         // Must complete without throwing.
         await bc.BroadcastLoggedQsoAsync(entry);
+    }
+
+    private sealed class FakeLogbookPlugin : ILogbookPlugin
+    {
+        public Dictionary<string, string> AdifById { get; } = new(StringComparer.Ordinal);
+
+        public Task<string> ExportAdifAsync(IEnumerable<string>? ids = null, CancellationToken ct = default)
+        {
+            var id = ids?.FirstOrDefault();
+            return Task.FromResult(id is not null && AdifById.TryGetValue(id, out var adif) ? adif : "");
+        }
+
+        public Task<LogbookEntrySnapshot> CreateAsync(LogbookNewEntry entry, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<LogbookPage> GetEntriesAsync(int skip, int take, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<LogbookEntrySnapshot>> GetByIdsAsync(IEnumerable<string> ids, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<LogbookWorkedSummary?> GetWorkedSummaryAsync(string callsign, int recentTake, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<string>> GetDigitalWorkedCallsignsAsync(CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<bool> UpdateQrzUploadStatusAsync(string id, string qrzLogId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<int> DeleteAsync(IEnumerable<string> ids, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<LogbookExportFileResult> ExportAdifToFileAsync(string? directory = null, IEnumerable<string>? ids = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<LogbookImportResult> ImportAdifAsync(string adifText, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 }

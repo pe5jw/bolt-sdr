@@ -9,6 +9,12 @@ import {
 } from './admin-api';
 import { validateCrashBody } from './crash-validate';
 import { sanitizeOperatorMeta, cleanCountry } from './presence-meta';
+import { recordManagedUserLogin } from './admin-db';
+import {
+  handleBillingCheckout,
+  handleBillingWebhook,
+  handleUserSession,
+} from './billing-api';
 
 export { SignalRoom } from './signal-room';
 export { RateLimiter } from './rate-limiter';
@@ -58,6 +64,13 @@ export default {
       return handleAdmin(request, env, ctx);
     }
 
+    // Stripe sends these without QRZ headers; authenticity is proven by the
+    // Stripe-Signature HMAC in handleBillingWebhook.
+    if (url.pathname === '/billing/webhook') {
+      if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
+      return handleBillingWebhook(request, env);
+    }
+
     // Operator presence: the radio's sidecar registers/heartbeats/drops here so a
     // maintainer can see it as "online" (read back via /admin/presence). Mirrors
     // the host-signaling QRZ gate in /signal: the verified callsign is the only
@@ -81,6 +94,7 @@ export default {
         country: clientCountry(request),
         ...(meta ?? {}),
       };
+      ctx.waitUntil(recordManagedUserLogin(env.ADMIN_DB, verified).catch(() => undefined));
       const id = env.PRESENCE.idFromName('global');
       return env.PRESENCE.get(id).fetch(
         new Request(`https://presence.internal/${presenceAction}`, {
@@ -89,6 +103,40 @@ export default {
           body: JSON.stringify(upsert),
         }),
       );
+    }
+
+    // QRZ-verified user directory heartbeat. This is deliberately separate from
+    // support presence: every signed-in Zeus instance can populate the durable
+    // admin user ledger without implying the operator opted into live diagnostics.
+    if (url.pathname === '/users/heartbeat' || url.pathname === '/users/seen') {
+      if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
+      if (await rateLimited(env, clientIp(request))) return new Response('rate limited', { status: 429 });
+      const verified = await verifyOperator(request, env, ctx);
+      if (!verified) return new Response('qrz auth required', { status: 401 });
+      await recordManagedUserLogin(env.ADMIN_DB, verified);
+      return Response.json({ ok: true, callsign: verified });
+    }
+
+    // QRZ-verified user-management snapshot consumed by the Zeus app. This is
+    // the central gate: app access, plugin pricing, and per-plugin entitlements
+    // stream from the admin D1 ledger into /api/users/session locally.
+    if (url.pathname === '/users/session') {
+      if (request.method !== 'GET') return new Response('method not allowed', { status: 405 });
+      if (await rateLimited(env, clientIp(request))) return new Response('rate limited', { status: 429 });
+      const verified = await verifyOperator(request, env, ctx);
+      if (!verified) return new Response('qrz auth required', { status: 401 });
+      return handleUserSession(verified, env);
+    }
+
+    // QRZ-verified billing checkout. The app asks here for a paid plugin; the
+    // broker either opens a new Stripe subscription or adds the plugin's price
+    // to the operator's existing subscription.
+    if (url.pathname === '/billing/checkout') {
+      if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
+      if (await rateLimited(env, clientIp(request))) return new Response('rate limited', { status: 429 });
+      const verified = await verifyOperator(request, env, ctx);
+      if (!verified) return new Response('qrz auth required', { status: 401 });
+      return handleBillingCheckout(request, env, verified);
     }
 
     // Crash auto-share upload: the sidecar POSTs a (already-redacted)
@@ -216,10 +264,11 @@ async function verifyOperator(
 
 /**
  * GET /admin/crashes?callsign=<cs> — maintainer view of a consented operator's
- * auto-shared crash records. Admin-only: same Bearer-token credential auth as the
- * rest of /admin (reused via verifyAdminToken), NOT the operator's QRZ identity.
- * The operator opted in by enabling auto-share; the admin store proves the caller
- * is authorised to read it.
+ * auto-shared crash records. DELETE /admin/crashes clears all retained crash logs;
+ * DELETE with callsign clears that operator only. Admin-only: same Bearer-token
+ * credential auth as the rest of /admin (reused via verifyAdminToken), NOT the
+ * operator's QRZ identity. The operator opted in by enabling auto-share; the admin
+ * store proves the caller is authorised to read or clear it.
  */
 async function handleAdminCrashes(
   request: Request,
@@ -232,7 +281,7 @@ async function handleAdminCrashes(
   // dashboard's /admin/crashes fetch with a CORS preflight failure.
   const cors = adminCorsHeaders(env, request);
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
-  if (request.method !== 'GET') {
+  if (request.method !== 'GET' && request.method !== 'DELETE') {
     return Response.json({ error: 'method not allowed' }, { status: 405, headers: cors });
   }
 
@@ -246,11 +295,15 @@ async function handleAdminCrashes(
   void ctx; // reserved (audit logging could go here as the admin-api routes do)
   const id = env.CRASH_STORE.idFromName('global');
   // No callsign → the crash-bearing-operator index (overview); with a callsign →
-  // that operator's records. Both are admin-Bearer-gated above.
-  const internalUrl = callsign
-    ? `https://crash.internal/list?callsign=${encodeURIComponent(callsign)}`
-    : 'https://crash.internal/index';
-  const res = await env.CRASH_STORE.get(id).fetch(internalUrl);
+  // that operator's records. DELETE mirrors the shape but clears instead.
+  const internalUrl = request.method === 'DELETE'
+    ? callsign
+      ? `https://crash.internal/clear?callsign=${encodeURIComponent(callsign)}`
+      : 'https://crash.internal/clear'
+    : callsign
+      ? `https://crash.internal/list?callsign=${encodeURIComponent(callsign)}`
+      : 'https://crash.internal/index';
+  const res = await env.CRASH_STORE.get(id).fetch(new Request(internalUrl, { method: request.method }));
   const body = await res.json<unknown>();
   return Response.json(body, { status: res.status, headers: cors });
 }

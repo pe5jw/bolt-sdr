@@ -236,4 +236,43 @@ public class SupportIpcFramingTests
         Assert.Equal("zeus-support-ab_cd_12", a);
         Assert.Equal(a, SupportIpc.PipeNameForSession("ab/cd-12"));
     }
+
+    // Regression: a full 32-hex GUID session token (what the backend actually mints,
+    // SupportSidecarBridge.SessionToken = Guid.NewGuid().ToString("N")) must produce a
+    // pipe name whose macOS-realised Unix-domain-socket path fits inside the 104-char
+    // sun_path cap. Before the token was bounded, the realised path was 105 chars and
+    // the sidecar's NamedPipeServerStream threw ArgumentOutOfRangeException every
+    // second on macOS — so the operator never appeared in the /admin presence list and
+    // crash auto-share never fired, while Windows/Linux clients worked.
+    [Fact]
+    public void PipeNameForSession_RealisedMacOsSocketPath_FitsUnder104()
+    {
+        // .NET realises a local named pipe as {GetTempPath()}/CoreFxPipe_{pipeName}.
+        // Use a representative deep macOS temp dir: /var/folders/xx/<24>/T/ = 49 chars.
+        const string macTempDir = "/var/folders/7v/4s264zd570q7_w7l5nbt_rbh0000gn/T/";
+        const string coreFxPrefix = "CoreFxPipe_";
+        const int macSunPathLimit = 104;
+
+        var token = Guid.NewGuid().ToString("N"); // 32 hex chars, as in production
+        var pipeName = SupportIpc.PipeNameForSession(token);
+        var realisedPath = macTempDir + coreFxPrefix + pipeName;
+
+        Assert.True(
+            realisedPath.Length <= macSunPathLimit,
+            $"realised macOS socket path is {realisedPath.Length} chars (limit {macSunPathLimit}): {realisedPath}");
+    }
+
+    // The bound must not defeat its purpose: two distinct full tokens must still yield
+    // distinct pipe names (so two Zeus instances on one machine don't collide), and the
+    // derivation stays deterministic (both IPC ends derive the same name from the same
+    // token).
+    [Fact]
+    public void PipeNameForSession_BoundedTokenStaysDistinctAndDeterministic()
+    {
+        var t1 = Guid.NewGuid().ToString("N");
+        var t2 = Guid.NewGuid().ToString("N");
+
+        Assert.Equal(SupportIpc.PipeNameForSession(t1), SupportIpc.PipeNameForSession(t1));
+        Assert.NotEqual(SupportIpc.PipeNameForSession(t1), SupportIpc.PipeNameForSession(t2));
+    }
 }

@@ -19,14 +19,14 @@ namespace Zeus.Server.Uninstall;
 public sealed class UninstallService
 {
     private readonly ILogger<UninstallService> _log;
-    private readonly LogService _logService;
+    private readonly LogbookPluginBridge _logbook;
     private readonly object _gate = new();
     private string? _nonce;
 
-    public UninstallService(ILogger<UninstallService> log, LogService logService)
+    public UninstallService(ILogger<UninstallService> log, LogbookPluginBridge logbook)
     {
         _log = log;
-        _logService = logService;
+        _logbook = logbook;
     }
 
     public sealed record PreviewDto(
@@ -59,6 +59,7 @@ public sealed class UninstallService
         using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
         {
             var dataDir = PrefsDbPath.DataDir;
+            var addedEntries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             // All *.db in DataDir and DataDir/profiles, read shared so the live DB
             // can be copied while open.
             foreach (var (abs, entryName) in EnumerateBackupDbFiles(dataDir))
@@ -69,6 +70,7 @@ public sealed class UninstallService
                     await using var es = entry.Open();
                     await using var fs = new FileStream(abs, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                     await fs.CopyToAsync(es, ct).ConfigureAwait(false);
+                    addedEntries.Add(entryName);
                 }
                 catch (Exception ex)
                 {
@@ -77,16 +79,24 @@ public sealed class UninstallService
             }
 
             // Human-readable ADIF export of the QSO log.
-            try
+            var plugin = _logbook.Current;
+            if (plugin is not null)
             {
-                var adif = await _logService.ExportToAdifAsync(null, ct).ConfigureAwait(false);
-                var entry = zip.CreateEntry("zeus-logbook.adi", CompressionLevel.Fastest);
-                await using var es = entry.Open();
-                await es.WriteAsync(Encoding.UTF8.GetBytes(adif), ct).ConfigureAwait(false);
+                try
+                {
+                    var adif = await plugin.ExportAdifAsync(null, ct).ConfigureAwait(false);
+                    var entry = zip.CreateEntry("zeus-logbook.adi", CompressionLevel.Fastest);
+                    await using var es = entry.Open();
+                    await es.WriteAsync(Encoding.UTF8.GetBytes(adif), ct).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "uninstall.backup adif failed");
+                }
             }
-            catch (Exception ex)
+            else
             {
-                _log.LogWarning(ex, "uninstall.backup adif failed");
+                await AddRawLogbookIfMissingAsync(zip, addedEntries, ct).ConfigureAwait(false);
             }
         }
         return (ms.ToArray(), "zeus-backup.zip");
@@ -179,6 +189,31 @@ public sealed class UninstallService
     {
         try { return Directory.EnumerateFiles(dir, pattern, SearchOption.TopDirectoryOnly); }
         catch { return []; }
+    }
+
+    private async Task AddRawLogbookIfMissingAsync(
+        ZipArchive zip,
+        HashSet<string> addedEntries,
+        CancellationToken ct)
+    {
+        const string entryName = "zeus-logbook.db";
+        if (addedEntries.Contains(entryName)) return;
+
+        var logbook = PrefsDbPath.LogbookPath();
+        if (!File.Exists(logbook)) return;
+
+        try
+        {
+            var entry = zip.CreateEntry(entryName, CompressionLevel.Fastest);
+            await using var es = entry.Open();
+            await using var fs = new FileStream(logbook, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            await fs.CopyToAsync(es, ct).ConfigureAwait(false);
+            addedEntries.Add(entryName);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "uninstall.backup raw logbook failed {File}", logbook);
+        }
     }
 
     private string NewNonce()

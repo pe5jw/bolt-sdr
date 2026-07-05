@@ -6,7 +6,7 @@
 // harness import installs the localStorage polyfill + act flag before the store
 // loads; store methods are stubbed so no real fetch fires.
 
-import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { createElement } from 'react';
 import { act, render } from './meters/__tests__/harness';
 import { MidiSettingsPanel } from './MidiSettingsPanel';
@@ -51,9 +51,14 @@ describe('MidiSettingsPanel', () => {
         upsertStreamDeckMapping: async () => {},
         removeStreamDeckMapping: async () => {},
         startLearn: async () => {},
+        keepLearnAlive: async () => {},
         stopLearn: async () => {},
       } as never);
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('renders the MIDI section with the device list, default disabled', () => {
@@ -82,6 +87,75 @@ describe('MidiSettingsPanel', () => {
     clickByText(container, 'LEARN');
     expect(startLearn).toHaveBeenCalled();
     unmount();
+  });
+
+  it('keeps Learn mode alive while mounted', () => {
+    vi.useFakeTimers();
+    const keepLearnAlive = vi.fn(async () => {});
+    act(() =>
+      useMidiStore.setState({
+        keepLearnAlive,
+        status: { ...STATUS, learning: true },
+      } as never),
+    );
+
+    const { unmount } = render(createElement(MidiSettingsPanel));
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+
+    expect(keepLearnAlive).toHaveBeenCalledTimes(1);
+    unmount();
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+  });
+
+  it('stops Learn mode on unmount while learning', () => {
+    vi.useFakeTimers();
+    const stopLearn = vi.fn(async () => {});
+    act(() =>
+      useMidiStore.setState({
+        stopLearn,
+        status: { ...STATUS, learning: true },
+      } as never),
+    );
+
+    const { unmount } = render(createElement(MidiSettingsPanel));
+    unmount();
+
+    expect(stopLearn).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(stopLearn).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not stop Learn mode during a StrictMode remount', () => {
+    vi.useFakeTimers();
+    const stopLearn = vi.fn(async () => {});
+    act(() =>
+      useMidiStore.setState({
+        stopLearn,
+        status: { ...STATUS, learning: true },
+      } as never),
+    );
+
+    const first = render(createElement(MidiSettingsPanel));
+    first.unmount();
+
+    const second = render(createElement(MidiSettingsPanel));
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+
+    expect(stopLearn).not.toHaveBeenCalled();
+
+    second.unmount();
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(stopLearn).toHaveBeenCalledTimes(1);
   });
 
   it('binds a learned control to a chosen command', () => {

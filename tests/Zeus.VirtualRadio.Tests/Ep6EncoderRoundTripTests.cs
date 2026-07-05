@@ -24,6 +24,7 @@ namespace Zeus.VirtualRadio.Tests;
 public class Ep6EncoderRoundTripTests
 {
     private const int ComplexSamples = 126;          // PacketParser.ComplexSamplesPerPacket
+    private const int TwoDdcComplexSamples = 72;     // PacketParser.TwoDdcSamplesPerPacket
     private const double Int24Lsb = 1.0 / 8_388_608.0; // one int24 quantisation step
     private const double Tol = 2 * Int24Lsb;           // round-trip tolerance (≈ 2.4e-7)
 
@@ -35,6 +36,17 @@ public class Ep6EncoderRoundTripTests
         {
             iq[2 * n] = 0.75 * Math.Sin(2 * Math.PI * n / 17.0);      // I
             iq[2 * n + 1] = 0.60 * Math.Cos(2 * Math.PI * n / 23.0);  // Q
+        }
+        return iq;
+    }
+
+    private static double[] MakeTwoDdcIq(double phase)
+    {
+        var iq = new double[2 * TwoDdcComplexSamples];
+        for (int n = 0; n < TwoDdcComplexSamples; n++)
+        {
+            iq[2 * n] = 0.55 * Math.Sin(phase + 2 * Math.PI * n / 19.0);
+            iq[2 * n + 1] = 0.45 * Math.Cos(phase + 2 * Math.PI * n / 29.0);
         }
         return iq;
     }
@@ -92,6 +104,52 @@ public class Ep6EncoderRoundTripTests
 
         // Clean telemetry bytes here must not look like an ADC overload.
         Assert.Equal(0, overload);
+    }
+
+    [Fact]
+    public void EncodeTwoDdc_RoundTripsThroughPacketParser_BothDdcStreamsSurvive()
+    {
+        var enc = new Ep6Encoder();
+        var ddc0 = MakeTwoDdcIq(0.0);
+        var ddc1 = MakeTwoDdcIq(0.31);
+        var mic = new short[TwoDdcComplexSamples];
+        for (int n = 0; n < mic.Length; n++) mic[n] = (short)(1000 - n * 11);
+        var telemetry = new RfTelemetry(FwdAdc: 2500, RefAdc: 126,
+            FwdWatts: 10.0, RefWatts: 0.2, Swr: 1.05);
+
+        var packet = new byte[Ep6Encoder.Ep6PacketLength];
+        enc.EncodeTwoDdc(packet, sequence: 0x12345678, ddc0, ddc1, telemetry,
+            pttEcho: true, micSamples: mic);
+
+        var ddc0Out = new double[2 * TwoDdcComplexSamples];
+        var ddc1Out = new double[2 * TwoDdcComplexSamples];
+        bool ok = PacketParser.TryParse2DdcPacket(packet, ddc0Out, ddc1Out,
+            out uint seq, out int samples,
+            out TelemetryReading tel0, out TelemetryReading tel1,
+            out byte overload);
+
+        Assert.True(ok);
+        Assert.Equal(0x12345678u, seq);
+        Assert.Equal(TwoDdcComplexSamples, samples);
+        Assert.True(PacketParser.ExtractHardwarePtt(packet));
+
+        for (int k = 0; k < 2 * TwoDdcComplexSamples; k++)
+        {
+            Assert.True(Math.Abs(ddc0Out[k] - ddc0[k]) <= Tol,
+                $"DDC0 sample {k}: encoded {ddc0[k]} but parsed {ddc0Out[k]}");
+            Assert.True(Math.Abs(ddc1Out[k] - ddc1[k]) <= Tol,
+                $"DDC1 sample {k}: encoded {ddc1[k]} but parsed {ddc1Out[k]}");
+        }
+
+        Assert.Equal(0x09, tel0.C0Address);
+        Assert.Equal(telemetry.FwdAdc, tel0.Ain1);
+        Assert.Equal(0x11, tel1.C0Address);
+        Assert.Equal(telemetry.RefAdc, tel1.Ain0);
+        Assert.Equal(0, overload);
+
+        var micOut = new short[TwoDdcComplexSamples];
+        Assert.Equal(TwoDdcComplexSamples, PacketParser.ExtractMicSamples2Ddc(packet, micOut));
+        for (int n = 0; n < mic.Length; n++) Assert.Equal(mic[n], micOut[n]);
     }
 
     [Fact]

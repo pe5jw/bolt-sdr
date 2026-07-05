@@ -28,6 +28,12 @@ public interface IPluginContext
     /// </summary>
     string PluginRootPath { get; }
 
+    /// <summary>
+    /// Absolute path to the host data directory containing zeus-prefs.db and
+    /// zeus-logbook.db. Default keeps older test doubles source-compatible.
+    /// </summary>
+    string HostDataDirectory => string.Empty;
+
     /// <summary>Capabilities actually granted (intersect of manifest + user choice).</summary>
     PluginCapabilities GrantedCapabilities { get; }
 
@@ -64,6 +70,12 @@ public interface IPluginContext
     /// hosts / test doubles need no change.
     /// </summary>
     IQrzLookup? Qrz => null;
+
+    /// <summary>
+    /// Shared operator callsign/grid resolver. Default implementation returns
+    /// null so existing hosts and test doubles remain source-compatible.
+    /// </summary>
+    IOperatorIdentityProvider? OperatorIdentity => null;
 }
 
 /// <summary>Key/value persistence scoped to one plugin id.</summary>

@@ -1,5 +1,35 @@
 # Agent Instructions
 
+## Project Context — read this first
+
+**`CLAUDE.md` at the repo root is the canonical project brief for ALL AI agents**
+(regardless of vendor): project goal, architecture map, per-board radio
+abstractions, build/run commands, and the load-bearing lessons index
+(`docs/lessons/`, `docs/references/`, `docs/rca/`). Read it before your first
+code change in a session. Everything below supplements it; nothing below
+overrides it.
+
+Hard rules that apply to every agent, every session:
+
+- **PureSignal is a full-stop zone.** No change to PureSignal logic,
+  persistence, arm/disarm behavior, or calibration defaults without explicit
+  approval from KB2UKA. See CLAUDE.md "Hard Rules — PureSignal".
+- **Cross-platform is mandatory.** macOS, Windows, Linux x64 + arm64,
+  Raspberry Pi. A change is not done until CI is green on all of them.
+- **Never mention AI assistants or vendors** (Claude, Anthropic, Codex,
+  OpenAI, Gemini, Google, "AI-generated") in commit messages, PR bodies, code
+  comments, or any repo-visible artifact.
+- **Red-light surfaces need maintainer approval before merge:** visual design
+  (palette lives in `zeus-web/src/styles/tokens.css` — use tokens, never raw
+  hex), UX behavior, operator-felt defaults, architecture / new dependencies,
+  and the Zeus.Contracts wire format. See CLAUDE.md for the full list.
+- **Quality gates before declaring work done:** `dotnet build Zeus.slnx`,
+  `dotnet test Zeus.slnx`, `npm --prefix zeus-web run build` (plus
+  `npm --prefix zeus-web run test` when the frontend changed).
+- **Debug from evidence, not theory.** Read the actual logs / wire values /
+  state first; verify protocol behavior against Thetis source and
+  `docs/references/` before changing DSP or protocol code.
+
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
 > **Architecture in one line:** Issues live in a local Dolt database

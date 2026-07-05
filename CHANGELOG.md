@@ -10,6 +10,77 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.10.9] — 2026-07-05
+
+> **📖 The Logbook grows up, and Zeus goes modular.** The headline is a completely reworked **Logbook**: pop it out onto its own monitor and it blooms into a full logging workspace — sortable table, live station-detail card, analytics dashboard, and an interactive globe — with **QSO editing, tags, QSL tracking, and LoTW upload/sync (TQSL)** built in. Around it, Zeus's big features keep moving into **installable plugins** (FT8/FT4 digital suite, FreeDV, and the Logbook engine itself), so the core stays lean and features update on their own schedule. Also in this release: a **0–60 MHz wideband display**, PureSignal fixes for the **ANAN-10E**, the Audio Suite in its **own OS window**, a first-launch **crash-report agreement**, a **macOS .pkg installer**, and a long list of transmit, audio, and stability fixes. **Note: this version is a one-time required update** — older installs will be prompted to move up to 0.10.9, after which updates go back to being optional.
+
+### 📖 Logbook — full logging workspace, editing, QSL/LoTW, and the globe
+
+- **Pop the Logbook out and it becomes a real logging workspace.** Docked, it stays the familiar compact table. Drag its tab off the dock into its own window (or give it room) and it expands into the rich view: full QSO table, a live station-detail card for the selected contact, and an analytics dashboard covering your entire log. *(#1379)*
+- **Edit your QSOs.** Fix a busted RST, correct a call, add notes — plus **tags**, **QSL-status tracking**, **LoTW upload and confirmation sync** (using your installed TQSL, with ADIF export as the fallback), per-station defaults (rig / antenna / power), and an **interactive globe** of your worked stations. The new **settings gear** in the Logbook header holds the QRZ, LoTW, and station-defaults setup. *(#1385)*
+- **The logbook engine is now the `org.openhpsdr.logbook` plugin.** Your log database, QRZ publishing, and ADIF import/export all carry over — the Logbook panel in Zeus is unchanged on the outside and simply lights up when the plugin is installed. *(#1372)*
+- **Fixes from the bench:** clicking the Logbook settings gear no longer blanks the workspace with an error, and a popped-out Logbook window now **resizes with the window** — enlarge it and the log fills the space instead of staying at its docked size. *(#1395)*
+
+### 🧩 Plugins — FT8/FT4 and FreeDV move out of the core
+
+- **The FT8/FT4/WSPR digital suite is now the installable "Zeus Digital" plugin (`org.openhpsdr.digital`).** The whole digital engine — decoding, click-to-tune, armed auto-sequencing TX, auto-logging, PSK Reporter / WSPRnet spotting, and the WSJT-X UDP live-decode stream — installs from **Settings → Plugins** and updates independently of Zeus. The **FT8** and **FT4** mode buttons stay where they are: greyed out with a tooltip until the plugin is installed, then working **exactly as they did built-in** — same pop-out window, auto-sequencing, logbook, spotting, and GridTracker/QRZ/N1MM integrations. Upgrading from a release with built-in FT8? Install the plugin once and restart — call sign, grid, and digital settings carry over; the spotting / live-decode toggles (off by default) need re-enabling once. **WSPR stays greyed out** until its reporting map lands. *(#1280)*
+- **FreeDV is now the `org.openhpsdr.freedv` plugin** — same digital-voice modes, now installable and independently updatable. *(#1344)*
+- **Plugin housekeeping, automatic.** Existing installs migrate to the new `org.openhpsdr.*` plugin naming on their own — nothing to reinstall — and Zeus now **reloads itself after a plugin install**, so new panels appear without a manual restart. *(#1347, #1376)*
+
+### 🛰️ PureSignal — ANAN-10E corrections + UI fixes
+
+- **ANAN-10E (HermesII) PureSignal corrected on both protocols.** The Protocol-1 path now uses the proper 2-DDC feedback arrangement, and Protocol-2 policy matches it — 10E owners trying single-ADC PureSignal should see it behave like the G2E path introduced in 0.10.7/0.10.8. Still experimental: on-air reports welcome. *(#1362)*
+- **G2E feedback-attenuation polish.** The byte-59 ADC-protection servo now honors deliberately-set values, walks down from a cold fit, and only servos during two-tone; the PS feedback-source picker correctly labels the external tap as the **RX BYPASS** jack.
+- **The PS status popover can no longer be clipped** by the transport bar. *(#1358)*
+- As always: **PureSignal starts OFF every session on every board** — you arm it by hand.
+
+### 📡 Display — wideband 0–60 MHz + Protocol-3 sidecar stability
+
+- **New wideband display mode: see 0–60 MHz at once**, with local zoom and cleaned-up spectrum controls, fed by a new wideband display bridge. *(#1343, #1346, #1352, #1359)*
+- **Protocol-3 sidecar displays are steadier** — aligned receiver filters and display cadence, stabilized performance, guarded display edges, correct default polarity for Zeus, and a clear message when the sidecar isn't set up. *(#1335, #1345, #1350, #1353, #1355)*
+- **Native crashes on Protocol-3 connect hand-off are fixed** — the WDSP channel pool no longer double-owns DSP slots during the connect transition. *(#1392, #1394)*
+- **S-meter SNR is now derived from the measured noise floor**, so the SNR readout tracks band conditions honestly. *(#1331)*
+
+### 🔊 Audio & Transmit
+
+- **The TX/RX Audio Suite pops out into its own OS window** — park your audio chain on a second monitor like a VST rack; it keeps working there, and the TX preview stays live even with no radio connected. *(#1381, #1382)*
+- **Roger beep behaves:** it fires only on transmit stop, its tail fully drains before unkey, and it works with voice-keying sources. *(#1318, #1321, #1322)*
+- **Cleaner key-down:** the TX DSP chain is primed before key-down, stale P2 TX IQ is cleared, and a key-down LO race that could shift your transmit frequency mid-TX is closed. *(#1324, #1330, #1334)*
+- **RX audio keeps its low end** — a filter-chain fix restores the bottom of the receive audio passband. *(#1357)*
+- **TX testing tools:** built-in test waveforms with auto-keyed WRITE audio for exercising the transmit path off-air. *(#1320, #1333)*
+- **Per-band OC TUNE additive mask** for keying amps/tuners on TUNE, with a hardened TUNE lifecycle (TUN cleared on disconnect, atomic mask pushes). *(#1326)*
+
+### 🎛️ Control — TCI, CAT, MIDI
+
+- **TCI grows up:** mute, RIT/XIT, squelch, and `agc_mode` are wired through, so TCI clients (loggers, skimmers, SDC) get real control. *(#1363)*
+- **CAT on Linux:** serial-port symlinks (`/dev/serial/by-id/...`) are now supported, with per-port Auto Report settings. *(#1338)*
+- **MIDI Learn no longer sticks** — Learn mode auto-expires, and device-open failures are surfaced instead of silently ignored. *(#1340)*
+
+### 🖥️ UI & Quality of life
+
+- **Light theme renders as a true light theme** in native controls (scrollbars, form fields). *(#1339)*
+- **Configurable display refresh cap** — trade smoothness for CPU on low-power machines. *(#1390)*
+- Footer controls no longer wrap at narrow widths; the About panel's User Manual link opens in your OS browser; connect-dialog errors stay contained; lightning-alert radius recounts correctly. *(#1341, #1364, #1349, #1348)*
+
+### 🛠️ Support, stability & accounts
+
+- **First-launch crash-report agreement.** Zeus now asks once, up front, whether it may send crash reports — versioned consent, changeable any time in Settings. *(#1391)*
+- **The crash reporter itself was the crasher** on some Windows systems — the in-process crash-dump writer that could corrupt the runtime is retired in favor of the OS-native path. *(#1356)*
+- **Remote support sessions now cross networks** (TURN relay) with durable crash-report storage, and maintainer diagnostics got safer admin-log pruning. *(#1365, #1389)*
+- **Networking hardened for direct-connect, link-local, and multihomed setups** — radios on odd network arrangements connect and recover more reliably. *(#1368)*
+- **QRZ-backed user validation** with cached access decisions and a fail-open policy if the validation service is unreachable — an outage never locks you out of your radio. *(#1371, #1373, #1380, #1387, #1393, #1394)*
+- Fixed a shutdown race that could crash the host on exit. *(#1369)*
+
+### 📦 Install & update
+
+- **macOS now ships a signed `.pkg` installer** alongside the DMG. *(#1386)*
+- **Old releases are pruned automatically** — the download page and GitHub always offer exactly the current version (older installers are archived privately, not lost). *(#1386)*
+- **One-time required update:** installs older than 0.10.9 get an update gate on launch. This happens **once** — after you're on 0.10.9, updates are optional again. *(#1386)*
+
+**Credits.** This release is the work of **Douglas Cerrato (KB2UKA)** and **Christian Suarez (N9WAR)**.
+
+---
+
 ## [0.10.8] — 2026-06-30
 
 > **🔧 Hotfix for ANAN-10E and ANAN-G2E PureSignal.** The 0.10.7 release added single-ADC PureSignal for the **ANAN-10E (HermesII)** and **ANAN-G2E (HermesC10)** — but it shipped with the path switched **off**, so owners had no way to actually try it. This release flips that switch: **PureSignal now engages on the normal PS button on the 10E and G2E, exactly like every other board** — no special steps. It stays **experimental** and **we still want your on-air reports** if you run one of these radios.

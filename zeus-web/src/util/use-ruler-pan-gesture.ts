@@ -25,6 +25,8 @@ import {
   type ReceiverKey,
 } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
+import * as viewZoom from '../state/view-zoom';
+import { isWidebandDisplayGeometry, resolveSpectrumViewport } from './wideband-view';
 
 type SpectrumReceiver = ReceiverKey;
 
@@ -94,10 +96,33 @@ export function useRulerPanGesture(
       const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
       const width = s.width || s.panDb?.length || 0;
       if (!width || s.hzPerPixel <= 0) return null;
+      const sourceCenterHz = fallbackCenterHz();
+      const viewport = resolveSpectrumViewport({
+        width,
+        sourceCenterHz,
+        sourceHzPerPixel: s.hzPerPixel,
+        viewCenterHz: vc.isInitialized() ? vc.getTargetCenterHz() : undefined,
+        viewHzPerPixel: viewZoom.isInitialized() ? viewZoom.getTargetHzPerPixel() : undefined,
+      });
+      if (viewport) {
+        return {
+          centerHz: viewport.centerHz,
+          spanHz: viewport.spanHz,
+        };
+      }
       return {
-        centerHz: vc.isInitialized() ? vc.getTargetCenterHz() : fallbackCenterHz(),
+        centerHz: sourceCenterHz,
         spanHz: width * s.hzPerPixel,
       };
+    };
+    const isWidebandLocalView = () => {
+      const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
+      const width = s.width || s.panDb?.length || s.wfDb?.length || 0;
+      return isWidebandDisplayGeometry({
+        width,
+        hzPerPixel: s.hzPerPixel,
+        centerHz: Number(s.centerHz),
+      });
     };
 
     const commandedLoHz = () =>
@@ -142,6 +167,10 @@ export function useRulerPanGesture(
       if (useVfoLockStore.getState().locked) return;
       const loHz = clampHz(nextLoHz);
       if (loHz === pendingLoHz) return;
+      if (isWidebandLocalView()) {
+        vc.nudgeTargetHz(loHz - commandedLoHz());
+        return;
+      }
       vc.nudgeTargetHz(loHz - commandedLoHz());
       writeCenter(loHz);
       pendingLoHz = loHz;

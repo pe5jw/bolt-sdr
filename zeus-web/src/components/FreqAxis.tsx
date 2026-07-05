@@ -43,13 +43,15 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { useConnectionStore } from '../state/connection-store';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { getReceiverVfoHz, type ReceiverKey } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
+import * as viewZoom from '../state/view-zoom';
 import { useRulerPanGesture } from '../util/use-ruler-pan-gesture';
+import { isWidebandDisplayGeometry, resolveSpectrumViewport } from '../util/wideband-view';
 
 function pickStrideHz(spanHz: number, targetTicks: number): number {
   if (spanHz <= 0) return 1;
@@ -100,18 +102,58 @@ export function FreqAxis({ receiver = 'A', stitched = false }: FreqAxisProps = {
   const tickStripRef = useRef<HTMLDivElement | null>(null);
   const markerRef = useRef<HTMLDivElement | null>(null);
   const rulerRef = useRef<HTMLDivElement | null>(null);
+  const [, forceWidebandAxisRender] = useState(0);
 
   useRulerPanGesture(rulerRef, receiver, !!width && hzPerPixel > 0);
+
+  useEffect(() => {
+    let lastTargetHzPerPixel = viewZoom.getTargetHzPerPixel();
+    const unsub = viewZoom.subscribe(() => {
+      const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
+      if (
+        !isWidebandDisplayGeometry({
+          width: s.width,
+          hzPerPixel: s.hzPerPixel,
+          centerHz: Number(s.centerHz),
+        })
+      ) {
+        return;
+      }
+      const nextTargetHzPerPixel = viewZoom.getTargetHzPerPixel();
+      if (Math.abs(nextTargetHzPerPixel - lastTargetHzPerPixel) <= Math.max(1e-9, nextTargetHzPerPixel * 0.002)) {
+        return;
+      }
+      lastTargetHzPerPixel = nextTargetHzPerPixel;
+      forceWidebandAxisRender((v) => (v + 1) & 0xffff);
+    });
+    return unsub;
+  }, [receiver]);
 
   useEffect(() => {
     const vc = viewCenter.viewCenterFor(receiver);
     const update = () => {
       const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
       if (!s.width || s.hzPerPixel <= 0) return;
-      const spanHz = s.width * s.hzPerPixel;
+      const layoutTarget = vc.isInitialized() ? vc.getTargetCenterHz() : Number(s.centerHz);
+      const viewport = resolveSpectrumViewport({
+        width: s.width,
+        sourceCenterHz: Number(s.centerHz),
+        sourceHzPerPixel: s.hzPerPixel,
+        viewCenterHz: layoutTarget,
+        viewHzPerPixel: viewZoom.isInitialized() ? viewZoom.getTargetHzPerPixel() : undefined,
+      });
+      if (!viewport) return;
+      const spanHz = viewport.spanHz;
       const conn = useConnectionStore.getState();
-      const layoutCenter = Number(s.centerHz);
-      const view = vc.isInitialized() ? vc.getViewCenterHz() : layoutCenter;
+      const layoutCenter = viewport.centerHz;
+      const liveViewport = resolveSpectrumViewport({
+        width: s.width,
+        sourceCenterHz: Number(s.centerHz),
+        sourceHzPerPixel: s.hzPerPixel,
+        viewCenterHz: vc.isInitialized() ? vc.getViewCenterHz() : Number(s.centerHz),
+        viewHzPerPixel: viewZoom.isInitialized() ? viewZoom.getDisplayedHzPerPixel() : undefined,
+      });
+      const view = liveViewport?.centerHz ?? layoutCenter;
       // Ticks were laid out around layoutCenter; sliding the strip by the
       // layout→view fraction of its own width keeps every label at its true
       // frequency. translateX(%) is relative to the element's own width,
@@ -138,6 +180,7 @@ export function FreqAxis({ receiver = 'A', stitched = false }: FreqAxisProps = {
     };
     const schedule = () => requestDrawBusFrame(update);
     const unsubVc = vc.subscribe(schedule);
+    const unsubVz = viewZoom.subscribe(schedule);
     const unsubVfo = useConnectionStore.subscribe((s, prev) => {
       // RX1 is the flat primary VFO; every secondary (RX2 = index 1, RX3+) lives
       // in the receivers[] array.
@@ -149,6 +192,7 @@ export function FreqAxis({ receiver = 'A', stitched = false }: FreqAxisProps = {
     schedule();
     return () => {
       unsubVc();
+      unsubVz();
       unsubVfo();
       unsubFrame();
       cancelDrawBusFrame(update);
@@ -157,12 +201,21 @@ export function FreqAxis({ receiver = 'A', stitched = false }: FreqAxisProps = {
 
   if (!width || hzPerPixel <= 0) return null;
 
-  const spanHz = width * hzPerPixel;
+  const vc = viewCenter.viewCenterFor(receiver);
+  const center = Number(centerHz);
+  const viewport = resolveSpectrumViewport({
+    width,
+    sourceCenterHz: center,
+    sourceHzPerPixel: hzPerPixel,
+    viewCenterHz: vc.isInitialized() ? vc.getTargetCenterHz() : undefined,
+    viewHzPerPixel: viewZoom.isInitialized() ? viewZoom.getTargetHzPerPixel() : undefined,
+  });
+  if (!viewport) return null;
+  const spanHz = viewport.spanHz;
   const stride = pickStrideHz(spanHz, 6);
   const conn = useConnectionStore.getState();
-  const center = Number(centerHz);
-  const startHz = center - spanHz / 2;
-  const endHz = center + spanHz / 2;
+  const startHz = viewport.centerHz - spanHz / 2;
+  const endHz = viewport.centerHz + spanHz / 2;
   // Initial (pre-draw-bus) marker position; the callback refines it against
   // the animated view-center on the next frame.
   const selectedVfoHz = getReceiverVfoHz(conn, receiver);

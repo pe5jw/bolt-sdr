@@ -19,8 +19,8 @@ namespace Zeus.Server;
 // Persists per-mode VAR1/VAR2 overrides and the last-selected preset slot
 // across server restarts. Lives in the shared zeus-prefs.db file.
 //
-// On first run, USB and LSB VAR1 are seeded with Zeus's wider 150/2850 default
-// (PRD §9 open question: preserve Zeus's low-cut as VAR1 on first run).
+// On first run, USB and LSB VAR1 are seeded from the default SSB preset table
+// so stored overrides do not narrow the low-frequency audio response.
 public sealed class FilterPresetStore : IDisposable
 {
     // BsonMapper.Global is a shared, lazily-built entity map. When multiple
@@ -238,15 +238,23 @@ public sealed class FilterPresetStore : IDisposable
         }
     }
 
-    // Seed USB and LSB VAR1 with Zeus's 150/2850 default on first run so the
-    // operator sees a familiar starting point (PRD §9 decision).
+    // Seed USB and LSB VAR1 with the same 100 Hz low edge as the SSB preset
+    // table. Older builds seeded 150/2850; migrate exactly that stale default
+    // so existing preference DBs regain low-end response without touching
+    // operator-edited VAR1 values.
     private void SeedDefaults()
     {
-        SeedVarIfAbsent(RxMode.USB, "VAR1",  150,  2850);
-        SeedVarIfAbsent(RxMode.LSB, "VAR1", -2850, -150);
+        SeedVarIfAbsent(RxMode.USB, "VAR1",  100,  2800, legacyLoHz:  150, legacyHiHz:  2850);
+        SeedVarIfAbsent(RxMode.LSB, "VAR1", -2800, -100, legacyLoHz: -2850, legacyHiHz: -150);
     }
 
-    private void SeedVarIfAbsent(RxMode mode, string slotName, int loHz, int hiHz)
+    private void SeedVarIfAbsent(
+        RxMode mode,
+        string slotName,
+        int loHz,
+        int hiHz,
+        int? legacyLoHz = null,
+        int? legacyHiHz = null)
     {
         var key = mode.ToString();
         var existing = FindByMode(key);
@@ -272,6 +280,14 @@ public sealed class FilterPresetStore : IDisposable
             existing.HasVar1 = true;
             existing.Var1Lo = loHz;
             existing.Var1Hi = hiHz;
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Update(existing);
+        }
+        else if (slotName == "VAR1" && existing.Var1Lo == legacyLoHz && existing.Var1Hi == legacyHiHz)
+        {
+            existing.Var1Lo = loHz;
+            existing.Var1Hi = hiHz;
+            existing.UpdatedUtc = DateTime.UtcNow;
             _entries.Update(existing);
         }
         else if (slotName == "VAR2" && !existing.HasVar2)
@@ -279,6 +295,14 @@ public sealed class FilterPresetStore : IDisposable
             existing.HasVar2 = true;
             existing.Var2Lo = loHz;
             existing.Var2Hi = hiHz;
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Update(existing);
+        }
+        else if (slotName == "VAR2" && existing.Var2Lo == legacyLoHz && existing.Var2Hi == legacyHiHz)
+        {
+            existing.Var2Lo = loHz;
+            existing.Var2Hi = hiHz;
+            existing.UpdatedUtc = DateTime.UtcNow;
             _entries.Update(existing);
         }
     }

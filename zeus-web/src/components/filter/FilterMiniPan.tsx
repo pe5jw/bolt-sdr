@@ -48,6 +48,7 @@ import {
 import { useConnectionStore } from '../../state/connection-store';
 import { useThemeStore } from '../../state/theme-store';
 import { useDisplaySettingsStore } from '../../state/display-settings-store';
+import { cancelDrawBusFrame, requestDrawBusFrame } from '../../realtime/draw-bus';
 import {
   detectPeaks,
   getNoiseFloor,
@@ -210,7 +211,9 @@ function filterWindowLoOffsetHz(lowHz: number, highHz: number, spanHz: number): 
 // Resolve a CSS colour token (hex or rgb()/rgba()) to [r,g,b] so we can build
 // alpha variants at draw time. Lets the accent passband follow the live
 // --accent token (and any Theme Settings override) without hard-coding hex.
-function parseRgb(s: string): [number, number, number] {
+type Rgb = [number, number, number];
+
+function parseRgb(s: string): Rgb {
   const t = s.trim();
   if (t.startsWith('#')) {
     let h = t.slice(1);
@@ -225,7 +228,7 @@ function parseRgb(s: string): [number, number, number] {
 
 // Resolve an `hsl(H S% L%)` token (the receiverColorByIndex output for RX3+) to
 // [r,g,b]. parseRgb can't — its numeric fallback would read H/S/L as r/g/b.
-function hslStringToRgb(s: string): [number, number, number] {
+function hslStringToRgb(s: string): Rgb {
   const m = s.match(/-?\d+(?:\.\d+)?/g);
   if (!m || m.length < 3) return [74, 158, 255];
   const h = ((((Number(m[0]) % 360) + 360) % 360)) / 360;
@@ -251,6 +254,45 @@ function hslStringToRgb(s: string): [number, number, number] {
     Math.round(hue2(h) * 255),
     Math.round(hue2(h - 1 / 3) * 255),
   ];
+}
+
+function rgba([r, g, b]: Rgb, a: number): string {
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
+type MiniPanThemePalette = {
+  fg0: string;
+  fg2: string;
+  fg0Rgb: Rgb;
+  fg1Rgb: Rgb;
+  fg3Rgb: Rgb;
+  accentRgb: Rgb;
+};
+
+function readMiniPanThemePalette(receiver: SpectrumReceiver): MiniPanThemePalette {
+  const cs = getComputedStyle(document.documentElement);
+  const fg0 = cs.getPropertyValue('--fg-0').trim() || '#edeef1';
+  const fg1 = cs.getPropertyValue('--fg-1').trim() || '#cccccc';
+  const fg2 = cs.getPropertyValue('--fg-2').trim() || '#7c8088';
+  const fg3 = cs.getPropertyValue('--fg-3').trim() || '#5a5a60';
+  const accent =
+    typeof receiver === 'number' && receiver >= 2
+      ? receiverColorByIndex(receiver)
+      : receiver === 'B'
+        ? cs.getPropertyValue('--signal').trim() || '#25d366'
+        : cs.getPropertyValue('--accent').trim() || '#4a9eff';
+
+  return {
+    fg0,
+    fg2,
+    fg0Rgb: parseRgb(fg0),
+    fg1Rgb: parseRgb(fg1),
+    fg3Rgb: parseRgb(fg3),
+    accentRgb:
+      typeof receiver === 'number' && receiver >= 2
+        ? hslStringToRgb(accent)
+        : parseRgb(accent),
+  };
 }
 
 type ConnSnapshot = ReturnType<typeof useConnectionStore.getState>;
@@ -552,7 +594,6 @@ function FilterMiniPanSurface({
       ? registerEstimatorConsumer()
       : () => {};
 
-    let rafHandle = 0;
     let lastSeq: number | null = null;
     let heldPanDb: Float32Array | null = null;
     let heldCenterHz = 0;
@@ -575,9 +616,10 @@ function FilterMiniPanSurface({
     let bracketTracks: BracketTrack[] = []; // smoothed signal-bandwidth annotations
     let bracketKey = ''; // geometry key; reset annotations when the display window changes
     let activeReceiver: SpectrumReceiver = 'A';
+    let themePalette = readMiniPanThemePalette(receiver);
+    let traceRgb = parseRgb(useDisplaySettingsStore.getState().rxTraceColor || '#FFA028');
 
     const draw = () => {
-      rafHandle = 0;
       const now = performance.now();
       const d = useDisplayStore.getState();
       const c = useConnectionStore.getState();
@@ -608,7 +650,7 @@ function FilterMiniPanSurface({
       const spanHz = spanHzRef.current;
       const winLoOffHz = filterWindowLoOffsetHz(active.filterLowHz, active.filterHighHz, spanHz);
       const winHiOffHz = winLoOffHz + spanHz;
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = Math.min(1, window.devicePixelRatio || 1);
       const cssW = canvas.clientWidth;
       const cssH = canvas.clientHeight;
       if (cssW <= 0 || cssH <= 0) return;
@@ -620,35 +662,14 @@ function FilterMiniPanSurface({
 
       ctx.clearRect(0, 0, w, h);
 
-      // Resolve theme-driven text colours once per frame. Operator overrides
-      // from the Theme Settings panel flow through these tokens.
-      const cs = getComputedStyle(document.documentElement);
-      const fg0 = cs.getPropertyValue('--fg-0').trim() || '#edeef1';
-      const fg1 = cs.getPropertyValue('--fg-1').trim() || '#cccccc';
-      const fg2 = cs.getPropertyValue('--fg-2').trim() || '#7c8088';
-      const fg3 = cs.getPropertyValue('--fg-3').trim() || '#5a5a60';
-      const colTickLabel = fg2;
-      const colTickLabelCenter = fg0;
-      const colCutKey = fg2;
-      const colCutVal = fg0;
-      const [fg0r, fg0g, fg0b] = parseRgb(fg0);
-      const [fg1r, fg1g, fg1b] = parseRgb(fg1);
-      const [fg3r, fg3g, fg3b] = parseRgb(fg3);
-      const ink0 = (a: number) => `rgba(${fg0r}, ${fg0g}, ${fg0b}, ${a})`;
-      const ink1 = (a: number) => `rgba(${fg1r}, ${fg1g}, ${fg1b}, ${a})`;
-      const ink3 = (a: number) => `rgba(${fg3r}, ${fg3g}, ${fg3b}, ${a})`;
-      // Each receiver gets its OWN colour, matching the main spectrum surfaces:
-      // A → --accent, B → --signal, RX3+ → its distinct identity hue
-      // (receiverColorByIndex returns an hsl() we resolve to rgb here).
-      const [ar, ag, ab] =
-        typeof receiver === 'number' && receiver >= 2
-          ? hslStringToRgb(receiverColorByIndex(receiver))
-          : parseRgb(
-              receiver === 'B'
-                ? cs.getPropertyValue('--signal').trim() || '#25d366'
-                : cs.getPropertyValue('--accent').trim() || '#4a9eff',
-            );
-      const accent = (a: number) => `rgba(${ar}, ${ag}, ${ab}, ${a})`;
+      const colTickLabel = themePalette.fg2;
+      const colTickLabelCenter = themePalette.fg0;
+      const colCutKey = themePalette.fg2;
+      const colCutVal = themePalette.fg0;
+      const ink0 = (a: number) => rgba(themePalette.fg0Rgb, a);
+      const ink1 = (a: number) => rgba(themePalette.fg1Rgb, a);
+      const ink3 = (a: number) => rgba(themePalette.fg3Rgb, a);
+      const accent = (a: number) => rgba(themePalette.accentRgb, a);
       const eqBlue = (a: number) => `rgba(34, 204, 255, ${Math.max(0, Math.min(1, a))})`;
 
       // Snap/pop state. This panel registers an estimator consumer, so the floor
@@ -656,9 +677,7 @@ function FilterMiniPanSurface({
       // are on) — the heat trace, brackets and fit-to-signal all read it.
       const enh = useSignalEnhanceStore.getState();
       const floor = sharedNoiseFloorForReceiver(receiver);
-      const signalColor = useDisplaySettingsStore.getState().rxTraceColor;
-      const [sr, sg, sb] = parseRgb(signalColor || '#FFA028');
-      const signal = (a: number) => `rgba(${sr}, ${sg}, ${sb}, ${a})`;
+      const signal = (a: number) => rgba(traceRgb, a);
 
       // Reserve the top ~22 px for LOW CUT / HIGH CUT wall callouts and the
       // bottom ~14 px for the x-axis labels so neither overlap the trace.
@@ -974,7 +993,7 @@ function FilterMiniPanSurface({
         // noise floor riding under the trace. In Pop mode the floor IS the
         // baseline, so it collapses to the bottom rail instead — drawn below.
         if (floor !== null && floor.length === panDb.length && !popOn) {
-          ctx.strokeStyle = fg2;
+          ctx.strokeStyle = themePalette.fg2;
           ctx.globalAlpha = 0.35;
           ctx.lineWidth = 1 * dpr;
           ctx.beginPath();
@@ -1114,7 +1133,7 @@ function FilterMiniPanSurface({
         // Pop-mode floor baseline: a faint flat rail at SNR=0 with an "NF" tag.
         if (popOn) {
           const yBase = snrToY(0);
-          ctx.strokeStyle = fg2;
+          ctx.strokeStyle = themePalette.fg2;
           ctx.globalAlpha = 0.3;
           ctx.lineWidth = 1 * dpr;
           ctx.beginPath();
@@ -1122,7 +1141,7 @@ function FilterMiniPanSurface({
           ctx.lineTo(w, yBase + 0.5);
           ctx.stroke();
           ctx.globalAlpha = 0.55;
-          ctx.fillStyle = fg2;
+          ctx.fillStyle = themePalette.fg2;
           ctx.font = `${Math.round(8 * dpr)}px "SFMono-Regular", ui-monospace, monospace`;
           ctx.textBaseline = 'bottom';
           ctx.textAlign = 'start';
@@ -1559,13 +1578,13 @@ function FilterMiniPanSurface({
     // nothing in the stores changed.
     const requestRedraw = () => {
       lastSeq = null;
-      if (rafHandle === 0) rafHandle = requestAnimationFrame(draw);
+      requestDrawBusFrame(draw);
     };
     redrawRef.current = requestRedraw;
 
     const unsubDisplay = useDisplayStore.subscribe((s, p) => {
       if (selectDisplaySlice(s, receiver).lastSeq !== selectDisplaySlice(p, receiver).lastSeq) {
-        if (rafHandle === 0) rafHandle = requestAnimationFrame(draw);
+        requestDrawBusFrame(draw);
       }
     });
     const unsubConn = useConnectionStore.subscribe((s, p) => {
@@ -1586,7 +1605,10 @@ function FilterMiniPanSurface({
       }
     });
     const unsubTheme = useThemeStore.subscribe((s, p) => {
-      if (s.theme !== p.theme || s.overrides !== p.overrides) requestRedraw();
+      if (s.theme !== p.theme || s.overrides !== p.overrides) {
+        themePalette = readMiniPanThemePalette(receiver);
+        requestRedraw();
+      }
     });
     // Toggling Pop/Snap (or the marker colour) changes what we draw even when
     // the spectrum frame is unchanged.
@@ -1606,7 +1628,10 @@ function FilterMiniPanSurface({
       ) requestRedraw();
     });
     const unsubSettings = useDisplaySettingsStore.subscribe((s, p) => {
-      if (s.rxTraceColor !== p.rxTraceColor) requestRedraw();
+      if (s.rxTraceColor !== p.rxTraceColor) {
+        traceRgb = parseRgb(s.rxTraceColor || '#FFA028');
+        requestRedraw();
+      }
     });
 
     // Scroll wheel — granular fine-tune. Registered natively (not via React's
@@ -1657,10 +1682,10 @@ function FilterMiniPanSurface({
     const ro = new ResizeObserver(() => requestRedraw());
     ro.observe(canvas);
 
-    rafHandle = requestAnimationFrame(draw);
+    requestDrawBusFrame(draw);
     return () => {
-      if (rafHandle !== 0) cancelAnimationFrame(rafHandle);
       redrawRef.current = null;
+      cancelDrawBusFrame(draw);
       unsubDisplay();
       unsubConn();
       unsubTheme();

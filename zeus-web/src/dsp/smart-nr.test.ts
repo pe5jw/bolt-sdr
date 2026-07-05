@@ -166,7 +166,7 @@ describe('smart NR supervisor', () => {
     expect(rec.reason).toContain('Weak-signal assist');
   });
 
-  it('uses NR2 plus RX Suite path for RX-assisted weak SSB copy', () => {
+  it('uses transparent NR2 for RX-assisted weak SSB copy', () => {
     const spec = noise();
     spec[120] = NOISE_DB + 8;
 
@@ -185,6 +185,20 @@ describe('smart NR supervisor', () => {
     expect(rec.condition.rxAssistedWeakSignal).toBe(true);
     expect(rec.nr.nrMode).toBe('Emnr');
     expect(rec.nr.nbMode).toBe('Off');
+    expect(rec.nr.snbEnabled).toBe(false);
+    expect(rec.nr.emnrPost2Factor).toBe(8);
+    expect(rec.nr.emnrPost2Nlevel).toBe(8);
+    expect(rec.reason).toContain('preserving speech bandwidth');
+
+    const shaped = shapeSmartNrRecommendation(rec, {
+      aggressiveness: 55,
+      autoBlankerEnabled: true,
+      autoNotchEnabled: true,
+      maxBlankerThreshold: 16,
+    });
+    expect(shaped.emnrPost2Factor).toBe(8);
+    expect(shaped.emnrPost2Nlevel).toBe(7);
+    expect(shaped.emnrAeRun).toBe(true);
   });
 
   it('reports coherent subthreshold SSB as a weak-signal NR2 profile', () => {
@@ -274,11 +288,20 @@ describe('smart NR supervisor', () => {
     expect(rec.condition.coherentCopySignal).toBe(true);
     expect(rec.condition.speechLikeVoice).toBe(true);
     expect(rec.nr.nrMode).toBe('Emnr');
-    expect(rec.nr.emnrPost2Factor).toBe(11);
-    expect(rec.nr.emnrPost2Nlevel).toBe(11);
+    expect(rec.nr.emnrPost2Factor).toBe(9);
+    expect(rec.nr.emnrPost2Nlevel).toBe(9);
     expect(rec.nr.nbMode).toBe('Off');
     expect(rec.nr.snbEnabled).toBe(false);
     expect(rec.reason).toContain('copy-assist');
+
+    const shaped = shapeSmartNrRecommendation(rec, {
+      aggressiveness: 55,
+      autoBlankerEnabled: true,
+      autoNotchEnabled: true,
+      maxBlankerThreshold: 16,
+    });
+    expect(shaped.emnrPost2Factor).toBe(9);
+    expect(shaped.emnrPost2Nlevel).toBe(9);
   });
 
   it('prefers installed NR3/RNNoise for speech-like SSB copy', () => {

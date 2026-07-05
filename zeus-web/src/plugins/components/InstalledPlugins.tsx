@@ -8,37 +8,34 @@ import { useEffect, useState } from 'react';
 
 import { usePluginsStore } from '../state/plugins-store';
 import type { PluginDto } from '../api/plugins';
+import { createPluginCheckout } from '../api/plugins';
 import { ConfirmDialog } from '../../layout/ConfirmDialog';
+import { pluginAccessFor, useUserAccessStore } from '../../state/user-access-store';
 
-function CapabilityChips({ caps }: { caps: string[] }) {
-  if (caps.length === 0) {
-    return (
-      <span style={{ color: 'var(--fg-3)', fontStyle: 'italic' }}>
-        no host capabilities granted
-      </span>
-    );
+type InstalledListKind = 'plugins' | 'vsts';
+
+const LIST_COPY: Record<
+  InstalledListKind,
+  {
+    testId: string;
+    loading: string;
+    empty: string;
+    loadError: string;
   }
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-      {caps.map((c) => (
-        <span
-          key={c}
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10,
-            padding: '2px 6px',
-            borderRadius: 'var(--r-sm)',
-            background: 'var(--bg-2)',
-            border: '1px solid var(--line)',
-            color: 'var(--fg-1)',
-          }}
-        >
-          {c}
-        </span>
-      ))}
-    </div>
-  );
-}
+> = {
+  plugins: {
+    testId: 'plugins-installed',
+    loading: 'Loading installed plugins…',
+    empty: 'No plugins installed yet. Browse the registry or install from a URL.',
+    loadError: 'Couldn’t load plugins',
+  },
+  vsts: {
+    testId: 'plugins-installed-vsts',
+    loading: 'Loading installed VSTs…',
+    empty: 'No VSTs installed yet. Open the TX or RX Audio Suite and scan a VST3 folder.',
+    loadError: 'Couldn’t load VSTs',
+  },
+};
 
 function PluginCard({ p }: { p: PluginDto }) {
   const uninstall = usePluginsStore((s) => s.uninstall);
@@ -63,101 +60,39 @@ function PluginCard({ p }: { p: PluginDto }) {
           gap: 8,
         }}
       >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'baseline',
-          justifyContent: 'space-between',
-          gap: 12,
-        }}
-      >
-        <div>
-          <div style={{ fontWeight: 700, color: 'var(--fg-0)', fontSize: 13 }}>
-            {p.name}
-          </div>
-          <div style={{ color: 'var(--fg-2)', fontSize: 11 }}>
-            <span style={{ fontFamily: 'var(--font-mono)' }}>{p.id}</span>
-            {' · '}v{p.version}
-            {p.author ? ` · ${p.author}` : ''}
-            {p.license ? ` · ${p.license}` : ''}
-          </div>
-        </div>
-        <button
-          type="button"
-          className="btn sm"
-          onClick={onUninstall}
-          disabled={inflight}
-          aria-label={`Uninstall ${p.name}`}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            justifyContent: 'space-between',
+            gap: 12,
+          }}
         >
-          {inflight ? 'WORKING…' : 'UNINSTALL'}
-        </button>
-      </div>
-
-      {p.description && (
-        <div style={{ color: 'var(--fg-1)', lineHeight: 1.5 }}>
-          {p.description}
+          <div>
+            <div style={{ fontWeight: 700, color: 'var(--fg-0)', fontSize: 13 }}>
+              {p.name}
+            </div>
+            <div style={{ color: 'var(--fg-2)', fontSize: 11 }}>
+              v{p.version}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={onUninstall}
+            disabled={inflight}
+            aria-label={`Uninstall ${p.name}`}
+          >
+            {inflight ? 'WORKING…' : 'UNINSTALL'}
+          </button>
         </div>
-      )}
 
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        {p.ui && (
-          <span
-            style={{
-              fontSize: 10,
-              padding: '2px 6px',
-              borderRadius: 'var(--r-sm)',
-              background: 'var(--accent-soft)',
-              border: '1px solid var(--accent-line)',
-              color: 'var(--accent-bright)',
-              fontWeight: 600,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-            }}
-          >
-            UI · {p.ui.panels.length} panel
-            {p.ui.panels.length === 1 ? '' : 's'}
-          </span>
+        {p.description && (
+          <div style={{ color: 'var(--fg-1)', lineHeight: 1.5 }}>
+            {p.description}
+          </div>
         )}
-        {p.audio && (
-          <span
-            style={{
-              fontSize: 10,
-              padding: '2px 6px',
-              borderRadius: 'var(--r-sm)',
-              background: 'var(--amber-soft)',
-              border: '1px solid var(--amber)',
-              color: 'var(--amber)',
-              fontWeight: 600,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-            }}
-          >
-            AUDIO · {p.audio.slot}
-          </span>
-        )}
-        {p.homepage && (
-          <a
-            href={p.homepage}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              fontSize: 10,
-              padding: '2px 6px',
-              borderRadius: 'var(--r-sm)',
-              border: '1px solid var(--line)',
-              color: 'var(--accent-bright)',
-              textDecoration: 'none',
-              fontWeight: 600,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-            }}
-          >
-            HOMEPAGE
-          </a>
-        )}
-      </div>
 
-      <CapabilityChips caps={p.capabilities} />
       </div>
       {confirmOpen && (
         <ConfirmDialog
@@ -171,7 +106,7 @@ function PluginCard({ p }: { p: PluginDto }) {
         >
           <p>Uninstall {p.name}?</p>
           <p>
-            {p.id} will be removed from the host. A restart may be required to
+            {p.name} will be removed from the host. A restart may be required to
             fully unload the assembly.
           </p>
         </ConfirmDialog>
@@ -180,15 +115,25 @@ function PluginCard({ p }: { p: PluginDto }) {
   );
 }
 
-export function InstalledPlugins() {
+export function InstalledPlugins({
+  kind = 'plugins',
+}: {
+  kind?: InstalledListKind;
+}) {
   const installed = usePluginsStore((s) => s.installed);
+  const installedVsts = usePluginsStore((s) => s.installedVsts);
+  const blocked = usePluginsStore((s) => s.blocked);
   const load = usePluginsStore((s) => s.installedLoad);
-  const sdkAbi = usePluginsStore((s) => s.sdkAbi);
-  const sdkVersion = usePluginsStore((s) => s.sdkVersion);
   const refresh = usePluginsStore((s) => s.refreshInstalled);
+  const uninstall = usePluginsStore((s) => s.uninstall);
+  const uninstallInflight = usePluginsStore((s) => s.uninstallInflight);
   const uninstallError = usePluginsStore((s) => s.lastUninstallError);
   const uninstallNotice = usePluginsStore((s) => s.lastUninstallNotice);
   const clearUninstall = usePluginsStore((s) => s.clearUninstallFeedback);
+  const refreshUserSession = useUserAccessStore((s) => s.refreshSession);
+  const [blockedRemove, setBlockedRemove] = useState<PluginDto | null>(null);
+  const [checkoutPluginId, setCheckoutPluginId] = useState<string | null>(null);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!load.loaded && !load.inflight) {
@@ -196,22 +141,45 @@ export function InstalledPlugins() {
     }
   }, [load.loaded, load.inflight, refresh]);
 
+  const copy = LIST_COPY[kind];
+  const items = kind === 'vsts' ? installedVsts : installed;
+
+  async function keepBlockedAccess(plugin: PluginDto) {
+    if (checkoutPluginId) return;
+    setCheckoutPluginId(plugin.id);
+    setCheckoutError(null);
+    try {
+      const checkout = await createPluginCheckout([plugin.id]);
+      if (checkout.url) {
+        window.location.href = checkout.url;
+        return;
+      }
+      if (checkout.subscriptionUpdated) {
+        await refreshUserSession();
+        await refresh();
+        return;
+      }
+      setCheckoutError('Subscription checkout did not return a billing session.');
+    } catch (err) {
+      setCheckoutError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCheckoutPluginId(null);
+    }
+  }
+
   return (
     <div
-      data-testid="plugins-installed"
+      data-testid={copy.testId}
       style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
     >
       <div
         style={{
           display: 'flex',
           alignItems: 'baseline',
-          justifyContent: 'space-between',
+          justifyContent: 'flex-end',
           gap: 12,
         }}
       >
-        <div style={{ color: 'var(--fg-2)', fontSize: 11 }}>
-          SDK ABI v{sdkAbi || '?'} · runtime {sdkVersion || '—'}
-        </div>
         <button
           type="button"
           className="btn sm"
@@ -285,15 +253,15 @@ export function InstalledPlugins() {
             color: 'var(--fg-0)',
           }}
         >
-          Couldn’t load plugins: {load.loadError}
+          {copy.loadError}: {load.loadError}
         </div>
       )}
 
       {!load.loaded && load.inflight && (
-        <div style={{ color: 'var(--fg-2)' }}>Loading installed plugins…</div>
+        <div style={{ color: 'var(--fg-2)' }}>{copy.loading}</div>
       )}
 
-      {load.loaded && installed.length === 0 && (
+      {load.loaded && items.length === 0 && (
         <div
           style={{
             padding: 16,
@@ -304,13 +272,101 @@ export function InstalledPlugins() {
             textAlign: 'center',
           }}
         >
-          No plugins installed yet. Browse the registry or install from a URL.
+          {copy.empty}
         </div>
       )}
 
-      {installed.map((p) => (
+      {items.map((p) => (
         <PluginCard key={p.id} p={p} />
       ))}
+
+      {kind === 'plugins' && blocked.length > 0 && (
+        <div
+          style={{
+            padding: 12,
+            border: '1px solid var(--accent-line)',
+            borderRadius: 'var(--r-md)',
+            background: 'var(--accent-soft)',
+            color: 'var(--fg-0)',
+            display: 'grid',
+            gap: 8,
+          }}
+        >
+          <strong style={{ fontSize: 12 }}>Plugin subscriptions required</strong>
+          <span style={{ color: 'var(--fg-2)', fontSize: 12 }}>
+            These installed plugins are now managed as paid subscriptions. Keep access by subscribing, or remove the plugin.
+          </span>
+          {checkoutError && (
+            <span role="alert" style={{ color: 'var(--tx)', fontSize: 12 }}>
+              {checkoutError}
+            </span>
+          )}
+          {blocked.map((p) => {
+            const access = pluginAccessFor(p.id);
+            const managed = access.managedPlugin;
+            const price = managed?.subscriptionRequired && managed.monthlyPriceCents > 0
+              ? `${managed.currency} ${(managed.monthlyPriceCents / 100).toFixed(2)}/mo`
+              : null;
+            return (
+              <div
+                key={p.id}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1fr) auto auto',
+                  gap: 8,
+                  alignItems: 'center',
+                }}
+              >
+                <span style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                  <span style={{ fontWeight: 700 }}>{p.name}</span>
+                  <span style={{ color: 'var(--fg-2)', fontSize: 12 }}>
+                    {price
+                      ? `${access.reason ?? 'Plugin subscription required'} - ${price}`
+                      : access.reason ?? 'Plugin subscription required'}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  className="btn sm active"
+                  onClick={() => void keepBlockedAccess(p)}
+                  disabled={checkoutPluginId !== null || uninstallInflight}
+                >
+                  {checkoutPluginId === p.id ? 'WORKING…' : 'KEEP ACCESS'}
+                </button>
+                <button
+                  type="button"
+                  className="btn sm"
+                  onClick={() => setBlockedRemove(p)}
+                  disabled={checkoutPluginId !== null || uninstallInflight}
+                >
+                  REMOVE
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {blockedRemove && (
+        <ConfirmDialog
+          title="Remove paid plugin"
+          confirmLabel="Remove"
+          onCancel={() => setBlockedRemove(null)}
+          onConfirm={() => {
+            void uninstall(blockedRemove.id);
+            setBlockedRemove(null);
+          }}
+        >
+          <p>Remove {blockedRemove.name}?</p>
+          <p>
+            Access is currently blocked by subscription policy. Removing it keeps Zeus compliant with the admin plugin policy.
+          </p>
+        </ConfirmDialog>
+      )}
     </div>
   );
+}
+
+export function InstalledVsts() {
+  return <InstalledPlugins kind="vsts" />;
 }

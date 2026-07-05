@@ -1601,7 +1601,10 @@ export function AudioSuiteWindow({
     : undefined;
 
   // Embedded mode (rendered inline inside Audio Tools) is always
-  // visible; the floating window only renders when opened.
+  // visible; the floating window unmounts only when CLOSED. An OPEN
+  // floating window stays visible even while Settings replaces the
+  // workspace, because its open buttons live inside Settings → Audio
+  // Tools (see the display note in containerStyle below).
   if (!embedded && !isOpen) return null;
 
   // Outer container differs by mode: a fixed, draggable, resizable
@@ -1641,6 +1644,13 @@ export function AudioSuiteWindow({
         // (AddPanelModal etc at zIndex 10000) so critical overlays
         // still win.
         zIndex: isRxSuite ? 410 : 400,
+        // The suite's open buttons (TX/RX Suite) live inside Settings →
+        // Audio Tools, so the floating window MUST stay visible while the
+        // Settings view is up — otherwise clicking those buttons opens a
+        // window the operator can never see (regression from #1274). Unlike
+        // FreeDV/FT8 (workspace overlays that legitimately hide behind
+        // Settings), this window is a Settings-adjacent editor; it floats
+        // over the Settings page and is draggable out of the way.
         display: 'flex',
         flexDirection: 'column',
         background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Zeus.Plugins.Contracts;
 using Zeus.Plugins.Contracts.Audio;
+using Zeus.Plugins.Host.Registry;
 
 namespace Zeus.Plugins.Host;
 
@@ -78,8 +79,22 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
         if (!Directory.Exists(root)) Directory.CreateDirectory(root);
         _log.LogInformation("Plugin root: {Root}", root);
 
+        // Complete deferred uninstalls FIRST. On Windows the ALC keeps plugin
+        // DLLs file-locked past deactivation (until a full GC), so
+        // PluginInstaller.UninstallAsync can fail the directory delete and
+        // instead drops a .pending-delete marker. Without this sweep the next
+        // boot would re-activate the "uninstalled" plugin from its leftover
+        // dir — the uninstall silently undone.
+        SweepPendingDeletes(root);
+
+        var suppressedDirs = await RunStartupMigrationsAsync(root, ct)
+            .ConfigureAwait(false);
+
         var pluginDirs = Directory.EnumerateDirectories(root)
-            .Where(d => File.Exists(Path.Combine(d, "plugin.json")))
+            .Where(d => File.Exists(Path.Combine(d, "plugin.json"))
+                        && !File.Exists(Path.Combine(d, PendingDeleteMarker))
+                        && !suppressedDirs.Contains(Path.GetFullPath(d))
+                        && !IsAlreadyActiveDirectory(d))
             .ToArray();
 
         foreach (var dir in pluginDirs)
@@ -94,6 +109,99 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
             }
         }
     }
+
+    /// <summary>Marker file a deferred uninstall leaves in a plugin dir whose
+    /// files were still locked at uninstall time (Windows ALC file locks).
+    /// Marked dirs are deleted — and never activated — on the next boot.</summary>
+    public const string PendingDeleteMarker = ".pending-delete";
+
+    private void SweepPendingDeletes(string root)
+    {
+        foreach (var dir in Directory.EnumerateDirectories(root))
+        {
+            if (!File.Exists(Path.Combine(dir, PendingDeleteMarker))) continue;
+            try
+            {
+                if (!TryDeletePluginDirectory(dir))
+                {
+                    _log.LogWarning("Could not complete deferred uninstall of {Dir}; will retry next start.", dir);
+                    continue;
+                }
+                _log.LogInformation("Completed deferred uninstall of {Dir}", dir);
+            }
+            catch (Exception ex)
+            {
+                // Still locked somehow — leave the marker in place so the dir
+                // stays excluded from activation and the next boot retries.
+                _log.LogWarning(ex, "Could not complete deferred uninstall of {Dir}; will retry next start.", dir);
+            }
+        }
+    }
+
+    private bool TryDeletePluginDirectory(string dir)
+    {
+        if (_options.TryDeleteDirectory is { } tryDeleteDirectory)
+            return tryDeleteDirectory(dir);
+
+        Directory.Delete(dir, recursive: true);
+        return true;
+    }
+
+    private async Task<IReadOnlySet<string>> RunStartupMigrationsAsync(
+        string root,
+        CancellationToken ct)
+    {
+        var migrator = _services.GetService<PluginIdMigrator>();
+        var installer = _services.GetService<PluginInstaller>();
+        if (migrator is null || installer is null)
+            return EmptyPathSet;
+
+        using var migrationCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        migrationCts.CancelAfter(_options.MigrationTimeout);
+
+        try
+        {
+            return await migrator.RunStartupMigrationsAsync(installer, migrationCts.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && migrationCts.IsCancellationRequested)
+        {
+            _log.LogWarning(ex,
+                "Plugin id startup migrations did not complete for {Root}; installed plugins will continue loading.",
+                root);
+            return EmptyPathSet;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex,
+                "Plugin id startup migrations did not complete for {Root}; installed plugins will continue loading.",
+                root);
+            return EmptyPathSet;
+        }
+    }
+
+    private bool IsAlreadyActiveDirectory(string dir)
+    {
+        var full = NormalizeDirectoryPath(dir);
+        return _active.Values.Any(p =>
+            string.Equals(NormalizeDirectoryPath(p.Loaded.PluginDir), full, PathComparison));
+    }
+
+    private static string NormalizeDirectoryPath(string dir) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
+
+    private static readonly IReadOnlySet<string> EmptyPathSet =
+        new HashSet<string>(PathComparer);
+
+    private static StringComparer PathComparer =>
+        OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+
+    private static StringComparison PathComparison =>
+        OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
 
     public async Task StopAsync(CancellationToken ct)
     {
@@ -132,15 +240,22 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
             radioController: granted.HasFlag(PluginCapabilities.ControlRadio)
                 ? _services.GetService<IRadioController>()
                 : null,
+            hostDataDirectory: _options.HostDataDirectory ?? _settings.DataDirectory,
             // Audio playback sink (local monitor + on-air TX inject). Provided
             // by the host when available; on-air only reaches the air under
-            // operator MOX, so this is not capability-gated here.
-            playback: _services.GetService<IAudioPlaybackSink>(),
+            // operator MOX, so this is not capability-gated here. Prefer the
+            // per-plugin factory — the sink's over-air resampler is stateful,
+            // so two plugins sharing one instance would leak residual samples
+            // into each other's first block — falling back to a host-wide
+            // singleton for hosts that only register that.
+            playback: _services.GetService<Func<IAudioPlaybackSink>>()?.Invoke()
+                ?? _services.GetService<IAudioPlaybackSink>(),
             // QRZ callsign lookup, gated on NetworkAccess — the host reuses the
             // operator's stored credentials + rate-limit gate (no second login).
             qrz: granted.HasFlag(PluginCapabilities.NetworkAccess)
                 ? _services.GetService<IQrzLookup>()
-                : null);
+                : null,
+            operatorIdentity: _services.GetService<IOperatorIdentityProvider>());
 
         using (var initCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
@@ -225,7 +340,9 @@ public sealed record PluginManagerOptions
 {
     public TimeSpan InitTimeout { get; init; } = TimeSpan.FromSeconds(10);
     public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromSeconds(5);
+    public TimeSpan MigrationTimeout { get; init; } = TimeSpan.FromSeconds(60);
     public bool SafeMode { get; init; } = false;
+    internal Func<string, bool>? TryDeleteDirectory { get; init; }
 
     /// <summary>
     /// Override the plugin discovery root. Null (default) defers to
@@ -234,6 +351,17 @@ public sealed record PluginManagerOptions
     /// <c>ZEUS_PLUGINS_PATH</c> env var.
     /// </summary>
     public string? PluginRoot { get; init; }
+
+    /// <summary>
+    /// The host data directory surfaced to plugins as
+    /// <see cref="Zeus.Plugins.Contracts.IPluginContext.HostDataDirectory"/>.
+    /// Null (default) falls back to the prefs database's directory — which is
+    /// WRONG for hosts using prefs profiles (the prefs file moves into
+    /// <c>profiles/</c> while per-data-dir files like <c>zeus-logbook.db</c>
+    /// stay at the data-dir root), so the host should always set this to the
+    /// data-dir root it wants plugins to see.
+    /// </summary>
+    public string? HostDataDirectory { get; init; }
 }
 
 /// <summary>Runtime state for one currently-active plugin.</summary>

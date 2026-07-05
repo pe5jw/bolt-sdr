@@ -71,6 +71,7 @@ function TuneSlider({ label, value, min, max, unit = '', precision = 1, onChange
           const next = Number(e.currentTarget.value);
           if (Number.isFinite(next)) onChange(roundTo(next, precision));
         }}
+        aria-label={`${label} value${unit ? ` in ${unit.trim()}` : ''}`}
       />
     </div>
   );

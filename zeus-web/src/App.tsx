@@ -44,7 +44,7 @@
 // License for details.
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
-import { ChevronLeft, ChevronRight, Download, Upload } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Trash2, Upload } from 'lucide-react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
 import { DigitalWindow } from './components/DigitalWindow';
@@ -53,9 +53,12 @@ import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
 import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import {
   currentDetachedWorkspaceLayoutId,
+  currentDetachedAudioSuiteRoute,
+  isDetachedSettingsWindow,
   restorePersistedWorkspaceWindows,
 } from './layout/workspace-windows';
 import { ConfirmDialog } from './layout/ConfirmDialog';
+import CrashConsentModal from './components/CrashConsentModal';
 import { SupportSessionWatcher } from './components/SupportSessionWatcher';
 import { FreeDvWindow } from './components/FreeDvWindow';
 import { AfGainSlider } from './components/AfGainSlider';
@@ -79,23 +82,31 @@ import { PsToggleButton } from './components/PsToggleButton';
 import { PaTempChip } from './components/PaTempChip';
 import { WorkspaceZoomControls } from './components/WorkspaceZoomControls';
 import { QrzStatusPill } from './components/QrzStatusPill';
+import { AdminPage } from './components/AdminPage';
+import { QrzAccessGate } from './components/QrzAccessGate';
+import { QrmButton, QrmPanelToggleButton } from './components/QrmButton';
+import { RogerBeepButton } from './components/RogerBeepButton';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
 import ReportProblemButton from './components/report-problem/ReportProblemButton';
 import ReportProblemModal from './components/report-problem/ReportProblemModal';
 import type { SettingsTabId } from './components/SettingsMenu';
 import { SignalIntelligenceController } from './components/SignalIntelligenceController';
+import { SignalJammerPopover } from './components/SignalJammerPopover';
+import { SignalJammerRuntime } from './components/SignalJammerRuntime';
 import { SmartNrController } from './components/SmartNrController';
 import { DspSceneDiagnosticsPublisher } from './components/DspSceneDiagnosticsPublisher';
 import { AudioPlaybackDiagnosticsPublisher } from './components/AudioPlaybackDiagnosticsPublisher';
 import { useTxAudioProfileDirtyTracker } from './state/tx-audio-profile-tracker';
 import { useEasterEggStore } from './state/easter-egg-store';
+import { useSignalJammerStore } from './state/signal-jammer-store';
 import { ThemeApplier } from './components/ThemeApplier';
+import { ForceUpdateGate } from './components/ForceUpdateGate';
 import { StartupUpdatePrompt } from './components/StartupUpdatePrompt';
 import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
 import { BOARD_LABELS } from './api/radio';
 import { useFilterRibbonOpenSync } from './components/filter/filterRibbonShared';
-import { CONTACTS, bandOf } from './components/design/data';
+import { bandOf } from './components/design/data';
 import { bearingDeg, distanceKm } from './components/design/geo';
 import { startRealtime } from './realtime/ws-client';
 import { isRemoteMode } from './remote/remote-client';
@@ -104,20 +115,23 @@ import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
 import { setAudioHostMode } from './audio/host-mode';
 import { useMicUplink } from './audio/use-mic-uplink';
-import { fetchState, fetchUpdateStatus, type RepoUpdateStatus } from './api/client';
+import { disconnect, disconnectP2, disconnectP3, fetchState, fetchUpdateStatus, type RepoUpdateStatus } from './api/client';
 import { useConnectionStore } from './state/connection-store';
 import { getReceiverMode } from './state/receiver-state';
 import { useFreeDvWindowStore } from './state/freedv-window-store';
 import { useRadioStore } from './state/radio-store';
 import { useQrzStore } from './state/qrz-store';
+import { useUserAccessStore } from './state/user-access-store';
 import { qrzFullName } from './api/qrz';
 import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
+import { logbookPluginUnavailableReason, useLogbookPluginStore } from './state/logbook-plugin-store';
 import { useTxStore } from './state/tx-store';
 import { useLayoutStore } from './state/layout-store';
 import { useSavedLayoutsStore } from './state/saved-layouts-store';
 import { useDisplaySettingsStore } from './state/display-settings-store';
 import { useCapabilitiesStore } from './state/capabilities-store';
+import { useMidiStore } from './state/midi-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { useFilterAutopan } from './util/filter-autopan';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
@@ -128,6 +142,10 @@ import { useDesktopViewportLock, useIsMobileViewport } from './mobile/use-mobile
 import type L from 'leaflet';
 import type { Contact } from './components/design/data';
 import { qrzStationToContact } from './components/design/qrz-contact';
+import { reloadInstalledPluginUis } from './plugins/runtime/pluginRuntime';
+import { usePluginsStore } from './plugins/state/plugins-store';
+import { useDigitalPluginStore } from './state/digital-plugin-store';
+import { useFreeDvPluginStore } from './state/freedv-plugin-store';
 
 const SettingsView = lazy(async () => {
   const module = await import('./components/SettingsMenu');
@@ -143,22 +161,79 @@ const MobileApp = lazy(async () => {
 // previous 333 ms cadence accounted for ~3 of the ~5 idle-RX fetches/sec and
 // drove repeated applyState/hydrateFromState fan-out into the React tree.
 const STATE_POLL_MS = 1000;
+const USER_ACCESS_REFRESH_MS = 30_000;
+// When MIDI is enabled the operator's physical knob/fader can change server
+// state at whatever rate they move it; the 1 s poll makes the on-screen
+// slider jump ~1 s behind their hand, which reads as broken. Speeding up
+// only while MIDI is active pays the fetch cost only when the operator is
+// actually driving the radio from a controller (issue #1231).
+const MIDI_ACTIVE_STATE_POLL_MS = 250;
 
 export default function App() {
   const detachedLayoutId = useMemo(() => currentDetachedWorkspaceLayoutId(), []);
+  const detachedSettingsWindow = useMemo(() => isDetachedSettingsWindow(), []);
+  const detachedAudioSuiteRoute = useMemo(() => currentDetachedAudioSuiteRoute(), []);
   // Remote (WebRTC) RX-monitoring mode — ?remote=<CALLSIGN>. Frames arrive over
   // the broker instead of the local /ws; RemoteGate prompts for the session
   // password and owns that transport.
   const remoteMode = useMemo(() => isRemoteMode(), []);
+  const adminRoute = useMemo(() => window.location.pathname.replace(/\/+$/, '') === '/admin', []);
+  const appAccessAllowed = useUserAccessStore((s) => s.session?.accessAllowed === true);
+  const pluginPolicyKey = useUserAccessStore((s) =>
+    s.session
+      ? JSON.stringify({
+          mode: s.session.pluginAccessMode,
+          entitlements: s.session.pluginEntitlements,
+          managed: s.session.managedPlugins,
+        })
+      : '',
+  );
+  const refreshAccessSession = useUserAccessStore((s) => s.refreshSession);
+  const appShellEnabled = appAccessAllowed && !adminRoute;
+
+  useEffect(() => {
+    void refreshAccessSession();
+  }, [refreshAccessSession]);
+
+  useEffect(() => {
+    if (!appShellEnabled) return;
+    const id = window.setInterval(() => {
+      void refreshAccessSession();
+    }, USER_ACCESS_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [appShellEnabled, refreshAccessSession]);
+
+  useEffect(() => {
+    if (!appShellEnabled) return;
+    void (async () => {
+      try {
+        await usePluginsStore.getState().refreshInstalled();
+        await reloadInstalledPluginUis();
+        await useDigitalPluginStore.getState().probe();
+        await useFreeDvPluginStore.getState().probe();
+        await useLogbookPluginStore.getState().probe();
+      } catch (err) {
+        console.warn('plugin access refresh failed', err);
+      }
+    })();
+  }, [appShellEnabled, pluginPolicyKey]);
+
   // Reopen any detached workspace windows the operator left open at the last
   // desktop shutdown. Main window only (a detached window must not re-spawn its
   // siblings) and not in remote/web mode. Runs once on mount; the helper is a
   // no-op outside the Photino desktop shell.
   useEffect(() => {
-    if (detachedLayoutId || remoteMode) return;
+    if (
+      !appShellEnabled ||
+      detachedLayoutId ||
+      detachedSettingsWindow ||
+      detachedAudioSuiteRoute ||
+      remoteMode
+    )
+      return;
     void restorePersistedWorkspaceWindows();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [appShellEnabled]);
   const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
   const settingsInitialTab = useLayoutStore((s) => s.settingsInitialTab);
   const setSettingsView = useLayoutStore((s) => s.setSettingsView);
@@ -194,6 +269,27 @@ export default function App() {
   const workspaceZoomPct = useConnectionStore((s) => s.workspaceZoomPct);
   const chromeZoom = (workspaceZoomPct > 0 ? workspaceZoomPct : 100) / 100;
   const connected = status === 'Connected';
+  useEffect(() => {
+    if (appAccessAllowed || status !== 'Connected') return;
+
+    void (async () => {
+      try {
+        await disconnectP3();
+      } catch {
+        // Best-effort cleanup; the active protocol may not be P3.
+      }
+      try {
+        await disconnectP2();
+      } catch {
+        // Best-effort cleanup; the active protocol may not be P2.
+      }
+      try {
+        await disconnect();
+      } catch (err) {
+        console.warn('access denial disconnect failed', err);
+      }
+    })();
+  }, [appAccessAllowed, status]);
   // Brand sub label reflects what discovery actually saw on the wire
   // (selection.connected), not the operator's preferred override — showing
   // "ANAN G2" when an HL2 is plugged in would just confuse anyone reading
@@ -205,7 +301,10 @@ export default function App() {
   // Reload on mount AND every time the wire connection flips to Connected.
   // Clicking Connect on a discovered radio doesn't refresh radio-store on
   // its own (only the manual-connect path does).
-  useEffect(() => { radioLoad(); }, [radioLoad, connected]);
+  useEffect(() => {
+    if (!appShellEnabled) return;
+    radioLoad();
+  }, [radioLoad, connected, appShellEnabled]);
   // Track unsaved TX Audio Profile edits (dirty flag) for the disconnect/close
   // save prompt. Mounted once here so it spans the whole session.
   useTxAudioProfileDirtyTracker();
@@ -228,11 +327,11 @@ export default function App() {
   // `radioLoaded` means we load the correct layout exactly once.
   const radioLoaded = useRadioStore((s) => s.loaded);
   useEffect(() => {
-    if (!radioLoaded) return;
+    if (!appShellEnabled || !radioLoaded) return;
     const key = radioConnected !== 'Unknown' ? radioConnected : 'default';
     void loadLayoutsForRadio(key);
     void loadSavedLayoutsForRadio(key);
-  }, [loadLayoutsForRadio, loadSavedLayoutsForRadio, radioConnected, radioLoaded]);
+  }, [loadLayoutsForRadio, loadSavedLayoutsForRadio, radioConnected, radioLoaded, appShellEnabled]);
   const activeLayoutId = useLayoutStore((s) => s.activeLayoutId);
 
   // Recover action for the workspace error boundary: reset the active layout to
@@ -251,11 +350,13 @@ export default function App() {
   const topbarControlsRef = useRef<HTMLDivElement | null>(null);
   const [topbarScroll, setTopbarScroll] = useState({ canLeft: false, canRight: false });
 
-  // Hidden HARDWARE diagnostics folder — easter egg. Tapping the brand-mark
-  // lightning bolt unlocks the folder for this session (it re-locks on the next
-  // launch; counting + threshold live in easter-egg-store). Deliberately exposes
-  // no hover, cursor, or title affordance so the bolt never advertises itself.
+  // Hidden HARDWARE diagnostics + TX testing tools — easter egg. Tapping the
+  // brand-mark lightning bolt unlocks the folder and popout for this session
+  // (it re-locks on next launch; counting + threshold live in
+  // easter-egg-store). Deliberately exposes no hover, cursor, or title
+  // affordance so the bolt never advertises itself.
   const registerBoltClick = useEasterEggStore((s) => s.registerBoltClick);
+  const signalJammerEnabled = useSignalJammerStore((s) => s.enabled);
   const syncTopbarScroll = useCallback(() => {
     const el = topbarControlsRef.current;
     if (!el) return;
@@ -312,8 +413,9 @@ export default function App() {
         // A newer production build (from the download domain) is available and
         // we have somewhere to send the operator — prompt on startup.
         const actionableRelease =
-          next.updateAvailable
-          && (next.updateAction === 'download' || next.updateAction === 'openRelease');
+          next.forceUpdate
+          || (next.updateAvailable
+            && (next.updateAction === 'download' || next.updateAction === 'openRelease'));
         if (actionableRelease) setStartupUpdate(next);
       })
       .catch(() => {
@@ -326,14 +428,15 @@ export default function App() {
     // Remote (WebRTC) mode sources frames over the broker, not the local
     // websocket — RemoteGate owns that transport. Starting startRealtime() here
     // too would open a second, doomed /ws connection.
-    if (remoteMode) return;
+    if (!appShellEnabled || remoteMode) return;
     const stop = startRealtime();
     return () => {
       stop();
     };
-  }, [remoteMode]);
+  }, [remoteMode, appShellEnabled]);
 
   useEffect(() => {
+    if (!appShellEnabled) return;
     const ctrl = new AbortController();
     fetchState(ctrl.signal)
       .then((next) => {
@@ -344,13 +447,14 @@ export default function App() {
         /* ConnectPanel reports startup/API failures in the visible UI. */
       });
     return () => ctrl.abort();
-  }, []);
+  }, [appShellEnabled]);
 
   // Fetch host capabilities once on mount. The backend snapshot is built
   // at startup and doesn't change at runtime, so a single fetch is enough;
   // failures fall back to "no features available" which hides feature-gated
   // UI rather than rendering broken controls.
   useEffect(() => {
+    if (!appShellEnabled) return;
     void useCapabilitiesStore.getState().refresh();
     // Mirror the resolved host mode into the audio-host-mode flag so the
     // non-React consumers (audio-client, ws-client, mic-uplink) can opt
@@ -363,7 +467,7 @@ export default function App() {
       // own speakers, not the remote operator. See isNativeAudio().
       if (host) setAudioHostMode(host === 'desktop' && !remoteMode ? 'native' : 'browser');
     });
-  }, []);
+  }, [remoteMode, appShellEnabled]);
 
   useEffect(() => {
     // Normally the poll only runs once a radio is connected. In remote (WebRTC)
@@ -374,6 +478,7 @@ export default function App() {
     // disables MOX and empties every store-driven panel (meters, TX, controls)
     // even though the panadapter — fed straight from frames — keeps rendering.
     // The poll seeds the store as soon as the tunnel can serve /api/state.
+    if (!appShellEnabled) return;
     if (!connected && !remoteMode) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -394,7 +499,10 @@ export default function App() {
       } catch {
         /* transient errors reconcile on the next tick */
       }
-      if (!cancelled) timer = setTimeout(tick, STATE_POLL_MS);
+      if (!cancelled) {
+        const midiOn = useMidiStore.getState().config.enabled;
+        timer = setTimeout(tick, midiOn ? MIDI_ACTIVE_STATE_POLL_MS : STATE_POLL_MS);
+      }
     };
     tick();
     return () => {
@@ -402,7 +510,7 @@ export default function App() {
       if (timer != null) clearTimeout(timer);
       ctrl?.abort();
     };
-  }, [connected, remoteMode]);
+  }, [connected, remoteMode, appShellEnabled]);
 
   useEffect(() => {
     return useConnectionStore.subscribe((state, prev) => {
@@ -519,9 +627,12 @@ export default function App() {
 
   const qrzHome = useQrzStore((s) => s.home);
   const qrzLookup = useQrzStore((s) => s.lastLookup);
-  const qrzHasXml = useQrzStore((s) => s.hasXmlSubscription);
   const qrzLookupError = useQrzStore((s) => s.lookupError);
-  const qrzActive = !!qrzHome && qrzHasXml;
+  // QRZ XML lookups return basic callsign data (name, grid, country, DXCC/CQ/ITU)
+  // to free-tier accounts as well — an XML subscription only adds the extended
+  // license / QSL fields. Gate the card on a resolved home station, NOT on the
+  // subscription flag, so non-subscribers still get lookups.
+  const qrzActive = !!qrzHome;
 
   const addLogEntry = useLoggerStore((s) => s.addLogEntry);
   const logPublishInFlight = useLoggerStore((s) => s.publishInFlight);
@@ -532,11 +643,17 @@ export default function App() {
   const logImportError = useLoggerStore((s) => s.importError);
   const logSelectedIds = useLoggerStore((s) => s.selectedIds);
   const logPublishSelected = useLoggerStore((s) => s.publishSelectedToQrz);
+  const logDeleteSelected = useLoggerStore((s) => s.deleteSelected);
+  const logDeleteInFlight = useLoggerStore((s) => s.deleteInFlight);
+  const logDeleteError = useLoggerStore((s) => s.deleteError);
+  const logDeleteResult = useLoggerStore((s) => s.lastDeleteResult);
   const logExportAdif = useLoggerStore((s) => s.exportAdif);
   const logExportInFlight = useLoggerStore((s) => s.exportInFlight);
   const logExportResult = useLoggerStore((s) => s.lastExportResult);
   const logExportError = useLoggerStore((s) => s.exportError);
   const logImportAdifFile = useLoggerStore((s) => s.importAdifFile);
+  const logbookPluginReady = useLogbookPluginStore((s) => s.installed && s.live);
+  const logbookUnavailableReason = logbookPluginUnavailableReason();
   const workedSummary = useLoggerStore((s) => s.workedSummary);
   const workedSummaryLoading = useLoggerStore((s) => s.workedSummaryLoading);
   const loadWorkedSummary = useLoggerStore((s) => s.loadWorkedSummary);
@@ -544,6 +661,7 @@ export default function App() {
   const qrzHasApiKey = useQrzStore((s) => s.hasApiKey);
 
   const logImportInputRef = useRef<HTMLInputElement | null>(null);
+  const [logDeleteConfirm, setLogDeleteConfirm] = useState<string[] | null>(null);
   let logbookTitle = 'Logbook';
   if (logImportInFlight) {
     logbookTitle = 'Logbook · Importing…';
@@ -569,15 +687,29 @@ export default function App() {
   } else if (logExportResult) {
     const dir = logExportResult.path.replace(/[/\\][^/\\]*$/, '');
     logbookTitle = `Logbook · Exported ${logExportResult.count} → ${dir}`;
+  } else if (logDeleteInFlight) {
+    logbookTitle = 'Logbook · Deleting…';
+  } else if (logDeleteError) {
+    logbookTitle = `Logbook · ${logDeleteError.length > 28 ? 'Delete failed' : logDeleteError}`;
+  } else if (logDeleteResult) {
+    logbookTitle = `Logbook · Deleted ${logDeleteResult.deletedCount}`;
   }
 
   const logSelectedCount = logSelectedIds.size;
-  const publishDisabled = logSelectedCount === 0 || logPublishInFlight || !qrzHasApiKey;
-  const publishTitle = !qrzHasApiKey
+  const publishDisabled = !logbookPluginReady || logSelectedCount === 0 || logPublishInFlight || !qrzHasApiKey;
+  const publishTitle = !logbookPluginReady
+    ? (logbookUnavailableReason ?? 'Logbook plugin unavailable')
+    : !qrzHasApiKey
     ? 'Set a QRZ API key in the QRZ panel to enable publishing'
     : logSelectedCount === 0
       ? 'Select one or more rows to publish'
       : 'Publish selected QSOs to QRZ logbook';
+  const deleteDisabled = !logbookPluginReady || logSelectedCount === 0 || logDeleteInFlight;
+  const deleteTitle = !logbookPluginReady
+    ? (logbookUnavailableReason ?? 'Logbook plugin unavailable')
+    : logSelectedCount === 0
+    ? 'Select one or more rows to delete'
+    : `Delete ${logSelectedCount} selected ${logSelectedCount === 1 ? 'entry' : 'entries'} from the logbook`;
 
   const handleLogImportFile = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0];
@@ -598,8 +730,8 @@ export default function App() {
         type="button"
         className="btn ghost sm"
         onClick={() => logImportInputRef.current?.click()}
-        disabled={logImportInFlight}
-        title="Import an ADIF logbook file"
+        disabled={!logbookPluginReady || logImportInFlight}
+        title={logbookPluginReady ? 'Import an ADIF logbook file' : (logbookUnavailableReason ?? 'Logbook plugin unavailable')}
         aria-label="Import ADIF logbook file"
       >
         <Upload size={13} strokeWidth={2.2} aria-hidden="true" />
@@ -617,8 +749,20 @@ export default function App() {
       <button
         type="button"
         className="btn ghost sm"
+        onClick={() => setLogDeleteConfirm(Array.from(logSelectedIds))}
+        disabled={deleteDisabled}
+        title={deleteTitle}
+        aria-label="Delete selected log entries"
+      >
+        <Trash2 size={13} strokeWidth={2.2} aria-hidden="true" />
+        {logDeleteInFlight ? 'Deleting…' : `Delete (${logSelectedCount})`}
+      </button>
+      <button
+        type="button"
+        className="btn ghost sm"
         onClick={() => void logExportAdif()}
-        title="Export all log entries to ADIF file"
+        disabled={!logbookPluginReady || logExportInFlight}
+        title={logbookPluginReady ? 'Export all log entries to ADIF file' : (logbookUnavailableReason ?? 'Logbook plugin unavailable')}
       >
         <Download size={13} strokeWidth={2.2} aria-hidden="true" />
         Export
@@ -627,13 +771,19 @@ export default function App() {
   ), [
     handleLogImportFile,
     logExportAdif,
+    logExportInFlight,
+    logbookPluginReady,
+    logbookUnavailableReason,
     logImportInFlight,
     logPublishInFlight,
     logPublishSelected,
+    logDeleteInFlight,
     logSelectedCount,
     logSelectedIds,
     publishDisabled,
     publishTitle,
+    deleteDisabled,
+    deleteTitle,
   ]);
 
   // Live rotator heading — drives the map's beam lines when rotctld is up so
@@ -641,9 +791,7 @@ export default function App() {
   // to the current QRZ lookup.
   const rotStatus = useRotatorStore((s) => s.status);
   const rotLiveAz = rotStatus?.connected ? rotStatus.currentAz : null;
-  const contact: Contact | null = qrzActive
-    ? qrzStationToContact(qrzLookup, qrzHome)
-    : (CONTACTS[callsign.toUpperCase()] ?? null);
+  const contact: Contact | null = qrzActive ? qrzStationToContact(qrzLookup, qrzHome) : null;
 
   const workedSummaryCallsign = contact?.callsign ?? null;
 
@@ -729,12 +877,14 @@ export default function App() {
     setBeamOverrideDeg(null);
     setBeamInputStr('');
     const qrz = useQrzStore.getState();
-    if (qrz.connected && qrz.hasXmlSubscription) {
+    if (qrz.connected) {
+      // Free QRZ accounts get basic data (name/grid/country/DXCC); paid XML
+      // subscriptions add extended license/QSL fields. The backend returns 402
+      // for calls that QRZ actually blocks, which surfaces as lookupError in
+      // QrzCard — a clearer signal than the old "silently do nothing" gate.
       qrz.lookup(target).finally(() => setEnriching(false));
     } else {
-      // Design-mock fallback: CONTACTS lookup is synchronous; just run the scan
-      // briefly so the card doesn't pop in without the visual beat.
-      setTimeout(() => setEnriching(false), 700);
+      setEnriching(false);
     }
   }, [callsign]);
 
@@ -862,7 +1012,15 @@ export default function App() {
         </>
       )
     ) : (
-      <>Panadapter · {(vfoHz / 1e6).toFixed(3)} MHz · {bandLabel}</>
+      // Opt the readout out of the .workspace-tile-title uppercase transform —
+      // the plate ("PANADAPTER") stays engraved-uppercase, but SI casing is
+      // preserved (MHz keeps its lowercase "z"; 80m stays lowercase "m").
+      <>
+        Panadapter ·{' '}
+        <span style={{ textTransform: 'none' }}>
+          {(vfoHz / 1e6).toFixed(6)} MHz · {bandLabel}
+        </span>
+      </>
     )
   ), [bandLabel, contact, dist, sp, terminatorActive, vfoHz]);
 
@@ -960,6 +1118,33 @@ export default function App() {
     handleLogQso, handleClearQrz, onCallsignSubmit, runQrzLookup, submitBeam,
   ]);
 
+  if (startupUpdate?.forceUpdate) {
+    return (
+      <>
+        <ThemeApplier />
+        <ForceUpdateGate status={startupUpdate} />
+      </>
+    );
+  }
+
+  if (adminRoute) {
+    return (
+      <>
+        <ThemeApplier />
+        <AdminPage />
+      </>
+    );
+  }
+
+  if (!appAccessAllowed) {
+    return (
+      <>
+        <ThemeApplier />
+        <QrzAccessGate />
+      </>
+    );
+  }
+
   if (detachedLayoutId) {
     return (
       <BandPlanProvider>
@@ -1016,6 +1201,61 @@ export default function App() {
           {remoteMode && <RemoteGate />}
         </SpectrumWheelActionsContext.Provider>
       </WorkspaceContext.Provider>
+    );
+  }
+
+  if (detachedSettingsWindow) {
+    return (
+      <BandPlanProvider>
+      <ThemeApplier />
+      <div
+        className="detached-workspace-app detached-settings-app"
+        data-screen-label="Detached Settings"
+      >
+        <div className="workspace-area detached-workspace-area">
+          <AppErrorBoundary
+            scope="Settings"
+            resetKey={settingsInitialTab}
+            recover={{ label: 'Close settings', run: () => window.close() }}
+          >
+            <Suspense fallback={null}>
+              <SettingsView
+                initialTab={settingsInitialTab as SettingsTabId | undefined}
+                onClose={() => window.close()}
+              />
+            </Suspense>
+          </AppErrorBoundary>
+        </div>
+      </div>
+      </BandPlanProvider>
+    );
+  }
+
+  // Detached Audio Suite window — the TX/RX rack popped out into its own
+  // independent OS window (like a hosted VST plugin editor). Renders the suite
+  // in embedded (full-window flow) mode; the OS window chrome owns close/resize.
+  if (detachedAudioSuiteRoute) {
+    return (
+      <BandPlanProvider>
+      <ThemeApplier />
+      <div
+        className="detached-workspace-app detached-audio-suite-app"
+        data-screen-label={`Detached ${detachedAudioSuiteRoute.toUpperCase()} Audio Suite`}
+      >
+        {/* Embedded mode flows at natural height and expects its host to be
+            the scroll container; .workspace-area is overflow:hidden, so wrap
+            the suite in a scroll pane or a tall rack would clip in a short
+            window. */}
+        <div
+          className="workspace-area detached-workspace-area"
+          style={{ overflow: 'auto' }}
+        >
+          <AppErrorBoundary scope="Audio Suite">
+            <AudioSuiteWindow route={detachedAudioSuiteRoute} embedded />
+          </AppErrorBoundary>
+        </div>
+      </div>
+      </BandPlanProvider>
     );
   }
 
@@ -1121,6 +1361,20 @@ export default function App() {
               <div className="label-xs ctrl-lbl">AF</div>
               <AfGainSlider />
             </div>
+            <span className="strip-divider" aria-hidden />
+            <div className="ctrl-group topbar-control topbar-control--roger">
+              <div className="label-xs ctrl-lbl">ROGER</div>
+              <RogerBeepButton />
+            </div>
+            {signalJammerEnabled && (
+              <div className="ctrl-group topbar-control topbar-control--qrm">
+                <div className="label-xs ctrl-lbl">TX TEST</div>
+                <div className="btn-row" style={{ gap: 4, alignItems: 'center' }}>
+                  <QrmPanelToggleButton />
+                  <QrmButton />
+                </div>
+              </div>
+            )}
           </div>
           <button
             type="button"
@@ -1178,13 +1432,12 @@ export default function App() {
         )}
       </div>
 
-      {/* Audio Suite floating window — position:fixed overlay rendered
-          outside the workspace grid so it can drift to wherever the
-          operator drags it without getting clipped by a parent. Mounted
-          unconditionally (returns null when closed) so the open/close
-          state in the store is the single source of truth. */}
-      <AudioSuiteWindow route="tx" />
-      <AudioSuiteWindow route="rx" />
+      {/* The TX/RX Audio Suite is no longer a fixed overlay inside the main
+          window — it pops out into its own independent OS window (see the
+          detachedAudioSuiteRoute branch above and openAudioSuiteWindow), the
+          way a hosted VST plugin editor detaches from the host. */}
+      <SignalJammerPopover />
+      <SignalJammerRuntime />
 
       {/* FreeDV modem popup — floating overlay that opens when the operator
           selects FreeDV mode (see the mode-transition effect above). Mounted
@@ -1203,49 +1456,52 @@ export default function App() {
           bar; the previous separate BottomStatusBar was merged in here so
           the chrome doesn't duplicate. */}
       <div className="transport">
-        <MoxButton />
-        <TunButton />
-        <PsToggleButton />
-        <div className="transport-sep" />
-        <AudioToggle />
-        <MicMeter />
-        <div className="transport-sep hide-mobile" />
-        <CtunButton />
-        <button type="button" className="btn ghost hide-mobile">SPLIT</button>
-        <button type="button" className="btn ghost hide-mobile">RIT</button>
-        <button type="button" className="btn ghost hide-mobile">SAVE MEM</button>
-        <div className="spacer" style={{ flex: 1 }} />
-        <WorkspaceZoomControls />
-        <PaTempChip />
-        <div className="chip hide-mobile">
-          <span className="k">PRE</span>
-          <span className="v">{preampOn ? 'ON' : 'OFF'}</span>
+        <div className="transport-primary">
+          <MoxButton />
+          <TunButton />
+          <PsToggleButton />
+          <div className="transport-sep" />
+          <AudioToggle />
+          <MicMeter />
+          <div className="transport-sep hide-mobile" />
+          <CtunButton />
+          <button type="button" className="btn ghost hide-mobile">SPLIT</button>
+          <button type="button" className="btn ghost hide-mobile">RIT</button>
+          <button type="button" className="btn ghost hide-mobile">SAVE MEM</button>
         </div>
-        <span className={`chip ${connected ? 'accent' : ''}`}>
-          <span className="k">RADIO</span>
-          <span className="v mono">{connected ? (endpoint ?? '—') : '—'}</span>
-        </span>
-        <RotatorStatusPill />
-        <QrzStatusPill />
-        <ReportProblemButton />
-        {/* Reset acts on the active layout's tile arrangement. Disabled
-            while the Settings view is showing (no active workspace to
-            mutate). Add Panel now lives inside the workspace surface. */}
-        <button
-          type="button"
-          className="btn ghost"
-          onClick={() => {
-            const s = useLayoutStore.getState();
-            const active = s.layouts.find((l) => l.id === s.activeLayoutId);
-            if (!active) return;
-            setConfirmResetLayout({ id: active.id, name: active.name });
-          }}
-          disabled={settingsViewOpen}
-          title="Reset active layout to default"
-          aria-label="Reset active layout to default"
-        >
-          ⟳ Default
-        </button>
+        <div className="transport-status">
+          <WorkspaceZoomControls />
+          <PaTempChip />
+          <div className="chip hide-mobile">
+            <span className="k">PRE</span>
+            <span className="v">{preampOn ? 'ON' : 'OFF'}</span>
+          </div>
+          <span className={`chip transport-radio-chip ${connected ? 'accent' : ''}`}>
+            <span className="k">RADIO</span>
+            <span className="v mono">{connected ? (endpoint ?? '—') : '—'}</span>
+          </span>
+          <RotatorStatusPill />
+          <QrzStatusPill />
+          <ReportProblemButton />
+          {/* Reset acts on the active layout's tile arrangement. Disabled
+              while the Settings view is showing (no active workspace to
+              mutate). Add Panel now lives inside the workspace surface. */}
+          <button
+            type="button"
+            className="btn ghost"
+            onClick={() => {
+              const s = useLayoutStore.getState();
+              const active = s.layouts.find((l) => l.id === s.activeLayoutId);
+              if (!active) return;
+              setConfirmResetLayout({ id: active.id, name: active.name });
+            }}
+            disabled={settingsViewOpen}
+            title="Reset active layout to default"
+            aria-label="Reset active layout to default"
+          >
+            ⟳ Default
+          </button>
+        </div>
       </div>
 
       {disconnectedOverlay}
@@ -1266,6 +1522,24 @@ export default function App() {
           <p>This keeps the layout tab but replaces its current panel positions.</p>
         </ConfirmDialog>
       )}
+      {logDeleteConfirm && logDeleteConfirm.length > 0 && (
+        <ConfirmDialog
+          title="Delete log entries"
+          confirmLabel={`Delete ${logDeleteConfirm.length} ${logDeleteConfirm.length === 1 ? 'Entry' : 'Entries'}`}
+          onCancel={() => setLogDeleteConfirm(null)}
+          onConfirm={() => {
+            const ids = logDeleteConfirm;
+            setLogDeleteConfirm(null);
+            void logDeleteSelected(ids);
+          }}
+        >
+          <p>
+            Permanently delete {logDeleteConfirm.length} selected{' '}
+            {logDeleteConfirm.length === 1 ? 'QSO' : 'QSOs'} from the logbook?
+          </p>
+          <p>This cannot be undone. QSOs already uploaded to QRZ or a cloud logger are not retracted there.</p>
+        </ConfirmDialog>
+      )}
       <StartupUpdatePrompt
         status={!startupUpdateDismissed ? startupUpdate : null}
         onDismiss={() => setStartupUpdateDismissed(true)}
@@ -1274,6 +1548,7 @@ export default function App() {
       <UpdatePrompt show={updateAvailable} onUpdate={installUpdate} />
       <ReportProblemModal />
       <ProfileOverlayHost />
+      <CrashConsentModal />
       <SupportSessionWatcher />
       {remoteMode && <RemoteGate />}
     </div>
@@ -1282,4 +1557,3 @@ export default function App() {
     </BandPlanProvider>
   );
 }
-

@@ -14,6 +14,7 @@ using System.Net;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 
 namespace Zeus.Server;
 
@@ -22,7 +23,7 @@ public sealed class CapabilitiesService
     private readonly CapabilitiesSnapshot _snapshot;
     private readonly bool _shareOverLan;
 
-    public CapabilitiesService(ZeusHostOptions options)
+    public CapabilitiesService(ZeusHostOptions options, IConfiguration? configuration = null)
     {
         var version = Assembly.GetExecutingAssembly()
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
@@ -46,6 +47,7 @@ public sealed class CapabilitiesService
             Architecture: architecture,
             Version: version,
             LanHttpsUrls: lanHttpsUrls,
+            DisplayPerformance: DisplayPerformanceOptions.Resolve(configuration),
             Features: new FeatureMatrix(Vst: VstSupported(), VstEditor: VstEditorSupported()));
 
         _shareOverLan = options.HostMode == ZeusHostMode.Desktop && options.ShareOverLan;
@@ -113,6 +115,7 @@ public sealed record CapabilitiesSnapshot(
     string Architecture,
     string Version,
     IReadOnlyList<string> LanHttpsUrls,
+    DisplayPerformanceSnapshot DisplayPerformance,
     FeatureMatrix Features);
 
 public sealed record FeatureMatrix(bool Vst = false, bool VstEditor = false);

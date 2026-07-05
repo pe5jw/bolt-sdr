@@ -17,6 +17,7 @@
 // to /arm {enabled:false} and /halt. A message is only staged when enableTx is
 // true, so a disarmed controller never POSTs /tx.
 
+import { digitalPluginBase } from '../api/digital-plugin';
 import { parseFt8Message } from './ft8-message';
 import { FT8_MAX_TX_OFFSET_HZ, FT8_MIN_OFFSET_HZ } from './ft8-passband';
 import {
@@ -315,17 +316,29 @@ export class Ft8TxController {
     if (msg != null) void this.postStage(msg);
   }
 
-  /** Start calling CQ. `opts.cqDirective` sets the CQ directive (CQ vs CQ DX). */
+  /** Start calling CQ. `opts.cqDirective` sets the CQ directive (CQ vs CQ DX).
+   *  Preserves session-level operator state (arm, HOLD TX FREQ, TX slot) so that
+   *  pressing CQ while armed does NOT silently disarm the sequencer — the backend
+   *  keyer stays armed on its own arm state, and the sequencer must match, or
+   *  incoming replies decode but never get staged (issue #1223). */
   startCq(opts?: Partial<NewQsoOpts>): void {
-    this.state = seqStartCq({
-      myCall: this.state.myCall,
-      myGrid4: this.state.myGrid4,
-      mode: this.state.mode,
-      txAck: this.txAck,
-      noReplyLimit: this.noReplyLimit,
-      disableTxAfter73: this.disableTxAfter73,
-      ...opts,
-    });
+    const preserved = {
+      enableTx: this.state.enableTx,
+      holdTxFreq: this.state.holdTxFreq,
+      txSlot: this.state.txSlot,
+    };
+    this.state = {
+      ...seqStartCq({
+        myCall: this.state.myCall,
+        myGrid4: this.state.myGrid4,
+        mode: this.state.mode,
+        txAck: this.txAck,
+        noReplyLimit: this.noReplyLimit,
+        disableTxAfter73: this.disableTxAfter73,
+        ...opts,
+      }),
+      ...preserved,
+    };
   }
 
   /** Call an arbitrary decoded station (click a decode row). Treats any decode
@@ -386,7 +399,7 @@ export class Ft8TxController {
   // ---- backend POSTs ------------------------------------------------------
 
   private postStage(message: string): Promise<unknown> {
-    return this.post('/api/ft8/tx', {
+    return this.post(`${digitalPluginBase()}/ft8/tx`, {
       message,
       audioHz: this.audioHz,
       slot: this.state.txSlot,
@@ -395,11 +408,11 @@ export class Ft8TxController {
   }
 
   private postArm(enabled: boolean): Promise<unknown> {
-    return this.post('/api/ft8/tx/arm', { enabled });
+    return this.post(`${digitalPluginBase()}/ft8/tx/arm`, { enabled });
   }
 
   private postHalt(): Promise<unknown> {
-    return this.post('/api/ft8/tx/halt', {});
+    return this.post(`${digitalPluginBase()}/ft8/tx/halt`, {});
   }
 
   private async post(url: string, body: unknown): Promise<unknown> {

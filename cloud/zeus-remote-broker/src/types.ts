@@ -61,6 +61,26 @@ export interface Env {
    */
   ADMIN_ORIGINS?: string;
 
+  /**
+   * Optional override for the plugin registry JSON used to auto-populate the
+   * maintainer dashboard's plugin management table. Defaults to the official
+   * OpenHPSDR-Zeus plugin repo.
+   */
+  PLUGIN_REGISTRY_URL?: string;
+
+  /**
+   * Stripe Billing secret key. Set via `wrangler secret put`; never store it in
+   * source. When unset, paid plugin catalog rows are still saved but checkout
+   * returns a clear billing-not-configured error.
+   */
+  STRIPE_SECRET_KEY?: string;
+  /** Stripe webhook signing secret for /billing/webhook. */
+  STRIPE_WEBHOOK_SECRET?: string;
+  /** Default redirect after a successful Stripe checkout. */
+  STRIPE_SUCCESS_URL?: string;
+  /** Default redirect when an operator cancels Stripe checkout. */
+  STRIPE_CANCEL_URL?: string;
+
   /** Cloudflare Realtime TURN key id (set via `wrangler secret put`). */
   TURN_KEY_ID?: string;
   /** Cloudflare Realtime TURN API token (set via `wrangler secret put`). */

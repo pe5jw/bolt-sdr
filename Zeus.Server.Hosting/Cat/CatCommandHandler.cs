@@ -51,6 +51,15 @@ internal sealed class CatCommandHandler
     /// <summary>True once the client issued AI1/AI2 — gates unsolicited pushes.</summary>
     public bool AutoInfoEnabled => Volatile.Read(ref _autoInfo) > 0;
 
+    /// <summary>Server-side toggle for per-port "Auto Report" (piHPSDR AutoRprt
+    /// parity): pre-enables AI1 so devices that expect unsolicited frequency
+    /// updates but never send <c>AI1;</c> (some amplifiers, loggers, legacy CAT
+    /// clients) get them. Distinct from a client's <c>AI1;</c> in that it does
+    /// NOT seed an initial IF frame — a device that never sent AI cannot be
+    /// assumed to be listening at connect time; the next state event drives the
+    /// first push naturally.</summary>
+    public void EnableAutoInfo() => Volatile.Write(ref _autoInfo, 1);
+
     public void Dispatch(string token)
     {
         string cmd = CatProtocol.CommandId(token);

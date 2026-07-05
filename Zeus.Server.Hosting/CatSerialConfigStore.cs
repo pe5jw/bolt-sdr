@@ -118,6 +118,7 @@ public sealed class CatSerialConfigStore : IDisposable
             DataBits = data,
             Parity = parity,
             StopBits = stop,
+            AutoReport = c.AutoReport,
         };
     }
 
@@ -133,7 +134,8 @@ public sealed class CatSerialConfigStore : IDisposable
         BaudRate: e.BaudRate,
         Parity: e.Parity ?? "None",
         DataBits: e.DataBits,
-        StopBits: e.StopBits ?? "One");
+        StopBits: e.StopBits ?? "One",
+        AutoReport: e.AutoReport);
 
     private static CatSerialPortEntry ToEntry(CatSerialPortConfig c) => new()
     {
@@ -143,6 +145,7 @@ public sealed class CatSerialConfigStore : IDisposable
         Parity = c.Parity,
         DataBits = c.DataBits,
         StopBits = c.StopBits,
+        AutoReport = c.AutoReport,
     };
 
     public void Dispose() => _dbLease.Dispose();
@@ -163,4 +166,5 @@ public sealed class CatSerialPortEntry
     public string Parity { get; set; } = "None";
     public int DataBits { get; set; } = 8;
     public string StopBits { get; set; } = "One";
+    public bool AutoReport { get; set; }
 }

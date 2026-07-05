@@ -48,6 +48,19 @@ interface OpenChannels {
   log: RTCDataChannel;
 }
 
+export interface SupportIceServer {
+  urls: string;
+  username?: string;
+  credential?: string;
+}
+
+interface FetchIceOptions {
+  timeoutMs?: number;
+  fetchFn?: typeof fetch;
+}
+
+const STUN_FALLBACK: SupportIceServer[] = [{ urls: 'stun:stun.cloudflare.com:3478' }];
+
 /** A connected support session: issue API GETs, collect logs, then close(). */
 export class SupportSession {
   private constructor(
@@ -74,9 +87,10 @@ export class SupportSession {
       `&callsign=${encodeURIComponent(opts.callsign)}` +
       `&ticket=${encodeURIComponent(opts.ticket)}`;
 
+    const iceServers = await fetchSupportIceServers(opts.wsBase);
     const ws = new WebSocket(url);
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      iceServers,
     });
 
     // Buffer everything received per-channel before the consumer attaches.
@@ -420,6 +434,65 @@ function waitChannelOpen(dc: RTCDataChannel, timeoutMs: number): Promise<void> {
 // --- small utilities ----------------------------------------------------------
 
 type WsData = string | Buffer | ArrayBuffer | Buffer[];
+
+export async function fetchSupportIceServers(
+  wsBase: string,
+  opts: FetchIceOptions = {},
+): Promise<SupportIceServer[]> {
+  const fetchFn = opts.fetchFn ?? fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 5_000);
+  try {
+    const res = await fetchFn(`${brokerHttpBase(wsBase)}/turn`, {
+      method: 'POST',
+      signal: controller.signal,
+    });
+    if (!res.ok) return [...STUN_FALLBACK];
+
+    const body = (await res.json()) as { iceServers?: unknown };
+    const parsed = normalizeIceServers(body.iceServers);
+    return parsed.length > 0 ? parsed : [...STUN_FALLBACK];
+  } catch {
+    return [...STUN_FALLBACK];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function brokerHttpBase(wsBase: string): string {
+  return wsBase.replace(/^ws/i, 'http').replace(/\/+$/, '');
+}
+
+function normalizeIceServers(value: unknown): SupportIceServer[] {
+  if (!Array.isArray(value)) return [];
+  const into: SupportIceServer[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue;
+    const item = entry as { urls?: unknown; username?: unknown; credential?: unknown };
+    const username = typeof item.username === 'string' ? item.username : undefined;
+    const credential = typeof item.credential === 'string' ? item.credential : undefined;
+    const urls = typeof item.urls === 'string'
+      ? [item.urls]
+      : Array.isArray(item.urls)
+        ? item.urls.filter((u): u is string => typeof u === 'string')
+        : [];
+
+    for (const url of urls) {
+      // Same transport filter as the host side (BrokerIceServers.AddUrl): keep
+      // STUN and UDP TURN; drop turns:(TLS) and TCP TURN so an unsupported
+      // transport cannot poison werift's candidate gathering.
+      const lower = url.toLowerCase();
+      const keep = lower.startsWith('stun:') || lower.startsWith('stuns:')
+        || (lower.startsWith('turn:') && !lower.includes('transport=tcp'));
+      if (!keep) continue;
+      const server: SupportIceServer = { urls: url };
+      if (username) server.username = username;
+      if (credential) server.credential = credential;
+      into.push(server);
+    }
+  }
+  return into;
+}
 
 function parse<T>(raw: WsData | string | Buffer): T | null {
   try {

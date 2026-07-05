@@ -26,6 +26,7 @@ vi.mock('../api/client', async (importOriginal) => {
 import { useConnectionStore } from '../state/connection-store';
 import { createEmptyDisplaySlice, useDisplayStore } from '../state/display-store';
 import * as viewCenter from '../state/view-center';
+import * as viewZoom from '../state/view-zoom';
 import { maybeUpdateEstimator, resetEstimator, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import {
@@ -76,6 +77,21 @@ function pushSnapFrame(spec: Float32Array, seq = 1): void {
   });
 }
 
+function pushRx2SnapFrame(spec: Float32Array, seq = 1): void {
+  maybeUpdateEstimator({ panDb: spec, panValid: true, width: SNAP_WIDTH, hzPerPixel: SNAP_HZ_PER_PX });
+  useDisplayStore.setState({
+    rx2: {
+      ...createEmptyDisplaySlice(),
+      width: SNAP_WIDTH,
+      centerHz: BigInt(SNAP_CENTER),
+      hzPerPixel: SNAP_HZ_PER_PX,
+      panDb: spec,
+      panValid: true,
+      lastSeq: seq,
+    },
+  });
+}
+
 function GestureProbe({
   touchMode,
   receiver = 'A',
@@ -122,6 +138,7 @@ function wheel(
     deltaMode?: number;
     shiftKey?: boolean;
     altKey?: boolean;
+    clientX?: number;
   },
 ): void {
   const ev = new Event('wheel', { bubbles: true, cancelable: true });
@@ -131,6 +148,7 @@ function wheel(
     deltaMode: { value: init.deltaMode ?? 0 },
     shiftKey: { value: init.shiftKey ?? false },
     altKey: { value: init.altKey ?? false },
+    clientX: { value: init.clientX ?? 100 },
   });
   target.dispatchEvent(ev);
 }
@@ -177,6 +195,7 @@ describe('usePanTuneGesture mobile touch mode', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     viewCenter._resetForTest();
+    viewZoom._resetForTest();
     rafNowMs = 0;
     nextRafHandle = 1;
     rafCallbacks = new Map<number, FrameRequestCallback>();
@@ -245,6 +264,7 @@ describe('usePanTuneGesture mobile touch mode', () => {
   afterEach(() => {
     useVfoLockStore.setState({ locked: false });
     viewCenter._resetForTest();
+    viewZoom._resetForTest();
     resetEstimator();
     _resetPanSnapStickyForTest();
     useSignalEnhanceStore.setState({
@@ -325,6 +345,25 @@ describe('usePanTuneGesture mobile touch mode', () => {
     expect(target.snappedToSignal).toBe(true);
     expect(target.tuneHz).toBe(Math.round(binHz(140) / 100) * 100);
     expect(target.tuneHz % 100).toBe(0);
+  });
+
+  it('uses the tuned secondary receiver mode for snap edge placement', () => {
+    useConnectionStore.setState({
+      mode: 'USB',
+      receivers: [
+        rxEntry(0, SNAP_CENTER),
+        { ...rxEntry(1, SNAP_CENTER), mode: 'LSB' as RxMode },
+      ],
+    });
+    useSignalEnhanceStore.setState({ snapEnabled: true, snapRadiusHz: 3000, snapMinSnrDb: 5 });
+    useToolbarFavoritesStore.setState({ stepHz: 1 });
+    const spec = voiceBlock();
+    for (let k = 0; k < 5; k++) pushRx2SnapFrame(spec, k + 1);
+
+    const target = resolvePanTuneTarget(binHz(152), true, 'B', 'B');
+
+    expect(target.snappedToSignal).toBe(true);
+    expect(target.tuneHz).toBe(Math.round(binHz(160)));
   });
 
   it('holds the snapped signal between two close carriers, switching only when the cursor reaches the other', () => {
@@ -453,6 +492,71 @@ describe('usePanTuneGesture mobile touch mode', () => {
     expect(useConnectionStore.getState().radioLoHz).toBe(tunedHz);
     expect(useConnectionStore.getState().ctunEnabled).toBe(true);
     expect(viewCenter.viewCenterFor('A').getTargetCenterHz()).toBe(tunedHz);
+
+    unmount();
+  });
+
+  it('uses local pointer-anchored zoom instead of backend zoom for wideband frames', async () => {
+    const width = 2048;
+    const hzPerPixel = 60_000_000 / width;
+    useConnectionStore.setState({ ctunEnabled: false, zoomLevel: 4 });
+    useDisplayStore.setState({
+      width,
+      centerHz: 30_000_000n,
+      hzPerPixel,
+      panDb: new Float32Array(width),
+      wfDb: new Float32Array(width),
+      panValid: true,
+      wfValid: true,
+      lastSeq: 9,
+    });
+    viewCenter.viewCenterFor('A').snapTo(30_000_000, hzPerPixel);
+    viewZoom.snapTo(hzPerPixel);
+
+    const { container, unmount } = render(createElement(GestureProbe, { touchMode: 'normal' }));
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+    await act(async () => {
+      wheel(canvas, { deltaY: 40, shiftKey: true, clientX: 50 });
+      await flush();
+    });
+
+    expect(setZoomMock).not.toHaveBeenCalled();
+    expect(viewZoom.getTargetHzPerPixel()).toBeLessThan(hzPerPixel);
+    expect(viewCenter.viewCenterFor('A').getTargetCenterHz()).toBeCloseTo(27_000_000, 0);
+
+    unmount();
+  });
+
+  it('uses plain wheel as pointer-anchored zoom on wideband frames', async () => {
+    const width = 2048;
+    const hzPerPixel = 60_000_000 / width;
+    useConnectionStore.setState({ ctunEnabled: false, zoomLevel: 4, vfoHz: 14_200_000 });
+    useDisplayStore.setState({
+      width,
+      centerHz: 30_000_000n,
+      hzPerPixel,
+      panDb: new Float32Array(width),
+      wfDb: new Float32Array(width),
+      panValid: true,
+      wfValid: true,
+      lastSeq: 10,
+    });
+    viewCenter.viewCenterFor('A').snapTo(30_000_000, hzPerPixel);
+    viewZoom.snapTo(hzPerPixel);
+
+    const { container, unmount } = render(createElement(GestureProbe, { touchMode: 'normal' }));
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+    await act(async () => {
+      wheel(canvas, { deltaY: 40, clientX: 50 });
+      await flush();
+    });
+
+    expect(setVfoMock).not.toHaveBeenCalled();
+    expect(setZoomMock).not.toHaveBeenCalled();
+    expect(viewZoom.getTargetHzPerPixel()).toBeLessThan(hzPerPixel);
+    expect(viewCenter.viewCenterFor('A').getTargetCenterHz()).toBeCloseTo(27_000_000, 0);
 
     unmount();
   });

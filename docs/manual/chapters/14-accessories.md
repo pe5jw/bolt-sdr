@@ -49,6 +49,30 @@ Zeus) and **export your log to ADIF** (a download you can hand to a contest
 robot, LoTW upload tool, or another logger). Entries are stored on the
 backend, so the log is the same from any browser you connect with.
 
+The logbook engine ships as the **`org.openhpsdr.logbook` plugin** — install
+it from **Settings → Plugins** and the panel lights up; until then it shows
+a short note explaining what's missing.
+
+**The full logging workspace.** Docked in the workspace, the Logbook is the
+compact table above. Give it real estate — drag its tab off the left dock so
+it opens in its own window, then size that window as you like (the log fills
+whatever space you give it) — and it blooms into the full workspace: the
+complete QSO table, a **station-detail card** for the selected contact, an
+**analytics dashboard** across your entire log, and an **interactive globe**
+of everywhere you've been heard. Click any row to focus its detail card;
+the checkboxes drive multi-select for bulk actions.
+
+**Editing, tags, and QSL.** From the detail card you can **edit a QSO** —
+correct a call, fix an RST, add notes — and attach **tags** for filtering.
+QSL status is tracked per contact, including **LoTW confirmations**.
+
+**LoTW.** The **settings gear** in the Logbook header opens the logbook
+settings: your LoTW username/password, TQSL station location, and
+per-station defaults (rig, antenna, TX power) that stamp new QSOs. **Upload
+new QSOs** signs and uploads through your installed **TQSL** (if Zeus can't
+find TQSL it exports a ready-to-sign ADIF instead), and **Sync
+confirmations** pulls your LoTW QSL matches back into the log.
+
 ### QRZ Lookup, World Map, and Contacts
 
 Sign in under **Settings → QRZ** with your QRZ.com username and password.

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Zeus.Plugins.Host.Registry;
 
@@ -20,6 +21,7 @@ public static class ServiceCollectionExtensions
         RegistryClientOptions? registryOptions = null)
     {
         services.AddSingleton<PluginLoader>();
+        services.TryAddSingleton<IPluginInstallAccessGate, AllowAllPluginInstallAccessGate>();
         services.AddSingleton(sp => new PluginSettingsStore(
             prefsDbPathProvider(),
             sp.GetService<ILogger<PluginSettingsStore>>()));
@@ -43,17 +45,25 @@ public static class ServiceCollectionExtensions
         if (registryOptions is not null)
             services.AddSingleton(registryOptions);
 
-        services.AddHttpClient<PluginInstaller>(c =>
+        services.AddHttpClient<PluginPackageDownloader>(c =>
         {
             c.Timeout = TimeSpan.FromMinutes(2);
             c.DefaultRequestHeaders.UserAgent.ParseAdd("Openhpsdr-Zeus/1.0 (plugins-installer)");
         });
+        services.AddSingleton<IPluginPackageDownloader>(sp => sp.GetRequiredService<PluginPackageDownloader>());
+
         services.AddSingleton(sp => new PluginInstaller(
-            http: sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(PluginInstaller)),
+            downloader: sp.GetRequiredService<IPluginPackageDownloader>(),
             registry: sp.GetRequiredService<IRegistryClient>(),
             manager: sp.GetRequiredService<PluginManager>(),
             pluginRoot: options?.PluginRoot ?? PluginRoot.Get(),
             log: sp.GetService<ILogger<PluginInstaller>>()));
+        services.AddSingleton(sp => new PluginIdMigrator(
+            registry: sp.GetRequiredService<IRegistryClient>(),
+            downloader: sp.GetRequiredService<IPluginPackageDownloader>(),
+            settings: sp.GetRequiredService<PluginSettingsStore>(),
+            pluginRoot: options?.PluginRoot ?? PluginRoot.Get(),
+            log: sp.GetRequiredService<ILogger<PluginIdMigrator>>()));
 
         // VST directory scanner — registers each .vst3 in an operator-
         // chosen folder as a generated plugin package (stub assembly +

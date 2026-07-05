@@ -780,12 +780,15 @@ public sealed class G2PanelActionRouter
 
     private void CycleNr()
     {
-        var nr = _radio.Snapshot().Nr ?? new NrConfig();
+        var snapshot = _radio.Snapshot();
+        var nr = snapshot.Nr ?? new NrConfig();
+        var nr3Ready = snapshot.WdspNr3RnnrAvailable && !string.IsNullOrWhiteSpace(snapshot.Nr3ModelName);
         NrMode next = nr.NrMode switch
         {
             NrMode.Off => NrMode.Anr,
             NrMode.Anr => NrMode.Emnr,
-            NrMode.Emnr => NrMode.Sbnr,
+            NrMode.Emnr => nr3Ready ? NrMode.Rnnr : NrMode.Sbnr,
+            NrMode.Rnnr => NrMode.Sbnr,
             _ => NrMode.Off,
         };
         _radio.SetNr(nr with { NrMode = next });

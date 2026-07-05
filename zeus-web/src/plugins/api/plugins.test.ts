@@ -98,6 +98,13 @@ describe('parseRegistryResponse', () => {
             license: 'GPL-2.0-or-later',
             categories: ['rx', 'ui'],
             verified: true,
+            subscription: {
+              required: true,
+              monthlyPriceCents: 499,
+              currency: 'usd',
+              checkoutUrl: 'https://example.com/checkout',
+              notes: 'monthly',
+            },
             versions: [
               {
                 version: '0.1.0',
@@ -115,6 +122,8 @@ describe('parseRegistryResponse', () => {
     expect(resp.sourceUrl).toBe('https://example.com/registry.json');
     expect(resp.catalog.plugins).toHaveLength(1);
     expect(resp.catalog.plugins[0]?.verified).toBe(true);
+    expect(resp.catalog.plugins[0]?.subscription?.required).toBe(true);
+    expect(resp.catalog.plugins[0]?.subscription?.currency).toBe('USD');
     expect(resp.catalog.plugins[0]?.versions[0]?.downloadUrl).toContain('demo');
   });
 });

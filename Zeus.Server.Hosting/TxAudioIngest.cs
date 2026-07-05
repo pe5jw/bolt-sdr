@@ -70,11 +70,6 @@ internal enum MicBlockSource
     Tci,
     /// <summary>WAV-recording playback to the air. Operator-explicit override.</summary>
     Wav,
-    /// <summary>Built-in FT8/FT4/WSPR auto-sequence keyer audio (digital TX).
-    /// Operator-armed override — bypasses the host/radio single-select gate like
-    /// <see cref="Tci"/>/<see cref="Wav"/>, and suppresses the live mic for the
-    /// duration of a digital transmission so the two never double-feed TXA.</summary>
-    Ft8,
 }
 
 /// <summary>
@@ -124,23 +119,37 @@ public sealed class TxAudioIngest : IDisposable
     // mute by writing FROM this buffer, not by zeroing _scratchIq in place.
     private readonly float[] _muteIq = new float[4096];
 
-    // FreeDV end-of-over TX tail. Non-zero while the mic hot path must yield TX
-    // exclusively to DrainFreeDvTxTail (no double-feed into WDSP fexchange2),
+    // Exclusive TXA utility path. Non-zero while the mic hot path must yield TX
+    // to a tail drain or key-down prime (no double-feed into WDSP fexchange2),
     // exactly as it defers to TxTuneDriver. Also the re-entrancy guard (CAS) so
-    // two rapid un-keys can't both drive ProcessTxBlock. Dedicated scratch so the
-    // drain (run on the un-key thread) never aliases _scratchMic/_scratchIq.
+    // rapid edge transitions can't both drive ProcessTxBlock. Dedicated scratch
+    // so API-thread work never aliases _scratchMic/_scratchIq.
     private int _tailDraining;
     private readonly float[] _tailMic = new float[1024];
     private readonly float[] _tailIq = new float[4096];
     private const int TxRateHz = 48000;          // TX block / DAC rate
-    // Bench-tunable on the G2: hard ceiling on how long the un-key blocks while
-    // the final FreeDV frame clocks out, and the extra hold after the last block
-    // so the radio FIFO finishes transmitting before PTT drops.
-    private const int FreeDvTxTailMaxMs = 350;
-    private const int FreeDvTxTailGuardMs = 60;
+    // Bench-tunable on the G2. The tail drain paces the queued modem audio out at
+    // the DAC rate, so its time budget must cover the ACTUAL backlog FinishTx
+    // queued (residual frame + RADE EOO). The OLD fixed 350 ms budget guillotined
+    // any larger tail mid-symbol — the far-station "garble at end of over". Budget
+    // is now backlog-derived (pending + slack), bounded only by a runaway ceiling.
+    // The guard is the extra hold after the last block so the radio ring/FIFO
+    // finishes transmitting before PTT drops (raise if the very end is still
+    // clipped on air; lower if there is dead carrier at the end).
+    private const int FreeDvTxTailDrainSlackMs = 120;   // headroom over the measured backlog
+    private const int FreeDvTxTailCeilingMs = 1200;     // absolute runaway cap on the drain
+    private const int FreeDvTxTailGuardMs = 160;        // post-drain FIFO flush hold
+    private const int RogerBeepDurationMs = 180;
+    private const int RogerBeepTransportDrainTimeoutMs = 350;
+    private const int RogerBeepTailGuardMs = 120;
+    private const double RogerBeepFrequencyHz = 1000.0;
+    private const float RogerBeepMagnitude = 0.60f;
+    private const int KeyDownPrimeBlocks = 12;
 
     private long _totalMicSamples;
     private long _totalTxBlocks;
+
+    internal bool IsFreeDvTailDraining => Volatile.Read(ref _tailDraining) != 0;
     private long _droppedFrames;
     // Tracks the last-seen MOX state so Clear() fires exactly once per MOX
     // falling edge instead of on every mic frame that happens to arrive while
@@ -163,11 +172,6 @@ public sealed class TxAudioIngest : IDisposable
     // concurrent native-mic frame within TciHysteresisMs is suppressed -- the
     // recording replaces the live mic on the air, they never mix.
     private long _lastWavTickMs;
-    // Digital-keyer-source recency: set on every OnMicPcmBytesFromFt8 call so a
-    // concurrent native/browser mic frame within TciHysteresisMs is suppressed --
-    // while the FT8/FT4/WSPR keyer is streaming its synthesized audio the live
-    // mic must never mix into TXA. Same hysteresis shape as TCI/WAV.
-    private long _lastFt8TickMs;
     // Browser/mobile mic recency: desktop mode has NativeMicCapture running
     // continuously, so remote WebSocket mic frames must temporarily own the
     // "live mic" source. Otherwise mobile PTT mixes phone audio with desktop
@@ -280,12 +284,13 @@ public sealed class TxAudioIngest : IDisposable
         TxService tx,
         StreamingHub hub,
         ILogger<TxAudioIngest> log,
-        FreeDvService? freeDv = null)
+        AudioModemPluginBridge? audioModem = null)
         : this(ring, () => pipeline.CurrentEngine, () => tx.IsMoxOn, hub, log,
                forwardP2: iq => pipeline.ForwardTxIqToP2(iq.Span),
+               drainTxTransport: pipeline.DrainTxIqTransportTail,
                txOwnedByTuneDriver: () => tx.IsTunOn || tx.IsTwoToneOn,
                preKeyOpenAtTicks: () => tx.PreKeyOpenAtTicks,
-               freeDv: freeDv)
+               audioModem: audioModem)
     {
     }
 
@@ -301,16 +306,18 @@ public sealed class TxAudioIngest : IDisposable
         StreamingHub hub,
         ILogger<TxAudioIngest> log,
         Action<ReadOnlyMemory<float>>? forwardP2 = null,
+        Func<TimeSpan, bool>? drainTxTransport = null,
         Action<int>? onWdspConsumed = null,
         Func<bool>? txOwnedByTuneDriver = null,
         Func<long>? preKeyOpenAtTicks = null,
-        FreeDvService? freeDv = null)
+        AudioModemPluginBridge? audioModem = null)
     {
         _ring = ring;
         _engineProvider = engineProvider;
         _isMoxOn = isMoxOn;
-        _freeDv = freeDv;
+        _audioModem = audioModem;
         _forwardP2 = forwardP2;
+        _drainTxTransport = drainTxTransport;
         _onWdspConsumed = onWdspConsumed;
         _txOwnedByTuneDriver = txOwnedByTuneDriver ?? (static () => false);
         _preKeyOpenAtTicks = preKeyOpenAtTicks ?? (static () => 0L);
@@ -336,7 +343,7 @@ public sealed class TxAudioIngest : IDisposable
     /// </summary>
     public void DrainFreeDvTxTail()
     {
-        var freeDv = _freeDv;
+        var freeDv = _audioModem?.Current;
         if (freeDv is null || !freeDv.Active) return;
         if (_txOwnedByTuneDriver()) return;        // TUN/two-tone owns TX
         var engine = _engineProvider();
@@ -353,20 +360,30 @@ public sealed class TxAudioIngest : IDisposable
         lock (_sync) { _accumulatorFill = 0; }
         try
         {
-            // Complete the final frame so a well-formed last OFDM symbol exists.
-            freeDv.FinishTx();
+            // Complete the final frame (residual + RADE EOO) so a well-formed last
+            // OFDM symbol exists, and capture the queued 48 kHz backlog so the drain
+            // budget can cover it — a fixed budget truncated a large tail on air.
+            int pendingOut = freeDv.FinishTx();
+            double pendingMs = pendingOut * 1000.0 / TxRateHz;
 
             long freq = System.Diagnostics.Stopwatch.Frequency;
             long periodTicks = (long)(freq * (double)blockSize / TxRateHz);
-            long deadline = System.Diagnostics.Stopwatch.GetTimestamp();
-            long hardStop = deadline + (long)(freq * (FreeDvTxTailMaxMs / 1000.0));
-            int idle = 0;
+            long startTs = System.Diagnostics.Stopwatch.GetTimestamp();
+            long deadline = startTs;
+            // Budget = the measured backlog + slack, bounded by the runaway ceiling.
+            // Draining paces at the DAC rate, so this many ms of wall-time is what it
+            // takes to clock the whole tail out; sizing it to the backlog (not a
+            // fixed 350 ms) means the final data + EOO frame is never guillotined.
+            double budgetMs = Math.Min(pendingMs + FreeDvTxTailDrainSlackMs, FreeDvTxTailCeilingMs);
+            long hardStop = startTs + (long)(freq * (budgetMs / 1000.0));
+            int idle = 0, drainedBlocks = 0;
+            bool queueEmptied = false;
             while (System.Diagnostics.Stopwatch.GetTimestamp() < hardStop)
             {
                 int real = freeDv.DrainTx(new Span<float>(_tailMic, 0, blockSize));
                 // DrainTx silence-pads a short block; once the queue is empty
                 // (two fully-silent blocks) stop so we don't key dead carrier.
-                if (real == 0) { if (++idle >= 2) break; }
+                if (real == 0) { if (++idle >= 2) { queueEmptied = true; break; } }
                 else idle = 0;
 
                 int produced = engine.ProcessTxBlock(
@@ -377,6 +394,7 @@ public sealed class TxAudioIngest : IDisposable
                     var iqSpan = new ReadOnlySpan<float>(_tailIq, 0, 2 * produced);
                     _ring.Write(iqSpan);                                   // P1 EP2 packer
                     _forwardP2?.Invoke(new ReadOnlyMemory<float>(_tailIq, 0, 2 * produced)); // P2 DUC
+                    drainedBlocks++;
                 }
 
                 // Pace at the DAC rate so the radio FIFO transmits as we feed it.
@@ -390,10 +408,18 @@ public sealed class TxAudioIngest : IDisposable
                 else deadline = System.Diagnostics.Stopwatch.GetTimestamp(); // re-anchor if behind
             }
 
-            // Hold long enough for the radio FIFO to finish the last blocks before
-            // PTT drops (bench-tunable on the G2).
+            double drainMs = (System.Diagnostics.Stopwatch.GetTimestamp() - startTs) * 1000.0 / freq;
+
+            // Hold long enough for the radio ring/FIFO to finish the last blocks
+            // before PTT drops (bench-tunable on the G2).
             Thread.Sleep(FreeDvTxTailGuardMs);
-            _log.LogInformation("freedv.tx.tail drained, dropping PTT");
+            // On-air evidence for the end-of-over garble: term=drained means the
+            // whole tail clocked out (any residual clip is FIFO latency → raise the
+            // guard); term=ceiling means the backlog outran the budget (raise the
+            // ceiling). pendingMs is the true tail length.
+            _log.LogInformation(
+                "freedv.tx.tail dropping PTT: pendingMs={Pending:F0} blocks={Blocks} drainMs={Drain:F0} term={Term} guardMs={Guard}",
+                pendingMs, drainedBlocks, drainMs, queueEmptied ? "drained" : "ceiling", FreeDvTxTailGuardMs);
         }
         catch (Exception ex)
         {
@@ -416,13 +442,196 @@ public sealed class TxAudioIngest : IDisposable
         }
     }
 
+    /// <summary>
+    /// Clock a short voice-mode roger beep through the normal TX chain before
+    /// PTT drops. Called by <see cref="TxService"/> after an accepted local
+    /// MOX release while the wire MOX bit is still asserted.
+    /// </summary>
+    public bool DrainRogerBeepTail()
+    {
+        if (_audioModem?.Current?.Active == true) return false;
+        if (_txOwnedByTuneDriver()) return false;
+
+        var engine = _engineProvider();
+        int blockSize = engine?.TxBlockSamples ?? 0;
+        int iqOut = engine?.TxOutputSamples ?? 0;
+        if (engine is null || blockSize <= 0 || iqOut <= 0
+            || blockSize > _tailMic.Length || 2 * iqOut > _tailIq.Length)
+            return false;
+
+        if (Interlocked.CompareExchange(ref _tailDraining, 1, 0) != 0) return false;
+        lock (_sync) { _accumulatorFill = 0; }
+        bool emitted = false;
+        try
+        {
+            int totalSamples = Math.Max(1, TxRateHz * RogerBeepDurationMs / 1000);
+            double phase = 0.0;
+            double phaseStep = 2.0 * Math.PI * RogerBeepFrequencyHz / TxRateHz;
+            long freq = System.Diagnostics.Stopwatch.Frequency;
+            long periodTicks = (long)(freq * (double)blockSize / TxRateHz);
+            long deadline = System.Diagnostics.Stopwatch.GetTimestamp();
+            int sampleIndex = 0;
+            int blocks = 0;
+            float micPeak = 0f;
+            float iqPeak = 0f;
+
+            while (sampleIndex < totalSamples)
+            {
+                int active = Math.Min(blockSize, totalSamples - sampleIndex);
+                Array.Clear(_tailMic, 0, blockSize);
+                for (int i = 0; i < active; i++)
+                {
+                    float env = RogerBeepEnvelope(sampleIndex + i, totalSamples);
+                    float sample = (float)(Math.Sin(phase) * RogerBeepMagnitude * env);
+                    _tailMic[i] = sample;
+                    float sampleAbs = sample;
+                    if (sampleAbs < 0) sampleAbs = -sampleAbs;
+                    if (sampleAbs > micPeak) micPeak = sampleAbs;
+                    phase += phaseStep;
+                    if (phase >= 2.0 * Math.PI) phase -= 2.0 * Math.PI;
+                }
+
+                int produced = engine.ProcessTxBlock(
+                    new ReadOnlySpan<float>(_tailMic, 0, blockSize),
+                    new Span<float>(_tailIq, 0, 2 * iqOut));
+                if (produced > 0)
+                {
+                    var iqSpan = new ReadOnlySpan<float>(_tailIq, 0, 2 * produced);
+                    for (int i = 0; i < iqSpan.Length; i++)
+                    {
+                        float sampleAbs = iqSpan[i];
+                        if (sampleAbs < 0) sampleAbs = -sampleAbs;
+                        if (sampleAbs > iqPeak) iqPeak = sampleAbs;
+                    }
+                    _ring.Write(iqSpan);
+                    _forwardP2?.Invoke(new ReadOnlyMemory<float>(_tailIq, 0, 2 * produced));
+                    emitted = true;
+                    blocks++;
+                }
+
+                sampleIndex += active;
+                deadline += periodTicks;
+                long remaining = deadline - System.Diagnostics.Stopwatch.GetTimestamp();
+                if (remaining > 0)
+                {
+                    int ms = (int)(remaining * 1000 / freq);
+                    if (ms > 0) Thread.Sleep(ms);
+                }
+                else
+                {
+                    deadline = System.Diagnostics.Stopwatch.GetTimestamp();
+                }
+            }
+
+            bool transportDrained = _drainTxTransport?.Invoke(
+                TimeSpan.FromMilliseconds(RogerBeepTransportDrainTimeoutMs)) ?? true;
+            Thread.Sleep(RogerBeepTailGuardMs);
+            _log.LogInformation(
+                "tx.rogerBeep.tail dropping PTT: blocks={Blocks} durationMs={Duration} freqHz={Freq:F0} micPeak={MicPeak:F4} iqPeak={IqPeak:F4} transportDrained={TransportDrained} guardMs={Guard}",
+                blocks, RogerBeepDurationMs, RogerBeepFrequencyHz, micPeak, iqPeak, transportDrained, RogerBeepTailGuardMs);
+            return emitted;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "tx.rogerBeep.tail drain threw");
+            return false;
+        }
+        finally
+        {
+            lock (_sync)
+            {
+                _ring.Clear();
+                _accumulatorFill = 0;
+                _lastSeenMox = false;
+            }
+            Volatile.Write(ref _tailDraining, 0);
+        }
+    }
+
+    /// <summary>
+    /// Prime WDSP TXA with silence immediately after MOX-on, before the radio
+    /// wire key is asserted. Some TXA backends retain output from the previous
+    /// tail; this clocks that state through and discards it so the next over
+    /// starts with fresh mic audio, not the previous roger beep.
+    /// </summary>
+    public bool PrimeTxDspForKeyDown()
+    {
+        if (_audioModem?.Current?.Active == true) return false;
+        if (_txOwnedByTuneDriver()) return false;
+
+        var engine = _engineProvider();
+        int blockSize = engine?.TxBlockSamples ?? 0;
+        int iqOut = engine?.TxOutputSamples ?? 0;
+        if (engine is null || blockSize <= 0 || iqOut <= 0
+            || blockSize > _tailMic.Length || 2 * iqOut > _tailIq.Length)
+            return false;
+
+        if (Interlocked.CompareExchange(ref _tailDraining, 1, 0) != 0) return false;
+        lock (_sync) { _accumulatorFill = 0; }
+        int blocks = 0;
+        float iqPeak = 0f;
+        long startTs = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            Array.Clear(_tailMic, 0, blockSize);
+            for (int b = 0; b < KeyDownPrimeBlocks; b++)
+            {
+                int produced = engine.ProcessTxBlock(
+                    new ReadOnlySpan<float>(_tailMic, 0, blockSize),
+                    new Span<float>(_tailIq, 0, 2 * iqOut));
+                if (produced <= 0) continue;
+
+                var iqSpan = new ReadOnlySpan<float>(_tailIq, 0, 2 * produced);
+                for (int i = 0; i < iqSpan.Length; i++)
+                {
+                    float sampleAbs = iqSpan[i];
+                    if (sampleAbs < 0) sampleAbs = -sampleAbs;
+                    if (sampleAbs > iqPeak) iqPeak = sampleAbs;
+                }
+                blocks++;
+            }
+
+            double primeMs = (System.Diagnostics.Stopwatch.GetTimestamp() - startTs)
+                * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            _log.LogInformation(
+                "tx.keyDownPrime beforeWireKey blocks={Blocks} iqPeak={IqPeak:F4} elapsedMs={Elapsed:F2}",
+                blocks, iqPeak, primeMs);
+            return blocks > 0;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "tx.keyDownPrime threw");
+            return false;
+        }
+        finally
+        {
+            lock (_sync)
+            {
+                _ring.Clear();
+                _accumulatorFill = 0;
+                _lastSeenMox = false;
+            }
+            Volatile.Write(ref _tailDraining, 0);
+        }
+    }
+
+    private static float RogerBeepEnvelope(int sample, int totalSamples)
+    {
+        int fadeSamples = Math.Min(TxRateHz / 200, Math.Max(1, totalSamples / 4)); // <= 5 ms
+        if (sample < fadeSamples) return sample / (float)fadeSamples;
+        int remaining = totalSamples - sample - 1;
+        if (remaining < fadeSamples) return Math.Max(0f, remaining / (float)fadeSamples);
+        return 1f;
+    }
+
     // FreeDV digital-voice modem coordinator. When FreeDV is the active mode,
     // mic speech is replaced (in place, pre-WDSP) with the transmitted modem
     // signal so WDSP's USB TXA modulates the modem audio onto the carrier.
     // Null in unit tests.
-    private readonly FreeDvService? _freeDv;
+    private readonly AudioModemPluginBridge? _audioModem;
 
     private readonly Action<ReadOnlyMemory<float>>? _forwardP2;
+    private readonly Func<TimeSpan, bool>? _drainTxTransport;
     // True while TUN or the two-tone test is active. TxTuneDriver is the sole TX
     // driver in those states; this mic-ingest path must NOT also run ProcessTxBlock
     // or push IQ, or two threads drive the same TXA (fexchange2) and BOTH feed the
@@ -517,30 +726,12 @@ public sealed class TxAudioIngest : IDisposable
         OnMicPcmBytes(f32lePayload, MicBlockSource.RadioMic);
     }
 
-    /// <summary>
-    /// Source-tagged entry point for the built-in FT8/FT4/WSPR auto-sequence
-    /// keyer (from <see cref="Ft8TxService"/> / <see cref="WsprTxService"/>).
-    /// Mirrors <see cref="OnMicPcmBytesFromWav"/>: stamps the digital-keyer
-    /// recency marker so the live native/browser mic is suppressed for the
-    /// duration of the transmission, then feeds the synthesized block through the
-    /// normal TX chain. The block is tagged <see cref="MicBlockSource.Ft8"/>, an
-    /// operator-armed override that bypasses the host/radio single-select gate.
-    /// The caller keys MOX; this method does not touch MOX.
-    /// </summary>
-    internal void OnMicPcmBytesFromFt8(ReadOnlyMemory<byte> f32lePayload)
-    {
-        Volatile.Write(ref _lastFt8TickMs, Environment.TickCount64);
-        OnMicPcmBytes(f32lePayload, MicBlockSource.Ft8);
-    }
-
     private bool ShouldSuppressForAuthoritativeSource(long now)
     {
         long lastTci = Volatile.Read(ref _lastTciTickMs);
         if (lastTci != 0 && now - lastTci < TciHysteresisMs) return true;
         long lastWav = Volatile.Read(ref _lastWavTickMs);
-        if (lastWav != 0 && now - lastWav < TciHysteresisMs) return true;
-        long lastFt8 = Volatile.Read(ref _lastFt8TickMs);
-        return lastFt8 != 0 && now - lastFt8 < TciHysteresisMs;
+        return lastWav != 0 && now - lastWav < TciHysteresisMs;
     }
 
     /// <summary>Source-tagged entry point for WAV-recording playback to the
@@ -619,7 +810,7 @@ public sealed class TxAudioIngest : IDisposable
                     // MOX fell since our last frame — drain the IQ ring so the
                     // next keyed TX starts clean, without the tail of this one.
                     _ring.Clear();
-                    _freeDv?.FlushTx();
+                    _audioModem?.Current?.FlushTx();
                     _lastSeenMox = false;
                 }
             }
@@ -633,7 +824,7 @@ public sealed class TxAudioIngest : IDisposable
             lock (_sync)
             {
                 _ring.Clear();
-                _freeDv?.FlushTx();
+                _audioModem?.Current?.FlushTx();
                 _lastSeenMox = false;
             }
         }
@@ -749,8 +940,9 @@ public sealed class TxAudioIngest : IDisposable
                 // FreeDV modem signal (in place, same count, internally
                 // buffered). WDSP's USB TXA then SSB-modulates the modem audio.
                 // No-op unless FreeDV is the active mode.
-                if (_freeDv is not null && _freeDv.Active)
-                    _freeDv.ProcessTx(new Span<float>(_scratchMic, 0, blockSize));
+                var modem = _audioModem?.Current;
+                if (modem is not null && modem.Active)
+                    modem.ProcessTx(new Span<float>(_scratchMic, 0, blockSize));
                 int produced = engine.ProcessTxBlock(
                     new ReadOnlySpan<float>(_scratchMic, 0, blockSize),
                     new Span<float>(_scratchIq, 0, 2 * iqOut));

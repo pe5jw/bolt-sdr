@@ -10,7 +10,7 @@
 //
 // UpdatesPanel — Settings -> Updates. Reports the latest PRODUCTION build from
 // the Zeus download domain (downloads.openhpsdrzeus.com, published from `main`
-// only) and opens the matching installer / DMG / AppImage / tarball for this
+// only) and opens the matching installer / package / AppImage / tarball for this
 // platform. Source checkouts see the same domain status; they update their
 // source manually with scripts/update.*.
 
@@ -53,6 +53,9 @@ function openExternal(url: string | null | undefined) {
 }
 
 function statusLabel(status: RepoUpdateStatus): string {
+  if (status.forceUpdate) {
+    return 'Update required';
+  }
   if (status.updateAvailable && status.latestVersion) {
     return `Version ${status.latestVersion} available`;
   }
@@ -134,6 +137,7 @@ export function UpdatesPanel() {
           <section style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <Row label="Installed">{status.installedVersion ?? 'unknown'}</Row>
             <Row label="Latest">{status.latestVersion ?? (checking ? 'checking...' : '-')}</Row>
+            {status.minVersion && <Row label="Required">{status.minVersion}</Row>}
             <Row label="Platform">
               {(status.runtimePlatform ?? 'unknown')}/{status.runtimeArchitecture ?? 'unknown'}
             </Row>
@@ -178,7 +182,7 @@ export function UpdatesPanel() {
               style={{
                 fontSize: 13,
                 fontWeight: 700,
-                color: updateAvailable ? 'var(--power)' : 'var(--fg-1)',
+                color: status.forceUpdate || updateAvailable ? 'var(--power)' : 'var(--fg-1)',
               }}
             >
               {statusLabel(status)}
@@ -190,6 +194,14 @@ export function UpdatesPanel() {
 
           {status.error && (
             <div style={{ fontSize: 11, color: 'var(--tx)' }}>{status.error}</div>
+          )}
+
+          {status.forceUpdate && (
+            <div style={{ fontSize: 11, color: 'var(--tx)', lineHeight: 1.5 }}>
+              {status.forceReason === 'downgrade'
+                ? 'A newer Zeus version was previously installed on this machine.'
+                : 'This Zeus build is below the minimum supported version.'}
+            </div>
           )}
 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // PluginBrowser — registry catalog browser. Lists entries from
-// /api/plugins/registry; each card shows the latest version, license,
+// /api/plugins/registry; each card shows the latest version, description,
 // categories and verified-by-Zeus badge. The Install button posts
 // { source: "registry", id, version } to the install endpoint.
 
@@ -12,7 +12,9 @@ import type {
   RegistryPluginEntry,
   RegistryPluginVersion,
 } from '../api/plugins';
+import { createPluginCheckout, registryEntryToManagedPlugin } from '../api/plugins';
 import { RestartRequiredModal } from '../../components/RestartRequiredModal';
+import { pluginAccessFor, useUserAccessStore } from '../../state/user-access-store';
 
 function latestVersion(
   entry: RegistryPluginEntry,
@@ -78,6 +80,13 @@ function CategoryChip({ label }: { label: string }) {
   );
 }
 
+function subscriptionPrice(pluginAccess: ReturnType<typeof pluginAccessFor>): string | null {
+  const managed = pluginAccess.managedPlugin;
+  if (!managed?.subscriptionRequired) return null;
+  if (managed.monthlyPriceCents <= 0) return `${managed.currency} manual subscription`;
+  return `${managed.currency} ${(managed.monthlyPriceCents / 100).toFixed(2)}/mo`;
+}
+
 function RegistryCard({
   entry,
   installedIds,
@@ -87,8 +96,12 @@ function RegistryCard({
 }) {
   const install = usePluginsStore((s) => s.install);
   const installing = usePluginsStore((s) => s.installInflight);
+  const refreshUserSession = useUserAccessStore((s) => s.refreshSession);
   const latest = useMemo(() => latestVersion(entry), [entry]);
   const alreadyInstalled = installedIds.has(entry.id);
+  const registryManagedPlugin = useMemo(() => registryEntryToManagedPlugin(entry), [entry]);
+  const pluginAccess = pluginAccessFor(entry.id, false, registryManagedPlugin);
+  const price = subscriptionPrice(pluginAccess);
 
   // Restart-required modal — fires after a successful install of THIS
   // card's plugin. The plugin host registers new endpoints +
@@ -97,8 +110,33 @@ function RegistryCard({
   // Same modal the Download Audio Suite bundle install uses.
   const [restartModalOpen, setRestartModalOpen] = useState(false);
   const [installedDisplayName, setInstalledDisplayName] = useState<string | null>(null);
+  const [checkoutInflight, setCheckoutInflight] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
   const onInstall = async () => {
+    if (!pluginAccess.allowed) {
+      if (checkoutInflight) return;
+      setCheckoutInflight(true);
+      setCheckoutError(null);
+      try {
+        const checkout = await createPluginCheckout([entry.id]);
+        if (checkout.url) {
+          window.location.href = checkout.url;
+          return;
+        }
+        if (checkout.subscriptionUpdated) {
+          await refreshUserSession();
+          setCheckoutError(null);
+          return;
+        }
+        setCheckoutError('Subscription checkout did not return a billing session.');
+      } catch (err) {
+        setCheckoutError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setCheckoutInflight(false);
+      }
+      return;
+    }
     if (!latest || installing) return;
     const dto = await install({
       source: 'registry',
@@ -146,30 +184,46 @@ function RegistryCard({
             {entry.verified && <VerifiedBadge />}
           </div>
           <div style={{ color: 'var(--fg-2)', fontSize: 11 }}>
-            <span style={{ fontFamily: 'var(--font-mono)' }}>{entry.id}</span>
-            {latest ? ` · latest v${latest.version}` : ' · no versions'}
-            {entry.author ? ` · ${entry.author}` : ''}
-            {entry.license ? ` · ${entry.license}` : ''}
+            {latest ? `v${latest.version}` : 'No versions'}
           </div>
         </div>
         <button
           type="button"
           className="btn sm"
           onClick={onInstall}
-          disabled={!latest || installing || alreadyInstalled}
+          disabled={!latest || installing || checkoutInflight || alreadyInstalled}
+          title={!pluginAccess.allowed ? pluginAccess.reason ?? 'Plugin subscription required' : undefined}
           aria-label={
-            alreadyInstalled
-              ? `${entry.name} already installed`
-              : `Install ${entry.name}`
+            !pluginAccess.allowed
+              ? `${entry.name} requires a plugin subscription`
+              : alreadyInstalled
+                ? `${entry.name} already installed`
+                : `Install ${entry.name}`
           }
         >
-          {alreadyInstalled
-            ? 'INSTALLED'
-            : installing
-              ? 'WORKING…'
-              : 'INSTALL'}
+          {!pluginAccess.allowed
+            ? checkoutInflight ? 'WORKING…' : 'SUBSCRIBE'
+            : alreadyInstalled
+              ? 'INSTALLED'
+              : installing || checkoutInflight
+                ? 'WORKING…'
+                : 'INSTALL'}
         </button>
       </div>
+
+      {!pluginAccess.allowed && (
+        <div style={{ color: 'var(--accent)', fontSize: 11, fontFamily: 'var(--font-mono)' }}>
+          {price
+            ? `${pluginAccess.reason ?? 'Plugin subscription required'} - ${price}`
+            : pluginAccess.reason ?? 'Plugin subscription required'}
+        </div>
+      )}
+
+      {checkoutError && (
+        <div style={{ color: 'var(--tx)', fontSize: 11 }}>
+          {checkoutError}
+        </div>
+      )}
 
       {entry.description && (
         <div style={{ color: 'var(--fg-1)', lineHeight: 1.5 }}>
@@ -185,18 +239,6 @@ function RegistryCard({
         </div>
       )}
 
-      {latest && (
-        <div
-          style={{
-            color: 'var(--fg-3)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10,
-          }}
-        >
-          SDK ABI v{latest.sdkAbi} · min v{latest.sdkMinVersion} · platforms{' '}
-          {latest.platforms.join(', ')}
-        </div>
-      )}
       {restartModalOpen && (
         <RestartRequiredModal
           pluginDisplayName={installedDisplayName ?? entry.name}
@@ -209,7 +251,6 @@ function RegistryCard({
 
 export function PluginBrowser() {
   const registry = usePluginsStore((s) => s.registry);
-  const sourceUrl = usePluginsStore((s) => s.registrySourceUrl);
   const load = usePluginsStore((s) => s.registryLoad);
   const refresh = usePluginsStore((s) => s.refreshRegistry);
   const installed = usePluginsStore((s) => s.installed);
@@ -237,16 +278,10 @@ export function PluginBrowser() {
         style={{
           display: 'flex',
           alignItems: 'baseline',
-          justifyContent: 'space-between',
+          justifyContent: 'flex-end',
           gap: 12,
         }}
       >
-        <div style={{ color: 'var(--fg-2)', fontSize: 11 }}>
-          Source:{' '}
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-1)' }}>
-            {sourceUrl || '—'}
-          </span>
-        </div>
         <button
           type="button"
           className="btn sm"

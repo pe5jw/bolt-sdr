@@ -201,4 +201,44 @@ public static class TciProtocol
     /// </summary>
     public static bool TryParseDouble(string arg, out double value) =>
         double.TryParse(arg, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+
+    /// <summary>
+    /// Map Zeus <see cref="AgcMode"/> to the TCI wire string. TCI /
+    /// ExpertSDR3 uses uppercase mode names.
+    /// </summary>
+    public static string AgcModeToTci(AgcMode mode) => mode switch
+    {
+        AgcMode.Fixed => "FIXED",
+        AgcMode.Long => "LONG",
+        AgcMode.Slow => "SLOW",
+        AgcMode.Med => "MEDIUM",
+        AgcMode.Fast => "FAST",
+        AgcMode.Custom => "CUSTOM",
+        _ => "MEDIUM",
+    };
+
+    /// <summary>
+    /// Map a TCI mode string to <see cref="AgcMode"/>. Case-insensitive.
+    /// Accepts both the canonical ExpertSDR3 spelling (MEDIUM) and the
+    /// short "NORMAL"/"MED" / "OFF" aliases some clients emit — "OFF"
+    /// resolves to <see cref="AgcMode.Fixed"/>, matching Thetis's approach
+    /// (no runaway analog AGC, gain pinned to the fixed slider).
+    /// Returns null when the string doesn't match a known mode.
+    /// </summary>
+    public static AgcMode? TciToAgcMode(string tciMode)
+    {
+        return tciMode.ToUpperInvariant() switch
+        {
+            "OFF" => AgcMode.Fixed,
+            "FIXED" => AgcMode.Fixed,
+            "LONG" => AgcMode.Long,
+            "SLOW" => AgcMode.Slow,
+            "MED" => AgcMode.Med,
+            "MEDIUM" => AgcMode.Med,
+            "NORMAL" => AgcMode.Med,
+            "FAST" => AgcMode.Fast,
+            "CUSTOM" => AgcMode.Custom,
+            _ => null,
+        };
+    }
 }

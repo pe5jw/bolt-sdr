@@ -32,10 +32,13 @@ export type DisplaySettings = {
   txDisplayFftSize: number | null;
   txDisplayWindow: number | null;
   txDisplayAvgTauMs: number | null;
+  widebandDisplayEnabled: boolean;
+  displayMaxFrameRateHz: number;
 };
 
 // Matches backend DisplaySettingsStore.DefaultRxTraceColor.
 const DEFAULT_RX_TRACE_COLOR = '#FFA028';
+const DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ = 30;
 
 type DisplaySettingsDtoRaw = {
   mode?: string;
@@ -55,6 +58,8 @@ type DisplaySettingsDtoRaw = {
   txDisplayFftSize?: number | null;
   txDisplayWindow?: number | null;
   txDisplayAvgTauMs?: number | null;
+  widebandDisplayEnabled?: boolean | null;
+  displayMaxFrameRateHz?: number | null;
 };
 
 function normalizeRxTraceColor(raw: string | null | undefined): string {
@@ -64,6 +69,11 @@ function normalizeRxTraceColor(raw: string | null | undefined): string {
 
 function normalizeDbValue(raw: number | null | undefined): number | null {
   return typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
+}
+
+function normalizeDisplayMaxFrameRateHz(raw: number | null | undefined): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ;
+  return Math.min(DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ, Math.max(1, raw));
 }
 
 function normalize(raw: DisplaySettingsDtoRaw): DisplaySettings {
@@ -93,6 +103,8 @@ function normalize(raw: DisplaySettingsDtoRaw): DisplaySettings {
     txDisplayFftSize: normalizeDbValue(raw.txDisplayFftSize),
     txDisplayWindow: normalizeDbValue(raw.txDisplayWindow),
     txDisplayAvgTauMs: normalizeDbValue(raw.txDisplayAvgTauMs),
+    widebandDisplayEnabled: raw.widebandDisplayEnabled === true,
+    displayMaxFrameRateHz: normalizeDisplayMaxFrameRateHz(raw.displayMaxFrameRateHz),
   };
 }
 
@@ -120,6 +132,8 @@ export async function updateDisplaySettings(
     window?: number | null;
     avgTauMs?: number | null;
   },
+  widebandDisplayEnabled?: boolean | null,
+  displayMaxFrameRateHz?: number | null,
   signal?: AbortSignal,
 ): Promise<DisplaySettings> {
   const res = await fetch('/api/display-settings', {
@@ -141,6 +155,8 @@ export async function updateDisplaySettings(
       txDisplayFftSize: txDisplay?.fftSize,
       txDisplayWindow: txDisplay?.window,
       txDisplayAvgTauMs: txDisplay?.avgTauMs,
+      widebandDisplayEnabled,
+      displayMaxFrameRateHz,
     }),
     signal,
   });

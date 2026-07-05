@@ -2,11 +2,14 @@
 //
 // WSPR spot store. WSPR is a beacon mode — no QSO, no TX sequencing — so this is
 // just a rolling list of received spots for the WSPR workspace table, plus the
-// enable/native state. Spots arrive as 0x39 WsprSpot WS frames (one per 120 s
-// UTC slot), parsed in realtime/ws-client.ts and applied via ingest(). Enable/
-// disable hydrate from /api/wspr. Mirrors ft8-store.
+// enable/native state. Spots arrive as `wsprspot` SSE events from the Zeus
+// Digital plugin (one per 120 s UTC slot — payload identical to the old 0x39
+// WS frame), dispatched in state/digital-plugin-store.ts and applied via
+// ingest(). Enable/disable hydrate from the plugin's /wspr endpoints. Mirrors
+// ft8-store.
 
 import { create } from 'zustand';
+import { digitalPluginBase } from '../api/digital-plugin';
 import { dialHzFor, nearestDigitalBand } from '../dsp/digital-segments';
 import {
   configureRadioForDigital,
@@ -25,7 +28,7 @@ export interface WsprSpotDto {
   message: string; // "<callsign> <grid4> <dBm>"
 }
 
-/** A completed slot's spots for one receiver (the 0x39 payload). */
+/** A completed slot's spots for one receiver (the `wsprspot` payload). */
 export interface WsprSpotBatch {
   receiver: number;
   slotStartUnixMs: number;
@@ -116,9 +119,10 @@ export const useWsprStore = create<WsprState>((set, get) => ({
     }),
 
   refreshStatus: async (signal) => {
+    const base = digitalPluginBase();
     try {
-      const res = await fetch('/api/wspr', { signal });
-      if (!res.ok) throw new Error(`GET /api/wspr → ${res.status}`);
+      const res = await fetch(`${base}/wspr`, { signal });
+      if (!res.ok) throw new Error(`GET ${base}/wspr → ${res.status}`);
       const j = (await res.json()) as Record<string, unknown>;
       set({
         nativeAvailable: j.nativeAvailable === true,
@@ -131,14 +135,15 @@ export const useWsprStore = create<WsprState>((set, get) => ({
   },
 
   enable: async (band) => {
+    const base = digitalPluginBase();
     try {
       const dialHz = dialHzFor('WSPR', band) ?? 14_095_600;
-      const res = await fetch('/api/wspr/enable', {
+      const res = await fetch(`${base}/wspr/enable`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ receiver: 0, dialFreqMhz: dialHz / 1e6 }),
       });
-      if (!res.ok) throw new Error(`POST /api/wspr/enable → ${res.status}`);
+      if (!res.ok) throw new Error(`POST ${base}/wspr/enable → ${res.status}`);
       const j = (await res.json()) as Record<string, unknown>;
       const ok = j.enabled === true;
       set({
@@ -154,8 +159,9 @@ export const useWsprStore = create<WsprState>((set, get) => ({
   },
 
   disable: async () => {
+    const base = digitalPluginBase();
     try {
-      await fetch('/api/wspr/disable', { method: 'POST' });
+      await fetch(`${base}/wspr/disable`, { method: 'POST' });
     } catch {
       /* best-effort */
     }

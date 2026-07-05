@@ -264,6 +264,16 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         }
     }
 
+    /// <summary>Pick a per-install staging directory that lives in the same
+    /// parent as <paramref name="installDir"/>, so the final rename into place
+    /// is same-filesystem and never fails with EXDEV.</summary>
+    internal static string ComputeStagingDir(string installDir)
+    {
+        var parent = Path.GetDirectoryName(installDir)
+            ?? throw new ArgumentException("installDir has no parent directory.", nameof(installDir));
+        return Path.Combine(parent, $"hamclock-stage-{Guid.NewGuid():N}");
+    }
+
     /// <summary>Build the classic-HamClock set-DX REST URL. The grid is passed as
     /// a named <c>grid=</c> query parameter per the HamClock API
     /// (tardate/ESPHamClock doc/api.md, verified June 2026) — NOT a bare arg.</summary>
@@ -363,7 +373,11 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             // 2. Extract to a staging dir, then flatten the single top-level
             //    folder (openhamclock-<tag>/) into InstallDir. Wipe any prior
             //    install first so a re-install is clean.
-            var staging = Path.Combine(Path.GetTempPath(), $"hamclock-stage-{Guid.NewGuid():N}");
+            // Stage next to InstallDir (not /tmp) so Directory.Move is always
+            // an in-filesystem rename — /tmp is often a separate mount point
+            // (separate /home partition, tmpfs, btrfs subvolume, network home),
+            // and cross-device rename fails with EXDEV → "Invalid cross-device link".
+            var staging = ComputeStagingDir(InstallDir);
             ZipFile.ExtractToDirectory(tmpZip, staging);
             try { File.Delete(tmpZip); } catch { /* best effort */ }
 

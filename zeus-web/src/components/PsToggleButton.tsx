@@ -21,6 +21,7 @@
 // Both are GPL-2.0-or-later.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { setPs, setPsMonitor } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useRadioStore } from '../state/radio-store';
@@ -91,7 +92,15 @@ export function PsToggleButton() {
   // collapsing). Click still toggles the arm state; the popover is purely
   // informational. Native title tooltip is suppressed while armed so it
   // doesn't overlay the popover.
+  //
+  // Rendered through a portal to <body>: the transport bar scrolls its
+  // control clusters horizontally (overflow-x: auto), and any non-visible
+  // ancestor overflow clips absolutely-positioned descendants — an in-bar
+  // anchor would render above the bar but be invisible. A fixed-position
+  // portal keeps the popover immune to container overflow.
   const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
+  const wrapRef = useRef<HTMLSpanElement | null>(null);
   const closeTimer = useRef<number | null>(null);
 
   const cancelClose = useCallback(() => {
@@ -104,21 +113,22 @@ export function PsToggleButton() {
     cancelClose();
     closeTimer.current = window.setTimeout(() => setOpen(false), 120);
   }, [cancelClose]);
+  const openPopover = useCallback(() => {
+    cancelClose();
+    const rect = wrapRef.current?.getBoundingClientRect();
+    if (rect) setAnchor({ x: rect.left + rect.width / 2, y: rect.top });
+    setOpen(true);
+  }, [cancelClose]);
 
   useEffect(() => () => cancelClose(), [cancelClose]);
 
   return (
     <span
+      ref={wrapRef}
       className="ps-button-wrap"
-      onMouseEnter={() => {
-        cancelClose();
-        setOpen(true);
-      }}
+      onMouseEnter={openPopover}
       onMouseLeave={scheduleClose}
-      onFocus={() => {
-        cancelClose();
-        setOpen(true);
-      }}
+      onFocus={openPopover}
       onBlur={scheduleClose}
     >
       <button
@@ -132,15 +142,21 @@ export function PsToggleButton() {
         <span className={`led ${psEnabled ? 'on' : ''}`} style={{ marginRight: 8 }} />
         PS
       </button>
-      {open && psEnabled ? (
-        <span
-          id="ps-status-popover"
-          className="ps-popover-anchor"
-          role="presentation"
-        >
-          <PsStatusPopover />
-        </span>
-      ) : null}
+      {open && psEnabled && anchor
+        ? createPortal(
+            <span
+              id="ps-status-popover"
+              className="ps-popover-portal"
+              style={{ left: anchor.x, top: anchor.y }}
+              role="presentation"
+              onMouseEnter={cancelClose}
+              onMouseLeave={scheduleClose}
+            >
+              <PsStatusPopover />
+            </span>,
+            document.body,
+          )
+        : null}
     </span>
   );
 }

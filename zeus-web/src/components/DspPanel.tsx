@@ -60,13 +60,14 @@ import { Nr3ModelPanel } from './nr/Nr3ModelPanel';
 // Leveler max-gain moved to TxFilterPanel (alongside DRV/TUN/MIC) — it's
 // a TX-only stage and lives with the other TX controls now.
 
-// Mirrors NrControls.tsx. NR3 (RNNR / RNNoise) joins the cycle only when
-// libwdsp exports RNNR AND the operator has installed a model (Zeus ships none;
-// install it from the NR3 panel below). Removed NR modes are not exposed.
-const NR_CYCLE_BASE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
+// Mirrors the front-panel NR cycle. NR3 (RNNR / RNNoise) joins the cycle only
+// when libwdsp exports RNNR and an active model is available (bundled default or
+// operator-installed). Removed NR modes are not exposed.
+const NR_CYCLE_WITHOUT_NR3: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
+const NR_CYCLE_WITH_NR3: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Rnnr', 'Sbnr'];
 
 function nrCycleFor(nr3Ready: boolean): readonly NrMode[] {
-  return nr3Ready ? [...NR_CYCLE_BASE, 'Rnnr'] : NR_CYCLE_BASE;
+  return nr3Ready ? NR_CYCLE_WITH_NR3 : NR_CYCLE_WITHOUT_NR3;
 }
 
 const NR_LABEL: Record<NrMode, string> = {
@@ -117,7 +118,6 @@ export function DspPanel() {
   const setSmartNrMode = useSmartNrStore((s) => s.setAutomationMode);
   const setSmartNrStatus = useSmartNrStore((s) => s.setStatus);
   const openRxSuite = useAudioSuiteStore((s) => s.openRx);
-  const rxSuiteOpen = useAudioSuiteStore((s) => s.rxOpen);
 
   const inflightAbort = useRef<AbortController | null>(null);
 
@@ -268,9 +268,8 @@ export function DspPanel() {
         <button
           type="button"
           onClick={openRxSuite}
-          aria-pressed={rxSuiteOpen}
-          className={`btn sm ${rxSuiteOpen ? 'active' : ''}`}
-          title="Open RX Audio Suite for receive VST inserts"
+          className="btn sm"
+          title="Pop out the RX Audio Suite window for receive VST inserts"
         >
           RX Suite
         </button>

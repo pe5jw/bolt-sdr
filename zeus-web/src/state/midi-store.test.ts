@@ -20,6 +20,7 @@ vi.mock('../api/midi', async (importOriginal) => {
     getMidiCommands: vi.fn(),
     putMidiConfig: vi.fn(),
     startMidiLearn: vi.fn(),
+    keepAliveMidiLearn: vi.fn(),
     stopMidiLearn: vi.fn(),
   };
 });
@@ -27,6 +28,7 @@ vi.mock('../api/midi', async (importOriginal) => {
 import {
   EMPTY_BINDINGS,
   getMidiCommands,
+  keepAliveMidiLearn,
   putMidiConfig,
   startMidiLearn,
   stopMidiLearn,
@@ -36,6 +38,7 @@ import { useMidiStore } from './midi-store';
 const mockCommands = vi.mocked(getMidiCommands);
 const mockPut = vi.mocked(putMidiConfig);
 const mockStart = vi.mocked(startMidiLearn);
+const mockKeepAlive = vi.mocked(keepAliveMidiLearn);
 const mockStop = vi.mocked(stopMidiLearn);
 
 function status(over: Partial<MidiStatus> = {}): MidiStatus {
@@ -156,5 +159,19 @@ describe('midi-store', () => {
     expect(useMidiStore.getState().lastLearn).toBeNull();
     await useMidiStore.getState().stopLearn();
     expect(useMidiStore.getState().status?.learning).toBe(false);
+  });
+
+  it('keepLearnAlive refreshes status without clearing the last learned control', async () => {
+    mockKeepAlive.mockResolvedValue(status({ learning: true }));
+    useMidiStore.getState().ingestLearn({
+      deviceName: 'DJ', controlId: 'cc:0:1', controlType: 'Wheel', value: 0, delta: 1,
+    });
+
+    await useMidiStore.getState().keepLearnAlive();
+
+    expect(mockKeepAlive).toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+    expect(useMidiStore.getState().status?.learning).toBe(true);
+    expect(useMidiStore.getState().lastLearn?.controlId).toBe('cc:0:1');
   });
 });

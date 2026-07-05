@@ -25,6 +25,17 @@ function entry(overrides: Partial<LogEntry>): LogEntry {
     createdUtc: '2026-06-19T14:23:00Z',
     qrzLogId: null,
     qrzUploadedUtc: null,
+    tags: null,
+    qslSent: null,
+    qslRcvd: null,
+    qslSentDate: null,
+    qslRcvdDate: null,
+    lotwQslSentUtc: null,
+    lotwQslRcvdUtc: null,
+    qrzQslRcvdUtc: null,
+    rig: null,
+    antenna: null,
+    txPowerW: null,
     ...overrides,
   };
 }
@@ -93,5 +104,14 @@ describe('logbook search', () => {
   it('composes QRZ-published hiding with text search', () => {
     expect(filterLogEntries(entries, '20m', { hideQrzPublished: true }).map((qso) => qso.id)).toEqual(['b']);
     expect(filterLogEntries(entries, '40m', { hideQrzPublished: true })).toEqual([]);
+  });
+
+  it('supports tag-prefixed terms', () => {
+    const tagged = [
+      entry({ id: 'park', callsign: 'K1POTA', tags: ['POTA', 'CW'] }),
+      entry({ id: 'ragchew', callsign: 'K1CHAT', tags: ['Ragchew'] }),
+    ];
+    expect(filterLogEntries(tagged, 'tag:pot').map((qso) => qso.id)).toEqual(['park']);
+    expect(filterLogEntries(tagged, 'k1 tag:rag').map((qso) => qso.id)).toEqual(['ragchew']);
   });
 });

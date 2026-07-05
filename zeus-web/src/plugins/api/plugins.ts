@@ -87,7 +87,16 @@ export type RegistryPluginEntry = {
   homepage?: string | null;
   categories: string[];
   verified: boolean;
+  subscription: RegistryPluginSubscription | null;
   versions: RegistryPluginVersion[];
+};
+
+export type RegistryPluginSubscription = {
+  required: boolean;
+  monthlyPriceCents: number;
+  currency: string;
+  checkoutUrl: string | null;
+  notes: string | null;
 };
 
 export type RegistryCatalog = {
@@ -101,6 +110,22 @@ export type RegistryResponse = {
   catalog: RegistryCatalog;
 };
 
+export function registryEntryToManagedPlugin(entry: RegistryPluginEntry) {
+  const subscription = entry.subscription;
+  return {
+    pluginId: entry.id,
+    displayName: entry.name || entry.id,
+    subscriptionRequired: subscription?.required === true,
+    monthlyPriceCents: subscription?.monthlyPriceCents ?? 0,
+    currency: subscription?.currency ?? 'USD',
+    active: true,
+    checkoutUrl: null,
+    notes: subscription?.notes ?? null,
+    createdUtc: '',
+    updatedUtc: '',
+  };
+}
+
 export type InstallSource = 'url' | 'file' | 'registry';
 
 export type InstallRequest = {
@@ -110,6 +135,12 @@ export type InstallRequest = {
   sha256?: string;
   id?: string;
   version?: string;
+};
+
+export type PluginCheckoutResponse = {
+  url: string | null;
+  subscriptionUpdated: boolean;
+  pluginIds: string[];
 };
 
 // ---------------------------------------------------------------------------
@@ -215,9 +246,22 @@ function parseRegistryEntry(raw: unknown): RegistryPluginEntry {
     homepage: typeof o.homepage === 'string' ? o.homepage : null,
     categories: asStringArray(o.categories),
     verified: asBool(o.verified),
+    subscription: parseRegistrySubscription(o.subscription),
     versions: Array.isArray(o.versions)
       ? o.versions.map(parseRegistryVersion)
       : [],
+  };
+}
+
+function parseRegistrySubscription(raw: unknown): RegistryPluginSubscription | null {
+  if (raw == null || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  return {
+    required: asBool(o.required),
+    monthlyPriceCents: Math.max(0, asNumber(o.monthlyPriceCents)),
+    currency: asString(o.currency, 'USD').toUpperCase(),
+    checkoutUrl: typeof o.checkoutUrl === 'string' ? o.checkoutUrl : null,
+    notes: typeof o.notes === 'string' ? o.notes : null,
   };
 }
 
@@ -323,6 +367,32 @@ export async function installPlugin(
   });
   if (!res.ok) await failWith(res, '/api/plugins/install');
   return parsePluginDto(await res.json());
+}
+
+function parsePluginCheckout(raw: unknown): PluginCheckoutResponse {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  return {
+    url: typeof o.url === 'string' && o.url.length > 0 ? o.url : null,
+    subscriptionUpdated: o.subscriptionUpdated === true,
+    pluginIds: asStringArray(o.pluginIds),
+  };
+}
+
+export async function createPluginCheckout(
+  pluginIds: string[],
+  signal?: AbortSignal,
+): Promise<PluginCheckoutResponse> {
+  const res = await fetch('/api/plugins/checkout', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      pluginIds,
+      returnUrl: typeof window !== 'undefined' ? window.location.href : undefined,
+    }),
+    signal,
+  });
+  if (!res.ok) await failWith(res, '/api/plugins/checkout');
+  return parsePluginCheckout(await res.json());
 }
 
 export type UninstallResult = {

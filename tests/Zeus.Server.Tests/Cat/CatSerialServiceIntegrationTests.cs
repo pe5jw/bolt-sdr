@@ -125,4 +125,60 @@ public sealed class CatSerialServiceIntegrationTests : IDisposable
             await ((IHostedService)svc).StopAsync(CancellationToken.None);
         }
     }
+
+    [SkippableFact]
+    public async Task Service_AutoReport_PushesFrequencyWithoutClientAiCommand()
+    {
+        // Per-port "Auto Report" (piHPSDR AutoRprt parity): the port is
+        // pre-enabled to AI1 at open, so a client that never sends AI1; still
+        // gets unsolicited FA/IF updates on frequency changes.
+        Skip.IfNot(CatSerialTestSupport.PtyHarnessAvailable, "socat pty pair unavailable (POSIX + socat only)");
+        using var pair = await SocatPtyPair.CreateAsync(CatSerialTestSupport.ResolveSocat()!);
+
+        var (radio, tx, pipeline, dispose) = CatSerialTestSupport.BuildRadio(_dbPath);
+        using var _ = dispose;
+
+        using var store = new CatSerialConfigStore(NullLogger<CatSerialConfigStore>.Instance, _dbPath + ".cfg");
+        store.Set(new[]
+        {
+            new CatSerialPortConfig(true, pair.DeviceA, 115200, "None", 8, "One", AutoReport: true),
+            new CatSerialPortConfig(), new CatSerialPortConfig(), new CatSerialPortConfig(),
+        });
+
+        var svc = new CatSerialService(
+            NullLogger<CatSerialService>.Instance, NullLoggerFactory.Instance,
+            Options.Create(new CatOptions { RateLimitMs = 0 }), store, radio, tx, pipeline);
+
+        await ((IHostedService)svc).StartAsync(CancellationToken.None);
+        try
+        {
+            await CatSerialPortIntegrationTests.WaitForAsync(() => svc.Snapshot().Ports[0].Open);
+            Assert.True(svc.Snapshot().Ports[0].Open);
+            Assert.True(svc.Snapshot().Ports[0].AutoReport);
+
+            using var client = CatSerialPortIntegrationTests.OpenClient(pair.DeviceB);
+
+            // No AI1; sent — but a radio state change must still push FA/IF.
+            radio.SetVfo(21_074_000, fromExternal: true);
+
+            // Drain until we see an FA frame carrying the new frequency; the
+            // MD frame in the same fan-out may come first, so accept either.
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+            bool sawFa = false;
+            while (!sawFa && DateTime.UtcNow < deadline)
+            {
+                var frame = await CatSerialPortIntegrationTests.ReadResponseAsync(client);
+                if (frame.StartsWith("FA", StringComparison.Ordinal))
+                {
+                    Assert.Equal("FA00021074000;", frame);
+                    sawFa = true;
+                }
+            }
+            Assert.True(sawFa, "AutoReport port should push FA even without a prior AI1; command");
+        }
+        finally
+        {
+            await ((IHostedService)svc).StopAsync(CancellationToken.None);
+        }
+    }
 }

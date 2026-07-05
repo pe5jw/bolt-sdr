@@ -34,6 +34,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { openAudioSuiteWindow } from '../layout/workspace-windows';
 import { useTxStore } from './tx-store';
 import { uninstallPlugin as apiUninstall } from '../plugins/api/plugins';
 import { reloadInstalledPluginUis } from '../plugins/runtime/pluginRuntime';
@@ -311,8 +312,12 @@ interface AudioSuiteState {
     message: string | null;
   };
   // postUrl is an internal seam (install vs repair endpoint); callers use the
-  // no-arg form. Default is the install endpoint.
-  installVstEngine(postUrl?: string): Promise<void>;
+  // no-arg form. Default is the install endpoint. `route` decides the
+  // post-install configure step: 'tx' switches the TX processing mode to VST
+  // (the classic single-click TX flow); 'rx' leaves TX alone and just refreshes
+  // the shared engine's RX view, so an operator installing purely for RX VST
+  // doesn't get their TX route silently switched.
+  installVstEngine(postUrl?: string, route?: AudioSuiteRoute): Promise<void>;
   // Force a re-download of the verified engine, replacing a stale/corrupt or
   // crash-looping binary. Reuses the install status/polling lifecycle.
   repairVstEngine(): Promise<void>;
@@ -446,26 +451,12 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         if (route === 'rx') get().openRx();
         else get().openTx();
       },
-      openTx: () =>
-        set((s) => ({
-          isOpen: true,
-          txOpen: true,
-          suiteRoute: 'tx',
-          x: s.txX,
-          y: s.txY,
-          width: s.txWidth,
-          height: s.txHeight,
-        })),
-      openRx: () =>
-        set((s) => ({
-          isOpen: true,
-          rxOpen: true,
-          suiteRoute: 'rx',
-          x: s.rxX,
-          y: s.rxY,
-          width: s.rxWidth,
-          height: s.rxHeight,
-        })),
+      // The suite pops out as its own independent OS window (like a hosted
+      // VST plugin's editor), not a fixed panel inside the main Zeus window.
+      // openAudioSuiteWindow is fire-and-forget — the operator closes it via
+      // the window chrome — so the main window keeps no open/closed flag.
+      openTx: () => openAudioSuiteWindow('tx'),
+      openRx: () => openAudioSuiteWindow('rx'),
       close: () => set({ isOpen: false, txOpen: false, rxOpen: false }),
       closeTx: () =>
         set((s) => ({
@@ -1277,7 +1268,10 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         }
       },
 
-      installVstEngine: async (postUrl = '/api/tx-audio-suite/vst-engine/install') => {
+      installVstEngine: async (
+        postUrl = '/api/tx-audio-suite/vst-engine/install',
+        route: AudioSuiteRoute = 'tx',
+      ) => {
         const phase = get().vstEngineInstall.phase;
         if (phase === 'downloading' || phase === 'extracting' || phase === 'staging') {
           return; // already running
@@ -1323,12 +1317,6 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
               | 'done'
               | 'failed';
             if (p === 'done') {
-              // Configure: switch the TX route to VST so the freshly-staged
-              // engine activates and audio runs through it — the operator gets
-              // working VST without a second click. A direct PUT (not
-              // setProcessingMode, which short-circuits when the mode is
-              // unchanged) so the server re-activates even if VST was already
-              // the selected route when the engine was missing.
               set({
                 vstEngineInstall: {
                   phase: 'configuring',
@@ -1336,6 +1324,29 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
                   message: 'Configuring VST mode…',
                 },
               });
+              if (route === 'rx') {
+                // RX-initiated install: leave the TX route alone (an operator
+                // who only wants RX VST shouldn't get their TX flipped as a
+                // side effect). The engine is shared, so just refresh the RX
+                // view — rxVstEngineAvailable flips true and the RX chain
+                // activates as soon as it sees the engine.
+                await get().loadRxProcessingModeFromServer();
+                set({
+                  vstEngineInstall: {
+                    phase: 'done',
+                    percent: 100,
+                    message: 'VST engine ready — RX audio now routes through VST.',
+                  },
+                });
+                return;
+              }
+              // TX-initiated install (classic flow): switch the TX route to
+              // VST so the freshly-staged engine activates and audio runs
+              // through it — the operator gets working VST without a second
+              // click. A direct PUT (not setProcessingMode, which short-
+              // circuits when the mode is unchanged) so the server re-activates
+              // even if VST was already the selected route when the engine was
+              // missing.
               try {
                 const put = await fetch('/api/tx-audio-suite/processing-mode', {
                   method: 'PUT',

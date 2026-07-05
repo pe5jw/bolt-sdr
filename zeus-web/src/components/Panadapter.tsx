@@ -62,6 +62,7 @@ import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture, type PanTuneGestureOptions } from '../util/use-pan-tune-gesture';
+import { isWidebandDisplayGeometry } from '../util/wideband-view';
 import { BandOverlay } from './BandOverlay';
 import { FilterCursorOverlay } from './FilterCursorOverlay';
 import { FreqAxis } from './FreqAxis';
@@ -73,6 +74,7 @@ import { ChatRosterOverlay } from './ChatRosterOverlay';
 import { PeakMarkerOverlay } from './PeakMarkerOverlay';
 import { NotchOverlay } from './NotchOverlay';
 import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
+import { WidebandViewportControls } from './WidebandViewportControls';
 
 type PanadapterProps = {
   receiver?: ReceiverKey;
@@ -107,6 +109,17 @@ export function Panadapter({
   const popActive = popEnabled && !moxOn && !tunOn;
   const popIntensityCss = Math.max(0, Math.min(1, popRenderIntensity / 100)).toFixed(2);
   const receiverFilterColor = spectrumReceiverFilterColor(receiver);
+  const displayWidth = useDisplayStore((s) => {
+    const slice = selectDisplaySlice(s, receiver);
+    return slice.width || slice.panDb?.length || slice.wfDb?.length || 0;
+  });
+  const displayHzPerPixel = useDisplayStore((s) => selectDisplaySlice(s, receiver).hzPerPixel);
+  const displayCenterHz = useDisplayStore((s) => Number(selectDisplaySlice(s, receiver).centerHz));
+  const widebandDisplay = isWidebandDisplayGeometry({
+    width: displayWidth,
+    hzPerPixel: displayHzPerPixel,
+    centerHz: displayCenterHz,
+  });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -118,7 +131,7 @@ export function Panadapter({
     // the context we're about to (re)create (mirrors Waterfall.tsx, #629).
     cancelPendingPanContextLoss(canvas);
 
-    const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, premultipliedAlpha: true });
+    const gl = canvas.getContext('webgl2', { antialias: false, alpha: true, premultipliedAlpha: true });
     if (!gl) {
       console.error('WebGL2 not available');
       return;
@@ -204,7 +217,42 @@ export function Panadapter({
         ? vc.getViewCenterHz()
         : Number(selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz);
 
+    let pendingCanvasW = 0;
+    let pendingCanvasH = 0;
+    let appliedCanvasW = 0;
+    let appliedCanvasH = 0;
+
+    const measureCanvasSize = (entry?: ResizeObserverEntry) => {
+      const rect = entry?.contentRect ?? container.getBoundingClientRect();
+      // Clamp the WebGL backing store at DPR=1. On a Retina display the
+      // native devicePixelRatio is 2 (or higher on 5K), which means the
+      // panadapter would render at 4× the pixels and feed 4× the texture
+      // data through every composite. The trace is a single-pixel-wide line
+      // over a smooth dB gradient — sub-pixel antialiasing is not visible
+      // and not worth the GPU cost. Browser CSS scaling fills the difference.
+      const dpr = Math.min(1, window.devicePixelRatio || 1);
+      return {
+        w: Math.max(1, Math.round(rect.width * dpr)),
+        h: Math.max(1, Math.round(rect.height * dpr)),
+      };
+    };
+
+    const applyPendingResize = () => {
+      if (pendingCanvasW <= 0 || pendingCanvasH <= 0) {
+        const next = measureCanvasSize();
+        pendingCanvasW = next.w;
+        pendingCanvasH = next.h;
+      }
+      if (pendingCanvasW === appliedCanvasW && pendingCanvasH === appliedCanvasH) return;
+      appliedCanvasW = pendingCanvasW;
+      appliedCanvasH = pendingCanvasH;
+      canvas.width = appliedCanvasW;
+      canvas.height = appliedCanvasH;
+      renderer.resize(appliedCanvasW, appliedCanvasH);
+    };
+
     const redraw = () => {
+      applyPendingResize();
       if (!anchorPan) return;
       const s = useDisplaySettingsStore.getState();
       // While keyed (MOX or TUN — server already feeds TX pixels via
@@ -252,26 +300,16 @@ export function Panadapter({
       requestDrawBusFrame(redraw);
     };
 
-    const resize = () => {
-      const { width, height } = container.getBoundingClientRect();
-      // Clamp the WebGL backing store at DPR=1. On a Retina display the
-      // native devicePixelRatio is 2 (or higher on 5K), which means the
-      // panadapter would render at 4× the pixels and feed 4× the texture
-      // data through every composite. The trace is a single-pixel-wide line
-      // over a smooth dB gradient — sub-pixel antialiasing is not visible
-      // and not worth the GPU cost. Browser CSS scaling fills the difference.
-      const dpr = Math.min(1, window.devicePixelRatio || 1);
-      const w = Math.max(1, Math.round(width * dpr));
-      const h = Math.max(1, Math.round(height * dpr));
-      canvas.width = w;
-      canvas.height = h;
-      renderer.resize(w, h);
+    const queueResize = (entry?: ResizeObserverEntry) => {
+      const next = measureCanvasSize(entry);
+      pendingCanvasW = next.w;
+      pendingCanvasH = next.h;
       requestRedraw();
     };
 
-    const ro = new ResizeObserver(resize);
+    const ro = new ResizeObserver((entries) => queueResize(entries[entries.length - 1]));
     ro.observe(container);
-    resize();
+    queueResize();
 
     // Pause WebGL when the panadapter is not actually visible. Two signals:
     // IntersectionObserver covers "tile scrolled out of view / display:none
@@ -296,6 +334,7 @@ export function Panadapter({
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     let lastSeqDrawn = -1;
+    let wasWidebandDisplay = false;
     const unsub = useDisplayStore.subscribe((state) => {
       const slice = selectDisplaySlice(state, receiver);
       if (slice.lastSeq === 0) return;
@@ -312,13 +351,21 @@ export function Panadapter({
         planKey: String(receiver),
       });
       const frameCenter = Number(slice.centerHz);
+      const widebandDisplay = isWidebandDisplayGeometry({
+        width: slice.width,
+        hzPerPixel: slice.hzPerPixel,
+        centerHz: frameCenter,
+      });
+      const enteringWidebandDisplay = widebandDisplay && !wasWidebandDisplay;
 
       // Drive the shared zoom tween (view-zoom.ts) from RX1 only — see the
       // matching block in Waterfall.tsx. Idempotent with the waterfall's call;
       // having both A surfaces drive it keeps zoom animating in layouts where
       // only one of them is mounted.
       if (rxIndex === 0 && slice.hzPerPixel > 0) {
-        if (decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
+        if (widebandDisplay) {
+          if (enteringWidebandDisplay || decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
+        } else if (decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
         else viewZoom.setTarget(slice.hzPerPixel);
       }
 
@@ -334,11 +381,15 @@ export function Panadapter({
           anchorHzPerPixel = slice.hzPerPixel;
         }
       } else {
-        // push/shift: feed the frame center back to the view-center. With no
-        // recent operator gesture this recognises external tunes (CAT/TCI,
-        // band buttons, typed entry, mode changes) and glides there — which
-        // also arms the refill hold via the target-change stamp.
-        vc.reconcileFrame(frameCenter, slice.hzPerPixel);
+        if (widebandDisplay) {
+          if (enteringWidebandDisplay) vc.snapTo(frameCenter, slice.hzPerPixel);
+        } else {
+          // push/shift: feed the frame center back to the view-center. With no
+          // recent operator gesture this recognises external tunes (CAT/TCI,
+          // band buttons, typed entry, mode changes) and glides there — which
+          // also arms the refill hold via the target-change stamp.
+          vc.reconcileFrame(frameCenter, slice.hzPerPixel);
+        }
         // Adoption is unconditional (issue #597 Phase 2): the backend now
         // stamps CenterHz with the LO the pixels were actually computed at
         // (delay-compensated LO-history lookup), so mid-retune frames are
@@ -351,6 +402,7 @@ export function Panadapter({
           anchorHzPerPixel = slice.hzPerPixel;
         }
       }
+      wasWidebandDisplay = widebandDisplay;
 
       // While transmitting voice (MOX/PTT), fit the TX display windows to the
       // live signal. TUNE and two-tone are excluded — see shouldTxAutoRange();
@@ -468,7 +520,7 @@ export function Panadapter({
       schedulePanContextLoss(canvas, gl);
       releaseFrameConsumer();
     };
-  }, [receiver, stitched]);
+  }, [receiver, rxIndex, stitched]);
 
   usePanTuneGesture(canvasRef, receiver, { touchMode, tuneReceiver });
 
@@ -490,26 +542,28 @@ export function Panadapter({
       } as CSSProperties}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
-      {rxIndex === 0 && !multiRx && <BandOverlay receiver={receiver} />}
-      <div
-        className="pointer-events-none absolute z-[25] rounded-sm px-2 py-0.5 font-mono text-[10px]"
-        style={{
-          top: 24,
-          left: 8,
-          background: 'rgba(8, 10, 14, 0.78)',
-          color: receiverFilterColor,
-          border: '1px solid rgba(255,255,255,0.16)',
-        }}
-      >
-        {rxLabel} · {(vfoHz / 1e6).toFixed(6)}
-        {stitched && foreground ? ' · FOCUS' : ''}
-      </div>
+      {rxIndex === 0 && !multiRx && !widebandDisplay && <BandOverlay receiver={receiver} />}
+      {!widebandDisplay && (
+        <div
+          className="pointer-events-none absolute z-[25] rounded-sm px-2 py-0.5 font-mono text-[10px]"
+          style={{
+            top: 24,
+            left: 8,
+            background: 'rgba(8, 10, 14, 0.78)',
+            color: receiverFilterColor,
+            border: '1px solid rgba(255,255,255,0.16)',
+          }}
+        >
+          {rxLabel} · {(vfoHz / 1e6).toFixed(6)}
+          {stitched && foreground ? ' · FOCUS' : ''}
+        </div>
+      )}
       {/* Passband + hover crosshair render on BOTH halves (RX2), each tracking
           its own receiver's geometry, so a click lands wherever the operator
           points — not only on the focused half. Mirrors the WebGPU heightfield. */}
-      <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
+      {!widebandDisplay && <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />}
       <FilterCursorOverlay containerRef={containerRef} receiver={receiver} />
-      {rxIndex === 0 && (!stitched || foreground) && (
+      {rxIndex === 0 && !widebandDisplay && (!stitched || foreground) && (
         <>
           <SpotOverlay />
           <ChatRosterOverlay />
@@ -519,9 +573,10 @@ export function Panadapter({
         </>
       )}
       <FreqAxis receiver={receiver} stitched={stitched} />
+      {widebandDisplay && <WidebandViewportControls containerRef={containerRef} receiver={receiver} />}
       {/* One global dB scale for the whole stack — only RX1 (leftmost) renders
           it; every other pane (RX2 stitched half, RX3+ standalone) shares it. */}
-      {rxIndex === 0 && <DbScale />}
+      {rxIndex === 0 && !widebandDisplay && <DbScale />}
     </div>
   );
 }

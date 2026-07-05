@@ -28,7 +28,7 @@ import { useTxStore } from '../state/tx-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { VfoDisplay } from '../components/VfoDisplay';
 import { SMeterLive } from '../components/SMeterLive';
-import { Panadapter } from '../components/Panadapter';
+import { PanadapterSurface } from '../components/PanadapterSurface';
 import { WaterfallSurface } from '../components/WaterfallSurface';
 import { MobilePttButton } from '../components/MobilePttButton';
 import { MobileFrequencyTrackpad } from './MobileFrequencyTrackpad';
@@ -442,7 +442,7 @@ function MobileSpectrumStack({
         style={{ gridTemplateRows: `${split}fr 10px ${1 - split}fr` }}
       >
         <div className="m-pan">
-          <Panadapter touchMode="pinch-only" />
+          <PanadapterSurface touchMode="pinch-only" />
         </div>
         <div
           className={`m-spectrum-splitter${dragging ? ' dragging' : ''}`}

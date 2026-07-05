@@ -12,6 +12,12 @@ describe('parseCapabilities', () => {
       architecture: 'x64',
       version: '0.6.0-alpha',
       lanHttpsUrls: ['https://192.168.1.23:6443'],
+      displayPerformance: {
+        profile: 'low-power',
+        maxFrameRateHz: 15,
+        lowPower: true,
+        preferWebglWaterfall: true,
+      },
       features: {},
     });
     expect(caps.host).toBe('desktop');
@@ -19,6 +25,12 @@ describe('parseCapabilities', () => {
     expect(caps.architecture).toBe('x64');
     expect(caps.version).toBe('0.6.0-alpha');
     expect(caps.lanHttpsUrls).toEqual(['https://192.168.1.23:6443']);
+    expect(caps.displayPerformance).toEqual({
+      profile: 'low-power',
+      maxFrameRateHz: 15,
+      lowPower: true,
+      preferWebglWaterfall: true,
+    });
   });
 
   it('falls back to safe defaults on garbage input', () => {
@@ -28,6 +40,12 @@ describe('parseCapabilities', () => {
     expect(caps.architecture).toBe('unknown');
     expect(caps.version).toBe('unknown');
     expect(caps.lanHttpsUrls).toEqual([]);
+    expect(caps.displayPerformance).toEqual({
+      profile: 'normal',
+      maxFrameRateHz: 30,
+      lowPower: false,
+      preferWebglWaterfall: false,
+    });
   });
 
   it('filters malformed LAN HTTPS URL entries', () => {

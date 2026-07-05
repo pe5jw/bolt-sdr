@@ -118,6 +118,28 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // RX IQ data arrives on UDP source ports RxDataPortBase + ddcIndex, i.e.
     // 1035 (DDC0) .. 1035 + MaxRxDdc - 1 (DDC7).
     private const int RxDataPortBase = 1035;
+    private const int RxSilenceBeforeRecoveryMs = 3000;
+    private const int RxRecoveryAttemptSpacingMs = 2000;
+    private const int RxRecoveryMaxAttempts = 2;
+    // Upper bound on how long KeepaliveLoop may skip sends while a recovery
+    // restart is in flight. The burst itself lasts ~200 ms; if the queued
+    // restart task is delayed past this window (thread-pool saturation), the
+    // keepalive must resume so the radio's ~1 s hardware watchdog is never
+    // starved by our own recovery machinery — a late burst still toggles
+    // run 0→1 and remains effective.
+    private const int RxRecoveryKeepaliveSkipMaxMs = 600;
+
+    // Protocol-2 wideband ADC snapshots arrive on source ports 1027..1034.
+    // CmdGeneral below enables ADC0 only for the display mode; the firmware
+    // emits frame-local sequence numbers 0..WidebandPacketsPerFrame-1.
+    private const int WidebandDataPortBase = 1027;
+    private const int WidebandAdcCount = 8;
+    public const int WidebandSamplesPerPacket = 512;
+    public const int WidebandPacketsPerFrame = 32;
+    public const int WidebandFrameSamples = WidebandSamplesPerPacket * WidebandPacketsPerFrame;
+    public const int WidebandAdcSampleRateHz = 122_880_000;
+    private const int WidebandPayloadBytes = WidebandSamplesPerPacket * sizeof(short);
+    private const byte WidebandUpdateRateMs = 100;
 
     // Hermes-class radios (Brick2 is the live consumer) use a single ADC
     // and have no PureSignal feedback DDCs reserved at the front of the pool.
@@ -147,6 +169,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private CancellationTokenSource? _rxCts;
     private Task? _rxTask;
     private Task? _keepaliveTask;
+    private int _rxRecoveryRestartActive;
+    private long _rxRecoveryRestartSetMs;
     private int _sampleRateKhz = 48;
     private uint _rxFreqHz = 14_200_000;
     // Second receiver (RX2) on its own DDC. When enabled, a second DDC
@@ -156,6 +180,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // accessed ints/uints. _rx2Enabled: 0 = off, 1 = on.
     private int _rx2Enabled;
     private uint _rx2FreqHz = 7_100_000;
+    private int _rx1AdcSource;
+    private int _rx2AdcSource;
     // TX DUC NCO frequency. Normally tracks _rxFreqHz (the shared RX0/TX LO) so
     // the TX carrier lands at the RX0 frequency — byte-identical to the historic
     // single-frequency model. For dual-RX split TX (TX VFO = B with RX2 on) the
@@ -171,10 +197,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // base+2). _extraReceiverCount counts RX3.. ; total user receivers =
     // 2 + _extraReceiverCount and RX2 MUST be enabled (no DDC gaps). Indexed by
     // receiver index: _extraRxFreqHz[2] = RX3 NCO, _extraRxAdc[2] = RX3 ADC
-    // source, etc. When _extraReceiverCount == 0 the RX1/RX2 path below is
-    // entirely unchanged and SendCmdRx keeps using the byte-pinned legacy
-    // composer — extras are purely additive and never touch the PureSignal
-    // DDC0/1 branch. Read on the RX thread + command threads (volatile-accessed).
+    // source, etc. When _extraReceiverCount == 0 the RX1/RX2 path below keeps
+    // using the byte-pinned legacy composer, with the operator-selected RX1/RX2
+    // ADC sources supplied explicitly. Extras are purely additive and never
+    // touch the PureSignal DDC0/1 branch. Read on the RX thread + command
+    // threads (volatile-accessed).
     private int _extraReceiverCount;
     private readonly uint[] _extraRxFreqHz = new uint[MaxRxDdc];
     private readonly byte[] _extraRxAdc = new byte[MaxRxDdc];
@@ -252,16 +279,33 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // active (the only state on every board except the 10E with its interlock
     // lifted). See SetPsFeedbackEnabled / PsTxAdcProtectFloorDb.
     private byte? _txAttnBeforePsSeed;
+    // True once ANY caller has explicitly written the TX step attenuation via
+    // SetTxAttenuationDb — operator control, the auto-attenuate dance, or the
+    // connect-time restore of a persisted per-board value. The single-ADC
+    // PS-arm protective seed only fires while this is false: a
+    // deliberate value is never overridden (Thetis / piHPSDR parity — the
+    // stored per-band attenuation is sticky and 31 dB is only the
+    // virgin-store default). See SetPsFeedbackEnabled.
+    private bool _txAttnExplicitlySet;
     // PA settings — pushed from RadioService when PaSettingsStore changes or
     // the VFO crosses a band edge. _paEnabled is the global toggle that lands
     // in CmdGeneral[58]; _driveByte is the pre-calibrated drive level for
-    // CmdHighPriority[345]; _ocTxMask/_ocRxMask drive CmdHighPriority[1401].
-    // The piHPSDR-style global "OCtune" override was removed in #124 for
-    // hardware-safety: OC during TUN follows OcTx, identical to TX.
+    // CmdHighPriority[345]; _ocMasksPacked drives CmdHighPriority[1401].
+    //
+    // The low 7 bits of each packed mask are user OC pin states. OcTune
+    // (issue #1325) is a per-band additive mask ORed on top of OcTx while
+    // _tuneActive is set (wire = OcTx | OcTune during TUN).
+    // Distinct from the removed piHPSDR-style global "OCtune" override (#124):
+    // that override REPLACED the per-band OcTx byte and could hand an external
+    // amp a confused band-select state during a steady tune carrier. The
+    // additive shape here can only ADD bits — never replace the band-select
+    // bits already in OcTx — so filter selection stays intact under TUN.
     private bool _paEnabled = true;
     private byte _driveByte;
-    private byte _ocTxMask;
-    private byte _ocRxMask;
+    // Packed OC masks: bits 0..6 TX, 8..14 RX, 16..22 TUN additive. Written as
+    // one int so CmdHighPriority never observes a new-band OcTx with old-band
+    // OcTune.
+    private int _ocMasksPacked;
     // Anvelina-PRO3 DX OC extension (issue #407, EU2AV
     // Open_Collector_Anvelina_DX spec). 4-bit masks (bits 0..3 -> DX OUT
     // 7..10). Wire-encoded into CmdHighPriority[1397] bits [4:1] only when
@@ -300,6 +344,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // alongside the relay-population gate. MkII-BPF boards (0x0A / G2E) use it;
     // classic-Alex boards do not.
     private bool _mkiiBpfRxSelect;
+    // Operator-editable RF filter matrix (Thetis-style Ant/Filters parity).
+    // Null or CustomMatrixEnabled=false preserves the built-in Alex BPF/LPF
+    // tables byte-for-byte. Like antenna relays, changes are deferred while
+    // keyed so an edited range cannot hot-switch the filter board under power.
+    private RfFilterRuntimeSettings? _rfFilters;
+    private RfFilterRuntimeSettings? _pendingRfFilters;
+    private bool _hasPendingRfFilters;
 
     // TX audio front-end (external-audio-jacks re-port). Wire-encoded into the
     // TxSpecific (CmdTx, port 1026) packet byte 50 (mic_control flags) + byte
@@ -369,8 +420,39 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public const byte MicControlMicBias  = 0x10; // bit4 — Orion mic bias enable
     public const byte MicControlXlr      = 0x20; // bit5 — balanced/XLR input
 
-    private bool _moxOn;
-    private bool _tuneActive;
+    private volatile bool _moxOn;
+    private volatile bool _tuneActive;
+
+    private static int PackOcMasks(byte txMask, byte rxMask, byte tuneMask) =>
+        (txMask & 0x7F)
+        | ((rxMask & 0x7F) << 8)
+        | ((tuneMask & 0x7F) << 16);
+
+    private static void UnpackOcMasks(int packed, out byte txMask, out byte rxMask, out byte tuneMask)
+    {
+        txMask = (byte)(packed & 0x7F);
+        rxMask = (byte)((packed >> 8) & 0x7F);
+        tuneMask = (byte)((packed >> 16) & 0x7F);
+    }
+
+    internal static byte ComposeOcMaskByte1401(
+        bool moxOn,
+        bool tuneActive,
+        byte txMask,
+        byte rxMask,
+        byte tuneMask)
+    {
+        txMask = (byte)(txMask & 0x7F);
+        rxMask = (byte)(rxMask & 0x7F);
+        tuneMask = (byte)(tuneMask & 0x7F);
+        byte ocBits = tuneActive
+            ? (byte)(txMask | tuneMask)
+            : moxOn
+                ? txMask
+                : rxMask;
+        return (byte)((ocBits & 0x7F) << 1);
+    }
+
     private long _totalFrames;
     private long _droppedFrames;
     private uint _lastDdc0Seq;
@@ -447,6 +529,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private int _psBlockFill;
     private ulong _psBlockStartSeq;
 
+    // ---- Single-ADC time-mux PS wire instrumentation ----
+    // Read-only ~1 Hz diagnostic of the single-ADC time-mux PS feedback burst,
+    // gated on TimeMuxesPsFeedbackOnDdc0 so it is inert for dual-ADC and
+    // non-time-mux boards. It logs the byte-59 attenuation actually on the wire,
+    // the DDC0 feedback frame count on port 1035, and the peak coupler/reference
+    // sample magnitudes from the de-interleaved pair. Pure logging: no wire
+    // write, no socket I/O, no hot-path allocation. Touched only from the RX
+    // thread inside HandlePsPairedPacket, so no synchronization is needed.
+    private long _g2ePsDiagWindowStartMs;
+    private long _g2ePsDiagFramesInWindow;
+    private float _g2ePsDiagPeakCoupler;
+    private float _g2ePsDiagPeakReference;
+
     public Protocol2Client(ILogger<Protocol2Client> log)
     {
         _log = log;
@@ -507,6 +602,17 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // source switch is a full fence against the RX thread.
     private volatile RadioMicPacketHandler? _radioMicHandler;
 
+    // ---- Wideband ADC snapshot stream (UDP 1027) --------------------------
+    // Disabled by default. When enabled, the radio sends bounded raw ADC
+    // snapshots for a full-band display; we assemble a configured group and
+    // hand it off synchronously. The handler must copy before returning.
+    private volatile WidebandFrameHandler? _widebandFrameHandler;
+    private volatile bool _widebandDisplayEnabled;
+    private readonly short[] _widebandFrameSamples = new short[WidebandFrameSamples];
+    private int _widebandPacketIndex;
+    private uint _widebandExpectedSeq;
+    private bool _widebandCollecting;
+
     /// <summary>
     /// Synchronous handler for one decoded UDP-1026 radio-mic packet. Invoked on
     /// the RX loop thread with a span over the live receive buffer — copy before
@@ -514,6 +620,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// 64 × int16 BE @ 48 kHz); decoding/re-blocking is the handler's job.
     /// </summary>
     public delegate void RadioMicPacketHandler(ReadOnlySpan<byte> packet);
+
+    /// <summary>
+    /// Synchronous handler for one assembled Protocol-2 wideband ADC snapshot.
+    /// Invoked on the RX loop thread with a span over the client's reusable
+    /// buffer — copy before returning.
+    /// </summary>
+    public delegate void WidebandFrameHandler(int adcIndex, ReadOnlySpan<short> samples, int sampleRateHz);
 
     /// <summary>
     /// Attach the radio-mic (UDP 1026) handler. Until this is set the 1026
@@ -529,6 +642,33 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     /// <summary>Detach the radio-mic handler, reverting to drop-on-RX.</summary>
     public void DetachRadioMicHandler() => _radioMicHandler = null;
+
+    public void AttachWidebandFrameHandler(WidebandFrameHandler handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        _widebandFrameHandler = handler;
+    }
+
+    public void DetachWidebandFrameHandler()
+    {
+        _widebandFrameHandler = null;
+        ResetWidebandAssembler();
+    }
+
+    public void SetWidebandDisplayEnabled(bool enabled)
+    {
+        if (_widebandDisplayEnabled == enabled) return;
+        _widebandDisplayEnabled = enabled;
+        ResetWidebandAssembler();
+        if (_rxTask is not null) SendCmdGeneral();
+    }
+
+    private void ResetWidebandAssembler()
+    {
+        _widebandPacketIndex = 0;
+        _widebandExpectedSeq = 0;
+        _widebandCollecting = false;
+    }
 
     /// <summary>
     /// Attach a synchronous RX sink. While non-null, the RX loop calls the
@@ -621,6 +761,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             radioEndpoint.Address,
             localBind.Equals(IPAddress.Any) ? "ANY (no subnet match)" : localBind.ToString(),
             localPort);
+        if (NetworkAddressSelection.IsLinkLocal(radioEndpoint.Address))
+        {
+            _log.LogWarning(
+                "net.linklocal radio={Radio} - self-assigned address detected (direct-connect or DHCP-less segment); " +
+                "connection is functional but this topology is drop-prone; a switch with a DHCP router is recommended",
+                radioEndpoint.Address);
+        }
         return Task.CompletedTask;
     }
 
@@ -689,6 +836,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     {
         if (_rxTask is null) return;
 
+        _moxOn = false;
+        _tuneActive = false;
         SendCmdHighPriority(run: false);
         _rxCts?.Cancel();
         try { await _rxTask.ConfigureAwait(false); }
@@ -853,6 +1002,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
+    /// Set the physical ADC source for RX1/RX2 DDCs. Defaults remain ADC0, but
+    /// the operator can opt either receiver onto ADC1 when a second feedline is
+    /// present.
+    /// </summary>
+    public void SetReceiverAdcSources(byte rx1AdcSource, byte rx2AdcSource)
+    {
+        bool changed = Interlocked.Exchange(ref _rx1AdcSource, rx1AdcSource) != rx1AdcSource;
+        changed |= Interlocked.Exchange(ref _rx2AdcSource, rx2AdcSource) != rx2AdcSource;
+        if (changed && _rxTask is not null)
+            SendCmdRx();
+    }
+
+    /// <summary>
     /// Configure the extra user receivers beyond RX2 (RX3..) for full multi-DDC.
     /// <paramref name="count"/> is the number of receivers past RX2 (0 = RX1/RX2
     /// only, the legacy path). Extras are contiguous — receiver index 2+i sits on
@@ -866,13 +1028,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     {
         int maxExtras = MaxRxDdc - RxBaseDdc(_boardKind) - 2;
         int clamped = Math.Clamp(count, 0, Math.Max(0, maxExtras));
+        bool adcChanged = false;
         for (int k = 0; k < clamped; k++)
         {
             int rcvr = 2 + k;
-            _extraRxAdc[rcvr] = adcSources is not null && k < adcSources.Count ? adcSources[k] : (byte)0;
+            byte nextAdc = adcSources is not null && k < adcSources.Count ? adcSources[k] : (byte)0;
+            if (_extraRxAdc[rcvr] != nextAdc)
+            {
+                _extraRxAdc[rcvr] = nextAdc;
+                adcChanged = true;
+            }
         }
-        if (Interlocked.Exchange(ref _extraReceiverCount, clamped) == clamped) return;
-        if (_rxTask is not null)
+        bool countChanged = Interlocked.Exchange(ref _extraReceiverCount, clamped) != clamped;
+        if ((countChanged || adcChanged) && _rxTask is not null)
         {
             SendCmdRx();
             SendCmdHighPriority(run: true);
@@ -1088,10 +1256,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
-    public void SetOcMasks(byte txMask, byte rxMask)
+    public void SetOcMasks(byte txMask, byte rxMask, byte tuneMask)
     {
-        _ocTxMask = (byte)(txMask & 0x7F);
-        _ocRxMask = (byte)(rxMask & 0x7F);
+        Interlocked.Exchange(ref _ocMasksPacked, PackOcMasks(txMask, rxMask, tuneMask));
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
@@ -1165,13 +1332,39 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (changed && _rxTask is not null) SendCmdHighPriority(run: true);
     }
 
+    /// <summary>
+    /// Set the normalized Thetis-style RF filter matrix. Custom ranges and
+    /// bypass policies are resolved inside <see cref="ComputeAlexWord"/> so the
+    /// wire path remains the single source of Alex bit truth. Mid-key edits are
+    /// deferred with the antenna relays and flushed on the next unkey edge.
+    /// </summary>
+    public void SetRfFilters(RfFilterRuntimeSettings? settings)
+    {
+        if (_moxOn || _tuneActive)
+        {
+            _pendingRfFilters = settings;
+            _hasPendingRfFilters = true;
+            return;
+        }
+
+        bool changed = !Equals(_rfFilters, settings);
+        _rfFilters = settings;
+        _pendingRfFilters = null;
+        _hasPendingRfFilters = false;
+        if (changed && _rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
     // Apply any antenna selection deferred while keyed. Called on the unkey edge
-    // from SetMox/SetTune AFTER the MOX/TUNE flag clears, so the relay re-push
-    // happens at idle, never under power. Returns true if a re-push is warranted
-    // (the caller's SendCmdHighPriority covers it).
+    // from SetMox/SetTune AFTER the MOX/TUNE flag clears, so the relay/filter
+    // re-push happens at idle, never under power. Returns true if a re-push is
+    // warranted (the caller's SendCmdHighPriority covers it).
     private bool FlushPendingAntennas()
     {
-        if (_pendingTxAntenna < 0 && _pendingRxAntenna < 0 && _pendingRxAuxInput < 0) return false;
+        if (_pendingTxAntenna < 0
+            && _pendingRxAntenna < 0
+            && _pendingRxAuxInput < 0
+            && !_hasPendingRfFilters)
+            return false;
         int tx = _pendingTxAntenna >= 0 ? _pendingTxAntenna : _txAntenna;
         int rx = _pendingRxAntenna >= 0 ? _pendingRxAntenna : _rxAntenna;
         int aux = _pendingRxAuxInput >= 0 ? _pendingRxAuxInput : _rxAuxInput;
@@ -1182,6 +1375,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _pendingTxAntenna = -1;
         _pendingRxAntenna = -1;
         _pendingRxAuxInput = -1;
+        if (_hasPendingRfFilters)
+        {
+            changed |= !Equals(_rfFilters, _pendingRfFilters);
+            _rfFilters = _pendingRfFilters;
+            _pendingRfFilters = null;
+            _hasPendingRfFilters = false;
+        }
         return changed;
     }
 
@@ -1194,7 +1394,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public void SetMox(bool on)
     {
         _moxOn = on;
-        if (!on) ResetTxIq();
+        ResetTxIq();
         // Unkey edge: apply any antenna selection deferred while keyed before the
         // HighPriority re-push, so the relay matrix switches at idle and the very
         // next HP frame carries the operator's new antenna. Only flush when fully
@@ -1206,7 +1406,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public void SetTune(bool on)
     {
         _tuneActive = on;
-        if (!on) ResetTxIq();
+        ResetTxIq();
         if (!on && !_moxOn) FlushPendingAntennas();
         if (_rxTask is not null) PushTransmitEdge(on);
     }
@@ -1256,17 +1456,40 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Arm or disarm PureSignal feedback streaming. When on:
-    ///   - <c>SendCmdRx</c> enables DDC0 alongside the user-visible DDC2 and
-    ///     synchronises DDC1→DDC0 (byte 1363 = 0x02) so the radio sends
-    ///     paired DDC0/DDC1 IQ on port 1035.
-    ///   - <c>SendCmdHighPriority</c> sets <c>ALEX_PS_BIT (0x00040000)</c>
-    ///     in alex0/alex1 and, during xmit, mirrors DDC0+DDC1 phase words
-    ///     to the TX DUC frequency.
-    ///   - The packet decoder switches to the paired format (6B DDC0 + 6B
-    ///     DDC1 per sample, repeating).
-    /// When off the radio reverts to the standard non-PS RX layout and any
-    /// in-flight paired packets are discarded by the decoder.
+    /// Arm or disarm PureSignal feedback streaming. The exact wire behaviour is
+    /// board-specific and routed through the per-board predicates — this summary
+    /// describes the two families the code actually composes.
+    ///
+    /// DUAL-ADC family (OrionMkII / Saturn / G2, <see cref="ReservesPsFeedbackDdcs"/>):
+    ///   - <c>SendCmdRx</c> enables the dedicated DDC0+DDC1 feedback pair
+    ///     alongside the user-visible RX on DDC2 and sets byte 1363 = 0x02 so the
+    ///     radio streams paired DDC0/DDC1 IQ on port 1035.
+    ///   - <c>SendCmdHighPriority</c> sets <c>ALEX_PS_BIT</c> and, during xmit,
+    ///     mirrors the DDC0/DDC1 phase words to the TX-DUC frequency
+    ///     (<see cref="ComposesPsFeedbackWire"/> is true).
+    ///
+    /// SINGLE-ADC time-mux family (ANAN-G2E / HermesC10 and ANAN-10E / HermesII,
+    /// <see cref="TimeMuxesPsFeedbackOnDdc0"/>): the HermesC10 gateware forms the
+    /// feedback pair INSIDE DDC0's packer, so the path is materially different
+    /// from Orion and this method does NOT compose the Orion layout for it:
+    ///   - <c>SendCmdRx</c> arms DDC0 ONLY — no DDC1 enable. The coupler
+    ///     (rx_I[0] = temp_ADC) is interleaved with the hardwired internal TX-DAC
+    ///     reference (rx_I[NR] = temp_DACD) coupler-first / reference-second by
+    ///     the Rx0 FIFO controller under byte 1363 = 0x02 (SyncRx[0][1];
+    ///     Hermes.v:717-720, Rx_specific_C&amp;C.v:181). The descriptor is armed
+    ///     only during a TX burst (via <c>PushTransmitEdge</c>) and DDC0 reverts
+    ///     to the operator's RX at rest.
+    ///   - There is explicitly NO <c>ALEX_PS_BIT</c> and NO DDC0/DDC1 phase
+    ///     mirror — that scheme is Orion-only and
+    ///     <see cref="ComposesPsFeedbackWire"/>(HermesC10) is false.
+    ///   - byte 59 (Angelia_atten_Tx0) is seeded to the protective floor while
+    ///     armed (<see cref="SeedsTxAdcProtection"/>) so the DAC reference + PA
+    ///     coupler cannot slam the single shared RX ADC at 0 dB on key-down.
+    ///
+    /// The packet decoder consumes the same coupler-first/reference-second paired
+    /// format (6B + 6B per sample) for both families. When off the radio reverts
+    /// to the standard non-PS RX layout, byte 59 is restored to the operator's
+    /// prior value, and any in-flight paired packets are discarded.
     /// </summary>
     public void SetPsFeedbackEnabled(bool on)
     {
@@ -1293,8 +1516,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // Every other board, and either board with its kill-switch forced false,
         // takes the historical path untouched (the dual-ADC G2/OrionMkII never
         // qualifies, so its wire is provably unchanged).
+        // HermesC10 (ANAN-G2E) honours a deliberately-set attenuation: once
+        // the operator, the auto-attenuate dance, or the connect-time restore
+        // of a persisted value has written the byte, the arm-time seed must
+        // NOT slam it back to 31 dB. That force-override was the P2 field
+        // deadlock on self-protecting external taps (#960/#1248): 31 dB on an
+        // already-padded tap starves calcc below its fit floor, and the dance
+        // only walks after a fit — so PS could never converge. Thetis keeps
+        // the per-band stored value sticky (31 is only the fresh default,
+        // console.cs:1748) and piHPSDR writes the persisted operator value;
+        // this matches both single-ADC time-mux boards.
+        bool honorExplicit = HonorsExplicitTxAdcProtection(_boardKind) && _txAttnExplicitlySet;
         bool seededTxAttn = false;
-        if (SeedsTxAdcProtection(_boardKind))
+        if (SeedsTxAdcProtection(_boardKind) && !honorExplicit)
         {
             if (on)
             {
@@ -1379,12 +1613,44 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         }
     }
 
+    public int FlushPendingTxIqTailPacket()
+    {
+        if (_sock is null || _rxTask is null) return 0;
+        lock (_txIqGate)
+        {
+            int pendingComplexSamples = _txIqScratchCount / 2;
+            if (pendingComplexSamples <= 0) return 0;
+
+            Array.Clear(_txIqScratch, _txIqScratchCount, _txIqScratch.Length - _txIqScratchCount);
+            _txIqScratchCount = _txIqScratch.Length;
+            FlushTxIqLocked();
+            return pendingComplexSamples;
+        }
+    }
+
+    public bool WaitForTxIqQueueIdle(TimeSpan timeout)
+    {
+        long start = Stopwatch.GetTimestamp();
+        long timeoutTicks = timeout <= TimeSpan.Zero
+            ? 0
+            : (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+        while (true)
+        {
+            var diag = TxIqDiagnosticsSnapshot();
+            if (diag.ScratchComplexSamples == 0 && diag.QueuedPackets == 0) return true;
+            if (timeoutTicks <= 0) return false;
+            long elapsed = Stopwatch.GetTimestamp() - start;
+            if (elapsed >= timeoutTicks) return false;
+            Thread.Sleep(1);
+        }
+    }
+
     private void ResetTxIq()
     {
         lock (_txIqGate) _txIqScratchCount = 0;
-        // Drain any queued-but-unsent packets so a fresh key-down starts
-        // from an empty FIFO model and the radio isn't playing 10 ms of
-        // the previous transmission's IQ when PTT re-engages.
+        // Drain queued-but-unsent packets on BOTH transmit edges so a fresh
+        // key-down starts from an empty client-side FIFO model and the radio
+        // isn't fed the previous transmission's IQ when PTT re-engages.
         long drained = 0;
         while (_txIqQueue.Reader.TryRead(out _))
         {
@@ -1589,12 +1855,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         WriteBeU16(p, 15, 1029);
         WriteBeU16(p, 17, 1035);
         WriteBeU16(p, 19, 1026);
-        WriteBeU16(p, 21, 1027);
-        p[23] = 0x00;
-        BinaryPrimitives.WriteUInt16BigEndian(p.AsSpan(24), 512);
+        WriteBeU16(p, 21, WidebandDataPortBase);
+        p[23] = _widebandDisplayEnabled ? (byte)0x01 : (byte)0x00;
+        BinaryPrimitives.WriteUInt16BigEndian(p.AsSpan(24), WidebandSamplesPerPacket);
         p[26] = 16;
-        p[27] = 0;
-        p[28] = 32;
+        p[27] = _widebandDisplayEnabled ? WidebandUpdateRateMs : (byte)0;
+        p[28] = WidebandPacketsPerFrame;
         // Matches pihpsdr new_protocol_general for ORION2/SATURN hardware.
         //
         // [37] = 0x08: pihpsdr writes this on ORION2/SATURN. The upstream
@@ -1729,8 +1995,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // router, etc.) — the caller falls back to IPAddress.Any in that case.
     internal static IPAddress? FindLocalAddressForSubnet(IPAddress radioIp)
     {
-        if (radioIp.AddressFamily != AddressFamily.InterNetwork) return null;
-        var radioBytes = radioIp.GetAddressBytes();
+        return NetworkAddressSelection.FindLocalAddressForSubnet(radioIp, EnumerateLocalIpv4Addresses());
+    }
+
+    private static IEnumerable<LocalIpv4Address> EnumerateLocalIpv4Addresses()
+    {
         foreach (var iface in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (iface.OperationalStatus != OperationalStatus.Up) continue;
@@ -1740,15 +2009,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 if (ua.Address.AddressFamily != AddressFamily.InterNetwork) continue;
                 var mask = ua.IPv4Mask;
                 if (mask is null || mask.Equals(IPAddress.Any)) continue;
-                var local = ua.Address.GetAddressBytes();
-                var m = mask.GetAddressBytes();
-                bool same = true;
-                for (int i = 0; i < 4; i++)
-                    if ((local[i] & m[i]) != (radioBytes[i] & m[i])) { same = false; break; }
-                if (same) return ua.Address;
+                yield return new LocalIpv4Address(ua.Address, mask);
             }
         }
-        return null;
     }
 
     /// <summary>
@@ -1952,6 +2215,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         => (board == HpsdrBoardKind.HermesII && Hermes10ePsTimeMuxOnAir)
             || (board == HpsdrBoardKind.HermesC10 && G2ePsTimeMuxOnAir);
 
+    internal static bool HonorsExplicitTxAdcProtection(HpsdrBoardKind board) =>
+        TimeMuxesPsFeedbackOnDdc0(board);
+
     /// <summary>
     /// True iff this board does Orion-style PureSignal on a SINGLE ADC by
     /// time-multiplexing DDC0 (issue #960) — the N1GP ANAN-G2E / HermesC10
@@ -2067,18 +2333,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     internal static byte Rx2AdcSource(byte numAdc, HpsdrBoardKind boardKind)
     {
-        // RX2 shares RX1's ADC (ADC0 = the main receive antenna). RX1's DDC is
-        // always configured on ADC0, so a second receiver listening on a
-        // different band must read the same ADC to hear the same antenna.
+        // Default RX2 to RX1's ADC (ADC0 = the main receive antenna). A second
+        // receiver listening on another band usually needs the same ADC to hear
+        // the same antenna.
         //
         // The earlier code sourced ADC1 on dual-ADC Orion/Saturn/G2 boards on
         // the theory that ADC1 is "the RX2 input". On a G2 that is the separate
         // RX2/EXT antenna jack — empty on a normal single-antenna station, so
         // DDC3 clocked out at full rate but carried silence (verified on a live
         // G2: RX2 IQ RMS 9.6e-6 vs RX1 6.2e-4, a flat panadapter). Defaulting to
-        // ADC0 makes RX2 work for the common same-antenna case. A future RX2
-        // antenna/ADC selector can opt back into ADC1 for true diversity / a
-        // second feedline; until that UX exists, ADC0 is the only correct default.
+        // ADC0 makes RX2 work for the common same-antenna case. The manual
+        // per-receiver ADC selector can opt RX2 back into ADC1 for true
+        // diversity / a second feedline; ADC0 remains the correct default.
         _ = numAdc;
         _ = boardKind;
         return 0x00;
@@ -2099,7 +2365,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         bool adcDitherEnabled = false,
         bool adcRandomEnabled = false,
         bool rx2Enabled = false,
-        bool g2eFeedbackBurst = false)
+        bool g2eFeedbackBurst = false,
+        byte rx1AdcSource = 0,
+        byte? rx2AdcSource = null)
     {
         var p = new byte[BufLen];
         WriteBeU32(p, 0, seq);
@@ -2138,16 +2406,23 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
         if (psEnabled)
         {
-            // Zeus only composes the DDC0+DDC1 paired feedback layout (bit 1363
-            // sync) for boards where it reserves the front DDCs for feedback —
-            // the dual-ADC OrionMkII/Saturn/G2 family. On single-ADC Hermes-class
-            // radios (Hermes/0x01, HermesII/0x02, HermesC10/0x14) Zeus DISABLES
-            // PS (DDC0 is the operator's only RX), so leave the PS block alone.
-            // This is a Zeus software choice for the G2E, not a hardware limit —
-            // the G2E gateware can do Orion-style PS on DDC0 (byte 1363
-            // SyncRx[0]=0x02 interleave); see ReservesPsFeedbackDdcs. The same
-            // board set as the old `!= Hermes && != HermesII && != HermesC10`
-            // test (issue #960).
+            // This branch composes ONLY the dual-ADC Orion-style layout: the
+            // dedicated DDC0+DDC1 feedback pair (byte 1363 sync) alongside the
+            // user RX on DDC2, for boards where Zeus reserves the front DDCs for
+            // feedback — the OrionMkII/Saturn/G2 family (ReservesPsFeedbackDdcs).
+            //
+            // The single-ADC Hermes-class radios (Hermes/0x01, HermesII/0x02,
+            // HermesC10/0x14) do NOT take this branch — DDC0 is the operator's
+            // only RX, so the Orion pair layout does not apply. This is NOT "PS
+            // off" for the G2E/10E: as of v0.10.8 (#960) those boards perform
+            // Orion-style PS by TIME-MUXING the feedback pair onto DDC0 during a
+            // TX burst via the separate g2eFeedbackBurst descriptor above (byte
+            // 1363 = 0x02 coupler/reference interleave, DDC0-only), gated by
+            // TimeMuxesPsFeedbackOnDdc0 + txKeyed. Do NOT "restore" a disable
+            // here or add the reserve-DDC layout for the G2E — that would break
+            // the shipped single-ADC time-mux path and mis-route DDC0.
+            // ReservesPsFeedbackDdcs is the same board set as the old explicit
+            // `!= Hermes && != HermesII && != HermesC10` test (issue #960).
             if (ReservesPsFeedbackDdcs(boardKind))
             {
                 ddcEnable |= 0x01;
@@ -2172,7 +2447,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
         p[7] = ddcEnable;
         int off = 17 + rxDdc * 6;
-        p[off + 0] = 0x00;
+        p[off + 0] = rx1AdcSource;
         WriteBeU16(p, off + 1, sampleRateKhz);
         p[off + 5] = 24;
 
@@ -2183,7 +2458,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             // same feedline — see Rx2AdcSource. Sourcing ADC1 fed the empty
             // RX2/EXT jack and produced a silent DDC on a normal station.
             int off2 = 17 + rx2Ddc * 6;
-            p[off2 + 0] = Rx2AdcSource(numAdc, boardKind);
+            p[off2 + 0] = rx2AdcSource ?? Rx2AdcSource(numAdc, boardKind);
             WriteBeU16(p, off2 + 1, sampleRateKhz);
             p[off2 + 5] = 24;
         }
@@ -2311,11 +2586,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             // tests), so existing behaviour is preserved; extras add DDC config
             // blocks for RxBaseDdc+2.. only. PS DDC0/1 handling is inside the
             // composer and untouched.
-            byte rxAdc = Rx2AdcSource(_numAdc, _boardKind); // ADC0 (same antenna)
+            byte rx1Adc = (byte)Volatile.Read(ref _rx1AdcSource);
+            byte rx2Adc = (byte)Volatile.Read(ref _rx2AdcSource);
             var specs = new List<DdcReceiverSpec>(2 + extras)
             {
-                new DdcReceiverSpec(rxAdc, (ushort)_sampleRateKhz),  // RX1
-                new DdcReceiverSpec(rxAdc, (ushort)_sampleRateKhz),  // RX2
+                new DdcReceiverSpec(rx1Adc, (ushort)_sampleRateKhz),  // RX1
+                new DdcReceiverSpec(rx2Adc, (ushort)_sampleRateKhz),  // RX2
             };
             for (int k = 0; k < extras; k++)
                 specs.Add(new DdcReceiverSpec(_extraRxAdc[2 + k], (ushort)_sampleRateKhz));
@@ -2339,7 +2615,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 _adcDitherEnabled,
                 _adcRandomEnabled,
                 Volatile.Read(ref _rx2Enabled) != 0,
-                g2eFeedbackBurst);
+                g2eFeedbackBurst,
+                (byte)Volatile.Read(ref _rx1AdcSource),
+                (byte)Volatile.Read(ref _rx2AdcSource));
         }
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1025));
     }
@@ -2517,6 +2795,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public void SetTxAttenuationDb(byte db)
     {
         if (db > 31) db = 31;
+        // Any explicit write — operator control, the auto-attenuate dance, or
+        // the connect-time restore of a persisted per-board value — marks the
+        // attenuation as deliberately chosen. The HermesC10 PS-arm protective
+        // seed honours this and never overrides a deliberate value (Thetis /
+        // piHPSDR parity: the stored per-band value is sticky; 31 dB is only
+        // the virgin-store default). Recorded even when the value matches the
+        // current byte so an explicit 0 counts as deliberate.
+        _txAttnExplicitlySet = true;
         if (_txStepAttnDb == db) return;
         _txStepAttnDb = db;
         if (_rxTask is not null) SendCmdTx();
@@ -2630,14 +2916,17 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         p[345] = _driveByte;
 
         // OC outputs (7-bit mask) shifted left by 1 into byte 1401. The TX
-        // mask applies whenever MOX is on (whether keyed by the operator or
-        // by TUN) and the RX mask applies otherwise. The piHPSDR-style global
-        // "OCtune" override was removed in #124 for hardware-safety reasons:
-        // a global override layered on top of the per-band OC TX mask could
+        // mask applies whenever MOX or TUN is on and the RX mask applies
+        // otherwise. Additionally, when TUN is active the per-band OcTune mask
+        // is ORed on top of OcTx (Wire = OcTx | OcTune during TUN — issue
+        // #1325). The additive shape only ADDS bits on top of the band's
+        // already-correct OcTx mask, so the band-select state stays intact —
+        // distinct from the removed piHPSDR-style global "OCtune" override
+        // (#124), which layered a single override across all bands and could
         // hand an external amp a confused band-select state during a steady
-        // tune carrier and damage the finals. Thetis behaves this way too.
-        byte ocBits = (_moxOn || _tuneActive) ? _ocTxMask : _ocRxMask;
-        p[1401] = (byte)((ocBits & 0x7F) << 1);
+        // tune carrier.
+        UnpackOcMasks(Volatile.Read(ref _ocMasksPacked), out byte ocTxMask, out byte ocRxMask, out byte ocTuneMask);
+        p[1401] = ComposeOcMaskByte1401(_moxOn, _tuneActive, ocTxMask, ocRxMask, ocTuneMask);
 
         // Anvelina-PRO3 DX OC extension (USEROUT7..10) at byte 1397, bits
         // [4:1]. EU2AV's Open_Collector_Anvelina_DX for Thetis spec
@@ -2703,7 +2992,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // the VFO-B carrier, so there was NO RF output on a different band.
         uint txLpfFreqHz = xmit ? _txDucFreqHz : _rxFreqHz;
         // alex0 BPF follows RX1 (_rxFreqHz); LPF follows the TX freq.
-        uint alex0Common = ComputeAlexWord(_rxFreqHz, txLpfFreqHz, txAnt: txAntWire, board: _boardKind);
+        uint alex0Common = ComputeAlexWord(
+            _rxFreqHz,
+            txLpfFreqHz,
+            txAnt: txAntWire,
+            board: _boardKind,
+            rfFilters: _rfFilters,
+            xmit: xmit,
+            psEnabled: psWire);
         // alex1 keeps the TX antenna from txAntWire; alex0 swaps in the
         // state-correct antenna (clear [26:24], re-OR via the shared encoder).
         uint alex0 = (alex0Common & ~ALEX_TX_ANTENNA_MASK) | EncodeTxAntennaBits(alex0AntWire)
@@ -2716,7 +3012,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             xmit,
             psWire,          // board-gated PS arm (#960): no ALEX_PS on single-ADC
             _boardKind,
-            txAntWire);
+            txAntWire,
+            _rfFilters);
         // RX auxiliary input select (external-ports plan — antenna slice, #804).
         // Emitted on alex0 — XVTR/EXT1/EXT2/BYPASS bits 8..11 (+ Saturn RX_SELECT
         // bit 14). ORDER IS LOAD-BEARING (the PS-K36 firewall): the operator aux
@@ -2737,7 +3034,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // 1296 ORs ALEX_RX_ANTENNA_BYPASS into alex0 only during xmit when
         // PS is armed and the operator selected the external path. Internal
         // coupler leaves this bit clear.
-        if (psWire && _psFeedbackExternal && xmit)
+        //
+        // G2E (#960 follow-up): on the full-Orion dual-ADC wire psWire owns this,
+        // but the single-ADC HermesC10 does time-mux PS with psWire=false — yet
+        // its ONE ADC can only see an EXTERNAL sampler tap through this relay.
+        // RoutesExternalPsFeedbackBypass adds ONLY the HermesC10 arm, so the 10E
+        // and every other board stay byte-identical. G2ePsTimeMuxOnAir is true, so
+        // this path is LIVE in production; it is "bench-gated" only in the sense
+        // that no G2E is on our bench, so first-key-down behaviour is proven by
+        // construction from the C10 gateware and confirmed on a real G2E via the
+        // p2.ps.g2e log (peakFb going non-zero once the external tap is connected).
+        if (RoutesExternalPsFeedbackBypass(_boardKind, _psFeedbackEnabled, _psFeedbackExternal)
+            && xmit)
         {
             alex0 |= AlexRxAntennaBypass;
         }
@@ -2746,9 +3054,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1027));
 
         _log.LogInformation(
-            "p2.cmd_hp.tx run={Run} mox={Mox} tun={Tun} board={Board} variant={Variant} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocDxTx=0x{OcDxTx:X2} ocDxRx=0x{OcDxRx:X2} -> p[1401]=0x{B1401:X2} p[1397]=0x{B1397:X2}",
+            "p2.cmd_hp.tx run={Run} mox={Mox} tun={Tun} board={Board} variant={Variant} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocTune=0x{OcTune:X2} ocDxTx=0x{OcDxTx:X2} ocDxRx=0x{OcDxRx:X2} -> p[1401]=0x{B1401:X2} p[1397]=0x{B1397:X2}",
             run, _moxOn, _tuneActive, _boardKind, _variant,
-            _ocTxMask, _ocRxMask, _ocDxTxMask, _ocDxRxMask,
+            ocTxMask, ocRxMask, ocTuneMask, _ocDxTxMask, _ocDxRxMask,
             p[1401], p[1397]);
     }
 
@@ -2823,6 +3131,45 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private const uint ALEX_BYPASS_HPF = 0x00001000;  // bit 12
 
     /// <summary>
+    /// Should the RX-aux BYPASS relay (alex0 bit 11, <see cref="AlexRxAntennaBypass"/>)
+    /// route an EXTERNAL PureSignal feedback tap into the RX ADC on this board?
+    ///
+    /// Two paths qualify:
+    ///  • The full-Orion dual-ADC PS wire (<see cref="ComposesPsFeedbackWire"/>):
+    ///    pihpsdr new_protocol.c:1284-1296 ORs the bit during xmit when PS is
+    ///    armed and the operator selected the external path.
+    ///  • The single-ADC HermesC10 / ANAN-G2E time-mux PS path (#960 follow-up):
+    ///    here <see cref="ComposesPsFeedbackWire"/> is <c>false</c>, but the board's
+    ///    ONE ADC can only see an external sampler tap (post-PA pad into the
+    ///    RXbypass / K36 jack — how the real G2E operator runs PS) through this
+    ///    same relay. Without the bit the external feedback never reaches the ADC
+    ///    and calcc can never converge — the observed "PS doesn't work on the G2E".
+    ///
+    /// IMPORTANT — the <paramref name="psExternal"/> toggle is honoured ONLY on the
+    /// dual-ADC family, where "Internal" selects the board's dedicated feedback ADC1.
+    /// The single-ADC HermesC10 has NO internal feedback coupler: its one ADC is the
+    /// raw LTC2208 (<c>temp_ADC = INA</c>, Hermes.v:1117-1130) with no internal mux,
+    /// so PureSignal feedback is physically reachable ONLY through this external
+    /// bypass relay (bit 11 "RX 1 Out", SPI.v:47). "Internal" is not a valid source
+    /// on this board — it silently leaves the ADC on the antenna and the PS meter
+    /// dead ("as if PS isn't on"). So on HermesC10 the relay is routed whenever PS is
+    /// armed, regardless of the operator's Internal/External pick. Every OTHER board
+    /// still requires <paramref name="psExternal"/> and stays byte-identical; the 10E
+    /// (HermesII) is deliberately left off until a 10E owner can bench-confirm the
+    /// same routing. The caller still ANDs the transmit-edge (xmit / MOX) condition.
+    /// </summary>
+    internal static bool RoutesExternalPsFeedbackBypass(
+        HpsdrBoardKind board, bool psEnabled, bool psExternal)
+    {
+        if (!psEnabled) return false;
+        // Single-ADC G2E: external tap is the ONLY feedback path — route it on any
+        // PS-armed burst, independent of the (physically meaningless) Internal pick.
+        if (board == HpsdrBoardKind.HermesC10) return G2ePsTimeMuxOnAir;
+        // Dual-ADC family: honour the operator's Internal(ADC1)/External(bypass) pick.
+        return psExternal && ComposesPsFeedbackWire(psEnabled, board);
+    }
+
+    /// <summary>
     /// Compose the alex0 word the way <see cref="SendCmdHighPriority"/>
     /// does, exposed internal so wire-format tests can assert the
     /// PureSignal-related bits without standing up a socket. Mirrors the
@@ -2838,7 +3185,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         bool hasTxAntennaRelays = false,
         int rxAuxInput = 0,
         bool mkiiBpfRxSelect = false,
-        int rxAntWire = 1)
+        int rxAntWire = 1,
+        RfFilterRuntimeSettings? rfFilters = null)
     {
         // Mirrors the SendCmdHighPriority alex0 path EXACTLY, in the same order,
         // so the golden test asserts real behaviour:
@@ -2853,12 +3201,23 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         int alex0AntWire = (moxOn || rxAuxInput != 0)
             ? wire
             : ((rxAntWire is 1 or 2 or 3) ? rxAntWire : 1);
-        uint alexCommon = ComputeAlexWord(rxFreqHz, rxFreqHz, txAnt: wire, board: board);
+        uint alexCommon = ComputeAlexWord(
+            rxFreqHz,
+            rxFreqHz,
+            txAnt: wire,
+            board: board,
+            rfFilters: rfFilters,
+            xmit: moxOn,
+            psEnabled: psEnabled);
         uint alex0 = (alexCommon & ~ALEX_TX_ANTENNA_MASK) | EncodeTxAntennaBits(alex0AntWire)
                      | (moxOn ? ALEX_TX_RELAY : 0u);
         alex0 |= ComposeRxAuxBits(rxAuxInput, mkiiBpfRxSelect);
-        if (psEnabled && moxOn) alex0 |= AlexPsBit;
-        if (psEnabled && psExternal && moxOn) alex0 |= AlexRxAntennaBypass;
+        // PS bit is the full-Orion dual-ADC wire ONLY — single-ADC boards
+        // (HermesC10/G2E, HermesII/10E) never set ALEX_PS. Gate on the same
+        // predicate the live path uses so this helper mirrors the wire exactly.
+        if (ComposesPsFeedbackWire(psEnabled, board) && moxOn) alex0 |= AlexPsBit;
+        if (RoutesExternalPsFeedbackBypass(board, psEnabled, psExternal) && moxOn)
+            alex0 |= AlexRxAntennaBypass;
         return alex0;
     }
 
@@ -2870,7 +3229,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         bool moxOn,
         bool psEnabled,
         HpsdrBoardKind board = HpsdrBoardKind.OrionMkII,
-        int txAntWire = 1)
+        int txAntWire = 1,
+        RfFilterRuntimeSettings? rfFilters = null)
     {
         // The alex1 word carries TWO independent filter selections that must NOT
         // share a frequency when RX2 / the TX VFO sit on different bands:
@@ -2895,7 +3255,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // alex1 ALWAYS reflects the TX antenna (external-ports plan — antenna
         // slice, #804) — it never carries the RX antenna, so the TX-antenna
         // selector is threaded straight through here.
-        uint alex1 = ComputeAlexWord(rx2BpfFreqHz, lpfFreqHz, txAnt: txAntWire, board: board);
+        uint alex1 = ComputeAlexWord(
+            rx2BpfFreqHz,
+            lpfFreqHz,
+            txAnt: txAntWire,
+            board: board,
+            rfFilters: rfFilters,
+            xmit: moxOn,
+            psEnabled: psEnabled);
         if (moxOn) alex1 |= ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX;
         if (psEnabled) alex1 |= AlexPsBit;
         return alex1;
@@ -2911,25 +3278,46 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         uint rxFreqHz,
         bool moxOn,
         bool psEnabled,
-        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII)
+        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII,
+        RfFilterRuntimeSettings? rfFilters = null)
     {
-        uint alexCommon = ComputeAlexWord(rxFreqHz, rxFreqHz, txAnt: 1, board: board);
+        uint alexCommon = ComputeAlexWord(
+            rxFreqHz,
+            rxFreqHz,
+            txAnt: 1,
+            board: board,
+            rfFilters: rfFilters,
+            xmit: moxOn,
+            psEnabled: psEnabled);
         uint alex1 = alexCommon | (moxOn ? ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX : 0u);
         if (psEnabled) alex1 |= AlexPsBit;
         return alex1;
     }
 
-    internal static uint ComputeAlexWord(uint rxFreqHz, uint txFreqHz, int txAnt, HpsdrBoardKind board = HpsdrBoardKind.OrionMkII)
+    internal static uint ComputeAlexWord(
+        uint rxFreqHz,
+        uint txFreqHz,
+        int txAnt,
+        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII,
+        RfFilterRuntimeSettings? rfFilters = null,
+        bool xmit = false,
+        bool psEnabled = false)
     {
         uint word = 0;
-        word |= board is HpsdrBoardKind.Hermes or HpsdrBoardKind.HermesII
-            ? BpfBitsClassicAlex(rxFreqHz)
-            : BpfBitsAnan7000(rxFreqHz);
+        bool classicAlex = board is HpsdrBoardKind.Hermes or HpsdrBoardKind.HermesII;
+        bool forceRxBypass = rfFilters is not null
+            && (rfFilters.RxBypassAll
+                || (xmit && rfFilters.RxBypassOnTx)
+                || (xmit && psEnabled && rfFilters.RxBypassOnPureSignal));
+
+        word |= classicAlex
+            ? BpfBitsClassicAlex(rxFreqHz, rfFilters, forceRxBypass)
+            : BpfBitsAnan7000(rxFreqHz, rfFilters, forceRxBypass);
         // LPF bit positions and band thresholds are identical across both
         // filter-board generations (classic Alex on Hermes/ANAN-100 vs
         // ANAN-7000/Saturn BPF board) — confirmed against pihpsdr alex.h
         // and new_protocol.c. Same call for every board.
-        word |= LpfBits(txFreqHz);
+        word |= LpfBits(txFreqHz, rfFilters);
         word |= EncodeTxAntennaBits(txAnt);
         return word;
     }
@@ -2997,6 +3385,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         return ALEX_ANAN7000_RX_6_PRE_BPF;
     }
 
+    private static uint BpfBitsAnan7000(uint freqHz, RfFilterRuntimeSettings? rfFilters, bool forceBypass)
+    {
+        if (forceBypass) return ALEX_ANAN7000_RX_BYPASS_BPF;
+        if (rfFilters?.CustomMatrixEnabled == true)
+        {
+            var resolved = ResolveCustomFilterBits(
+                rfFilters.Anan7000RxFilters,
+                freqHz,
+                Anan7000RxKeyToBits,
+                ALEX_ANAN7000_RX_BYPASS_BPF);
+            if (resolved.HasValue) return resolved.Value;
+        }
+        return BpfBitsAnan7000(freqHz);
+    }
+
     // RX HPF band splits for the classic Alex filter board (Hermes,
     // ANAN-10, ANAN-100, ANAN-100D, ANAN-200D, HermesII / ANAN-10E,
     // ANAN-100B). Bit positions and thresholds lifted from pihpsdr
@@ -3013,6 +3416,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (freqHz < 20_000_000u) return ALEX_13MHZ_HPF;
         if (freqHz < 50_000_000u) return ALEX_20MHZ_HPF;
         return ALEX_6M_PREAMP;
+    }
+
+    private static uint BpfBitsClassicAlex(uint freqHz, RfFilterRuntimeSettings? rfFilters, bool forceBypass)
+    {
+        if (forceBypass) return ALEX_BYPASS_HPF;
+        if (rfFilters?.CustomMatrixEnabled == true)
+        {
+            var resolved = ResolveCustomFilterBits(
+                rfFilters.ClassicAlexRxFilters,
+                freqHz,
+                ClassicAlexRxKeyToBits,
+                ALEX_BYPASS_HPF);
+            if (resolved.HasValue) return resolved.Value;
+        }
+        return BpfBitsClassicAlex(freqHz);
     }
 
     // TX LPF band splits. Thresholds match pihpsdr new_protocol.c:1204-1218
@@ -3034,6 +3452,78 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         return ALEX_160_LPF;
     }
 
+    private static uint LpfBits(uint freqHz, RfFilterRuntimeSettings? rfFilters)
+    {
+        if (rfFilters?.CustomMatrixEnabled == true)
+        {
+            var resolved = ResolveCustomFilterBits(
+                rfFilters.TxFilters,
+                freqHz,
+                TxLpfKeyToBits,
+                ALEX_6_BYPASS_LPF);
+            if (resolved.HasValue) return resolved.Value;
+        }
+        return LpfBits(freqHz);
+    }
+
+    private static uint? ResolveCustomFilterBits(
+        IReadOnlyList<RfFilterRangeDto>? ranges,
+        uint freqHz,
+        Func<string, uint?> keyToBits,
+        uint bypassBits)
+    {
+        if (ranges is null) return null;
+        foreach (var range in ranges)
+        {
+            if (range is null) continue;
+            long start = Math.Max(0L, range.StartHz);
+            long end = Math.Max(start, range.EndHz);
+            if (freqHz < start || freqHz > end) continue;
+            if (range.ForceBypass) return bypassBits;
+            return keyToBits(range.Key);
+        }
+        return null;
+    }
+
+    private static uint? Anan7000RxKeyToBits(string key) => NormalizeFilterKey(key) switch
+    {
+        "bypass" => ALEX_ANAN7000_RX_BYPASS_BPF,
+        "160" => ALEX_ANAN7000_RX_160_BPF,
+        "80_60" => ALEX_ANAN7000_RX_80_60_BPF,
+        "40_30" => ALEX_ANAN7000_RX_40_30_BPF,
+        "20_15" => ALEX_ANAN7000_RX_20_15_BPF,
+        "12_10" => ALEX_ANAN7000_RX_12_10_BPF,
+        "6_pre" => ALEX_ANAN7000_RX_6_PRE_BPF,
+        _ => null,
+    };
+
+    private static uint? ClassicAlexRxKeyToBits(string key) => NormalizeFilterKey(key) switch
+    {
+        "bypass" => ALEX_BYPASS_HPF,
+        "1_5" => ALEX_1_5MHZ_HPF,
+        "6_5" => ALEX_6_5MHZ_HPF,
+        "9_5" => ALEX_9_5MHZ_HPF,
+        "13" => ALEX_13MHZ_HPF,
+        "20" => ALEX_20MHZ_HPF,
+        "6_pre" => ALEX_6M_PREAMP,
+        _ => null,
+    };
+
+    private static uint? TxLpfKeyToBits(string key) => NormalizeFilterKey(key) switch
+    {
+        "160" => ALEX_160_LPF,
+        "80" => ALEX_80_LPF,
+        "60_40" => ALEX_60_40_LPF,
+        "30_20" => ALEX_30_20_LPF,
+        "17_15" => ALEX_17_15_LPF,
+        "12_10" => ALEX_12_10_LPF,
+        "6_bypass" => ALEX_6_BYPASS_LPF,
+        _ => null,
+    };
+
+    private static string NormalizeFilterKey(string? key)
+        => (key ?? string.Empty).Trim().ToLowerInvariant().Replace('-', '_');
+
     // Mirrors pihpsdr's new_protocol_timer_thread:
     //   HighPriority every 100 ms, RX/TX specific every 200 ms, General
     //   every 800 ms. The G2 MkII expects this cadence once the hardware
@@ -3047,6 +3537,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             while (!ct.IsCancellationRequested)
             {
                 await Task.Delay(100, ct).ConfigureAwait(false);
+                // Skip sends only while a recovery restart is actually in
+                // flight, and never for longer than the bounded window — a
+                // stuck/delayed restart task must not starve the radio's
+                // hardware watchdog of keepalives.
+                if (Volatile.Read(ref _rxRecoveryRestartActive) != 0
+                    && Environment.TickCount64 - Volatile.Read(ref _rxRecoveryRestartSetMs) < RxRecoveryKeepaliveSkipMaxMs)
+                    continue;
                 cycle = (cycle % 8) + 1;
                 SendCmdHighPriority(run: true);
                 switch (cycle)
@@ -3069,6 +3566,60 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         {
             _log.LogWarning(ex, "p2.keepalive exited with error");
         }
+    }
+
+    private bool IsRxRecoveryBlocked(out string reason)
+    {
+        bool psArmed = _psFeedbackEnabled;
+        bool txActive = _moxOn || _tuneActive;
+        reason = (psArmed, txActive) switch
+        {
+            (true, true) => "ps-armed,tx-active",
+            (true, false) => "ps-armed",
+            (false, true) => "tx-active",
+            _ => "none"
+        };
+        return psArmed || txActive;
+    }
+
+    private void RequestStreamRestartForRecovery(CancellationToken ct)
+    {
+        if (Interlocked.Exchange(ref _rxRecoveryRestartActive, 1) != 0)
+            return;
+        Volatile.Write(ref _rxRecoveryRestartSetMs, Environment.TickCount64);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (ct.IsCancellationRequested) return;
+                if (IsRxRecoveryBlocked(out _)) return;
+
+                SendCmdHighPriority(run: false);
+                await Task.Delay(50, ct).ConfigureAwait(false);
+                SendCmdGeneral();
+                await Task.Delay(50, ct).ConfigureAwait(false);
+                SendCmdRx();
+                await Task.Delay(50, ct).ConfigureAwait(false);
+                SendCmdTx();
+                await Task.Delay(50, ct).ConfigureAwait(false);
+                SendCmdHighPriority(run: true);
+            }
+            catch (OperationCanceledException) { }
+            catch (ObjectDisposedException) { }
+            catch (SocketException ex)
+            {
+                _log.LogWarning(ex, "p2.rx.recover restart failed");
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "p2.rx.recover restart failed");
+            }
+            finally
+            {
+                Volatile.Write(ref _rxRecoveryRestartActive, 0);
+            }
+        }, CancellationToken.None);
     }
 
     private void RxLoop(CancellationToken ct)
@@ -3108,6 +3659,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         bool haveDdc0Arrival = false;
         long lastDroppedSnapshot = Interlocked.Read(ref _droppedFrames);
         double usPerTick = 1_000_000.0 / Stopwatch.Frequency;
+        var recoveryPolicy = new RxSilenceRecoveryPolicy(
+            Environment.TickCount64,
+            RxSilenceBeforeRecoveryMs,
+            RxRecoveryAttemptSpacingMs,
+            RxRecoveryMaxAttempts);
+        int toleratedConnectionResets = 0;
+        long lastConnectionResetLogMs = 0;
 
         try
         {
@@ -3121,6 +3679,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 }
                 catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
                 {
+                    HandleRxSilenceRecovery(Environment.TickCount64);
                     continue;
                 }
                 catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
@@ -3129,6 +3688,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                     // port-unreachable and Windows surfaces it on the next recv.
                     // Linux silently discards this; without the catch here the IQ
                     // loop dies on the first stray ICMP → frozen panadapter.
+                    toleratedConnectionResets++;
+                    long nowMs = Environment.TickCount64;
+                    if (lastConnectionResetLogMs == 0 || nowMs - lastConnectionResetLogMs >= 1000)
+                    {
+                        lastConnectionResetLogMs = nowMs;
+                        _log.LogInformation(
+                            "p2.rx.connreset tolerated count={Count}",
+                            toleratedConnectionResets);
+                    }
+                    HandleRxSilenceRecovery(nowMs);
                     continue;
                 }
                 catch (SocketException ex) when (ex.SocketErrorCode == SocketError.Interrupted
@@ -3141,6 +3710,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 if (srcPort >= RxDataPortBase && srcPort < RxDataPortBase + MaxRxDdc)
                 {
                     int ddc = srcPort - RxDataPortBase;
+                    if (n == BufLen)
+                    {
+                        long packetNowMs = Environment.TickCount64;
+                        if (recoveryPolicy.RecordPacket(packetNowMs) is { } recovered
+                            && recovered.Attempts > 0)
+                        {
+                            _log.LogInformation(
+                                "p2.rx.recover ok attempts={Attempts} silenceMs={Silence}",
+                                recovered.Attempts,
+                                recovered.SilenceMs);
+                        }
+                    }
                     portPkts[ddc]++;
 
                     // Measure inter-arrival on DDC0 only — the primary RX stream
@@ -3221,6 +3802,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                     else
                     {
                         HandleDdcPacket(buf, ddcIndex);
+                        // Keyed heartbeat: on the G2E, if PS is armed + keyed but the
+                        // DDC0 packet did NOT route to the paired-feedback path (burst
+                        // not forming, wrong rate, or reverted to plain RX), still tick
+                        // the ~1 Hz diagnostic so the bench sees an explicit frames=0
+                        // line instead of silence. Inert on every other board.
+                        if (ddcIndex == 0 && ShouldLogSingleAdcPsWireDiag(
+                                _boardKind, _psFeedbackEnabled, _moxOn || _tuneActive))
+                        {
+                            MaybeEmitSingleAdcPsDiag();
+                        }
                     }
                 }
                 else if (srcPort == 1025 && n >= HiPriStatusMinBytes)
@@ -3246,14 +3837,103 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                     if (radioMic is not null && n >= 132)
                         radioMic(new ReadOnlySpan<byte>(buf, 0, n));
                 }
-                // wideband ADC0..7 (1027..1034) intentionally ignored — a
-                // separate feature.
+                else if (srcPort >= WidebandDataPortBase && srcPort < WidebandDataPortBase + WidebandAdcCount)
+                {
+                    if (_widebandDisplayEnabled && _widebandFrameHandler is not null)
+                        HandleWidebandPacket(buf, n, srcPort - WidebandDataPortBase);
+                }
             }
         }
         finally
         {
             _iqFrames.Writer.TryComplete();
         }
+
+        void HandleRxSilenceRecovery(long nowMs)
+        {
+            bool blocked = IsRxRecoveryBlocked(out var reason);
+            var decision = recoveryPolicy.Tick(
+                nowMs,
+                streamingExpected: !ct.IsCancellationRequested,
+                recoveryBlocked: blocked);
+            switch (decision.Action)
+            {
+                case RxSilenceRecoveryAction.None:
+                    return;
+                case RxSilenceRecoveryAction.Blocked:
+                    _log.LogWarning(
+                        "p2.rx.recover skip reason={Reason} silenceMs={Silence} - no DDC IQ packets; automatic restart is disabled while PS or TX is active",
+                        reason,
+                        decision.SilenceMs);
+                    return;
+                case RxSilenceRecoveryAction.AttemptRestart:
+                    if (IsRxRecoveryBlocked(out reason))
+                    {
+                        _log.LogWarning(
+                            "p2.rx.recover skip reason={Reason} silenceMs={Silence} - no DDC IQ packets; automatic restart is disabled while PS or TX is active",
+                            reason,
+                            decision.SilenceMs);
+                        return;
+                    }
+                    _log.LogWarning(
+                        "p2.rx.recover attempt={Attempt}/{Max} silenceMs={Silence} - no DDC IQ packets; restarting stream",
+                        decision.Attempt,
+                        decision.MaxAttempts,
+                        decision.SilenceMs);
+                    RequestStreamRestartForRecovery(ct);
+                    return;
+                case RxSilenceRecoveryAction.Exhausted:
+                    _log.LogWarning(
+                        "p2.rx.recover failed attempts={Max} silenceMs={Silence} - no DDC IQ packets after stream restart attempts; likely network causes include direct-connect/link-local addressing, an isolated switch, DHCP renewal, NIC power management, firewall filtering, or WiFi/Ethernet route selection",
+                        decision.MaxAttempts,
+                        decision.SilenceMs);
+                    return;
+            }
+        }
+    }
+
+    private void HandleWidebandPacket(byte[] buf, int n, int adcIndex)
+    {
+        // Zeus enables ADC0 only for now. Multi-ADC wideband would need either
+        // separate display panes or an explicit source selector; silently ignore
+        // any unexpected source so one radio quirk cannot corrupt ADC0 frames.
+        if (adcIndex != 0) return;
+
+        var handler = _widebandFrameHandler;
+        if (!_widebandDisplayEnabled || handler is null) return;
+        if (n < 4 + WidebandPayloadBytes)
+        {
+            ResetWidebandAssembler();
+            return;
+        }
+
+        uint seq = BinaryPrimitives.ReadUInt32BigEndian(buf.AsSpan(0, 4));
+        if (seq == 0)
+        {
+            _widebandPacketIndex = 0;
+            _widebandExpectedSeq = 0;
+            _widebandCollecting = true;
+        }
+
+        if (!_widebandCollecting || seq != _widebandExpectedSeq)
+        {
+            ResetWidebandAssembler();
+            return;
+        }
+
+        int dst = _widebandPacketIndex * WidebandSamplesPerPacket;
+        int src = 4;
+        for (int i = 0; i < WidebandSamplesPerPacket; i++, src += 2)
+            _widebandFrameSamples[dst + i] = BinaryPrimitives.ReadInt16BigEndian(buf.AsSpan(src, 2));
+
+        _widebandPacketIndex++;
+        _widebandExpectedSeq++;
+        if (_widebandPacketIndex < WidebandPacketsPerFrame) return;
+
+        _widebandCollecting = false;
+        _widebandPacketIndex = 0;
+        _widebandExpectedSeq = 0;
+        handler(adcIndex, _widebandFrameSamples, WidebandAdcSampleRateHz);
     }
 
     private void HandleDdcPacket(byte[] buf, int ddcIndex)
@@ -3496,6 +4176,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             samplesPerPacket = 119;
         }
 
+        // Single-ADC PS wire instrumentation gate — computed once per packet
+        // (see field block near _psBlockStartSeq). When true we track the peak
+        // coupler/reference magnitudes in the decode loop below and emit a ~1 Hz
+        // diagnostic. Dual-ADC boards also reach this method but are excluded by
+        // ShouldLogSingleAdcPsWireDiag.
+        bool g2eDiag = ShouldLogSingleAdcPsWireDiag(
+            _boardKind, _psFeedbackEnabled, _moxOn || _tuneActive);
+
         for (int i = 0; i < samplesPerPacket; i++)
         {
             int off = 16 + i * 12;
@@ -3504,6 +4192,15 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             // the live decode path so the regression guard is real.
             var (sampleRxI, sampleRxQ, sampleTxI, sampleTxQ) =
                 DecodePsPairForTest(new ReadOnlySpan<byte>(buf, off, 12));
+            if (g2eDiag)
+            {
+                // Peak |coupler| (rx_I[0]) and |reference| (rx_I[NR]) as a cheap
+                // max-of-|I|,|Q| — the level the next real-G2E bench needs to see.
+                float couplerMag = MathF.Max(MathF.Abs(sampleRxI), MathF.Abs(sampleRxQ));
+                float refMag = MathF.Max(MathF.Abs(sampleTxI), MathF.Abs(sampleTxQ));
+                if (couplerMag > _g2ePsDiagPeakCoupler) _g2ePsDiagPeakCoupler = couplerMag;
+                if (refMag > _g2ePsDiagPeakReference) _g2ePsDiagPeakReference = refMag;
+            }
             _psRxI[_psBlockFill] = sampleRxI;
             _psRxQ[_psBlockFill] = sampleRxQ;
             _psTxI[_psBlockFill] = sampleTxI;
@@ -3538,7 +4235,74 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 _psBlockFill = 0;
             }
         }
+
+        if (g2eDiag)
+        {
+            _g2ePsDiagFramesInWindow++;
+            MaybeEmitSingleAdcPsDiag();
+        }
     }
+
+    /// <summary>
+    /// Emit the ~1 Hz HermesC10 (ANAN-G2E) PS wire diagnostic when the window has
+    /// elapsed, then reset the window. Called from two places, both on the RX
+    /// thread (no synchronisation needed): once per PS-paired packet in
+    /// <see cref="HandlePsPairedPacket"/> (with <c>frames</c> already incremented),
+    /// AND as a keyed heartbeat from the RX dispatch loop on every DDC0 packet
+    /// during a keyed PS burst. The heartbeat is load-bearing for the bench: without
+    /// it the line only prints when feedback pairs actually arrive, so a totally
+    /// dead feedback path emits NOTHING and the tester cannot tell "zero frames"
+    /// (routing/burst broken) from "frames but flat level" (byte-59 / pad too high).
+    /// With it the tester always gets a line, and <c>frames=0</c> vs <c>frames=N,
+    /// peakFb≈0</c> is the one-line discriminator (see the #1249 bench notes).
+    /// </summary>
+    private void MaybeEmitSingleAdcPsDiag()
+    {
+        long nowMs = Environment.TickCount64;
+        if (_g2ePsDiagWindowStartMs == 0) _g2ePsDiagWindowStartMs = nowMs;
+        if (nowMs - _g2ePsDiagWindowStartMs < 1000) return;
+
+        // Mirrors the existing p1.tx.rate / p2.rxdiag 1 Hz cadence.
+        //   arm     = byte 1363 = 0x02 (SyncRx[0][1]) is on the wire whenever this
+        //             path runs;
+        //   external= the operator's Internal/External feedback pick;
+        //   bypass  = whether alex0 bit 11 (RX 1 Out) is actually routed on the wire
+        //             for this keyed PS burst — the single-ADC G2E's ONLY tap path,
+        //             now armed regardless of the Internal/External pick (#960);
+        //   atten   = the byte-59 (Angelia_atten_Tx0) TX-time ADC attenuation the
+        //             host is sending (stacks on the operator's external pad);
+        //   frames  = DDC0 feedback packets on port 1035 in the window;
+        //   peakFb / peakRef = de-interleaved coupler/reference magnitudes (0..1).
+        // Read-only diagnostic.
+        bool bypass = RoutesExternalPsFeedbackBypass(
+                          _boardKind, _psFeedbackEnabled, _psFeedbackExternal)
+                      && (_moxOn || _tuneActive);
+        _log.LogInformation(
+            "p2.ps.singleAdc arm={Arm} external={External} bypass={Bypass} atten={Atten} frames={Frames} peakFb={PeakFb:F4} peakRef={PeakRef:F4}",
+            1, _psFeedbackExternal, bypass, _txStepAttnDb, _g2ePsDiagFramesInWindow,
+            _g2ePsDiagPeakCoupler, _g2ePsDiagPeakReference);
+        _g2ePsDiagWindowStartMs = nowMs;
+        _g2ePsDiagFramesInWindow = 0;
+        _g2ePsDiagPeakCoupler = 0f;
+        _g2ePsDiagPeakReference = 0f;
+    }
+
+    /// <summary>
+    /// Gate for the read-only HermesC10 (ANAN-G2E) PS wire instrumentation
+    /// (<c>p2.ps.g2e</c>): emit ONLY on the ANAN-G2E, and only while PS feedback
+    /// is armed AND transmit is asserted (the single-ADC time-mux burst is the
+    /// only time DDC0 carries feedback). Deliberately excludes dual-ADC boards
+    /// (which also reach the paired-packet decoder via
+    /// <see cref="ReservesPsFeedbackDdcs"/>), so it is inert everywhere else.
+    /// Pure predicate, no side effects — unit-testable without sockets.
+    /// </summary>
+    internal static bool ShouldLogSingleAdcPsWireDiag(
+        HpsdrBoardKind board, bool psFeedbackEnabled, bool txKeyed)
+        => TimeMuxesPsFeedbackOnDdc0(board) && psFeedbackEnabled && txKeyed;
+
+    internal static bool ShouldLogG2ePsWireDiag(
+        HpsdrBoardKind board, bool psFeedbackEnabled, bool txKeyed)
+        => ShouldLogSingleAdcPsWireDiag(board, psFeedbackEnabled, txKeyed);
 
     private static int SignExtend24(int raw)
     {

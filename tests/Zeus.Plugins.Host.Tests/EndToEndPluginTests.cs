@@ -219,6 +219,118 @@ public class EndToEndPluginTests : IDisposable
         store.Dispose();
     }
 
+    [Fact]
+    public async Task BackendPlugin_Activated_MidSession_Routes_Go_Live_Without_Restart()
+    {
+        _ = typeof(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder);
+        _ = typeof(Microsoft.AspNetCore.Http.Results);
+        _ = typeof(Microsoft.AspNetCore.Builder.EndpointRouteBuilderExtensions);
+
+        var dir = InstallFixture(
+            RoslynFixture.Create("Amplifier", AmplifierSource, AmplifierManifest),
+            "amplifier");
+
+        var loader = new PluginLoader(NullLogger<PluginLoader>.Instance);
+        using var store = new PluginSettingsStore(Path.Combine(_root, "settings.db"));
+        var manager = new PluginManager(loader, store, new ServiceCollection().BuildServiceProvider(), NullLoggerFactory.Instance);
+
+        // Server starts with NO plugins active — the store-install scenario.
+        using var host = await BuildTestServerAsync(manager);
+        var client = host.GetTestClient();
+
+        const string statusUrl = "/api/plugins/com.openhpsdr.zeus.samples.amplifier/status";
+        var before = await client.GetAsync(statusUrl);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, before.StatusCode);
+
+        // Mid-session activation (what PluginInstaller does after unzip).
+        await manager.ActivateAsync(dir, default);
+
+        var after = await client.GetFromJsonAsync<AmpStatus>(statusUrl);
+        Assert.NotNull(after);
+        Assert.Equal(0, after!.PowerWatts);
+
+        var set = await client.PostAsJsonAsync(
+            "/api/plugins/com.openhpsdr.zeus.samples.amplifier/power",
+            new { watts = 500 });
+        Assert.True(set.IsSuccessStatusCode);
+
+        await manager.StopAsync(default);
+        store.Dispose();
+    }
+
+    [Fact]
+    public async Task BackendPlugin_Deactivated_MidSession_Routes_Go_Dark()
+    {
+        _ = typeof(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder);
+        _ = typeof(Microsoft.AspNetCore.Http.Results);
+        _ = typeof(Microsoft.AspNetCore.Builder.EndpointRouteBuilderExtensions);
+
+        var dir = InstallFixture(
+            RoslynFixture.Create("Amplifier", AmplifierSource, AmplifierManifest),
+            "amplifier");
+
+        var loader = new PluginLoader(NullLogger<PluginLoader>.Instance);
+        using var store = new PluginSettingsStore(Path.Combine(_root, "settings.db"));
+        var manager = new PluginManager(loader, store, new ServiceCollection().BuildServiceProvider(), NullLoggerFactory.Instance);
+        await manager.ActivateAsync(dir, default);
+
+        using var host = await BuildTestServerAsync(manager);
+        var client = host.GetTestClient();
+
+        const string statusUrl = "/api/plugins/com.openhpsdr.zeus.samples.amplifier/status";
+        var live = await client.GetAsync(statusUrl);
+        Assert.True(live.IsSuccessStatusCode);
+
+        // Uninstall mid-session: no more zombie routes serving the dead instance.
+        await manager.DeactivateAsync("com.openhpsdr.zeus.samples.amplifier", default);
+
+        var dark = await client.GetAsync(statusUrl);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, dark.StatusCode);
+
+        await manager.StopAsync(default);
+        store.Dispose();
+    }
+
+    [Fact]
+    public async Task BackendPlugin_Reinstalled_MidSession_Serves_The_New_Instance()
+    {
+        _ = typeof(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder);
+        _ = typeof(Microsoft.AspNetCore.Http.Results);
+        _ = typeof(Microsoft.AspNetCore.Builder.EndpointRouteBuilderExtensions);
+
+        var dir = InstallFixture(
+            RoslynFixture.Create("Amplifier", AmplifierSource, AmplifierManifest),
+            "amplifier");
+
+        var loader = new PluginLoader(NullLogger<PluginLoader>.Instance);
+        using var store = new PluginSettingsStore(Path.Combine(_root, "settings.db"));
+        var manager = new PluginManager(loader, store, new ServiceCollection().BuildServiceProvider(), NullLoggerFactory.Instance);
+        await manager.ActivateAsync(dir, default);
+
+        using var host = await BuildTestServerAsync(manager);
+        var client = host.GetTestClient();
+
+        // Mutate state on the FIRST instance so we can tell instances apart.
+        var set = await client.PostAsJsonAsync(
+            "/api/plugins/com.openhpsdr.zeus.samples.amplifier/power",
+            new { watts = 750 });
+        Assert.True(set.IsSuccessStatusCode);
+
+        // Reinstall (ActivateAsync on an already-active id deactivates the
+        // old instance first — the PluginInstaller overwrite path).
+        await manager.ActivateAsync(dir, default);
+
+        // Routes still answer, and from the FRESH instance (state reset) —
+        // previously the stale routes kept serving the unloaded old object.
+        var status = await client.GetFromJsonAsync<AmpStatus>(
+            "/api/plugins/com.openhpsdr.zeus.samples.amplifier/status");
+        Assert.NotNull(status);
+        Assert.Equal(0, status!.PowerWatts);
+
+        await manager.StopAsync(default);
+        store.Dispose();
+    }
+
     private static async Task<IHost> BuildTestServerAsync(PluginManager manager)
     {
         var builder = DotnetHost.CreateDefaultBuilder()

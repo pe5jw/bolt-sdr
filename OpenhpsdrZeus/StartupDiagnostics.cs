@@ -457,8 +457,16 @@ internal static class StartupDiagnostics
     {
         try
         {
-            var result = NativeCrashDumpWriter.Install(CrashDumpDir, LogPath, ExeName);
-            Write(result);
+            if (!OperatingSystem.IsWindows())
+            {
+                Write("  native.crash.dump      n/a (non-Windows)");
+                Write(ConfigureWindowsErrorReportingLocalDumps());
+                return;
+            }
+
+            Directory.CreateDirectory(CrashDumpDir);
+            PruneOldCrashDumps(CrashDumpDir, ExeName, CrashDumpRetention);
+            Write($"  native.crash.dump      in-process writer retired; Windows Error Reporting owns capture into {CrashDumpDir}");
             Write(ConfigureWindowsErrorReportingLocalDumps());
         }
         catch (Exception ex)
@@ -506,10 +514,7 @@ internal static class StartupDiagnostics
             Kv("support.collect", $"{LogPath}; {CrashDumpDir}; Windows Event Viewer > Application");
             Kv("crash.dump.privacy", "minidumps may include stack memory; share only for support/debugging");
 
-            var dumps = Directory
-                .EnumerateFiles(CrashDumpDir, "OpenhpsdrZeus-crash-*.dmp")
-                .Select(path => new FileInfo(path))
-                .OrderByDescending(f => f.LastWriteTimeUtc)
+            var dumps = EnumerateCrashDumps(CrashDumpDir, ExeName)
                 .Take(CrashDumpRetention)
                 .ToArray();
 
@@ -519,15 +524,84 @@ internal static class StartupDiagnostics
                 return;
             }
 
-            Kv("crash.dumps", $"{dumps.Length} retained (newest first)");
+            Kv("crash.dumps", $"{dumps.Length} retained (valid first, newest within class)");
             foreach (var dump in dumps)
-                Write($"  crash.dump             {dump.LastWriteTimeUtc:yyyy-MM-dd HH:mm:ss}Z  {dump.Length} bytes  {dump.FullName}");
+                Write(FormatCrashDumpForLog(dump));
         }
         catch (Exception ex)
         {
             Kv("crash.dumps", $"UNKNOWN ({ex.GetType().Name}: {ex.Message})");
         }
     }
+
+    internal static IReadOnlyList<CrashDumpFile> EnumerateCrashDumps(string dumpDir, string exeName)
+    {
+        if (!Directory.Exists(dumpDir)) return Array.Empty<CrashDumpFile>();
+
+        var paths = CrashDumpSearchPatterns(exeName)
+            .SelectMany(pattern => Directory.EnumerateFiles(dumpDir, pattern))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        var dumps = new List<CrashDumpFile>();
+        foreach (var path in paths)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+                if (!info.Exists) continue;
+                dumps.Add(new CrashDumpFile(info.FullName, info.Length, info.LastWriteTimeUtc));
+            }
+            catch
+            {
+                // Best effort: a disappearing dump should not break startup logging.
+            }
+        }
+
+        return OrderCrashDumpsForRetention(dumps).ToArray();
+    }
+
+    internal static IReadOnlyList<CrashDumpFile> OrderCrashDumpsForRetention(IEnumerable<CrashDumpFile> dumps) =>
+        dumps
+            .OrderByDescending(d => d.Length > 0)
+            .ThenByDescending(d => d.LastWriteTimeUtc)
+            .ThenBy(d => d.FullName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    internal static void PruneOldCrashDumps(string dumpDir, string exeName, int retention)
+    {
+        // Housekeeping must never mass-delete forensic evidence: a retention
+        // of zero or less is treated as "keep everything".
+        if (retention <= 0) return;
+
+        try
+        {
+            foreach (var dump in EnumerateCrashDumps(dumpDir, exeName).Skip(retention))
+            {
+                try { File.Delete(dump.FullName); } catch { /* best effort */ }
+            }
+        }
+        catch
+        {
+            // Pruning is housekeeping; never let it surface.
+        }
+    }
+
+    internal static string FormatCrashDumpForLog(CrashDumpFile dump)
+    {
+        var size = dump.Length == 0
+            ? "0 bytes — invalid, ignore"
+            : $"{dump.Length} bytes";
+        return $"  crash.dump             {dump.LastWriteTimeUtc:yyyy-MM-dd HH:mm:ss}Z  {size}  {dump.FullName}";
+    }
+
+    private static IEnumerable<string> CrashDumpSearchPatterns(string exeName)
+    {
+        var fileName = Path.GetFileName(exeName);
+        yield return $"{Path.GetFileNameWithoutExtension(fileName)}-crash-*.dmp";
+        yield return $"{fileName}.*.dmp";
+    }
+
+    internal sealed record CrashDumpFile(string FullName, long Length, DateTime LastWriteTimeUtc);
 
     private static void ProbeRecentWindowsCrashEvents()
     {
@@ -698,193 +772,6 @@ internal static class StartupDiagnostics
         string RecordId,
         DateTimeOffset TimeCreatedUtc,
         IReadOnlyList<string> DetailLines);
-
-    private static class NativeCrashDumpWriter
-    {
-        private const int ExceptionContinueSearch = 0;
-        private static readonly uint[] DumpworthyExceptionCodes =
-        {
-            0xC0000005, // STATUS_ACCESS_VIOLATION
-            0xC000001D, // STATUS_ILLEGAL_INSTRUCTION
-            0xC00000FD, // STATUS_STACK_OVERFLOW
-            0xC0000409, // STATUS_STACK_BUFFER_OVERRUN / fail-fast family
-        };
-
-        private static readonly object InstallGate = new();
-        private static TopLevelExceptionFilter? _topLevelFilter;
-        private static VectoredExceptionHandler? _vectoredHandler;
-        private static string? _dumpDir;
-        private static string? _logPath;
-        private static string? _exeName;
-        private static int _dumpAttempted;
-
-        public static string Install(string dumpDir, string logPath, string exeName)
-        {
-            if (!OperatingSystem.IsWindows())
-                return "  native.crash.dump      n/a (non-Windows)";
-
-            lock (InstallGate)
-            {
-                _dumpDir = dumpDir;
-                _logPath = logPath;
-                _exeName = exeName;
-                Directory.CreateDirectory(dumpDir);
-                PruneOldDumps(dumpDir, exeName);
-
-                _topLevelFilter ??= HandleTopLevelException;
-                _vectoredHandler ??= HandleVectoredException;
-
-                var vectored = AddVectoredExceptionHandler(1, _vectoredHandler);
-                SetUnhandledExceptionFilter(_topLevelFilter);
-
-                var status = vectored == IntPtr.Zero
-                    ? "top-level filter installed; vectored handler unavailable"
-                    : "top-level + vectored filters installed";
-                return $"  native.crash.dump      {status}; writing {Path.Combine(dumpDir, "OpenhpsdrZeus-crash-*.dmp")}";
-            }
-        }
-
-        private static int HandleVectoredException(IntPtr exceptionPointers)
-        {
-            try
-            {
-                var code = ReadExceptionCode(exceptionPointers);
-                if (DumpworthyExceptionCodes.Contains(code))
-                    TryWriteDump(exceptionPointers, $"first-chance fatal SEH 0x{code:X8}");
-            }
-            catch { /* never throw from an exception filter */ }
-            return ExceptionContinueSearch;
-        }
-
-        private static int HandleTopLevelException(IntPtr exceptionPointers)
-        {
-            try { TryWriteDump(exceptionPointers, "top-level unhandled exception"); }
-            catch { /* never throw from an exception filter */ }
-            return ExceptionContinueSearch;
-        }
-
-        private static uint ReadExceptionCode(IntPtr exceptionPointers)
-        {
-            if (exceptionPointers == IntPtr.Zero) return 0;
-            var exceptionRecord = Marshal.ReadIntPtr(exceptionPointers);
-            return exceptionRecord == IntPtr.Zero ? 0 : unchecked((uint)Marshal.ReadInt32(exceptionRecord));
-        }
-
-        private static void TryWriteDump(IntPtr exceptionPointers, string reason)
-        {
-            if (Interlocked.CompareExchange(ref _dumpAttempted, 1, 0) != 0) return;
-
-            var dumpDir = _dumpDir;
-            var logPath = _logPath;
-            var exeName = _exeName ?? ExeName;
-            if (string.IsNullOrWhiteSpace(dumpDir)) return;
-
-            Directory.CreateDirectory(dumpDir);
-            var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
-            var path = Path.Combine(dumpDir, $"OpenhpsdrZeus-crash-{stamp}-pid{GetCurrentProcessId()}.dmp");
-
-            using var fs = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read);
-            var info = new MiniDumpExceptionInformation
-            {
-                ThreadId = GetCurrentThreadId(),
-                ExceptionPointers = exceptionPointers,
-                ClientPointers = false,
-            };
-            var ok = MiniDumpWriteDump(
-                GetCurrentProcess(),
-                GetCurrentProcessId(),
-                fs.SafeFileHandle.DangerousGetHandle(),
-                MiniDumpType.Normal | MiniDumpType.WithThreadInfo | MiniDumpType.WithUnloadedModules,
-                ref info,
-                IntPtr.Zero,
-                IntPtr.Zero);
-
-            if (ok)
-            {
-                SafeAppend(logPath, $"[crash-dump] wrote {path} ({reason}; exe={exeName})");
-            }
-            else
-            {
-                SafeAppend(logPath, $"[crash-dump] FAILED {path} ({reason}; win32={Marshal.GetLastWin32Error()})");
-            }
-        }
-
-        private static void PruneOldDumps(string dumpDir, string exeName)
-        {
-            try
-            {
-                foreach (var dump in Directory
-                    .EnumerateFiles(dumpDir, Path.GetFileNameWithoutExtension(exeName) + "-crash-*.dmp")
-                    .Select(path => new FileInfo(path))
-                    .OrderByDescending(f => f.LastWriteTimeUtc)
-                    .Skip(CrashDumpRetention))
-                {
-                    try { dump.Delete(); } catch { /* best effort */ }
-                }
-            }
-            catch { /* best effort */ }
-        }
-
-        private static void SafeAppend(string? path, string line)
-        {
-            if (string.IsNullOrWhiteSpace(path)) return;
-            try
-            {
-                File.AppendAllText(path,
-                    $"{DateTime.UtcNow:HH:mm:ss.fff} {line}{Environment.NewLine}");
-            }
-            catch { /* crash path is best effort */ }
-        }
-
-        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-        private delegate int TopLevelExceptionFilter(IntPtr exceptionPointers);
-
-        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-        private delegate int VectoredExceptionHandler(IntPtr exceptionPointers);
-
-        [Flags]
-        private enum MiniDumpType : int
-        {
-            Normal = 0x00000000,
-            WithUnloadedModules = 0x00000020,
-            WithThreadInfo = 0x00001000,
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct MiniDumpExceptionInformation
-        {
-            public uint ThreadId;
-            public IntPtr ExceptionPointers;
-            [MarshalAs(UnmanagedType.Bool)]
-            public bool ClientPointers;
-        }
-
-        [DllImport("kernel32.dll")]
-        private static extern IntPtr AddVectoredExceptionHandler(uint first, VectoredExceptionHandler handler);
-
-        [DllImport("kernel32.dll")]
-        private static extern IntPtr SetUnhandledExceptionFilter(TopLevelExceptionFilter filter);
-
-        [DllImport("kernel32.dll")]
-        private static extern IntPtr GetCurrentProcess();
-
-        [DllImport("kernel32.dll")]
-        private static extern int GetCurrentProcessId();
-
-        [DllImport("kernel32.dll")]
-        private static extern uint GetCurrentThreadId();
-
-        [DllImport("dbghelp.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool MiniDumpWriteDump(
-            IntPtr hProcess,
-            int processId,
-            IntPtr hFile,
-            MiniDumpType dumpType,
-            ref MiniDumpExceptionInformation exceptionParam,
-            IntPtr userStreamParam,
-            IntPtr callbackParam);
-    }
 
     // ---- WebView2 -------------------------------------------------------
 

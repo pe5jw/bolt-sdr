@@ -16,11 +16,12 @@
 
 // Native FreeDV digital-voice panel. Reproduces the freedv-gui essentials —
 // submode selector, SYNC lamp + SNR readout, SNR squelch, and the RX/TX text
-// sidechannel — driven by GET /api/freedv/status (polled ~4 Hz) and
-// PUT /api/freedv/config. FreeDV is a normal RxMode ('FREEDV'); selecting it
+// sidechannel — driven by the FreeDV plugin status/config endpoints. FreeDV is
+// a normal RxMode ('FREEDV'); selecting it
 // from the mode row engages the modem (backend runs the SSB demod underneath on
-// the FreeDV band-convention sideband — LSB < 10 MHz, USB ≥). This panel is
-// telemetry/config only — it does NOT select the mode itself.
+// the FreeDV band-convention sideband — LSB < 10 MHz, USB ≥, with 60 m as the
+// regulatory USB-only exception). This panel is telemetry/config only — it does
+// NOT select the mode itself.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -35,21 +36,34 @@ import {
   type FreeDvInstallStatusDto,
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
+import {
+  FREEDV_60M_HIGH_HZ,
+  FREEDV_60M_LOW_HZ,
+  FREEDV_USB_THRESHOLD_HZ,
+} from '../../state/receiver-state';
 import { useQrzStore } from '../../state/qrz-store';
 import { freqHzToBand } from '../../state/spots-store';
+import { startEfficientPolling } from '../../util/efficient-polling';
 
 const POLL_MS = 250; // ~4 Hz, matches the brief.
+const INSTALL_POLL_MS = 500;
+const HIDDEN_POLL_MS = false;
 const SNR_SQUELCH_MIN = -2;
 const SNR_SQUELCH_MAX = 10;
 
-// FreeDV community sideband convention: LSB below 10 MHz, USB at/above 10 MHz —
+// FreeDV community sideband convention: LSB below 10 MHz, USB at/above 10 MHz,
+// with 60 m as the regulatory USB-only exception (FCC §97.305, Ofcom IR 2002).
 // FreeDV adopted the SSB voice-mode convention so every station on a band shares
 // one spectral orientation. Zeus runs the FreeDV modem on this sideband
 // underneath; a mismatch would invert the OFDM carriers in RF and nothing would
-// decode. This mirrors freedv-gui's "current mode" readout (which shows the rig
-// sideband, red when it's unexpected for the band).
-const FREEDV_USB_THRESHOLD_HZ = 10_000_000;
+// decode. This mirrors RadioService.EffectiveEngineMode on the server and
+// freedv-gui's "current mode" readout (which shows the rig sideband, red when
+// it's unexpected for the band).
+function freedvIsSixtyMeters(hz: number): boolean {
+  return hz >= FREEDV_60M_LOW_HZ && hz <= FREEDV_60M_HIGH_HZ;
+}
 function freedvSidebandForFreq(hz: number): 'LSB' | 'USB' {
+  if (freedvIsSixtyMeters(hz)) return 'USB';
   return hz < FREEDV_USB_THRESHOLD_HZ ? 'LSB' : 'USB';
 }
 
@@ -71,36 +85,27 @@ export function FreeDvPanel() {
   const [txDraft, setTxDraft] = useState('');
   const txDirty = useRef(false);
 
-  const pollAbort = useRef<AbortController | null>(null);
   const cfgAbort = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-
-    const tick = () => {
-      pollAbort.current?.abort();
-      const ac = new AbortController();
-      pollAbort.current = ac;
-      getFreeDvStatus(ac.signal)
-        .then((s) => {
-          if (cancelled || ac.signal.aborted) return;
+    return startEfficientPolling(
+      async (signal) => {
+        try {
+          const s = await getFreeDvStatus(signal);
+          if (signal.aborted) return;
           setReachable(true);
           setStatus(s);
           if (!txDirty.current) setTxDraft(s.txText ?? '');
-        })
-        .catch(() => {
-          if (cancelled || ac.signal.aborted) return;
+        } catch {
+          if (signal.aborted) return;
           setReachable(false);
-        });
-    };
-
-    tick();
-    const id = window.setInterval(tick, POLL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-      pollAbort.current?.abort();
-    };
+        }
+      },
+      {
+        intervalMs: POLL_MS,
+        hiddenIntervalMs: HIDDEN_POLL_MS,
+      },
+    );
   }, []);
 
   const sendConfig = useCallback((req: FreeDvConfigRequest) => {
@@ -141,7 +146,7 @@ export function FreeDvPanel() {
     sendConfig({ txText: ownCallsign });
   }, [ownCallsign, status, sendConfig]);
 
-  // Library missing — offer the one-click install instead of dead controls.
+  // Native support missing — the backend plugin is live, but codec2 did not load.
   if (status && !status.nativeAvailable) {
     return (
       <div className="dsp-cfg" style={{ gap: 8, padding: '10px 12px', overflowY: 'auto' }}>
@@ -157,8 +162,8 @@ export function FreeDvPanel() {
             lineHeight: 1.5,
           }}
         >
-          The codec2 modem isn't installed yet, so FreeDV decode/encode can't run.
-          Install it once and FreeDV works every time you pick the mode.
+          The FreeDV plugin is active, but the codec2 native modem did not load
+          from the plugin package for this platform.
         </div>
         <FreeDvInstallSection />
       </div>
@@ -294,7 +299,7 @@ export function FreeDvPanel() {
                 className={`btn sm ${cls}`}
                 title={
                   radeUnavailable
-                    ? 'RADEV1 — neural Radio Autoencoder (native decoder not installed for this platform)'
+                    ? 'RADEV1 — neural Radio Autoencoder (native decoder not packaged for this platform)'
                     : m.rade === true
                       ? 'RADEV1 — neural Radio Autoencoder (RX + TX, LDPC callsign)'
                       : `FreeDV ${m.label}${isCurrent && status.autoDetect && !status.synced ? ' (scanning)' : ''}`
@@ -331,7 +336,7 @@ export function FreeDvPanel() {
           }}
         >
           <strong>RADEV1</strong> is FreeDV's neural (Radio Autoencoder) mode. Its
-          native decoder isn't installed for this platform yet, so this mode won't
+          native decoder isn't packaged for this platform yet, so this mode won't
           produce audio. Use <strong>700D / 700E / 1600</strong> here — RADE ships
           on Windows today; other platforms follow.
         </div>
@@ -524,7 +529,10 @@ function FreeDvBandModeIndicator({
   const haveDial = connected && vfoHz > 0;
   const band = haveDial ? freqHzToBand(vfoHz) : null;
   const sideband = haveDial ? freedvSidebandForFreq(vfoHz) : null;
-  const freqMhz = haveDial ? (vfoHz / 1e6).toFixed(3) : null;
+  const isSixtyMeters = haveDial && freedvIsSixtyMeters(vfoHz);
+  // 4 decimals = 100 Hz resolution — 60m channel dials sit on 500 Hz offsets
+  // (e.g. 5.3685 MHz) which .toFixed(3) rounds away.
+  const freqMhz = haveDial ? (vfoHz / 1e6).toFixed(4) : null;
 
   // freedv-gui semantics: gray "unk" when the mode can't be determined (no CAT /
   // here: no radio). When we do know the dial, the convention sideband is what
@@ -546,9 +554,11 @@ function FreeDvBandModeIndicator({
         className="mono dsp-cfg-unit"
         title={
           haveDial
-            ? `FreeDV uses ${sideband} ${
-                sideband === 'LSB' ? 'below' : 'at/above'
-              } 10 MHz — Zeus rides this sideband so its carriers line up with other FreeDV stations on the band.`
+            ? isSixtyMeters
+              ? 'FreeDV uses USB on 60 m — regulators (FCC §97.305, Ofcom IR 2002) mandate USB-only on this band, overriding the usual "below 10 MHz → LSB" convention. Zeus rides USB so its carriers line up with other FreeDV stations on the band.'
+              : `FreeDV uses ${sideband} ${
+                  sideband === 'LSB' ? 'below' : 'at/above'
+                } 10 MHz — Zeus rides this sideband so its carriers line up with other FreeDV stations on the band.`
             : 'Connect a radio so the dial frequency can be read (freedv-gui shows "unk" here without CAT).'
         }
         style={{ color: valueColor, display: 'flex', alignItems: 'center', gap: 6 }}
@@ -567,71 +577,71 @@ function FreeDvBandModeIndicator({
   );
 }
 
-// One-click codec2 install. The backend downloads the prebuilt modem Zeus
-// committed for this platform and reloads it live (see FreeDvNativeInstaller);
-// once it reports installed, the panel's status poll flips nativeAvailable and
-// this whole branch is replaced by the live controls — so the "done" state here
-// is only ever momentary.
+// Native-package status check. The plugin ships its natives in the zip, so the
+// backend reports an already-ready shape for UI parity.
 function FreeDvInstallSection() {
   const [install, setInstall] = useState<FreeDvInstallStatusDto | null>(null);
-  const timerRef = useRef<number | null>(null);
-  const pollAbort = useRef<AbortController | null>(null);
+  const stopPollingRef = useRef<(() => void) | null>(null);
 
   const phase = install?.phase ?? 'idle';
   const busy = phase === 'downloading' || phase === 'staging';
   const failed = phase === 'failed';
   const done = phase === 'done';
 
-  const stopTimer = useCallback(() => {
-    if (timerRef.current != null) {
-      window.clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
+  const stopPolling = useCallback(() => {
+    stopPollingRef.current?.();
+    stopPollingRef.current = null;
   }, []);
 
-  const poll = useCallback(() => {
-    pollAbort.current?.abort();
-    const ac = new AbortController();
-    pollAbort.current = ac;
-    getFreeDvInstallStatus(ac.signal)
-      .then((s) => {
-        if (ac.signal.aborted) return;
+  const poll = useCallback(
+    async (signal: AbortSignal) => {
+      try {
+        const s = await getFreeDvInstallStatus(signal);
+        if (signal.aborted) return;
         setInstall(s);
-        // Terminal phase (or already installed) — stop polling.
-        if (s.installed || (s.phase !== 'downloading' && s.phase !== 'staging')) stopTimer();
-      })
-      .catch(() => {
+        // Terminal phase (or native support already ready) — stop polling.
+        if (s.installed || (s.phase !== 'downloading' && s.phase !== 'staging')) stopPolling();
+      } catch {
+        if (signal.aborted) return;
         /* next tick retries */
-      });
-  }, [stopTimer]);
+      }
+    },
+    [stopPolling],
+  );
+
+  const startPolling = useCallback(() => {
+    stopPolling();
+    stopPollingRef.current = startEfficientPolling(poll, {
+      intervalMs: INSTALL_POLL_MS,
+      hiddenIntervalMs: HIDDEN_POLL_MS,
+    });
+  }, [poll, stopPolling]);
 
   const start = useCallback(() => {
     startFreeDvInstall()
       .then((s) => {
         setInstall(s);
         if (s.phase === 'downloading' || s.phase === 'staging') {
-          stopTimer();
-          timerRef.current = window.setInterval(poll, 500);
+          startPolling();
         }
       })
-      .catch(() => setInstall({ phase: 'failed', percent: 0, message: 'Could not reach the install service.', installed: false }));
-  }, [poll, stopTimer]);
+      .catch(() => setInstall({ phase: 'failed', percent: 0, message: 'Could not reach the plugin native support status.', installed: false }));
+  }, [startPolling]);
 
   useEffect(
     () => () => {
-      stopTimer();
-      pollAbort.current?.abort();
+      stopPolling();
     },
-    [stopTimer],
+    [stopPolling],
   );
 
   const label = busy
-    ? `Installing… ${install?.percent ?? 0}%`
+    ? `Checking native support… ${install?.percent ?? 0}%`
     : failed
-      ? 'Retry install'
+      ? 'Retry native check'
       : done
-        ? 'Starting modem…'
-        : 'Install FreeDV';
+        ? 'Native support ready'
+        : 'Check native support';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -642,7 +652,7 @@ function FreeDvInstallSection() {
         onClick={() => {
           if (!busy && !done) start();
         }}
-        title="Download the FreeDV (codec2) modem for this platform and enable it"
+        title="Refresh the FreeDV plugin native support status"
         style={{ whiteSpace: 'nowrap', alignSelf: 'flex-start' }}
       >
         {label}

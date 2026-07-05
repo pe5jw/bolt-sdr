@@ -110,6 +110,22 @@ public sealed class TxIqRing : ITxIqSource
     public long Dropped { get { lock (_gate) return _dropped; } }
     public double RecentMag { get { lock (_gate) return _recentMag; } }
 
+    public bool WaitForEmpty(TimeSpan timeout)
+    {
+        long start = System.Diagnostics.Stopwatch.GetTimestamp();
+        long timeoutTicks = timeout <= TimeSpan.Zero
+            ? 0
+            : (long)(timeout.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
+        while (true)
+        {
+            if (Count == 0) return true;
+            if (timeoutTicks <= 0) return false;
+            long elapsed = System.Diagnostics.Stopwatch.GetTimestamp() - start;
+            if (elapsed >= timeoutTicks) return false;
+            Thread.Sleep(1);
+        }
+    }
+
     /// <summary>
     /// Push one block of interleaved float IQ into the ring, converting
     /// −1..+1 floats to s16. Samples above ±1 are saturated rather than

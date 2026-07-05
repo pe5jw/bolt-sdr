@@ -36,6 +36,7 @@ function stripConfig(p: CatSerialPortStatus): CatSerialPortConfig {
     parity: p.parity,
     dataBits: p.dataBits,
     stopBits: p.stopBits,
+    autoReport: p.autoReport,
   };
 }
 
@@ -45,7 +46,8 @@ function sameConfig(a: CatSerialPortConfig, b: CatSerialPortConfig): boolean {
     && a.baudRate === b.baudRate
     && a.parity === b.parity
     && a.dataBits === b.dataBits
-    && a.stopBits === b.stopBits;
+    && a.stopBits === b.stopBits
+    && a.autoReport === b.autoReport;
 }
 
 export type CatSerialTestState = { index: number; result: CatSerialTestResult };

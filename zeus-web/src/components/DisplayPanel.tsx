@@ -15,10 +15,12 @@
 // in issue #241 — layout switching now lives entirely in the LeftLayoutBar.
 
 import { BackgroundSettingsPanel } from './BackgroundSettingsPanel';
+import { DisplayPerformancePanel } from './DisplayPerformancePanel';
 import { PanadapterOverlaySettingsPanel } from './PanadapterOverlaySettingsPanel';
 import { SpectrumScaleSettingsPanel } from './SpectrumScaleSettingsPanel';
 import { ThemeSettingsPanel } from './ThemeSettingsPanel';
 import { TraceColorPanel } from './TraceColorPanel';
+import { WidebandDisplayPanel } from './WidebandDisplayPanel';
 
 export function DisplayPanel() {
   return (
@@ -27,6 +29,8 @@ export function DisplayPanel() {
       <BackgroundSettingsPanel />
       <TraceColorPanel />
       <PanadapterOverlaySettingsPanel />
+      <DisplayPerformancePanel />
+      <WidebandDisplayPanel />
       <SpectrumScaleSettingsPanel />
     </div>
   );

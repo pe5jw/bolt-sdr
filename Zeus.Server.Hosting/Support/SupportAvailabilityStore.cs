@@ -39,6 +39,8 @@ public sealed class SupportAvailabilityStore : IDisposable
     private readonly ILogger<SupportAvailabilityStore> _log;
     private readonly object _sync = new();
 
+    public const int CurrentAgreementVersion = 1;
+
     public SupportAvailabilityStore(ILogger<SupportAvailabilityStore> log, string? dbPathOverride = null)
     {
         _log = log;
@@ -88,6 +90,22 @@ public sealed class SupportAvailabilityStore : IDisposable
         }
     }
 
+    /// <summary>
+    /// The most recent crash-report agreement version the operator has answered.
+    /// Missing rows and legacy rows without the field both read as zero.
+    /// </summary>
+    public int AnsweredAgreementVersion
+    {
+        get
+        {
+            lock (_sync)
+            {
+                var entry = _state.FindAll().FirstOrDefault();
+                return entry?.AgreementVersion ?? 0;
+            }
+        }
+    }
+
     /// <summary>Persist both opt-in flags atomically and return the new state.</summary>
     public (bool Available, bool AutoShareCrashes) Set(bool available, bool autoShareCrashes)
     {
@@ -119,6 +137,57 @@ public sealed class SupportAvailabilityStore : IDisposable
         return (available, autoShareCrashes);
     }
 
+    /// <summary>
+    /// Stamp the current crash-report agreement version. Opt-in also enables
+    /// both Remote Diagnostics flags; opt-out preserves the existing flags.
+    /// </summary>
+    public (bool Available, bool AutoShareCrashes, int AgreementVersion) AnswerAgreement(bool optIn)
+    {
+        bool available;
+        bool autoShareCrashes;
+        int agreementVersion;
+
+        lock (_sync)
+        {
+            var existing = _state.FindAll().FirstOrDefault();
+            var nowUtc = DateTime.UtcNow;
+            if (existing is null)
+            {
+                available = optIn;
+                autoShareCrashes = optIn;
+                agreementVersion = CurrentAgreementVersion;
+                _state.Insert(new SupportAvailabilityEntry
+                {
+                    Available = available,
+                    AutoShareCrashes = autoShareCrashes,
+                    AgreementVersion = agreementVersion,
+                    UpdatedUtc = nowUtc,
+                });
+            }
+            else
+            {
+                if (optIn)
+                {
+                    existing.Available = true;
+                    existing.AutoShareCrashes = true;
+                }
+
+                existing.AgreementVersion = CurrentAgreementVersion;
+                existing.UpdatedUtc = nowUtc;
+                _state.Update(existing);
+
+                available = existing.Available;
+                autoShareCrashes = existing.AutoShareCrashes;
+                agreementVersion = existing.AgreementVersion;
+            }
+        }
+
+        _log.LogInformation(
+            "support.agreement answered optIn={OptIn} available={Available} autoShareCrashes={AutoShare} agreementVersion={AgreementVersion}",
+            optIn, available, autoShareCrashes, agreementVersion);
+        return (available, autoShareCrashes, agreementVersion);
+    }
+
     public void Dispose() => _dbLease.Dispose();
 }
 
@@ -127,5 +196,6 @@ public sealed class SupportAvailabilityEntry
     public int Id { get; set; }
     public bool Available { get; set; }
     public bool AutoShareCrashes { get; set; }
+    public int AgreementVersion { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

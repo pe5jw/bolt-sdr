@@ -210,7 +210,7 @@ public static class ZeusHost
 
         // One-time fold of the legacy encrypted zeus.db (credentials + QSO
         // logbook) into the plaintext config DB (credentials, via CredentialStore)
-        // and the dedicated logbook DB (via LogService). Runs AFTER the integrity
+        // and the dedicated logbook DB. Runs AFTER the integrity
         // guard and BEFORE any store opens, disposing its handles before it
         // renames the legacy file aside. Strictly best-effort: it never throws and
         // never blocks launch, and it's a no-op on a fresh install or once the
@@ -326,10 +326,19 @@ public static class ZeusHost
         builder.Services.AddSingleton<Protocol3PresenceProbe>();
         builder.Services.AddHttpClient(Protocol3SidecarBridge.HttpClientName, c =>
         {
-            c.Timeout = TimeSpan.FromSeconds(3);
+            c.Timeout = TimeSpan.FromSeconds(15);
             c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus");
         });
+        builder.Logging.AddFilter(
+            $"System.Net.Http.HttpClient.{Protocol3SidecarBridge.HttpClientName}",
+            LogLevel.Warning);
         builder.Services.AddSingleton<Protocol3SidecarBridge>();
+        builder.Services.AddSingleton<Protocol3SidecarFrameForwarder>();
+        builder.Services.AddSingleton<Protocol3SidecarControlForwarder>();
+        builder.Services.AddHostedService(sp =>
+            sp.GetRequiredService<Protocol3SidecarControlForwarder>());
+        builder.Services.AddHostedService(sp =>
+            sp.GetRequiredService<Protocol3SidecarFrameForwarder>());
         // TxIqRing is shared: TxAudioIngest writes modulated IQ into it, Protocol1Client
         // (constructed inside RadioService) reads from it for the EP2 payload.
         builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();
@@ -347,6 +356,11 @@ public static class ZeusHost
         builder.Services.AddSingleton<Zeus.Protocol1.RxAudioRing>();
         builder.Services.AddSingleton<Zeus.Protocol1.IRxAudioSource>(sp =>
             sp.GetRequiredService<Zeus.Protocol1.RxAudioRing>());
+        // Shared operator-mute flag consumed by every RX audio sink (issue
+        // #1252). Registered before the sinks so ctor DI resolves it — one
+        // Mute click on the desktop button silences PC playback AND the
+        // radio's onboard speaker in one go.
+        builder.Services.AddSingleton<RxAudioMuteState>();
         builder.Services.AddSingleton<RadioSpeakerSettingsStore>();
         builder.Services.AddSingleton<RadioSpeakerAudioSink>();
         builder.Services.AddSingleton<IRxAudioSink>(sp =>
@@ -404,6 +418,25 @@ public static class ZeusHost
         builder.Services.AddHttpClient(
             Zeus.Server.Hosting.Remote.RemoteWebRtcSession.LoopbackHttpClientName,
             c => c.Timeout = TimeSpan.FromSeconds(10));
+        builder.Services.AddHttpClient(
+            Zeus.Server.Hosting.Remote.BrokerIceServers.TurnHttpClientName,
+            c => c.Timeout = TimeSpan.FromSeconds(5));
+        builder.Services.AddHttpClient(
+            Zeus.Server.Hosting.UserDirectoryReporter.HttpClientName,
+            c =>
+            {
+                c.Timeout = TimeSpan.FromSeconds(8);
+                c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus");
+            });
+        builder.Services.AddHttpClient(
+            Zeus.Server.Hosting.RemoteUserAccessClient.HttpClientName,
+            c =>
+            {
+                c.Timeout = TimeSpan.FromSeconds(10);
+                c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus");
+            });
+        builder.Services.AddSingleton<Zeus.Server.Hosting.RemoteUserAccessClient>();
+        builder.Services.AddHostedService<Zeus.Server.Hosting.UserDirectoryReporter>();
         // Remote-access WebRTC signaling (Phase 1). Answers offers with a session
         // gated behind the SPAKE2+ password handshake. The read-only API tunnel
         // loopback-proxies to this host's own Kestrel on HttpPort (or :0 disabled).
@@ -572,59 +605,13 @@ public static class ZeusHost
         // Per-radio frequency calibration (issue #325). Stateless coordinator —
         // owns no resources, just a SemaphoreSlim to prevent re-entry.
         builder.Services.AddSingleton<FrequencyCalibrationService>();
-        // FreeDV digital-voice modem (Codec2/freedv_api via P/Invoke). Singleton
-        // owns the one modem instance; DspPipelineService taps RX (post-demod)
-        // and TxAudioIngest taps TX (pre-WDSP), both gated on FreeDV being the
-        // active RX0 mode. No-op when the codec2 native library is absent.
-        builder.Services.AddSingleton<FreeDvService>();
-        // Ft8Service — the built-in FT8/FT4 RX decode pipeline. Taps the same
-        // post-demod RX audio event AudioTapBridge uses (no hot-path changes),
-        // decimates 48k->12k, buffers UTC slots, and decodes on a worker. No-op
-        // (Enable() returns false) when the zeus_ft8 native library is absent.
-        builder.Services.AddSingleton<Ft8Service>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<Ft8Service>());
-        // Ft8BroadcastService — pushes each decoded slot to WS clients as a 0x38
-        // Ft8Decode frame for the FT8 workspace decode table.
-        builder.Services.AddHostedService<Ft8BroadcastService>();
-        // WsprService — native WSPR spotting: same RX-audio tap, 120 s UTC slots,
-        // decoded via the vendored K1JT/K9AN decoder. No-op (Enable returns false)
-        // when zeus_wspr decode is unavailable (e.g. Windows encode-only build).
-        builder.Services.AddSingleton<WsprService>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<WsprService>());
-        // WsprBroadcastService — pushes each completed 120 s slot's spots to WS
-        // clients as a 0x39 WsprSpot frame for the WSPR workspace spot table.
-        builder.Services.AddHostedService<WsprBroadcastService>();
-        // FreeDvNativeInstaller — the in-app "Install FreeDV" downloader. codec2
-        // can't be built on a stock operator machine, so when the bundled binary
-        // is missing (older build / unshipped platform) this fetches the prebuilt
-        // lib Zeus committed for the running platform straight from the repo and
-        // stages it at the managed path, then reloads the modem live. The named
-        // HttpClient carries a User-Agent and a generous timeout.
-        builder.Services.AddHttpClient("ZeusFreeDvNative", c =>
-        {
-            c.Timeout = TimeSpan.FromMinutes(5);
-            c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus");
-        });
-        builder.Services.AddSingleton<FreeDvNativeInstaller>();
         builder.Services.AddSingleton<TxService>();
         builder.Services.AddSingleton<TxAudioIngest>();
-        // Ft8TxService / WsprTxService — the ARMED FT8/FT4 + WSPR auto-sequence
-        // keyers (TX half; the RX decode/spot services above are untouched). They
-        // own the UTC slot clock, key MOX via TxService (MoxSource.Ft8) and stream
-        // synthesized tone audio through TxAudioIngest. They NEVER auto-arm (armed
-        // defaults false, operator-only) and a backend watchdog auto-disarms an
-        // unattended arm. No PureSignal / drive / power state is touched. A shared
-        // DigitalTxArbiter enforces that only ONE of FT8/FT4/WSPR is armed at a
-        // time (they share MoxSource.Ft8), so neither can drop MOX out from under
-        // the other or double-feed TXA.
-        builder.Services.AddSingleton<DigitalTxArbiter>();
-        builder.Services.AddSingleton<Ft8TxService>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<Ft8TxService>());
-        builder.Services.AddSingleton<WsprTxService>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<WsprTxService>());
         // Resolve at startup so the MicPcmReceived subscription attaches before the
         // first client connects (lazy resolution would leave early frames unhandled).
         builder.Services.AddHostedService<TxAudioIngestStartup>();
+        builder.Services.AddSingleton<SignalJammerTxSource>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<SignalJammerTxSource>());
         builder.Services.AddSingleton<TxMetersService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<TxMetersService>());
         // TxTuneDriver pumps silent mic blocks through WDSP TXA while TUN is on so
@@ -680,6 +667,10 @@ public static class ZeusHost
         // ports plan — antenna slice, #804). RadioService takes it as an
         // optional ctor param and re-pushes on its Changed event.
         builder.Services.AddSingleton<AntennaSettingsStore>();
+        // Thetis-style RF filter windows / bypass policy for Protocol-2 Alex
+        // BPF/LPF words. RadioService normalizes and replays it with the PA
+        // snapshot so edits apply server-authoritatively.
+        builder.Services.AddSingleton<RfFilterSettingsStore>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<ExternalPttService>());
 
         // ANAN G2 / G2-Ultra hardware front-panel bridge (FrontPanel/). Opens
@@ -698,6 +689,7 @@ public static class ZeusHost
         // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
         // hung login surfaces quickly in the UI.
         builder.Services.AddHttpClient("Qrz", c => c.Timeout = TimeSpan.FromSeconds(10));
+        builder.Services.AddHttpClient(LotwService.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(60));
         // Per-QSO HTTP cloud-log uploaders (Wavelog/Cloudlog + Club Log realtime).
         // SEND-ONLY, default OFF. Tight timeouts so a slow/blocked endpoint never
         // delays the operator's log confirmation.
@@ -723,6 +715,7 @@ public static class ZeusHost
 
         // Full "Reset & Uninstall Zeus" flow (About panel).
         builder.Services.AddSingleton<Zeus.Server.Uninstall.UninstallService>();
+        builder.Services.AddSingleton<IWindowsFirewallService, WindowsFirewallService>();
 
         // Self-diagnostic "Report a problem" feature: read-only probes, the
         // symptom→recipe registry, the known-issue rules (seeded from docs/rca +
@@ -778,7 +771,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<OpenWorkspaceWindowsStore>();
         builder.Services.AddSingleton<RadioStateStore>();
         builder.Services.AddSingleton<QrzService>();
-        builder.Services.AddSingleton<LogService>();
+        builder.Services.AddSingleton<UserManagementStore>();
         builder.Services.AddSingleton<FrontendDspSceneDiagnosticsService>();
         builder.Services.AddSingleton<FrontendAudioPlaybackDiagnosticsService>();
         builder.Services.AddSingleton<HardwareDiagnosticsService>();
@@ -837,7 +830,36 @@ public static class ZeusHost
         // is registered as IHostedService so plugin discovery / activation
         // runs as part of normal app startup; plugin REST endpoints are
         // mounted below via PluginEndpoints.MapAll under /api/plugins/...
-        builder.Services.AddZeusPlugins(prefsDbPathProvider: PrefsDbPath.Get);
+        // HostDataDirectory must be the data-dir ROOT (where zeus-logbook.db
+        // lives), NOT the prefs file's directory: with a named prefs profile the
+        // prefs file moves into profiles/, but per-data-dir files do not. The
+        // logbook path is the authority for that root.
+        builder.Services.AddZeusPlugins(
+            prefsDbPathProvider: PrefsDbPath.Get,
+            options: new Zeus.Plugins.Host.PluginManagerOptions
+            {
+                HostDataDirectory = Path.GetDirectoryName(PrefsDbPath.LogbookPath()),
+            });
+        builder.Services.AddSingleton<IPluginInstallAccessGate, Zeus.Server.Hosting.PluginInstallAccessGate>();
+
+        // LogbookPluginBridge publishes the one active ILogbookPlugin to the
+        // stable /api/log/* endpoints. The UI and egress paths stay in core;
+        // the plugin owns zeus-logbook.db and ADIF/log queries.
+        builder.Services.AddSingleton(sp => new LogbookPluginBridge(
+            sp.GetRequiredService<PluginManager>(),
+            sp.GetRequiredService<ILogger<LogbookPluginBridge>>()));
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<LogbookPluginBridge>());
+
+        // AudioModemPluginBridge publishes the one active IAudioModemPlugin
+        // (FreeDV today) to the existing RX/TX insertion points. It also
+        // follows live plugin activation/deactivation so uninstall cannot leave
+        // a dangling modem reference on the audio path.
+        builder.Services.AddSingleton(sp => new AudioModemPluginBridge(
+            sp.GetRequiredService<PluginManager>(),
+            sp.GetRequiredService<RadioService>(),
+            sp.GetRequiredService<ILogger<AudioModemPluginBridge>>(),
+            () => sp.GetService<DspPipelineService>()));
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioModemPluginBridge>());
 
         // ChainOrderService — owns the canonical Audio Suite plugin
         // chain order (drag-droppable tile sequence in the Audio Suite
@@ -892,8 +914,17 @@ public static class ZeusHost
 
         // PluginPlaybackSink lets a plugin play a clip locally (preview) or
         // inject it on the air (TX chain, under operator MOX). Surfaced to
-        // plugins via IPluginContext.Playback.
-        builder.Services.AddSingleton<Zeus.Plugins.Contracts.Audio.IAudioPlaybackSink, PluginPlaybackSink>();
+        // plugins via IPluginContext.Playback. Registered as a FACTORY so
+        // PluginManager builds one sink PER PLUGIN CONTEXT: the sink's over-air
+        // resampler is stateful (carry-over output fill), so a shared instance
+        // would leak the residual tail of one plugin's clip into another
+        // plugin's first on-air block.
+        builder.Services.AddSingleton<Func<Zeus.Plugins.Contracts.Audio.IAudioPlaybackSink>>(sp =>
+            () => new PluginPlaybackSink(
+                sp.GetRequiredService<TxAudioIngest>(),
+                sp.GetRequiredService<DspPipelineService>(),
+                sp.GetRequiredService<TxService>(),
+                sp.GetRequiredService<ILogger<PluginPlaybackSink>>()));
 
         // RadioController lets a plugin holding the ControlRadio capability key
         // TX (MoxSource.Plugin) and set VFO/mode — the same surfaces the UI and
@@ -988,28 +1019,17 @@ public static class ZeusHost
         builder.Services.AddSingleton<ActivationSpotsService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<ActivationSpotsService>());
 
-        // FreeDvReporterService — holds a persistent read-only Socket.IO link to
-        // the FreeDV Reporter network (qso.freedv.org) and mirrors the live
-        // station roster for the Stations panel (GET /api/freedv/stations). Same
-        // singleton + hosted-service shape as ActivationSpotsService; streaming
-        // Socket.IO instead of HTTP polling. Touches nothing on the radio / DSP /
-        // TX path — outbound TLS WebSocket in, station snapshot out.
-        // Persists the operator's FreeDV Reporter "report mode" opt-in (default
-        // OFF). Reporting only broadcasts the operator's callsign/grid/TX activity
-        // to the public map after an explicit opt-in — see FreeDvReporterService.
         // Shared operator identity (callsign + Maidenhead grid). One store, read
-        // first by every operator resolver (spotting / FreeDV Reporter / FT8-FT4
-        // TX) via OperatorIdentityResolver, with the QRZ home station as the
-        // fallback. Replaces the per-store identity duplication and the frontend's
+        // first by every operator resolver (FreeDV Reporter / log broadcasters)
+        // via OperatorIdentityResolver, with the QRZ home station as the
+        // fallback; the Zeus Digital plugin gets it pushed by the core UI.
+        // Replaces the per-store identity duplication and the frontend's
         // port-scoped localStorage that lost the call on every desktop restart.
         builder.Services.AddSingleton<OperatorIdentityStore>();
+        builder.Services.AddSingleton<Zeus.Plugins.Contracts.IOperatorIdentityProvider, PluginOperatorIdentityProvider>();
         // Persisted FT8/FT4 workspace behaviour preferences (auto-seq, decode
         // depth, macros, logging). Behaviour/UI knobs only — none transmit.
         builder.Services.AddSingleton<Ft8SettingsStore>();
-
-        builder.Services.AddSingleton<FreeDvReporterSettingsStore>();
-        builder.Services.AddSingleton<FreeDvReporterService>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<FreeDvReporterService>());
 
         // TCI (Transceiver Control Interface) — ExpertSDR3-compatible WebSocket server
         // for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),
@@ -1101,12 +1121,6 @@ public static class ZeusHost
         builder.Services.AddSingleton<WsjtxConfigStore>();
         builder.Services.AddSingleton<WsjtxManagementService>();
         builder.Services.AddSingleton<Wsjtx.WsjtxUdpBroadcaster>();
-        // WsjtxLiveEmitter — the optional live WSJT-X stream (Heartbeat/Status/
-        // Decode/WSPRDecode) GridTracker / JTAlert consume. Leaf subscriber to
-        // Ft8Service/WsprService/RadioService; gated on Enabled && SendLiveDecodes
-        // so the default path emits nothing. SEND-ONLY via the broadcaster.
-        builder.Services.AddSingleton<Wsjtx.WsjtxLiveEmitter>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<Wsjtx.WsjtxLiveEmitter>());
 
         // Logging v2 — N1MM-format UDP broadcaster (Class B). Sends the N1MM
         // "contactinfo" datagram (a DIFFERENT wire format from the WSJT-X type-12
@@ -1124,18 +1138,10 @@ public static class ZeusHost
         builder.Services.AddSingleton<CloudLog.WavelogClient>();
         builder.Services.AddSingleton<CloudLog.ClubLogClient>();
         builder.Services.AddSingleton<CloudLog.CloudLogService>();
-
-        // Digital-mode spotting uploaders — FT8/FT4 decodes to PSK Reporter and
-        // WSPR spots to WSPRnet. NEW network egress; both DISABLED by default and
-        // additionally no-op until operator callsign + grid are resolved. The two
-        // reporters are leaf subscribers to Ft8Service/WsprService — they enqueue/
-        // POST only and never touch the radio/DSP/TX path.
-        builder.Services.AddSingleton<SpottingSettingsStore>();
-        builder.Services.AddSingleton<SpottingManagementService>();
-        builder.Services.AddSingleton<Spotting.PskReporterReporter>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<Spotting.PskReporterReporter>());
-        builder.Services.AddSingleton<Spotting.WsprnetReporter>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<Spotting.WsprnetReporter>());
+        builder.Services.AddSingleton<LotwSettingsStore>();
+        builder.Services.AddSingleton<ILotwTqslLocator, LotwTqslLocator>();
+        builder.Services.AddSingleton<ILotwProcessRunner, LotwProcessRunner>();
+        builder.Services.AddSingleton<LotwService>();
 
         // ZeusChat — operator-to-operator chat over the Cloudflare relay.
         // Singleton (API surface) + hosted service (relay connection lifecycle),
@@ -1269,12 +1275,13 @@ public static class ZeusHost
         }
 
         app.MapZeusEndpoints();
-        // PluginEndpoints.MapAll iterates manager.Active to wire each
-        // IBackendPlugin's MapEndpoints into the route table. The hosted-
-        // service StartAsync fires later (during app.Run), so we have to
-        // activate plugins synchronously here or their routes never land.
-        // ActivateAsync is idempotent per id, so the runtime's StartAsync
-        // call below is a no-op.
+        // PluginEndpoints.MapAll publishes each IBackendPlugin's routes
+        // through a mutable endpoint data source and keeps them in sync with
+        // PluginActivated / PluginDeactivated, so store installs go live
+        // mid-session without a restart. Activating synchronously here (the
+        // hosted-service StartAsync fires later, during app.Run) keeps
+        // startup plugins routable before the first request. ActivateAsync
+        // is idempotent per id, so the runtime's StartAsync call is a no-op.
         var pluginManager = app.Services.GetRequiredService<Zeus.Plugins.Host.PluginManager>();
         pluginManager.StartAsync(default).GetAwaiter().GetResult();
         Zeus.Plugins.Host.PluginEndpoints.MapAll(app, pluginManager);
@@ -1302,6 +1309,13 @@ public static class ZeusHost
         // Initialize QrzService to restore stored credentials (silent login).
         var qrzService = app.Services.GetRequiredService<QrzService>();
         await qrzService.InitializeAsync(cancellationToken);
+
+        // If silent QRZ re-login succeeded, make sure the QRZ callsign exists in
+        // the user-management ledger before the first browser session asks.
+        var users = app.Services.GetRequiredService<UserManagementStore>();
+        _ = users.GetSession(qrzService.GetStatus());
+
+        app.Services.GetRequiredService<RepoUpdateService>().InitializePackagedStartupGuards();
     }
 
     static void PrintBanner(

@@ -34,7 +34,7 @@ As each plugin installs you'll see a progress list with a tick, a "skip" mark fo
 
 ### Opening the suite and reading the rack
 
-Open the suite from the **Audio Suite** button on the Audio Tools panel. It appears as a floating window titled **TX Audio Suite** that you can drag by its header and resize from any edge or corner. Press **Escape** to close it. (On a desktop install it can also render inline within the Audio Tools settings pane.)
+Open the suite from the **Audio Suite** button on the Audio Tools panel. It appears as a floating window titled **TX Audio Suite** that you can drag by its header and resize from any edge or corner. Press **Escape** to close it. On a desktop install you can also **pop the suite out into its own operating-system window** — park it on a second monitor like a VST rack; it keeps processing there, and the TX preview stays live even with no radio connected. (It can also render inline within the Audio Tools settings pane.)
 
 The window has three main areas:
 
@@ -87,7 +87,7 @@ To bring plugins in, use the scan controls at the bottom of the Plugins browser:
 
 A hosted plugin chip in the chain carries a small format tag (**VST** / **AU**) and a star you can use to mark favourites (favourites sort to the top of the browser). Because a plugin's real interface is a native operating-system window — not browser HTML — Zeus can't draw it inside the suite window. Instead, selecting a plugin chip opens its **real editor as a separate desktop window**, exactly like a standalone host, with an Open Editor / Close Editor button in the detail pane. The plugin processes your audio whether or not its editor window is open; closing the editor just hides the GUI. If a plugin ever misbehaves, the host process is self-healing — it recovers on its own rather than taking the radio down with it.
 
-The RX suite header shows a **VST** status pill — ON when receive VSTs are processing, IDLE when the engine is available but unused, OFF when no VST engine is installed — plus its own Bypass toggle for the whole receive chain.
+The RX suite header shows a **VST** status pill — ON when receive VSTs are processing, IDLE when the engine is available but unused, OFF when no VST engine is installed — plus its own Bypass toggle for the whole receive chain. On Windows, when the engine is missing the RX Audio row in Settings → Audio Tools now offers its own **Download VST Engine** button, so you can enable receive VSTs without first switching your TX route to VST.
 
 ### Practical tips
 

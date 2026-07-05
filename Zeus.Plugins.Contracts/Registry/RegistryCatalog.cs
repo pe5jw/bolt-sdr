@@ -44,8 +44,29 @@ public sealed record PluginEntry
     [JsonPropertyName("verified")]
     public bool Verified { get; init; }
 
+    [JsonPropertyName("subscription")]
+    public PluginSubscription? Subscription { get; init; }
+
     [JsonPropertyName("versions")]
     public IReadOnlyList<PluginVersion> Versions { get; init; } = Array.Empty<PluginVersion>();
+}
+
+public sealed record PluginSubscription
+{
+    [JsonPropertyName("required")]
+    public bool Required { get; init; }
+
+    [JsonPropertyName("monthlyPriceCents")]
+    public int MonthlyPriceCents { get; init; }
+
+    [JsonPropertyName("currency")]
+    public string Currency { get; init; } = "USD";
+
+    [JsonPropertyName("checkoutUrl")]
+    public string? CheckoutUrl { get; init; }
+
+    [JsonPropertyName("notes")]
+    public string? Notes { get; init; }
 }
 
 public sealed record PluginVersion

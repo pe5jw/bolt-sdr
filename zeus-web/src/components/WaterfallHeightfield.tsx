@@ -27,7 +27,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { probeWebGpu, resetWebGpuProbe } from '../gl/webgpu/caps';
-import { createHeightfieldRenderer, type HeightfieldRenderer } from '../gl/webgpu/heightfield';
+import { createHeightfieldRenderer, type HeightfieldRenderer, type HeightfieldRowDomain } from '../gl/webgpu/heightfield';
 import { registerFrameConsumer, selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { enhanceInto, registerEstimatorConsumer, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { estimateRowFloorDb, forgetReceiverFloor, reportReceiverFloorDb } from '../dsp/floor-normalization';
@@ -40,11 +40,14 @@ import { getReceiverVfoHz, KIWI_RECEIVER_INDEX, rxIndexOf, type ReceiverKey } fr
 import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { usePanTuneGesture, type PanTuneGestureOptions } from '../util/use-pan-tune-gesture';
+import { isWidebandDisplayGeometry, resolveSpectrumViewport } from '../util/wideband-view';
 import { FilterCursorOverlay } from './FilterCursorOverlay';
+import { FreqAxis } from './FreqAxis';
 import { NotchOverlay } from './NotchOverlay';
 import { PassbandOverlay } from './PassbandOverlay';
 import { WfDbScale } from './WfDbScale';
 import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
+import { WidebandViewportControls } from './WidebandViewportControls';
 
 type Props = {
   receiver?: ReceiverKey;
@@ -91,6 +94,17 @@ export function WaterfallHeightfield({
   const [stats, setStats] = useState<{ fps: number; ms: number } | null>(null);
   const rxIndex = rxIndexOf(receiver);
   const receiverFilterColor = spectrumReceiverFilterColor(receiver);
+  const displayWidth = useDisplayStore((s) => {
+    const slice = selectDisplaySlice(s, receiver);
+    return slice.width || slice.panDb?.length || slice.wfDb?.length || 0;
+  });
+  const displayHzPerPixel = useDisplayStore((s) => selectDisplaySlice(s, receiver).hzPerPixel);
+  const displayCenterHz = useDisplayStore((s) => Number(selectDisplaySlice(s, receiver).centerHz));
+  const widebandDisplay = isWidebandDisplayGeometry({
+    width: displayWidth,
+    hzPerPixel: displayHzPerPixel,
+    centerHz: displayCenterHz,
+  });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -101,6 +115,7 @@ export function WaterfallHeightfield({
     let disposed = false;
     let lost = false;
     let lastSeqDrawn = -1;
+    let wasWidebandDisplay = false;
     let frameAccum = 0;
     let frameCount = 0;
     let lastStatsAt = 0;
@@ -117,6 +132,12 @@ export function WaterfallHeightfield({
       const { moxOn, tunOn } = useTxStore.getState();
       if (moxOn || tunOn) return 'tx-db';
       return useSignalEnhanceStore.getState().popEnabled ? 'pop' : 'rx-db';
+    };
+
+    const shouldClearForDomainChange = (prev: string, next: string): boolean => {
+      if (!prev || prev === next) return false;
+      if (prev === 'tx-db' || next === 'tx-db') return false;
+      return true;
     };
 
     // Upload one row. On a value-domain change first clears the history so stale
@@ -137,10 +158,12 @@ export function WaterfallHeightfield({
         if (floorDb != null) reportReceiverFloorDb(rxIndex, floorDb);
       }
       if (dom !== valueDomain) {
+        const shouldClear = shouldClearForDomainChange(valueDomain, dom);
         valueDomain = dom;
-        renderer.clearHistory();
+        if (shouldClear) renderer.clearHistory();
       }
       let row = wfDb;
+      let rowDomain: HeightfieldRowDomain = dom === 'tx-db' ? 'tx' : dom === 'pop' ? 'pop' : 'rx';
       if (dom === 'pop') {
         if (!enhBuf || !terrainScratch || enhBuf.length !== row.length) {
           enhBuf = new Float32Array(row.length);
@@ -148,8 +171,9 @@ export function WaterfallHeightfield({
         }
         enhanceInto(row, enhBuf, terrainScratch);
         row = enhBuf;
+        rowDomain = 'pop';
       }
-      renderer.pushRow(row, Number(centerHz), hzPerPixel);
+      renderer.pushRow(row, Number(centerHz), hzPerPixel, rowDomain);
     };
 
     const releaseFrameConsumer = registerFrameConsumer();
@@ -166,17 +190,34 @@ export function WaterfallHeightfield({
         ? vc.getViewCenterHz()
         : Number(selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz);
 
-    const resize = () => {
-      const { width, height } = container.getBoundingClientRect();
+    let pendingCanvasW = 0;
+    let pendingCanvasH = 0;
+    let appliedCanvasW = 0;
+    let appliedCanvasH = 0;
+
+    const measureCanvasSize = (entry?: ResizeObserverEntry) => {
+      const rect = entry?.contentRect ?? container.getBoundingClientRect();
       const dpr = Math.min(1, window.devicePixelRatio || 1);
-      const w = Math.max(1, Math.round(width * dpr));
-      const h = Math.max(1, Math.round(height * dpr));
-      canvas.width = w;
-      canvas.height = h;
-      renderer?.resize(w, h);
+      return {
+        w: Math.max(1, Math.round(rect.width * dpr)),
+        h: Math.max(1, Math.round(rect.height * dpr)),
+      };
     };
 
-    const ro = new ResizeObserver(resize);
+    const applyPendingResize = () => {
+      if (!renderer) return;
+      if (pendingCanvasW <= 0 || pendingCanvasH <= 0) {
+        const next = measureCanvasSize();
+        pendingCanvasW = next.w;
+        pendingCanvasH = next.h;
+      }
+      if (pendingCanvasW === appliedCanvasW && pendingCanvasH === appliedCanvasH) return;
+      appliedCanvasW = pendingCanvasW;
+      appliedCanvasH = pendingCanvasH;
+      canvas.width = appliedCanvasW;
+      canvas.height = appliedCanvasH;
+      renderer.resize(appliedCanvasW, appliedCanvasH);
+    };
 
     // Visibility gating (parity with Panadapter / WebGL Waterfall): skip the GPU
     // paint while the surface is scrolled off-screen or the tab is backgrounded.
@@ -200,6 +241,7 @@ export function WaterfallHeightfield({
 
     const draw = () => {
       if (!renderer || lost) return;
+      applyPendingResize();
       // Read settings LIVE every draw so the sliders take effect immediately.
       const { wfTxDbMin, wfTxDbMax, waterfallScrollSpeed } =
         useDisplaySettingsStore.getState();
@@ -212,6 +254,7 @@ export function WaterfallHeightfield({
       // operator override, so each band's noise floor lands at the same colour and
       // the single dB slider evens them all out. Keyed/Pop are absolute.
       const rxWin = dom === 'rx-db' ? effectiveRxWfWindow(rxIndex) : null;
+      const rxWindowForRows = rxWin ?? effectiveRxWfWindow(rxIndex);
       const dbMin = dom === 'pop' ? 0 : dom === 'tx-db' ? wfTxDbMin : rxWin!.wfDbMin;
       const dbMax = dom === 'pop' ? 1 : dom === 'tx-db' ? wfTxDbMax : rxWin!.wfDbMax;
       renderer.setScrollSpeed(waterfallScrollSpeed);
@@ -240,7 +283,12 @@ export function WaterfallHeightfield({
             ? viewZoom.getDisplayedHzPerPixel()
             : null;
       const t0 = performance.now();
-      renderer.draw(dbMin, dbMax, visualCenterHz(), viewHzPerPixel);
+      renderer.draw(dbMin, dbMax, visualCenterHz(), viewHzPerPixel, {
+        rxDbMin: rxWindowForRows.wfDbMin,
+        rxDbMax: rxWindowForRows.wfDbMax,
+        txDbMin: wfTxDbMin,
+        txDbMax: wfTxDbMax,
+      });
       const dt = performance.now() - t0;
       if (showStats) {
         frameAccum += dt;
@@ -262,6 +310,15 @@ export function WaterfallHeightfield({
       if (!isActive()) return;
       requestDrawBusFrame(draw);
     };
+
+    const queueResize = (entry?: ResizeObserverEntry) => {
+      const next = measureCanvasSize(entry);
+      pendingCanvasW = next.w;
+      pendingCanvasH = next.h;
+      requestRedraw();
+    };
+
+    const ro = new ResizeObserver((entries) => queueResize(entries[entries.length - 1]));
 
     let unsub: (() => void) | null = null;
     let unsubSettings: (() => void) | null = null;
@@ -306,7 +363,7 @@ export function WaterfallHeightfield({
       renderer.setColormap(useDisplaySettingsStore.getState().colormap);
       renderer.setScrollSpeed(useDisplaySettingsStore.getState().waterfallScrollSpeed);
       setStatus('ready');
-      resize();
+      queueResize();
       ro.observe(container);
       io.observe(container);
       document.addEventListener('visibilitychange', onVisibilityChange);
@@ -314,6 +371,11 @@ export function WaterfallHeightfield({
       // Seed from the last-held frame so a paused-RX mount is not blank.
       const slice0 = selectDisplaySlice(useDisplayStore.getState(), receiver);
       if (slice0.wfValid && slice0.wfDb) {
+        wasWidebandDisplay = isWidebandDisplayGeometry({
+          width: slice0.width,
+          hzPerPixel: slice0.hzPerPixel,
+          centerHz: Number(slice0.centerHz),
+        });
         pushFrame(slice0.wfDb, slice0.centerHz, slice0.hzPerPixel);
         lastSeqDrawn = slice0.lastSeq;
       }
@@ -324,6 +386,13 @@ export function WaterfallHeightfield({
         const slice = selectDisplaySlice(state, receiver);
         if (slice.lastSeq === 0 || slice.lastSeq === lastSeqDrawn) return;
         lastSeqDrawn = slice.lastSeq;
+        const widebandDisplay = isWidebandDisplayGeometry({
+          width: slice.width,
+          hzPerPixel: slice.hzPerPixel,
+          centerHz: Number(slice.centerHz),
+        });
+        if (widebandDisplay && !wasWidebandDisplay) renderer.clearHistory();
+        wasWidebandDisplay = widebandDisplay;
         if (slice.wfValid && slice.wfDb) {
           pushFrame(slice.wfDb, slice.centerHz, slice.hzPerPixel);
         }
@@ -359,8 +428,9 @@ export function WaterfallHeightfield({
         if (!renderer || lost) return;
         const dom = domainNow();
         if (dom !== valueDomain) {
+          const shouldClear = shouldClearForDomainChange(valueDomain, dom);
           valueDomain = dom;
-          renderer.clearHistory();
+          if (shouldClear) renderer.clearHistory();
         }
         requestRedraw();
       };
@@ -406,7 +476,7 @@ export function WaterfallHeightfield({
       forgetReceiverFloor(rxIndex);
       renderer?.dispose();
     };
-  }, [receiver, showStats, stitched]);
+  }, [receiver, rxIndex, showStats, stitched]);
 
   // Dial-position cursor (the vertical tuning crosshair). Mirrors Waterfall.tsx:
   // outside CTUN the dial sits at the view centre (50%); under CTUN it slides to
@@ -421,7 +491,15 @@ export function WaterfallHeightfield({
         cur.style.left = '50%';
         return;
       }
-      const spanHz = s.width * s.hzPerPixel;
+      const viewport = resolveSpectrumViewport({
+        width: s.width,
+        sourceCenterHz: Number(s.centerHz),
+        sourceHzPerPixel: s.hzPerPixel,
+        viewCenterHz: vc.isInitialized() ? vc.getTargetCenterHz() : undefined,
+        viewHzPerPixel: viewZoom.isInitialized() ? viewZoom.getTargetHzPerPixel() : undefined,
+      });
+      if (!viewport) return;
+      const spanHz = viewport.spanHz;
       const c = useConnectionStore.getState();
       const vfoHz = getReceiverVfoHz(c, receiver);
       // Dial offset from THIS receiver's animated target center, so the cursor
@@ -431,6 +509,7 @@ export function WaterfallHeightfield({
     };
     const schedule = () => requestDrawBusFrame(update);
     const unsubVc = vc.subscribe(schedule);
+    const unsubVz = viewZoom.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
       // RX1 is the flat primary VFO; every secondary (RX2 = index 1, RX3+) lives
       // in the receivers[] array.
@@ -442,6 +521,7 @@ export function WaterfallHeightfield({
     schedule();
     return () => {
       unsubVc();
+      unsubVz();
       unsubConn();
       unsubFrame();
       cancelDrawBusFrame(update);
@@ -464,7 +544,8 @@ export function WaterfallHeightfield({
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
       {/* One global waterfall dB scale — only RX1 (leftmost) renders it. */}
-      {status === 'ready' && dbScale && rxIndex === 0 && <WfDbScale />}
+      {status === 'ready' && dbScale && rxIndex === 0 && !widebandDisplay && <WfDbScale />}
+      {status === 'ready' && widebandDisplay && <FreqAxis receiver={receiver} stitched={stitched} />}
       {/* Dial-position cursor on BOTH halves (RX2) — each tracks its own VFO so
           the stitched pair behaves like one waterfall with two live dials. */}
       {status === 'ready' && (
@@ -472,7 +553,7 @@ export function WaterfallHeightfield({
       )}
       {/* Each half shows its OWN receiver's filter passband, regardless of focus,
           so RX2 displays both bandwidth markers (A on its half, B on its half). */}
-      {status === 'ready' && (
+      {status === 'ready' && !widebandDisplay && (
         <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
       )}
       {/* Hover filter crosshair on BOTH halves — each tracks its own RX
@@ -481,8 +562,11 @@ export function WaterfallHeightfield({
       {status === 'ready' && (
         <FilterCursorOverlay containerRef={containerRef} receiver={receiver} />
       )}
-      {status === 'ready' && rxIndex === 0 && (!stitched || foreground) && (
+      {status === 'ready' && rxIndex === 0 && !widebandDisplay && (!stitched || foreground) && (
         <NotchOverlay resizable containerRef={containerRef} />
+      )}
+      {status === 'ready' && widebandDisplay && (
+        <WidebandViewportControls containerRef={containerRef} receiver={receiver} />
       )}
       {status === 'unsupported' && (
         <div

@@ -92,6 +92,8 @@ When a problem is hard to pin down over text, you can let a Zeus maintainer look
 
 You grant access from the diagnostics controls; nothing connects until you do, and the session ends when you close it. If you've opted in, a crash can be **auto-shared** with the maintainer to speed up a fix. This is strictly opt-in plumbing — by default Zeus shares nothing, and there is no way for anyone to start a session without your action.
 
+The first time you launch Zeus it asks this question directly: **"Automatically send crash logs to the developers?"** Answering **Yes** switches on both Remote Diagnostics controls (availability and crash auto-share) in one step; answering **No thanks** leaves everything off. Whichever you chose, the switches live under **Settings → Server → Remote Diagnostics** and you can flip them whenever you like — the first-launch answer is a convenience, not a commitment.
+
 ### Reset & Uninstall Zeus
 
 The **About** tab includes a **Danger Zone** with a **Reset & Uninstall Zeus** tool for when you want to start completely fresh or remove Zeus cleanly. It wipes Zeus's settings and data across the whole system — and, on a desktop install, removes the application itself the proper way for your platform (the Windows uninstaller, the macOS app bundle, or the Linux AppImage).

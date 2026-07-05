@@ -13,12 +13,20 @@ export type ZeusPlatform = 'linux' | 'darwin' | 'windows' | 'unknown';
 // `capabilities.features` without runtime guards.
 export type CapabilitiesFeatures = Record<string, never>;
 
+export type DisplayPerformanceCapabilities = {
+  profile: 'normal' | 'low-power' | 'custom';
+  maxFrameRateHz: number;
+  lowPower: boolean;
+  preferWebglWaterfall: boolean;
+};
+
 export type Capabilities = {
   host: ZeusHostMode;
   platform: ZeusPlatform;
   architecture: string;
   version: string;
   lanHttpsUrls: string[];
+  displayPerformance: DisplayPerformanceCapabilities;
   features: CapabilitiesFeatures;
 };
 
@@ -39,6 +47,26 @@ function asStringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((item): item is string => typeof item === 'string') : [];
 }
 
+function parseDisplayPerformance(raw: unknown): DisplayPerformanceCapabilities {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const rawProfile = o.profile;
+  const profile =
+    rawProfile === 'low-power' || rawProfile === 'custom' || rawProfile === 'normal'
+      ? rawProfile
+      : 'normal';
+  const rawFps = o.maxFrameRateHz;
+  const maxFrameRateHz =
+    typeof rawFps === 'number' && Number.isFinite(rawFps) && rawFps > 0
+      ? rawFps
+      : 30;
+  return {
+    profile,
+    maxFrameRateHz,
+    lowPower: o.lowPower === true,
+    preferWebglWaterfall: o.preferWebglWaterfall === true,
+  };
+}
+
 export function parseCapabilities(raw: unknown): Capabilities {
   const o = (raw ?? {}) as Record<string, unknown>;
   return {
@@ -47,6 +75,7 @@ export function parseCapabilities(raw: unknown): Capabilities {
     architecture: asString(o.architecture, 'unknown'),
     version: asString(o.version, 'unknown'),
     lanHttpsUrls: asStringArray(o.lanHttpsUrls),
+    displayPerformance: parseDisplayPerformance(o.displayPerformance),
     features: {} as CapabilitiesFeatures,
   };
 }

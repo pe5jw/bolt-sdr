@@ -111,7 +111,10 @@ export const DEFAULT_TILE_SPAN: Record<string, { w: number; h: number }> = {
   step: { w: 6, h: 6 },
   cw: { w: 8, h: 8 },
   tx: { w: 6, h: 10 },
-  ps: { w: 8, h: 10 },
+  // Full dashboard (calibration hero + mode row + timing/hardware cards +
+  // two-tone). A shorter default hides the ARM toggle below the fold on
+  // first add. Presentation-only — see panels.ts:ps.
+  ps: { w: 12, h: 26 },
   band: { w: 12, h: 4 },
   mode: { w: 8, h: 4 },
   meters: { w: 12, h: 16 },
@@ -206,6 +209,60 @@ export function placeTileInPage(
   return null;
 }
 
+export function resolveWorkspaceColumnCount({
+  occupiedCols,
+  colsForWidth,
+  monitorCols,
+}: {
+  occupiedCols: number;
+  colsForWidth: number;
+  monitorCols: number;
+}): number {
+  const occupied = Math.max(WORKSPACE_GRID_COLS, Math.floor(occupiedCols));
+  const widthCols = Math.max(occupied, Math.floor(colsForWidth));
+  const monitor = Math.floor(monitorCols);
+  if (monitor <= 0) return widthCols;
+  // The monitor cap is only a drag/scroll bound. It must never compress an
+  // existing authored layout, because RGL satisfies too-few cols by shifting
+  // right-edge tiles left, which can hide them under wider panels.
+  return Math.max(occupied, Math.min(monitor, widthCols));
+}
+
+export function shouldRenderDetachedSingleTileFill({
+  isPrimary,
+  tileCount,
+}: {
+  isPrimary: boolean;
+  tileCount: number;
+}): boolean {
+  return !isPrimary && tileCount === 1;
+}
+
+export function repairWorkspaceTileOverlaps(
+  tiles: WorkspaceTile[],
+): WorkspaceTile[] {
+  const placed: WorkspaceTile[] = [];
+  let changed = false;
+
+  for (const tile of tiles) {
+    let next = tile;
+    for (let guard = 0; guard <= placed.length; guard += 1) {
+      const colliders = placed.filter((other) => tilesOverlap(next, other));
+      if (colliders.length === 0) break;
+
+      const shiftedX = Math.max(
+        next.x,
+        ...colliders.map((other) => other.x + other.w),
+      );
+      next = { ...next, x: shiftedX };
+      changed = true;
+    }
+    placed.push(next);
+  }
+
+  return changed ? placed : tiles;
+}
+
 function tilesOverlap(
   a: { x: number; y: number; w: number; h: number },
   b: { x: number; y: number; w: number; h: number },
@@ -275,9 +332,10 @@ export function parseWorkspaceLayout(raw: unknown): WorkspaceLayout {
         : {}),
     });
   }
+  const normalized = normalizeOversizedRows(tiles);
   return {
     schemaVersion: 8,
-    tiles: normalizeOversizedRows(tiles),
+    tiles: repairWorkspaceTileOverlaps(normalized),
     ...(obj.locked === true ? { locked: true } : {}),
   };
 }

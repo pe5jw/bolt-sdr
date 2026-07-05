@@ -2,7 +2,7 @@
 //
 // FreeDvStationsPanel — workspace tile listing live FreeDV stations from the
 // FreeDV Reporter network (qso.freedv.org), with click-to-tune into the Zeus
-// VFO. Backed by freedv-stations-store, which polls GET /api/freedv/stations
+// VFO. Backed by freedv-stations-store, which polls the FreeDV plugin stations endpoint
 // and tunes via setVfo + setMode + setFreeDvConfig.
 
 import { useEffect, useMemo, useState } from 'react';
@@ -32,7 +32,9 @@ const COLUMNS: ReadonlyArray<{ key: SortKey; label: string; align?: 'right' }> =
 ];
 
 function fmtFreq(hz: number): string {
-  return (hz / 1_000_000).toFixed(3);
+  // 4 decimals = 100 Hz resolution — needed to render 60m channels' 500 Hz
+  // offsets (e.g. 5.3685 MHz) without rounding away the sub-kHz digit.
+  return (hz / 1_000_000).toFixed(4);
 }
 
 function stationAgeSeconds(lastUpdate: string, nowMs: number = Date.now()): number | null {
@@ -553,7 +555,7 @@ function ReportSection({
             onBlur={() => persist({ message })}
             placeholder="Status message (optional)"
             maxLength={80}
-            style={{ flex: 1, minWidth: 110 }}
+            style={{ flex: 1, minWidth: 110, textTransform: 'none' }}
           />
         </div>
       )}

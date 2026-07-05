@@ -17,6 +17,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using Zeus.Contracts;
+using Zeus.Protocol2;
 
 namespace Zeus.Server;
 
@@ -90,6 +91,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
 
     private readonly RadioService _radio;
     private readonly RadioSpeakerSettingsStore _settings;
+    private readonly RxAudioMuteState _muteState;
     private readonly ILogger<SaturnSpeakerAudioSink> _log;
     private readonly FloatSpscRing _ring = new(RingCapacity);
     private readonly ManualResetEventSlim _wake = new(false);
@@ -153,17 +155,23 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
     public SaturnSpeakerAudioSink(
         RadioService radio,
         RadioSpeakerSettingsStore settings,
-        ILogger<SaturnSpeakerAudioSink> log)
+        ILogger<SaturnSpeakerAudioSink> log,
+        RxAudioMuteState? muteState = null)
     {
         _radio = radio;
         _settings = settings;
         _log = log;
+        // Null in tests that don't exercise the mute path — a private
+        // instance keeps the field non-null so IsMuted stays cheap and the
+        // legacy 3-arg ctor call sites keep working.
+        _muteState = muteState ?? new RxAudioMuteState();
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _radio.StateChanged += OnRadioStateChanged;
         _settings.Changed += OnSettingsChanged;
+        _muteState.Changed += OnMuteChanged;
         _refreshRequested = true;
         _worker = new Thread(WorkerLoop)
         {
@@ -178,6 +186,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
     {
         _radio.StateChanged -= OnRadioStateChanged;
         _settings.Changed -= OnSettingsChanged;
+        _muteState.Changed -= OnMuteChanged;
         _cts.Cancel();
         _wake.Set();
         try { _worker?.Join(TimeSpan.FromSeconds(2)); }
@@ -196,6 +205,18 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         // firmware doesn't bind — causing pointless traffic + a per-second
         // socket re-flap. RadioSpeakerAudioSink owns P1 via IsProtocol1Active.
         if (!_radio.IsProtocol2Active) return;
+
+        // Operator mute (issue #1252): the desktop Mute button flips the
+        // shared RxAudioMuteState; without this gate the PC playback path
+        // fell silent but the radio's onboard speaker kept ripping at 750
+        // pkt/s. Mirror MOX handling — ask the worker to drop the buffered
+        // tail so unmute doesn't replay the pre-mute audio.
+        if (_muteState.IsMuted)
+        {
+            _drainRequested = true;
+            SignalWake();
+            return;
+        }
 
         // Mirror the P1 sink's MOX mute: while transmitting, don't carry the
         // operator's TX-monitor / CW sidetone out to the radio's speaker jack.
@@ -245,6 +266,16 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         // inside RefreshTarget so a flip-on path is covered by the same refresh.
         if (!_settings.Enabled) _drainRequested = true;
         _refreshRequested = true;
+        SignalWake();
+    }
+
+    private void OnMuteChanged()
+    {
+        // On mute rising edge, drop the buffered tail so an unmute doesn't
+        // replay the pre-mute audio at the radio's speaker jack. Falling edge
+        // is a no-op — Publish just resumes writing on the next DSP tick.
+        if (!_muteState.IsMuted) return;
+        _drainRequested = true;
         SignalWake();
     }
 
@@ -501,6 +532,28 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
             {
                 Blocking = false,
             };
+            // Match Protocol2Client's UDP setup on this dedicated speaker socket:
+            //  - SIO_UDP_CONNRESET off (issue #1218): without it, a single ICMP
+            //    port-unreachable from the radio surfaces as WSAECONNRESET on the
+            //    next Send and takes the whole audio socket down until the 1 s
+            //    refresh reopens it. The main P2 socket disables this ioctl for
+            //    the same reason; this one carries the same Windows risk.
+            //  - Bind to the local address on the radio's subnet, on an
+            //    ephemeral port. Leaving the socket unbound lets the OS pick a
+            //    source address at Connect time; binding pins the source
+            //    address to the same local IP the P2 command socket binds
+            //    (parity with Protocol2Client), so the radio and Windows
+            //    Firewall see one consistent flow across all P2 traffic.
+            Protocol2Client.DisableUdpConnReset(socket);
+            // NIC enumeration inside FindLocalAddressForSubnet can throw
+            // NetworkInformationException (not a SocketException) during NIC
+            // churn / sleep-resume — and RefreshTarget runs on the raw sender
+            // thread, where an escaped throw kills the whole process. A failed
+            // lookup just means bind-to-Any, same as a no-subnet-match result.
+            IPAddress localBind;
+            try { localBind = Protocol2Client.FindLocalAddressForSubnet(target.Address) ?? IPAddress.Any; }
+            catch { localBind = IPAddress.Any; }
+            socket.Bind(new IPEndPoint(localBind, 0));
             socket.Connect(target);
             _socket = socket;
             _target = target;
@@ -508,8 +561,9 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
             _wasEligible = true;
 
             _log.LogInformation(
-                "audio.radio.speaker.p2 enabled target={Target} board={Board} variant={Variant}",
+                "audio.radio.speaker.p2 enabled target={Target} localBind={Local} board={Board} variant={Variant}",
                 target,
+                localBind.Equals(IPAddress.Any) ? "ANY (no subnet match)" : localBind.ToString(),
                 board,
                 variant);
         }
@@ -637,6 +691,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         _disposed = true;
         _radio.StateChanged -= OnRadioStateChanged;
         _settings.Changed -= OnSettingsChanged;
+        _muteState.Changed -= OnMuteChanged;
 
         if (!_cts.IsCancellationRequested)
         {

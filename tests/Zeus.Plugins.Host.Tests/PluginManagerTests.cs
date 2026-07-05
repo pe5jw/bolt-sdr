@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Zeus.Plugins.Contracts;
+using Zeus.Plugins.Contracts.Audio;
 using Zeus.Plugins.Host;
 
 namespace Zeus.Plugins.Host.Tests;
@@ -112,6 +114,116 @@ public class PluginManagerTests : IDisposable
 
         await _manager.StopAsync(default);
         Assert.Empty(_manager.Active);
+    }
+
+    [Fact]
+    public async Task StartAsync_DeletesPendingDeleteDirs_AndNeverActivatesThem()
+    {
+        using var a = WriteFixturePluginToRoot("com.example.a", "A");
+        using var b = WriteFixturePluginToRoot("com.example.b", "B");
+        // Simulate a Windows deferred uninstall: the dir survived the session
+        // (locked DLLs) with the marker PluginInstaller wrote.
+        File.WriteAllText(
+            Path.Combine(_root, "com.example.a", PluginManager.PendingDeleteMarker), "");
+
+        await _manager.StartAsync(default);
+
+        // The marked dir is gone (uninstall completed), the other activated.
+        Assert.False(Directory.Exists(Path.Combine(_root, "com.example.a")));
+        Assert.Null(_manager.Find("com.example.a"));
+        Assert.NotNull(_manager.Find("com.example.b"));
+        Assert.Single(_manager.Active);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_BuildsOnePlaybackSinkPerPlugin_ViaFactory()
+    {
+        using var a = WriteFixturePluginToRoot("com.example.a", "A");
+        using var b = WriteFixturePluginToRoot("com.example.b", "B");
+
+        // Host registers a playback-sink FACTORY: every plugin context must get
+        // its OWN instance (the sink's over-air resampler is stateful, so a
+        // shared one leaks residual samples across plugins).
+        var services = new ServiceCollection()
+            .AddSingleton<Func<IAudioPlaybackSink>>(() => new FakePlaybackSink())
+            .BuildServiceProvider();
+        var manager = new PluginManager(
+            loader: new PluginLoader(NullLogger<PluginLoader>.Instance),
+            settings: _store,
+            services: services,
+            logFactory: NullLoggerFactory.Instance,
+            options: new PluginManagerOptions { PluginRoot = _root });
+
+        var pa = await manager.ActivateAsync(Path.Combine(_root, "com.example.a"), default);
+        var pb = await manager.ActivateAsync(Path.Combine(_root, "com.example.b"), default);
+
+        Assert.NotNull(pa.Context.Playback);
+        Assert.NotNull(pb.Context.Playback);
+        Assert.NotSame(pa.Context.Playback, pb.Context.Playback);
+        await manager.StopAsync(default);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_FallsBackToSharedPlaybackSink_WhenNoFactory()
+    {
+        using var a = WriteFixturePluginToRoot("com.example.a", "A");
+        using var b = WriteFixturePluginToRoot("com.example.b", "B");
+
+        var shared = new FakePlaybackSink();
+        var services = new ServiceCollection()
+            .AddSingleton<IAudioPlaybackSink>(shared)
+            .BuildServiceProvider();
+        var manager = new PluginManager(
+            loader: new PluginLoader(NullLogger<PluginLoader>.Instance),
+            settings: _store,
+            services: services,
+            logFactory: NullLoggerFactory.Instance,
+            options: new PluginManagerOptions { PluginRoot = _root });
+
+        var pa = await manager.ActivateAsync(Path.Combine(_root, "com.example.a"), default);
+        var pb = await manager.ActivateAsync(Path.Combine(_root, "com.example.b"), default);
+
+        Assert.Same(shared, pa.Context.Playback);
+        Assert.Same(shared, pb.Context.Playback);
+        await manager.StopAsync(default);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ProvidesOperatorIdentityProvider()
+    {
+        using var a = WriteFixturePluginToRoot("com.example.a", "A");
+
+        var identity = new FakeOperatorIdentityProvider();
+        var services = new ServiceCollection()
+            .AddSingleton<IOperatorIdentityProvider>(identity)
+            .BuildServiceProvider();
+        var manager = new PluginManager(
+            loader: new PluginLoader(NullLogger<PluginLoader>.Instance),
+            settings: _store,
+            services: services,
+            logFactory: NullLoggerFactory.Instance,
+            options: new PluginManagerOptions { PluginRoot = _root });
+
+        var activated = await manager.ActivateAsync(Path.Combine(_root, "com.example.a"), default);
+
+        Assert.Same(identity, activated.Context.OperatorIdentity);
+        await manager.StopAsync(default);
+    }
+
+    private sealed class FakePlaybackSink : IAudioPlaybackSink
+    {
+        public bool IsMoxOn => false;
+        public IDisposable BeginLocalMonitor() => new Noop();
+        public bool PlayLocal(ReadOnlySpan<float> samples, int sampleRate) => true;
+        public long LocalMonitorBacklog => 0;
+        public void PlayOnAir(ReadOnlySpan<float> samples, int sampleRate) { }
+        private sealed class Noop : IDisposable { public void Dispose() { } }
+    }
+
+    private sealed class FakeOperatorIdentityProvider : IOperatorIdentityProvider
+    {
+        public OperatorIdentitySnapshot Resolve(string? secondaryCall = null, string? secondaryGrid = null)
+            => new("N0CALL", "AA00");
     }
 
     [Fact]

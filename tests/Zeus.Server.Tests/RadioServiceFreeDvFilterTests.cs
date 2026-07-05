@@ -33,8 +33,23 @@ public sealed class RadioServiceFreeDvFilterTests : IDisposable
         }
     }
 
-    private RadioService BuildRadio() =>
-        new(NullLoggerFactory.Instance, _dspStore, _paStore);
+    private RadioService BuildRadio(bool modemAvailable = true)
+    {
+        var radio = new RadioService(NullLoggerFactory.Instance, _dspStore, _paStore);
+        if (modemAvailable)
+            radio.SetModemAvailability(() => true);
+        return radio;
+    }
+
+    [Fact]
+    public void SetMode_FreeDv_WithoutActiveModem_FallsBackToUsb()
+    {
+        using var radio = BuildRadio(modemAvailable: false);
+
+        var after = radio.SetMode(RxMode.FreeDv);
+
+        Assert.Equal(RxMode.USB, after.Mode);
+    }
 
     [Fact]
     public void SetMode_FreeDv_AppliesSpecBandpassToRxAndTx()

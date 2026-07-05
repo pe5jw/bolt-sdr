@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+using System.Reflection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Server;
@@ -17,7 +18,7 @@ public sealed class TxServiceTuneInterlockTests : IDisposable
         try { if (File.Exists(_dbPath + ".pa")) File.Delete(_dbPath + ".pa"); } catch { }
     }
 
-    private (TxService Tx, RecordingPipeline Pipeline) BuildConnectedTx()
+    private (RadioService Radio, TxService Tx, RecordingPipeline Pipeline) BuildConnectedTx()
     {
         var loggerFactory = NullLoggerFactory.Instance;
         var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath);
@@ -27,13 +28,13 @@ public sealed class TxServiceTuneInterlockTests : IDisposable
         var hub = new StreamingHub(new NullLogger<StreamingHub>());
         var pipeline = new RecordingPipeline(radio, hub, loggerFactory);
         var tx = new TxService(radio, pipeline, hub, NullBandPlanService.Instance, new NullLogger<TxService>());
-        return (tx, pipeline);
+        return (radio, tx, pipeline);
     }
 
     [Fact]
     public void TrySetMox_On_ClearsTuneGeneratorBeforeKeying()
     {
-        var (tx, pipeline) = BuildConnectedTx();
+        var (_, tx, pipeline) = BuildConnectedTx();
 
         bool ok = tx.TrySetMox(true, out var err);
 
@@ -49,7 +50,7 @@ public sealed class TxServiceTuneInterlockTests : IDisposable
     [Fact]
     public void TrySetMox_On_PreemptsActiveTunBeforeKeying()
     {
-        var (tx, pipeline) = BuildConnectedTx();
+        var (_, tx, pipeline) = BuildConnectedTx();
         Assert.True(tx.TrySetTun(true, out var tunErr), tunErr);
         Assert.True(tx.IsTunOn);
         pipeline.Calls.Clear();
@@ -63,6 +64,49 @@ public sealed class TxServiceTuneInterlockTests : IDisposable
             pipeline.Calls,
             call => Assert.Equal("tune:False", call),
             call => Assert.Equal("mox:True", call));
+    }
+
+    [Fact]
+    public void P1DisconnectWhileTunClearsServerTunStateWithoutHardwareUnkey()
+    {
+        AssertDisconnectWhileTunClearsServerState(RaiseP1DisconnectedForTest);
+    }
+
+    [Fact]
+    public void P2DisconnectWhileTunClearsServerTunStateWithoutHardwareUnkey()
+    {
+        AssertDisconnectWhileTunClearsServerState(radio => radio.MarkProtocol2Disconnected());
+    }
+
+    private void AssertDisconnectWhileTunClearsServerState(Action<RadioService> disconnect)
+    {
+        var (radio, tx, pipeline) = BuildConnectedTx();
+        var txActiveEdges = new List<bool>();
+        var tunEvents = new List<bool>();
+        tx.TxActiveChanged += txActiveEdges.Add;
+        radio.TunActiveChanged += tunEvents.Add;
+
+        Assert.True(tx.TrySetTun(true, out var tunErr), tunErr);
+        Assert.True(tx.IsTunOn);
+        txActiveEdges.Clear();
+        tunEvents.Clear();
+        pipeline.Calls.Clear();
+
+        disconnect(radio);
+
+        Assert.False(tx.IsTunOn);
+        Assert.False(tx.IsMoxOn);
+        Assert.Equal(new[] { false }, txActiveEdges);
+        Assert.Equal(new[] { false }, tunEvents);
+        Assert.Empty(pipeline.Calls);
+    }
+
+    private static void RaiseP1DisconnectedForTest(RadioService radio)
+    {
+        var handlers = (Action?)typeof(RadioService)
+            .GetField("Disconnected", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(radio);
+        handlers?.Invoke();
     }
 
     private sealed class RecordingPipeline(

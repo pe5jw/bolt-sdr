@@ -13,6 +13,7 @@ using System.Net.Http;
 using Microsoft.Extensions.Logging;
 using SIPSorcery.Net;
 using Zeus.Server.Diagnostics;
+using Zeus.Server.Hosting.Remote;
 
 namespace Zeus.Server.Hosting.Support;
 
@@ -31,7 +32,7 @@ public sealed class SupportWebRtcService
     private readonly IHttpClientFactory? _httpFactory;
     private readonly string? _loopbackBaseUrl;
     private readonly DiagnosticLogBuffer? _logBuffer;
-    private readonly ConcurrentDictionary<Guid, SupportWebRtcSession> _sessions = new();
+    private readonly ConcurrentDictionary<Guid, ISupportWebRtcSession> _sessions = new();
 
     public SupportWebRtcService(
         SupportGrantStore grants,
@@ -46,6 +47,8 @@ public sealed class SupportWebRtcService
         _httpFactory = httpFactory;
         _loopbackBaseUrl = loopbackBaseUrl;
     }
+
+    internal Func<SupportGrant, ILogger, IReadOnlyList<RTCIceServer>, SupportApiProxy?, DiagnosticLogBuffer?, ISupportWebRtcSession>? SessionFactoryForTest { get; set; }
 
     public int ActiveSessions => _sessions.Count;
 
@@ -64,7 +67,13 @@ public sealed class SupportWebRtcService
             proxy = new SupportApiProxy(_httpFactory, _loopbackBaseUrl, _log);
 
         var id = Guid.NewGuid();
-        var session = new SupportWebRtcSession(grant, _log, IceServers(), proxy, _logBuffer);
+        var ice = await BrokerIceServers.GetIceServersAsync(_httpFactory, _log, "support.rtc", ct);
+        _log.LogInformation(
+            "support.rtc ICE: {Count} server(s), relay={Relay}",
+            ice.Count,
+            BrokerIceServers.RelayCount(ice) > 0);
+
+        var session = (SessionFactoryForTest ?? CreateSession)(grant, _log, ice, proxy, _logBuffer);
         _sessions[id] = session;
         session.Closed += () =>
         {
@@ -85,12 +94,13 @@ public sealed class SupportWebRtcService
                 s.Close();
     }
 
-    // STUN only here; the production path swaps in Cloudflare TURN credentials
-    // minted by the broker for NAT/CGNAT traversal (same as the operator tunnel).
-    private static List<RTCIceServer> IceServers() =>
-    [
-        new RTCIceServer { urls = "stun:stun.cloudflare.com:3478" },
-    ];
+    private static ISupportWebRtcSession CreateSession(
+        SupportGrant grant,
+        ILogger log,
+        IReadOnlyList<RTCIceServer> ice,
+        SupportApiProxy? proxy,
+        DiagnosticLogBuffer? logBuffer)
+        => new SupportWebRtcSession(grant, log, ice, proxy, logBuffer);
 }
 
 /// <summary>Thrown when a support offer arrives without a live operator-approved grant.</summary>

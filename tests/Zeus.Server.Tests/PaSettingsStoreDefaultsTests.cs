@@ -5,6 +5,7 @@
 //                         Douglas J. Cerrato (KB2UKA),
 //                         Christian Suarez (N9WAR), and contributors.
 
+using LiteDB;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
@@ -355,6 +356,41 @@ public class PaSettingsStoreDefaultsTests : IDisposable
         using var read = NewStore();
         var s = read.GetAll(HpsdrBoardKind.Unknown);
         Assert.Equal(100.0, FindGain(s, "40m"));
+    }
+
+    [Fact]
+    public void LegacyBandRowWithoutOcTuneHydratesZeroAndSaveNarrowsOcTune()
+    {
+        using (var db = new LiteDatabase($"Filename={_dbPath};Connection=shared"))
+        {
+            db.GetCollection("pa_bands").Insert(new BsonDocument
+            {
+                ["_id"] = 1,
+                ["Band"] = "40m",
+                ["PaGainDb"] = 41.0,
+                ["DisablePa"] = false,
+                ["OcTx"] = 0x01,
+                ["OcRx"] = 0x02,
+                ["OcDxTx"] = 0x00,
+                ["OcDxRx"] = 0x00,
+                ["UpdatedUtc"] = DateTime.UtcNow,
+            });
+        }
+
+        using (var store = NewStore())
+        {
+            Assert.Equal((byte)0x00, store.GetBand("40m", HpsdrBoardKind.Hermes).OcTune);
+
+            var dto = store.GetAll(HpsdrBoardKind.Hermes);
+            var bands = dto.Bands.Select(b => b.Band == "40m" ? b with { OcTune = 0xFF } : b).ToArray();
+            store.Save(new PaSettingsDto(dto.Global, bands));
+        }
+
+        using (var db = new LiteDatabase($"Filename={_dbPath};Connection=shared"))
+        {
+            var row = db.GetCollection("pa_bands").FindOne(Query.EQ("Band", "40m"));
+            Assert.Equal(0x7F, row["OcTune"].AsInt32);
+        }
     }
 
     private static double FindGain(PaSettingsDto s, string band) =>

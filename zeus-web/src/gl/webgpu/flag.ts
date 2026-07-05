@@ -28,11 +28,13 @@
 
 const STORAGE_KEY = 'zeus.waterfall.webgpu';
 const URL_PARAM = 'webgpuWaterfall';
+const PAN_STORAGE_KEY = 'zeus.panadapter.webgpu3d';
+const PAN_URL_PARAM = 'webgpuPanadapter';
 
-function readUrlOverride(): boolean | null {
+function readUrlOverride(param = URL_PARAM): boolean | null {
   try {
     if (typeof window === 'undefined') return null;
-    const raw = new URLSearchParams(window.location.search).get(URL_PARAM);
+    const raw = new URLSearchParams(window.location.search).get(param);
     if (raw === null) return null;
     return raw === '1' || raw === 'true';
   } catch {
@@ -40,41 +42,58 @@ function readUrlOverride(): boolean | null {
   }
 }
 
-function readStored(): '1' | '0' | null {
+function readStored(key = STORAGE_KEY): '1' | '0' | null {
   try {
     if (typeof localStorage === 'undefined') return null;
-    const v = localStorage.getItem(STORAGE_KEY);
+    const v = localStorage.getItem(key);
     return v === '1' || v === '0' ? v : null;
   } catch {
     return null;
   }
 }
 
-function writeStored(enabled: boolean): void {
+function writeStored(enabled: boolean, key = STORAGE_KEY): void {
   try {
     if (typeof localStorage === 'undefined') return;
-    // Store the explicit choice (including off) so `?webgpuWaterfall=0` sticks.
-    localStorage.setItem(STORAGE_KEY, enabled ? '1' : '0');
+    // Store the explicit choice, including the emergency-off override.
+    localStorage.setItem(key, enabled ? '1' : '0');
   } catch {
     // private mode / quota — URL override still works for this session.
   }
 }
 
-/** Whether the WebGPU heightfield is the active waterfall. Default ON — the
- *  heightfield is the standard waterfall now; the legacy WebGL surface is the
- *  fallback. Force the legacy one with `?webgpuWaterfall=0` (sticky). Actual use
+/** Whether the WebGPU heightfield is the active waterfall. Default ON for the
+ *  normal profile; low-power hosts pass defaultEnabled=false so the flat WebGL
+ *  surface is preferred unless the operator explicitly opts back in. Actual use
  *  still requires the capability probe (caps.ts) and a clean renderer init; on
  *  any failure WaterfallSurface falls back to WebGL. */
-export function isWebGpuWaterfallEnabled(): boolean {
+export function isWebGpuWaterfallEnabled(defaultEnabled = true): boolean {
   const override = readUrlOverride();
   if (override !== null) {
     writeStored(override);
     return override;
   }
-  return readStored() !== '0';
+  const stored = readStored();
+  if (stored !== null) return stored === '1';
+  return defaultEnabled;
 }
 
 /** Programmatic toggle (e.g. a Settings switch). */
 export function setWebGpuWaterfallEnabled(enabled: boolean): void {
   writeStored(enabled);
+}
+
+/** Whether the WebGPU 3D panadapter is the active pan surface. Default ON, with
+ *  `?webgpuPanadapter=0` as the sticky emergency fallback to the WebGL2 trace. */
+export function isWebGpuPanadapterEnabled(): boolean {
+  const override = readUrlOverride(PAN_URL_PARAM);
+  if (override !== null) {
+    writeStored(override, PAN_STORAGE_KEY);
+    return override;
+  }
+  return readStored(PAN_STORAGE_KEY) !== '0';
+}
+
+export function setWebGpuPanadapterEnabled(enabled: boolean): void {
+  writeStored(enabled, PAN_STORAGE_KEY);
 }

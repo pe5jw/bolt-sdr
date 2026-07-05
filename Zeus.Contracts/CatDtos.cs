@@ -64,14 +64,19 @@ public static class CatSerialDefaults
 /// <summary>Persisted config for one serial CAT port. Defaults mirror Thetis:
 /// disabled, 115200 8-N-1. <paramref name="PortName"/> is a free-form device
 /// path (COM5, /dev/cu.usbserial-1, /dev/ttys013) — virtual pty/com0com pairs
-/// are not enumerable, so the UI never gates on a dropdown.</summary>
+/// are not enumerable, so the UI never gates on a dropdown.
+/// <para><paramref name="AutoReport"/> is Zeus's equivalent of piHPSDR's
+/// AutoRprt: when set, the port comes up already in AI1 mode so devices that
+/// expect unsolicited frequency updates (some amplifiers, loggers, legacy CAT
+/// clients) get them without ever sending <c>AI1;</c>.</para></summary>
 public sealed record CatSerialPortConfig(
     bool Enabled = false,
     string PortName = "",
     int BaudRate = CatSerialDefaults.BaudRate,
     string Parity = "None",
     int DataBits = 8,
-    string StopBits = "One");
+    string StopBits = "One",
+    bool AutoReport = false);
 
 /// <summary>Full serial-CAT config: exactly <see cref="CatSerialDefaults.PortCount"/>
 /// ports, index 0 = CAT 1.</summary>
@@ -87,6 +92,7 @@ public sealed record CatSerialPortStatus(
     string Parity,
     int DataBits,
     string StopBits,
+    bool AutoReport,
     bool Open,
     int ClientActivity,
     string? Error);

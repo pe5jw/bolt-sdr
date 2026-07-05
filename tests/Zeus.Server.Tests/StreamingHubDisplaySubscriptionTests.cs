@@ -12,6 +12,7 @@ namespace Zeus.Server.Tests;
 public class StreamingHubDisplaySubscriptionTests
 {
     private const byte DisplayStreamRequest = 0x22;
+    private const byte DisplayStreamPreferred = 2;
 
     [Fact]
     public async Task DisplayFramesOnlyFanOutToSubscribedClients()
@@ -44,6 +45,46 @@ public class StreamingHubDisplaySubscriptionTests
         ws.QueueClose();
         await attach.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal(0, hub.DisplaySubscriberCount);
+    }
+
+    [Fact]
+    public async Task PreferredDisplayClientSuppressesLegacyDisplayFanout()
+    {
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var legacy = new ScriptedWebSocket();
+        using var preferred = new ScriptedWebSocket();
+        var legacyAttach = hub.AttachClientAsync(legacy, CancellationToken.None);
+        var preferredAttach = hub.AttachClientAsync(preferred, CancellationToken.None);
+
+        var frame = new DisplayFrame(
+            Seq: 1,
+            TsUnixMs: 1_700_000_000_000,
+            RxId: 0,
+            BodyFlags: DisplayBodyFlags.PanValid | DisplayBodyFlags.WfValid,
+            Width: 2,
+            CenterHz: 14_254_000,
+            HzPerPixel: 46.875f,
+            PanDb: new float[] { -110f, -90f },
+            WfDb: new float[] { -120f, -100f });
+
+        legacy.QueueBinary(new byte[] { DisplayStreamRequest, 1 });
+        preferred.QueueBinary(new byte[] { DisplayStreamRequest, DisplayStreamPreferred });
+        await WaitUntilAsync(() => hub.DisplaySubscriberCount == 2);
+        await WaitUntilAsync(() => hub.PreferredDisplaySubscriberCount == 1);
+
+        hub.Broadcast(in frame);
+        await WaitUntilAsync(() => preferred.SentFrames.Any(payload => payload[0] == (byte)MsgType.DisplayFrame));
+        Assert.DoesNotContain(legacy.SentFrames, payload => payload[0] == (byte)MsgType.DisplayFrame);
+
+        preferred.QueueClose();
+        await preferredAttach.WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => hub.PreferredDisplaySubscriberCount == 0);
+
+        hub.Broadcast(in frame);
+        await WaitUntilAsync(() => legacy.SentFrames.Any(payload => payload[0] == (byte)MsgType.DisplayFrame));
+
+        legacy.QueueClose();
+        await legacyAttach.WaitAsync(TimeSpan.FromSeconds(2));
     }
 
     [Fact]

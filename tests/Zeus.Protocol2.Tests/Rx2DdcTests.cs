@@ -16,10 +16,10 @@ namespace Zeus.Protocol2.Tests;
 
 /// <summary>
 /// True second-receiver (RX2) DDC wiring on Protocol 2. RX2 streams its own
-/// independent DDC (RxBaseDdc + 1) sourced from the RX2 ADC on dual-ADC boards
-/// so it can sit on a different band/input than RX1. These pin the CmdRx
-/// enable-mask, per-DDC config-block offsets, and ADC source so the wire shape
-/// cannot regress to RX1 mirroring without a test failure.
+/// independent DDC (RxBaseDdc + 1), defaulting to RX1's ADC unless the operator
+/// selects another ADC. These pin the CmdRx enable-mask, per-DDC config-block
+/// offsets, and ADC source so the wire shape cannot regress to RX1 mirroring
+/// without a test failure.
 /// </summary>
 public class Rx2DdcTests
 {
@@ -105,6 +105,21 @@ public class Rx2DdcTests
         Assert.Equal((byte)0x00, p[36]);  // 48 kHz BE high
         Assert.Equal((byte)48,   p[37]);  // 48 kHz BE low
         Assert.Equal((byte)24,   p[40]);  // 24-bit
+    }
+
+    [Fact]
+    public void CmdRx_Orion_ManualAdcSources_ApplyToRx1AndRx2()
+    {
+        var p = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 1, numAdc: 2, sampleRateKhz: 48, psEnabled: false,
+            boardKind: HpsdrBoardKind.OrionMkII,
+            adcDitherEnabled: false, adcRandomEnabled: false, rx2Enabled: true,
+            rx1AdcSource: 1, rx2AdcSource: 1);
+
+        // Orion-family RX1 is DDC2 (offset 29), RX2 is DDC3 (offset 35).
+        Assert.Equal((byte)0x01, p[29]);
+        Assert.Equal((byte)0x01, p[35]);
+        Assert.Equal((byte)(0x04 | 0x08), p[7]);
     }
 
     [Fact]

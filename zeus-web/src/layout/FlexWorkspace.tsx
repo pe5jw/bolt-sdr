@@ -42,6 +42,7 @@ import {
   WORKSPACE_RESIZE_COMPACTOR,
   autoFitDroppedPanel,
   createWorkspaceDragCompactor,
+  repairLayoutOverlaps,
   resolveResizeOverlaps,
   type WorkspaceDragStartSnapshot,
 } from './workspaceGrid';
@@ -52,6 +53,8 @@ import {
   WORKSPACE_ROW_HEIGHT_PX,
   WORKSPACE_TILE_MIN_H,
   WORKSPACE_TILE_MIN_W,
+  resolveWorkspaceColumnCount,
+  shouldRenderDetachedSingleTileFill,
   type WorkspaceTile,
 } from './workspace';
 import { AddPanelModal } from './AddPanelModal';
@@ -108,7 +111,7 @@ interface FlexWorkspaceProps {
 export function FlexWorkspace({
   layoutId,
   showAddPanelModal = true,
-}: FlexWorkspaceProps = {}) {
+}: FlexWorkspaceProps) {
   const { terminatorActive } = useWorkspace();
   // Loading is driven by App.tsx via loadForRadio(boardKey) — no local
   // first-load effect here. The dock-selected layout uses `workspace`; a
@@ -263,7 +266,59 @@ interface WorkspaceCanvasProps {
   ) => void;
 }
 
-function WorkspaceCanvas({
+function WorkspaceCanvas(props: WorkspaceCanvasProps) {
+  if (
+    shouldRenderDetachedSingleTileFill({
+      isPrimary: props.isPrimary,
+      tileCount: props.tiles.length,
+    })
+  ) {
+    return <DetachedSingleTileCanvas {...props} />;
+  }
+
+  return <WorkspaceGridCanvas {...props} />;
+}
+
+function DetachedSingleTileCanvas({
+  tiles,
+  workspaceLocked,
+  isLoaded,
+  layoutId,
+  onRequestRemoveTile,
+  onToggleTileLock,
+}: WorkspaceCanvasProps) {
+  const tile = tiles[0];
+  const handleToggleTileLock = useCallback(
+    (uid: string, locked: boolean) => onToggleTileLock(uid, locked),
+    [onToggleTileLock],
+  );
+
+  return (
+    <div className="all-panels-workspace all-panels-workspace--detached-fill">
+      {!isLoaded || !tile ? (
+        <div style={{ minHeight: 80 }} aria-hidden />
+      ) : (
+        <div
+          className="detached-single-tile-fill"
+          data-tile-uid={tile.uid}
+          data-tile-locked={
+            workspaceLocked || tile.locked === true ? 'true' : undefined
+          }
+        >
+          <PanelTile
+            tile={tile}
+            layoutId={layoutId}
+            workspaceLocked={workspaceLocked}
+            onRequestRemoveTile={onRequestRemoveTile}
+            onToggleTileLock={handleToggleTileLock}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WorkspaceGridCanvas({
   tiles,
   workspaceLocked,
   isLoaded,
@@ -464,11 +519,14 @@ function WorkspaceCanvas({
           ),
         )
       : occupiedCols;
-  // Cap the canvas at the monitor width: it is never wider than the physical
-  // screen, so horizontal drag is bounded to the monitor and scroll only ever
-  // spans real content. No cap until the monitor size is known.
-  const cols =
-    monitorCols > 0 ? Math.min(monitorCols, colsForWidth) : colsForWidth;
+  // Cap new empty drag space at the monitor width, but never below the layout's
+  // current occupied extent. Compressing cols below existing tiles makes RGL
+  // shift right-edge panels left, which can hide them under wider neighbours.
+  const cols = resolveWorkspaceColumnCount({
+    occupiedCols,
+    colsForWidth,
+    monitorCols,
+  });
   // Exact width for `cols` columns at the fixed pitch, so RGL's derived column
   // width is exactly baseColWidth (no sub-pixel rescale as the window resizes).
   const gridWidth =
@@ -508,7 +566,10 @@ function WorkspaceCanvas({
 
   // With constant cells the render geometry equals the stored geometry, so
   // persistence is a straight passthrough to the store (no reconcile pass).
-  const persist = onLayoutChange;
+  const persist = useCallback(
+    (next: Layout) => onLayoutChange(repairLayoutOverlaps(next)),
+    [onLayoutChange],
+  );
 
   // Rows that fit the live workspace area (the measured container, which sits
   // ABOVE the footer). This is the vertical FIELD OF VIEW: the hard drag/resize
@@ -703,7 +764,7 @@ function WorkspaceCanvas({
     window.setTimeout(() => {
       skipPostDropLayoutChangeRef.current = false;
     }, 250);
-    persist(resolveResizeOverlaps(layout, resizedId, colsRef.current));
+    persist(resolveResizeOverlaps(layout, resizedId, colsRef.current, oldItem));
   }, [persist]);
   const handleLayoutChange = useCallback(
     (next: Layout) => {

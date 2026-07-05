@@ -16,7 +16,11 @@
 export type SupportAvailability = {
   available: boolean;
   autoShareCrashes: boolean;
+  agreementVersion: number;
+  currentAgreementVersion: number;
 };
+
+type SupportAvailabilityUpdate = Pick<SupportAvailability, 'available' | 'autoShareCrashes'>;
 
 export type PendingSupportRequest = {
   requestId: string;
@@ -92,28 +96,48 @@ function normalizeStatus(raw: unknown): SupportStatus {
   };
 }
 
-export async function getSupportAvailability(signal?: AbortSignal): Promise<SupportAvailability> {
-  const o = await jsonFetch<Record<string, unknown>>('/api/support/availability', { signal });
+function normalizeAgreementVersion(raw: unknown): number {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0
+    ? Math.trunc(raw)
+    : 0;
+}
+
+function normalizeAvailability(raw: unknown): SupportAvailability {
+  const o = (raw ?? {}) as Record<string, unknown>;
   return {
     available: o.available === true,
     autoShareCrashes: o.autoShareCrashes === true,
+    agreementVersion: normalizeAgreementVersion(o.agreementVersion),
+    currentAgreementVersion: normalizeAgreementVersion(o.currentAgreementVersion),
   };
 }
 
+export async function getSupportAvailability(signal?: AbortSignal): Promise<SupportAvailability> {
+  return normalizeAvailability(await jsonFetch<unknown>('/api/support/availability', { signal }));
+}
+
 export async function setSupportAvailability(
-  body: SupportAvailability,
+  body: SupportAvailabilityUpdate,
   signal?: AbortSignal,
 ): Promise<SupportAvailability> {
-  const o = await jsonFetch<Record<string, unknown>>('/api/support/availability', {
+  return normalizeAvailability(await jsonFetch<unknown>('/api/support/availability', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
     signal,
-  });
-  return {
-    available: o.available === true,
-    autoShareCrashes: o.autoShareCrashes === true,
-  };
+  }));
+}
+
+export async function answerSupportAgreement(
+  optIn: boolean,
+  signal?: AbortSignal,
+): Promise<SupportAvailability> {
+  return normalizeAvailability(await jsonFetch<unknown>('/api/support/agreement', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ optIn }),
+    signal,
+  }));
 }
 
 export async function getSupportStatus(signal?: AbortSignal): Promise<SupportStatus> {

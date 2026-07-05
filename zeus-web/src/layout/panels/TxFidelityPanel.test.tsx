@@ -184,6 +184,8 @@ function makeRadioState(): RadioStateDto {
     drivePercent: tx.drivePercent,
     tunePercent: tx.tunePercent,
     txMoxPreKeyDelayMs: tx.txMoxPreKeyDelayMs,
+    txMoxTailDelayMs: tx.txMoxTailDelayMs,
+    txTimeoutSec: tx.txTimeoutSec,
     twoToneFreq1: tx.twoToneFreq1,
     twoToneFreq2: tx.twoToneFreq2,
     twoToneMag: tx.twoToneMag,
@@ -291,6 +293,37 @@ describe('TxFidelityPanel', () => {
       o.textContent?.trim(),
     );
     expect(options).toContain('Studio SSB [Native]');
+
+    unmount();
+  });
+
+  it('keeps manual TX shaping controls editable while disconnected', async () => {
+    useConnectionStore.setState({ status: 'Disconnected', mode: 'USB' });
+
+    const { container, unmount } = render(createElement(TxFidelityPanel));
+    await act(async () => {
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+    });
+
+    for (const label of [
+      'TX mic gain',
+      'TX leveler max gain',
+      'TX leveler decay',
+      'TX filter low cut',
+      'TX filter high cut',
+    ]) {
+      const input = container.querySelector(`[aria-label="${label}"]`) as HTMLInputElement | null;
+      expect(input, label).not.toBeNull();
+      expect(input?.disabled, label).toBe(false);
+    }
+
+    const phase = container.querySelector('[aria-label="TX phase rotator enabled"]') as HTMLInputElement | null;
+    expect(phase).not.toBeNull();
+    expect(phase?.disabled).toBe(false);
+
+    const autoTune = container.querySelector('[aria-label="Auto tune TX fidelity"]') as HTMLButtonElement | null;
+    expect(autoTune).not.toBeNull();
+    expect(autoTune?.disabled).toBe(true);
 
     unmount();
   });

@@ -109,6 +109,11 @@ export enum AlertKind {
   SwrTrip = 0,
   TxTimeout = 1,
   OutOfBand = 2,
+  // Pre-warning ~30 s before the TX timeout trip fires so the operator can
+  // un-key or reset. Auto-dismissed by ws-client on the MoxState off-edge
+  // (unlike SwrTrip / TxTimeout which stick until the operator dismisses).
+  // Issue #1270.
+  TxTimeoutWarning = 3,
   // Frontend-only sentinel for service-worker update prompts. Raised locally
   // by useSwUpdatePrompt and consumed by AlertBanner; never sent on the wire,
   // so its value lives outside the wire-byte range to avoid collisions.
@@ -235,6 +240,20 @@ export type TxState = {
   // input doesn't flicker on reload.
   txMoxPreKeyDelayMs: number;
   setTxMoxPreKeyDelayMs: (ms: number) => void;
+  // TX tail (MOX hang) delay in ms (issue #1294) — after a UI PTT release,
+  // holds the wire MOX bit asserted so audio still in the browser→WDSP→IQ
+  // pipeline finishes clocking out before the radio drops off the air. Server
+  // is authoritative; mirrored here so the input doesn't flicker on reload.
+  txMoxTailDelayMs: number;
+  setTxMoxTailDelayMs: (ms: number) => void;
+  rogerBeepEnabled: boolean;
+  setRogerBeepEnabled: (on: boolean) => void;
+  // TX timeout in seconds (issue #1270). Server-authoritative (persisted via
+  // RadioStateStore). 0 = disabled (no guard); otherwise clamped to 30..600.
+  // Hydrated on connect + broadcast via StateDto so a fresh UI paint lands on
+  // the operator's last-set value.
+  txTimeoutSec: number;
+  setTxTimeoutSec: (s: number) => void;
   psMoxDelaySec: number;
   setPsMoxDelaySec: (s: number) => void;
   psLoopDelaySec: number;
@@ -416,6 +435,17 @@ export const useTxStore = create<TxState>()(
       setPsAutoAttenuate: (on) => set({ psAutoAttenuate: on }),
       txMoxPreKeyDelayMs: 0,
       setTxMoxPreKeyDelayMs: (ms) => set({ txMoxPreKeyDelayMs: ms }),
+      txMoxTailDelayMs: 0,
+      setTxMoxTailDelayMs: (ms) => set({ txMoxTailDelayMs: ms }),
+      rogerBeepEnabled: false,
+      setRogerBeepEnabled: (on) => set({ rogerBeepEnabled: on }),
+      txTimeoutSec: 120,
+      // 0 = disabled (kept as-is); any other value clamps to 30..600.
+      setTxTimeoutSec: (s) =>
+        set({
+          txTimeoutSec:
+            Math.round(s) <= 0 ? 0 : Math.max(30, Math.min(600, Math.round(s))),
+        }),
       psMoxDelaySec: 0.2,
       setPsMoxDelaySec: (s) => set({ psMoxDelaySec: s }),
       psLoopDelaySec: 0,
@@ -482,6 +512,8 @@ export const useTxStore = create<TxState>()(
           micGainDb: s.micGainDb,
           levelerMaxGainDb: s.levelerMaxGainDb,
           txMoxPreKeyDelayMs: s.txMoxPreKeyDelayMs,
+          txMoxTailDelayMs: s.txMoxTailDelayMs,
+          txTimeoutSec: s.txTimeoutSec,
           psEnabled: s.psEnabled,
           psAuto: s.psAuto,
           psPtol: s.psPtol,
@@ -504,6 +536,7 @@ export const useTxStore = create<TxState>()(
           twoToneFreq2: s.twoToneFreq2,
           twoToneMag: s.twoToneMag,
           cfcConfig: s.cfc,
+          rogerBeepEnabled: s.rogerBeepEnabled,
         }),
     }),
     {
@@ -532,6 +565,8 @@ export const useTxStore = create<TxState>()(
         // PS tuning is persisted server-side too, but we mirror it here so
         // the slider seeks don't flicker on first paint after a reload.
         txMoxPreKeyDelayMs: s.txMoxPreKeyDelayMs,
+        txMoxTailDelayMs: s.txMoxTailDelayMs,
+        txTimeoutSec: s.txTimeoutSec,
         psAuto: s.psAuto,
         psPtol: s.psPtol,
         psAutoAttenuate: s.psAutoAttenuate,

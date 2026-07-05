@@ -74,6 +74,12 @@ internal sealed class CatSerialPort : IDisposable
     /// unsolicited state-change pushes <see cref="CatSerialService"/> fans out.</summary>
     public bool AutoInfoEnabled => _handler.AutoInfoEnabled;
 
+    /// <summary>Pre-enable AI1 for this port (per-port "Auto Report" setting).
+    /// Called by <see cref="CatSerialService"/> right after <see cref="Open"/>,
+    /// so devices that never send <c>AI1;</c> still receive unsolicited state
+    /// pushes.</summary>
+    public void EnableAutoInfo() => _handler.EnableAutoInfo();
+
     /// <summary>Count of commands dispatched on this port (a cheap "is something
     /// talking to me" signal for the status panel).</summary>
     public int Activity => Volatile.Read(ref _activity);

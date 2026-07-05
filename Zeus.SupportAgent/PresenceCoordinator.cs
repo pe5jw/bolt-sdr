@@ -29,6 +29,8 @@ public sealed class PresenceCoordinator
     private readonly IMutableSupportBrokerClient _broker;
     private readonly PresenceClient _presence;
     private readonly Action<string>? _log;
+    private readonly Action? _onCrashBacklogEligible;
+    private int _crashBacklogTriggered;
 
     /// <param name="broker">The mutable-identity broker client the presence loop drives.</param>
     /// <param name="presence">The presence loop whose availability this gates.</param>
@@ -42,12 +44,14 @@ public sealed class PresenceCoordinator
         IMutableSupportBrokerClient broker,
         PresenceClient presence,
         bool initialAutoShare = false,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        Action? onCrashBacklogEligible = null)
     {
         _broker = broker;
         _presence = presence;
         AutoShareOnCrash = initialAutoShare;
         _log = log;
+        _onCrashBacklogEligible = onCrashBacklogEligible;
     }
 
     /// <summary>
@@ -76,5 +80,13 @@ public sealed class PresenceCoordinator
             $"autoShare={state.AutoShareOnCrash} " +
             $"identity={(_broker.IsConfigured ? "set" : "-")} " +
             $"radio={(state.RadioConnected ? state.RadioBoard ?? "?" : "-")} -> available={available}");
+
+        if (AutoShareOnCrash
+            && _broker.IsConfigured
+            && Interlocked.Exchange(ref _crashBacklogTriggered, 1) == 0)
+        {
+            try { _onCrashBacklogEligible?.Invoke(); }
+            catch (Exception ex) { _log?.Invoke($"crash backlog upload: trigger failed ({ex.GetType().Name})"); }
+        }
     }
 }

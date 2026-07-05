@@ -120,13 +120,18 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _boardKind = (int)HpsdrBoardKind.HermesLite2;
     private int _hasN2adr;      // 0 / 1
     private int _mox;           // 0 / 1
+    // Separate TUN latch (issue #1325). P1's wire MOX bit rises for both TUN
+    // and regular TX, so this internal flag is what ControlFrame consults to
+    // OR the per-band OcTune mask on top of OcTx only during TUN.
+    private int _tune;          // 0 / 1
     private int _drivePct;      // 0..100 UI percent; mapped to 0..255 on snapshot
     // When >= 0, RadioService has pushed a fully-computed drive byte (post PA
     // calibration) and we send that instead of the percent mapping. Legacy
     // callers that only call SetDrive(percent) keep working untouched.
     private int _driveByteOverride = -1;
-    private int _ocTxMask;      // user OC pin mask for TX (low 7 bits)
-    private int _ocRxMask;      // user OC pin mask for RX (low 7 bits)
+    // Packed OC masks: bits 0..6 TX, 8..14 RX, 16..22 TUN additive. Written as
+    // one int so the TX loop never observes a new-band OcTx with old-band OcTune.
+    private int _ocMasksPacked;
     // ATU auto-tune deadline (Environment.TickCount64). While now < this, the
     // DriveFilter frame asserts the auto-tune-start bit (C2[4]). 0 = idle.
     // Momentary so the tune request auto-releases without a second API call.
@@ -147,6 +152,13 @@ public sealed class Protocol1Client : IProtocol1Client
     // mi0bot console.cs:2084 (UI range -28..+31), networkproto1.c:1086-1088
     // (wire encoding).
     private int _hl2TxAttnDb = int.MinValue;
+    // HermesC10 (ANAN-G2E, P1) TX-time ADC attenuation in dB (0..31) —
+    // atten_on_Tx via C3[4:0] of the LnaTxGainStable (wire 0x1c) frame.
+    // Sentinel int.MinValue = "operator never set a value" → the wire emits
+    // 31, the silicon reset default (Hermes.v:2127), an honest no-op. NOT the
+    // same register / range / semantics as _hl2TxAttnDb above, so it gets its
+    // own field. See ControlFrame.CcState.PsTxAttnOnTxDb.
+    private int _psTxAttnOnTxDb = int.MinValue;
     // On-board CW keyer config (C&C 0x0B). Speed is the operator's WPM,
     // mode is CwKeyerMode (0=straight/1=A/2=B). Sent via the round-robin so
     // a dropped packet self-heals. Default mode 0 (straight) makes the write
@@ -166,12 +178,91 @@ public sealed class Protocol1Client : IProtocol1Client
     private long _droppedFrames;
     private long _totalFrames;
 
+    // ---- Single-ADC Hermes-family P1 PS safe-transition + observability (#1302) ----
+    // The C10 gateware applies a new receiver count INSTANTLY mid-frame
+    // (IF_last_chan <= IF_Rx_ctrl_4[5:3], Hermes.v:2151) into a free-running
+    // EP6 frame builder (num_loops 62<->18, Hermes_Tx_fifo_ctrl.v:140-152).
+    // One wrong-length frame permanently sync-shifts the byte stream against
+    // the frame-blind 1024-byte Tx_MAC packetizer (Tx_MAC.v:998,1026-1031) —
+    // the Tx FIFO is never cleared while run=1, so the corruption is
+    // PERMANENT and Zeus then silently discards 100% of EP6 (tester's
+    // "radio frozen" in #1302). Therefore the receiver count is NEVER
+    // flipped on a live stream: arm/disarm goes through
+    // RestartWithPsModeAsync (stop ×3 → drain ≥100 ms → reconfigure →
+    // pre-announce → start), modeled on piHPSDR old_protocol.c:2863-2921 /
+    // transmitter.c:2505-2511 ("do not change tx->puresignal unless the
+    // protocol is stopped").
+    private readonly SemaphoreSlim _psTransitionGate = new(1, 1);
+    private int _txPaused;              // 1 = TxLoop drops pacing ticks (transition window)
+    private int _rxDiscard;             // 1 = RxLoop discards datagrams (transition window)
+    private int _startHandshakeActive;  // 1 = RxLoop must not give up on RX timeouts
+    // F3 watchdog lifetime: a stale watchdog re-sending `start` inside a
+    // later transition's stop/drain window would restart the radio with the
+    // OLD receiver count — the exact condemned live flip. Every transition
+    // (and StopAsync) cancels the current watchdog before sending stop; the
+    // generation counter keeps a superseded watchdog's exit from clearing
+    // _startHandshakeActive under a newer one (last-writer-wins hazard).
+    private CancellationTokenSource? _handshakeCts;
+    private int _handshakeGeneration;
+    private long _ep2SendSeq;           // shared EP2 sequence: TxLoop + pre-announce frames
+    // Start-handshake (F3): after start, if no VALID parsed EP6 packet within
+    // the timeout, re-send start, up to Attempts total. Internal knobs so
+    // tests can shrink the wall-clock without weakening the logic.
+    internal int StartHandshakeTimeoutMs = 1000;
+    internal int StartHandshakeAttempts = 3;
+    internal int RxSoftRecoveryAttempts = 2;
+    internal int RxRecoveryTransitionGuardWaitMs = 2000;
+    internal int PsTransitionDrainMs = 120;
+    // PS feedback watchdog (F4): while PS is armed on C10, zero successfully
+    // parsed 4-DDC packets for this long — while datagrams ARE arriving —
+    // fires PsFeedbackStalled so RadioService can auto-disarm.
+    // INVARIANT: in production PsStallTimeoutMs MUST stay > the datagram
+    // window below. Both watchdog ticks are seeded together at (re)start, so
+    // with a FULLY dead radio they age in lockstep and the pair of
+    // conditions can never both hold — that is what routes "radio dead" to
+    // the RX-timeout teardown instead of a misleading stall auto-disarm.
+    // Tests that shrink PsStallTimeoutMs below 1000 must keep datagrams
+    // flowing (the misframed-stream scenario) or they will false-fire.
+    internal int PsStallTimeoutMs = 2000;
+    private const int PsStallDatagramWindowMs = 1000;
+    // 4-DDC parse observability (F5). Totals are Interlocked (read from any
+    // thread); the win* window counters are RX-thread-only.
+    private long _ps4DdcSyncFailTotal;
+    private long _ps4DdcOkTotal;
+    private long _ps4WinStartTicks;
+    private int _ps4WinDatagrams, _ps4WinOk, _ps4WinFail;
+    private bool _ps4FailWarned;
+    private long _lastPs4OkTicks;
+    private long _lastDatagramTicks;
+    private int _psStallFired;
+
     private Socket? _socket;
     private IPEndPoint? _remote;
     private Thread? _rxThread;
     private Task? _txTask;
     private CancellationTokenSource? _loopCts;
     private bool _disposed;
+
+    private static int PackOcMasks(byte txMask, byte rxMask, byte tuneMask) =>
+        (txMask & 0x7F)
+        | ((rxMask & 0x7F) << 8)
+        | ((tuneMask & 0x7F) << 16);
+
+    private static void UnpackOcMasks(int packed, out byte txMask, out byte rxMask, out byte tuneMask)
+    {
+        txMask = (byte)(packed & 0x7F);
+        rxMask = (byte)((packed >> 8) & 0x7F);
+        tuneMask = (byte)((packed >> 16) & 0x7F);
+    }
+
+    internal static bool UsesP1PsSafeTransition(HpsdrBoardKind board) =>
+        board is HpsdrBoardKind.HermesC10 or HpsdrBoardKind.HermesII;
+
+    private static bool UsesP1PsFourDdcLayout(HpsdrBoardKind board) =>
+        board == HpsdrBoardKind.HermesC10;
+
+    private static bool UsesP1PsTwoDdcLayout(HpsdrBoardKind board) =>
+        board == HpsdrBoardKind.HermesII;
 
     // TX IQ source: WDSP-TXA-driven ring in the live path (task #7/#8), or
     // the built-in test-tone when caller wants a bring-up carrier. Default is
@@ -200,6 +291,17 @@ public sealed class Protocol1Client : IProtocol1Client
     public long TotalFrames => Interlocked.Read(ref _totalFrames);
 
     public event Action? Disconnected;
+    /// <summary>Fires (at most once per stall, from the RX thread) when PS is
+    /// armed on a HermesC10 P1 stream and ZERO 4-DDC packets have parsed for
+    /// <see cref="PsStallTimeoutMs"/> while datagrams ARE still arriving — the
+    /// sync-shifted-stream fingerprint of issue #1302. RadioService subscribes
+    /// and auto-disarms PS through the normal StateDto flow. Handlers must not
+    /// block (RX thread).</summary>
+    public event Action? PsFeedbackStalled;
+    /// <summary>Monotonic count of 4-DDC EP6 packets that failed the
+    /// sync/framing parse since Start (issue #1302 observability — this was
+    /// previously a silent bare-return).</summary>
+    public long Ps4DdcSyncFailCount => Interlocked.Read(ref _ps4DdcSyncFailTotal);
     public event Action<TelemetryReading>? TelemetryReceived;
     public event Action<AdcOverloadStatus>? AdcOverloadObserved;
     public event Action<bool>? HardwarePttChanged;
@@ -347,8 +449,16 @@ public sealed class Protocol1Client : IProtocol1Client
     ///          demodulated to baseband).
     /// Pair DDC2 + DDC3 samples 1:1, accumulate 1024 paired complex samples,
     /// then emit a PsFeedbackFrame for the DspPipelineService pump.
+    /// <paramref name="micScratch"/> is RxLoop's per-thread mic scratch
+    /// (reused across packets, no per-packet alloc) for the codec radio-mic
+    /// relay — on a HermesC10 the TLV320 mic bytes keep riding each 26-byte
+    /// 4-DDC slot (offsets 24..25, Hermes_Tx_fifo_ctrl.v AD_SEND_PJ), so a
+    /// G2E operator on the radio-mic source keeps TX audio while PS is keyed.
     /// </summary>
-    private void HandlePs4DdcPacket(ReadOnlySpan<byte> packet)
+    /// <returns><c>true</c> when the packet parsed as a valid 4-DDC frame;
+    /// <c>false</c> on a sync/framing failure (counted by the caller — the
+    /// silent bare-return here was the #1302 observability blackout).</returns>
+    private bool HandlePs4DdcPacket(ReadOnlySpan<byte> packet, short[] micScratch)
     {
         int needed = 2 * PacketParser.Hl2Ps4DdcSamplesPerPacket;
         var ddc0 = ArrayPool<double>.Shared.Rent(needed);
@@ -364,7 +474,7 @@ public sealed class Protocol1Client : IProtocol1Client
                     out TelemetryReading telemetry0,
                     out TelemetryReading telemetry1,
                     out byte overloadBits))
-                return;
+                return false;
 
             Interlocked.Increment(ref _psPairedPacketCount);
             ObserveSequence(seq);
@@ -407,6 +517,22 @@ public sealed class Protocol1Client : IProtocol1Client
                 HpsdrSampleRate.Rate384k => 384_000,
                 _ => 48_000,
             };
+
+            // Codec mic / line-in relay (issue #992) — mirror the standard
+            // 1-DDC path so the radio-mic TX source doesn't go silent the
+            // instant PS keys. Gated on the attached handler exactly like
+            // RxLoop: no handler (Host source / no codec) → no work.
+            var micHandlerSnap = _radioMicHandler;
+            if (micHandlerSnap is not null)
+            {
+                int micCount = PacketParser.ExtractMicSamples4Ddc(packet, micScratch);
+                if (micCount > 0)
+                {
+                    try { micHandlerSnap(new ReadOnlySpan<short>(micScratch, 0, micCount), rateHz); }
+                    catch (Exception ex) { _log.LogWarning(ex, "p1.rx radio-mic handler threw"); }
+                }
+            }
+
             var memory = new ReadOnlyMemory<double>(rented, 0, 2 * samples);
             var frame = new IqFrame(memory, samples, rateHz, seq, NowNs());
             // iter5: if a synchronous sink is attached, hand the frame off
@@ -438,6 +564,20 @@ public sealed class Protocol1Client : IProtocol1Client
 
             // DDC2 → pscc RX, DDC3 → pscc TX. Mirror mi0bot cmaster.cs:8537-8538
             // (FOUR_DDC routing for HL2 with tot=5: psrx=2, pstx=3).
+            //
+            // Route to pscc ONLY while keyed — Thetis parity: the 4-DDC
+            // stream may run at rest (HermesC10 stays 4-DDC for the whole
+            // armed period), but Thetis's cmaster router assigns psrx/pstx
+            // only in the MOX+PS control states (console.cs GetDDC P1 states
+            // 5/7), so at rest DDC2/DDC3 are parsed and DISCARDED. Feeding
+            // rest-state silence into pscc would churn calcc's MOX-delay
+            // machinery for nothing. Reset the pairing accumulator on the
+            // keyed→unkeyed edge so a block never straddles two overs.
+            if (Volatile.Read(ref _mox) == 0)
+            {
+                _psBlockFill = 0;
+                return true;
+            }
             for (int s = 0; s < samples; s++)
             {
                 if (_psBlockFill == 0) _psBlockStartSeq = seq;
@@ -500,6 +640,7 @@ public sealed class Protocol1Client : IProtocol1Client
                     }
                 }
             }
+            return true;
         }
         finally
         {
@@ -510,6 +651,171 @@ public sealed class Protocol1Client : IProtocol1Client
             _ = publishedToIqChannel; // suppress unused warning
         }
     }
+
+    /// <summary>
+    /// Decode the ANAN-10E / HermesII P1 PS-armed 2-DDC EP6 layout. DDC0 remains
+    /// the live receiver/display stream and, while keyed with PS armed, is also
+    /// the coupler feedback stream for pscc. DDC1 carries the TX-DAC reference
+    /// under FPGA_PTT. At rest both DDCs are parsed for display hygiene but
+    /// discarded for pscc so feedback blocks never straddle overs.
+    /// </summary>
+    private bool HandlePs2DdcPacket(ReadOnlySpan<byte> packet, short[] micScratch)
+    {
+        int needed = 2 * PacketParser.TwoDdcSamplesPerPacket;
+        var ddc0 = ArrayPool<double>.Shared.Rent(needed);
+        var ddc1 = ArrayPool<double>.Shared.Rent(needed);
+        bool publishedToIqChannel = false;
+        try
+        {
+            if (!PacketParser.TryParse2DdcPacket(
+                    packet, ddc0, ddc1,
+                    out uint seq, out int samples,
+                    out TelemetryReading telemetry0,
+                    out TelemetryReading telemetry1,
+                    out byte overloadBits))
+                return false;
+
+            Interlocked.Increment(ref _psPairedPacketCount);
+            ObserveSequence(seq);
+            Interlocked.Increment(ref _totalFrames);
+
+            if (telemetry0.C0Address != 0)
+            {
+                try { TelemetryReceived?.Invoke(telemetry0); }
+                catch (Exception ex) { _log.LogWarning(ex, "TelemetryReceived handler threw"); }
+            }
+            if (telemetry1.C0Address != 0)
+            {
+                try { TelemetryReceived?.Invoke(telemetry1); }
+                catch (Exception ex) { _log.LogWarning(ex, "TelemetryReceived handler threw"); }
+            }
+            try { AdcOverloadObserved?.Invoke(AdcOverloadStatus.FromBits(overloadBits)); }
+            catch (Exception ex) { _log.LogWarning(ex, "AdcOverloadObserved handler threw"); }
+
+            UpdateHardwarePtt(PacketParser.ExtractHardwarePtt(packet));
+            UpdateCwKeyDown(PacketParser.ExtractCwKeyDown(packet));
+
+            var rented = ArrayPool<double>.Shared.Rent(2 * samples);
+            new ReadOnlySpan<double>(ddc0, 0, 2 * samples)
+                .CopyTo(rented.AsSpan(0, 2 * samples));
+            int rateHz = CurrentRateHz();
+
+            var micHandlerSnap = _radioMicHandler;
+            if (micHandlerSnap is not null)
+            {
+                int micCount = PacketParser.ExtractMicSamples2Ddc(packet, micScratch);
+                if (micCount > 0)
+                {
+                    try { micHandlerSnap(new ReadOnlySpan<short>(micScratch, 0, micCount), rateHz); }
+                    catch (Exception ex) { _log.LogWarning(ex, "p1.rx radio-mic handler threw"); }
+                }
+            }
+
+            var memory = new ReadOnlyMemory<double>(rented, 0, 2 * samples);
+            var frame = new IqFrame(memory, samples, rateHz, seq, NowNs());
+            var sinkSnap = Volatile.Read(ref _rxSink);
+            if (sinkSnap != null)
+            {
+                try
+                {
+                    sinkSnap.OnIqFrame(in frame);
+                    publishedToIqChannel = true;
+                }
+                catch (Exception ex)
+                {
+                    _log.LogError(ex, "p1.rx.sink_threw kind=iq");
+                    ArrayPool<double>.Shared.Return(rented);
+                }
+            }
+            else if (_channel.Writer.TryWrite(frame))
+            {
+                publishedToIqChannel = true;
+            }
+            else
+            {
+                ArrayPool<double>.Shared.Return(rented);
+            }
+
+            if (Volatile.Read(ref _mox) == 0)
+            {
+                _psBlockFill = 0;
+                return true;
+            }
+
+            for (int s = 0; s < samples; s++)
+            {
+                if (_psBlockFill == 0) _psBlockStartSeq = seq;
+                _psRxI[_psBlockFill] = (float)ddc0[2 * s];
+                _psRxQ[_psBlockFill] = (float)ddc0[2 * s + 1];
+                _psTxI[_psBlockFill] = (float)ddc1[2 * s];
+                _psTxQ[_psBlockFill] = (float)ddc1[2 * s + 1];
+                _psBlockFill++;
+
+                if (_psBlockFill >= PsFeedbackBlockSize)
+                {
+                    var txI = new float[PsFeedbackBlockSize];
+                    var txQ = new float[PsFeedbackBlockSize];
+                    var rxI = new float[PsFeedbackBlockSize];
+                    var rxQ = new float[PsFeedbackBlockSize];
+                    Array.Copy(_psTxI, txI, PsFeedbackBlockSize);
+                    Array.Copy(_psTxQ, txQ, PsFeedbackBlockSize);
+                    Array.Copy(_psRxI, rxI, PsFeedbackBlockSize);
+                    Array.Copy(_psRxQ, rxQ, PsFeedbackBlockSize);
+                    var psFrame = new PsFeedbackFrame(txI, txQ, rxI, rxQ, _psBlockStartSeq);
+                    var psSinkSnap = Volatile.Read(ref _rxSink);
+                    if (psSinkSnap != null)
+                    {
+                        try { psSinkSnap.OnPsFeedbackFrame(in psFrame); }
+                        catch (Exception ex) { _log.LogError(ex, "p1.rx.sink_threw kind=psfb"); }
+                    }
+                    else
+                    {
+                        _psFeedbackFrames.Writer.TryWrite(psFrame);
+                    }
+                    _psBlockFill = 0;
+
+                    if (++_psBlocksEmitted % 190 == 0)
+                    {
+                        float rxPk = 0f, txPk = 0f, rxAbs = 0f, txAbs = 0f;
+                        for (int j = 0; j < PsFeedbackBlockSize; j++)
+                        {
+                            float ari = Math.Abs(rxI[j]);
+                            float arq = Math.Abs(rxQ[j]);
+                            float ati = Math.Abs(txI[j]);
+                            float atq = Math.Abs(txQ[j]);
+                            if (ari > rxPk) rxPk = ari;
+                            if (arq > rxPk) rxPk = arq;
+                            if (ati > txPk) txPk = ati;
+                            if (atq > txPk) txPk = atq;
+                            rxAbs += ari + arq;
+                            txAbs += ati + atq;
+                        }
+                        _log.LogInformation(
+                            "p1.ps.fb DDC0(rx) peak={RxPk:F4} mean={RxMn:F4} | DDC1(tx) peak={TxPk:F4} mean={TxMn:F4} | blocks={N}",
+                            rxPk, rxAbs / (2 * PsFeedbackBlockSize),
+                            txPk, txAbs / (2 * PsFeedbackBlockSize),
+                            _psBlocksEmitted);
+                    }
+                }
+            }
+            return true;
+        }
+        finally
+        {
+            ArrayPool<double>.Shared.Return(ddc0);
+            ArrayPool<double>.Shared.Return(ddc1);
+            _ = publishedToIqChannel;
+        }
+    }
+
+    private int CurrentRateHz() => (HpsdrSampleRate)Volatile.Read(ref _rate) switch
+    {
+        HpsdrSampleRate.Rate48k => 48_000,
+        HpsdrSampleRate.Rate96k => 96_000,
+        HpsdrSampleRate.Rate192k => 192_000,
+        HpsdrSampleRate.Rate384k => 384_000,
+        _ => 48_000,
+    };
 
     public bool EnableHl2BandVolts
     {
@@ -528,56 +834,84 @@ public sealed class Protocol1Client : IProtocol1Client
             SendBufferSize = 64 * 1024,
             ReceiveTimeout = RxSocketTimeoutMs,
         };
-        sock.Bind(new IPEndPoint(LocalAddressForRemote(radioEndpoint.Address), 0));
+        DisableUdpConnReset(sock);
+        var localBind = LocalAddressForRemote(radioEndpoint.Address);
+        sock.Bind(new IPEndPoint(localBind, 0));
 
         _socket = sock;
         _remote = radioEndpoint;
-        _log.LogInformation("Protocol1 bound local={Local} remote={Remote}", sock.LocalEndPoint, radioEndpoint);
+        _log.LogInformation(
+            "p1.connect radio={Radio} localBind={LocalBind} local={Local}",
+            radioEndpoint.Address,
+            localBind.Equals(IPAddress.Any) ? "ANY (no subnet match)" : localBind.ToString(),
+            sock.LocalEndPoint);
+        if (NetworkAddressSelection.IsLinkLocal(radioEndpoint.Address))
+        {
+            _log.LogWarning(
+                "net.linklocal radio={Radio} - self-assigned address detected (direct-connect or DHCP-less segment); " +
+                "connection is functional but this topology is drop-prone; a switch with a DHCP router is recommended",
+                radioEndpoint.Address);
+        }
         return Task.CompletedTask;
     }
 
-    // When the radio is on a link-local address (169.254.0.0/16, direct-connect
-    // without a router), IPAddress.Any lets the OS pick the bind address — which
-    // on macOS is the default-route interface (Wi-Fi), a different subnet from the
-    // direct Ethernet link. The radio then streams IQ back to that unreachable
-    // address and Zeus gets nothing. Find the local link-local unicast on the same
-    // /16 and bind there instead so the Metis start command carries a reachable
-    // return address.
+    // Prefer the local IPv4 unicast whose subnet contains the radio. This
+    // subsumes the original link-local case (169.254.0.0/16 direct-connect /
+    // DHCP-less segment), where IPAddress.Any lets the OS pick the default-route
+    // interface and the radio streams IQ to an unreachable source address.
+    // Routers stay unchanged: no local subnet match means bind ANY.
     private static IPAddress LocalAddressForRemote(IPAddress remote)
     {
-        if (!IsLinkLocal(remote)) return IPAddress.Any;
+        return NetworkAddressSelection.FindLocalAddressForSubnet(remote, EnumerateLocalIpv4Addresses())
+               ?? IPAddress.Any;
+    }
+
+    private static IEnumerable<LocalIpv4Address> EnumerateLocalIpv4Addresses()
+    {
         foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (nic.OperationalStatus != OperationalStatus.Up) continue;
+            if (nic.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
             foreach (var uni in nic.GetIPProperties().UnicastAddresses)
             {
                 if (uni.Address.AddressFamily != AddressFamily.InterNetwork) continue;
-                if (!IsLinkLocal(uni.Address)) continue;
-                if (SameSubnet(remote, uni.Address, uni.IPv4Mask)) return uni.Address;
+                var mask = uni.IPv4Mask;
+                if (mask is null || mask.Equals(IPAddress.Any)) continue;
+                yield return new LocalIpv4Address(uni.Address, mask);
             }
         }
-        return IPAddress.Any;
     }
 
-    private static bool IsLinkLocal(IPAddress a)
+    // Windows surfaces ICMP port-unreachable as SocketError 10054 on the next recv.
+    // Disabling it at the ioctl level keeps transient radio-side UDP resets from
+    // poisoning the receive socket; the RxLoop ConnectionReset policy below is the
+    // fallback if the ioctl is unavailable.
+    private const int SIO_UDP_CONNRESET = -1744830452; // 0x9800000C
+
+    internal static void DisableUdpConnReset(Socket s)
     {
-        var b = a.GetAddressBytes();
-        return b[0] == 169 && b[1] == 254;
+        if (!OperatingSystem.IsWindows()) return;
+        try { s.IOControl(SIO_UDP_CONNRESET, new byte[4], null); }
+        catch (SocketException) { /* best effort */ }
     }
 
-    private static bool SameSubnet(IPAddress a, IPAddress b, IPAddress mask)
+    private enum StartWatchdogMode
     {
-        var ab = a.GetAddressBytes();
-        var bb = b.GetAddressBytes();
-        var mb = mask.GetAddressBytes();
-        for (int i = 0; i < 4; i++)
-            if ((ab[i] & mb[i]) != (bb[i] & mb[i])) return false;
-        return true;
+        InitialStart,
+        RxRecovery
     }
 
-    public Task StartAsync(StreamConfig config, CancellationToken ct)
+    public async Task StartAsync(StreamConfig config, CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        // Serialize with SetPsEnabledAsync / StopAsync (#1302): RadioService
+        // publishes ActiveClient before StartAsync completes, so a PS state
+        // change arriving during the connect handshake must queue behind the
+        // gate instead of interleaving a restart transition with our own
+        // pre-announce/start (orderings exist that re-create the live flip).
+        await _psTransitionGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
         if (_socket is null || _remote is null) throw new InvalidOperationException("Call ConnectAsync first.");
         if (_loopCts is not null) throw new InvalidOperationException("Already started.");
 
@@ -586,8 +920,43 @@ public sealed class Protocol1Client : IProtocol1Client
         Interlocked.Exchange(ref _attenDb, config.Atten.ClampedDb);
         Interlocked.Exchange(ref _droppedFrames, 0);
         Interlocked.Exchange(ref _totalFrames, 0);
+        ResetRxParserState();
 
         _loopCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+        // Single-ADC Hermes-family (#1302 F2): pre-announce the receiver count in EP2 C&C
+        // frames BEFORE the start command — piHPSDR old_protocol_run ordering
+        // (old_protocol.c:2887-2905, two double-Config packets before
+        // metis_start_stop(1)) / Thetis ForceCandCFrames (networkproto1.c:
+        // 106-130). The gateware decodes EP2 C&C regardless of `run`
+        // (Rx_MAC.v routes EP2 to SEND_TO_FIFO unconditionally; the Hermes.v
+        // SYNC state machine is gated only on IF_rst/IF_PHY_drdy), and
+        // IF_last_chan persists across stop/start (reset only by IF_rst =
+        // PLL/power). Without this, a radio still holding 4-DDC from a prior
+        // armed session would get its count flipped LIVE by our first Config
+        // frame — the exact mid-frame length change that permanently
+        // sync-shifts the EP6 stream. Combined with the PsEnabled seeding in
+        // RadioService.ConnectAsync (before StartAsync), a
+        // connect-while-armed starts DIRECTLY in 4-DDC with no transition.
+        // Gated to boards that change their EP6 frame geometry for PS; every
+        // other board's connect wire traffic is unchanged.
+        if (UsesP1PsSafeTransition(BoardKind))
+        {
+            // Connect hygiene (#1302): if a previous host session crashed or
+            // vanished while armed, the radio can STILL be streaming (run=1,
+            // its host-side ICMP never reached it). With run=1 the Tx_MAC
+            // keeps draining, no overflow-clear ever fires, and the
+            // pre-announce below would flip the count on a LIVE stream —
+            // permanent EP6 sync shift from packet one. Send stop ×3 first
+            // (idempotent, run <= 0), drain so the free-running builder
+            // overflows and Tx_fifo_clr realigns the FIFO at a frame
+            // boundary, and flush any stale queued datagrams so they cannot
+            // satisfy the F3 start handshake with old-format packets.
+            SendStartStop(start: false);
+            await Task.Delay(PsTransitionDrainMs, ct).ConfigureAwait(false);
+            FlushReceiveBuffer();
+            SendPreAnnounceConfigFrames();
+        }
 
         // Send Metis start. We send 3× on macOS to work around first-UDP-drop
         // (doc 02 §3).
@@ -601,37 +970,73 @@ public sealed class Protocol1Client : IProtocol1Client
         _rxThread.Start();
 
         _txTask = Task.Run(() => TxLoopAsync(_loopCts.Token), _loopCts.Token);
-        return Task.CompletedTask;
+
+        // Start-handshake robustness (#1302 F3): if no VALID (successfully
+        // parsed) EP6 packet arrives within ~1 s, re-send the start command,
+        // up to 3 attempts — piHPSDR retries the whole start sequence 10×
+        // (old_protocol.c:2894-2918). After the final failed attempt the
+        // existing consecutive-timeout teardown takes over unchanged.
+        BeginStartHandshakeWatchdog(_loopCts.Token, StartWatchdogMode.InitialStart);
+        }
+        finally
+        {
+            _psTransitionGate.Release();
+        }
     }
 
     public async Task StopAsync(CancellationToken ct)
     {
-        if (_loopCts is null) return;
+        var loopCts = _loopCts;
+        if (loopCts is null) return;
 
+        // Cancel FIRST so an in-flight PS transition parked in its drain
+        // delay aborts promptly (RestartWithPsModeAsync links its delay to
+        // this token and re-checks liveness before sending start), and kill
+        // any F3 handshake watchdog so a queued re-send can't restart the
+        // radio after the stop below (#1302 audit: teardown vs transition
+        // race left the radio streaming at an abandoned port).
         try
         {
-            _loopCts.Cancel();
+            loopCts.Cancel();
         }
         catch (ObjectDisposedException) { }
+        CancelStartHandshakeWatchdog();
 
-        SendStartStop(start: false);
-
-        if (_txTask is not null)
+        // Serialize with any in-flight transition: it holds the gate for a
+        // bounded window (stop + drain + pre-announce, and the cancel above
+        // short-circuits the drain), so wait unconditionally — the stop MUST
+        // go out even if the caller's ct is already cancelled.
+        await _psTransitionGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
         {
-            try { await _txTask.WaitAsync(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false); }
-            catch (OperationCanceledException) { }
-            catch (TimeoutException) { _log.LogWarning("TX loop did not exit within 2s."); }
+            // A concurrent StopAsync may have completed while we waited.
+            if (!ReferenceEquals(_loopCts, loopCts)) return;
+
+            Interlocked.Exchange(ref _mox, 0);
+            Interlocked.Exchange(ref _tune, 0);
+            SendStartStop(start: false);
+
+            if (_txTask is not null)
+            {
+                try { await _txTask.WaitAsync(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+                catch (TimeoutException) { _log.LogWarning("TX loop did not exit within 2s."); }
+            }
+
+            _rxThread?.Join(TimeSpan.FromSeconds(2));
+
+            loopCts.Dispose();
+            _loopCts = null;
+            _rxThread = null;
+            _txTask = null;
+
+            // Drain stale RX packets for ~100 ms per doc 02 §3.
+            await DrainSocketAsync(TimeSpan.FromMilliseconds(100)).ConfigureAwait(false);
         }
-
-        _rxThread?.Join(TimeSpan.FromSeconds(2));
-
-        _loopCts.Dispose();
-        _loopCts = null;
-        _rxThread = null;
-        _txTask = null;
-
-        // Drain stale RX packets for ~100 ms per doc 02 §3.
-        await DrainSocketAsync(TimeSpan.FromMilliseconds(100)).ConfigureAwait(false);
+        finally
+        {
+            _psTransitionGate.Release();
+        }
     }
 
     public Task DisconnectAsync(CancellationToken ct)
@@ -750,11 +1155,11 @@ public sealed class Protocol1Client : IProtocol1Client
     public void SetDriveByte(byte value) =>
         Interlocked.Exchange(ref _driveByteOverride, value);
 
-    public void SetOcMasks(byte txMask, byte rxMask)
-    {
-        Interlocked.Exchange(ref _ocTxMask, txMask & 0x7F);
-        Interlocked.Exchange(ref _ocRxMask, rxMask & 0x7F);
-    }
+    public void SetOcMasks(byte txMask, byte rxMask, byte tuneMask) =>
+        Interlocked.Exchange(ref _ocMasksPacked, PackOcMasks(txMask, rxMask, tuneMask));
+
+    public void SetTune(bool on) =>
+        Interlocked.Exchange(ref _tune, on ? 1 : 0);
 
     /// <summary>Request an ATU tune cycle: assert the Apollo/Alex auto-tune-start
     /// bit (DriveFilter C2[4]) on every outgoing frame for <paramref name="durationMs"/>
@@ -780,9 +1185,365 @@ public sealed class Protocol1Client : IProtocol1Client
     /// flag locally keeps the StateDto / engine in sync regardless of
     /// board so the round-tripping pumps don't get out of sync.
     /// </summary>
+    /// <remarks>
+    /// #1302: this synchronous setter only stores the flag. On a LIVE
+    /// HermesC10 stream the flag drives the EP6 packet shape (arm-scoped
+    /// 4-DDC), so flipping it live would change the receiver count mid-frame
+    /// and permanently sync-shift the radio's EP6 stream — callers with a
+    /// live C10 stream MUST use <see cref="SetPsEnabledAsync"/> instead,
+    /// which routes the change through the stop/drain/restart transition.
+    /// Legitimate direct uses: seeding the armed state BEFORE
+    /// <see cref="StartAsync"/> (connect-while-armed starts directly in
+    /// 4-DDC), HL2 (MOX-scoped flip is sync-safe in its gateware — fixed
+    /// 512-byte countdown builder, usopenhpsdr1.v:395-480), and boards with
+    /// no P1 PS path (flag is state-tracking only).
+    /// </remarks>
     public void SetPsEnabled(bool on)
     {
         Interlocked.Exchange(ref _psEnabled, on ? 1 : 0);
+    }
+
+    /// <summary>
+    /// Arm or disarm PureSignal, routing through the HermesC10 safe
+    /// transition when required (#1302). Idempotent: no transition (and no
+    /// wire traffic) when the client is already in the requested mode.
+    /// Single-flight: concurrent calls serialize on an internal gate.
+    /// On HL2 / other boards, or when no stream is live, this degrades to
+    /// the plain flag store of <see cref="SetPsEnabled"/>.
+    /// </summary>
+    public async Task SetPsEnabledAsync(bool on, CancellationToken ct = default)
+    {
+        await _psTransitionGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            bool current = Volatile.Read(ref _psEnabled) != 0;
+            if (current == on) return; // idempotent — reconnect resync no-op
+            bool live = _loopCts is not null && _socket is not null && _remote is not null;
+            if (!live || !UsesP1PsSafeTransition(BoardKind))
+            {
+                // HL2 keeps its shipped MOX-scoped behaviour (sync-safe by
+                // construction in its gateware); non-PS boards only track
+                // state; a not-yet-started client just seeds the flag so
+                // StartAsync announces the right count from packet one.
+                Interlocked.Exchange(ref _psEnabled, on ? 1 : 0);
+                return;
+            }
+            await RestartWithPsModeAsync(on, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _psTransitionGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// The #1302 safe transition: NEVER flip the P1 receiver count on a live
+    /// stream. Modeled on piHPSDR tx_ps_onoff → old_protocol_stop / 100 ms /
+    /// flip / old_protocol_run (transmitter.c:2505-2511, old_protocol.c:
+    /// 2863-2921). With run=0 the Tx_MAC stops draining, the free-running
+    /// EP6 builder overflows the FIFO within ms, AD_ERR fires Tx_fifo_clr at
+    /// a frame boundary — so on restart the byte stream is frame-aligned
+    /// again regardless of any prior sync shift.
+    /// Caller holds <see cref="_psTransitionGate"/>.
+    /// </summary>
+    private async Task RestartWithPsModeAsync(bool enable, CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+        // Liveness anchor: the drain delay below is linked to THIS loop's
+        // token so a concurrent StopAsync/Dispose (which cancels _loopCts
+        // before waiting on the gate) aborts the transition mid-drain instead
+        // of letting it send `start` into a session that is being torn down —
+        // that would leave the radio streaming ~5 k pkt/s at an abandoned
+        // port, recreating the #1302 reconnect failure.
+        var loopCts = _loopCts;
+        if (loopCts is null) return;
+        // A still-running F3 start-handshake watchdog belongs to the OLD
+        // stream; if it re-sent `start` inside our stop/drain window the
+        // radio would resume with the old receiver count and our
+        // pre-announce would land on a live stream — the condemned flip.
+        CancelStartHandshakeWatchdog();
+        _log.LogInformation(
+            "p1.ps.transition begin target={On} board={Board} — stop/drain/reconfigure/restart (#1302)",
+            enable, BoardKind);
+        // Pause EP2 (TX loop drops pacing ticks) and discard inbound
+        // datagrams for the whole window so stale frames from the old format
+        // never reach a parser configured for the new one.
+        Volatile.Write(ref _txPaused, 1);
+        Volatile.Write(ref _rxDiscard, 1);
+        try
+        {
+            SendStartStop(start: false); // stop is sent 3× on ALL platforms
+            // Drain ≥100 ms: let in-flight EP6 land (discarded above) and the
+            // radio's Tx FIFO overflow-clear settle at a frame boundary.
+            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, loopCts.Token))
+                await Task.Delay(PsTransitionDrainMs, linked.Token).ConfigureAwait(false);
+
+            // Atomically reconfigure while the stream is stopped: the numRx
+            // Config byte (SnapshotState) and the 4-DDC parser gate (RxLoop)
+            // both key off _psEnabled; the RX parser state (sequence
+            // tracking, PS pairing accumulator, watchdog latches) restarts
+            // clean exactly like piHPSDR's metis_offset=8 / current_rx=0.
+            Interlocked.Exchange(ref _psEnabled, enable ? 1 : 0);
+            ResetRxParserState();
+
+            // Re-check liveness before restarting the stream: if teardown
+            // began during the drain, leave the radio STOPPED (the flag flip
+            // above is harmless — the next StartAsync announces it cleanly).
+            if (_disposed || loopCts.IsCancellationRequested || !ReferenceEquals(_loopCts, loopCts))
+            {
+                _log.LogInformation(
+                    "p1.ps.transition target={On} aborted before restart — session stopping; radio left stopped",
+                    enable);
+                return;
+            }
+
+            // Pre-announce the new receiver count while run=0 (see
+            // StartAsync for the gateware evidence), then resume parsing
+            // BEFORE start so the first EP6 packet of the new format counts
+            // as the handshake's valid packet.
+            SendPreAnnounceConfigFrames();
+            Volatile.Write(ref _rxDiscard, 0);
+
+            SendStartStop(start: true);
+            BeginStartHandshakeWatchdog(loopCts.Token, StartWatchdogMode.InitialStart);
+        }
+        catch (OperationCanceledException) when (loopCts.IsCancellationRequested)
+        {
+            // StopAsync/Dispose cancelled the session mid-drain. The stop
+            // already went out; the radio is left stopped, which is exactly
+            // the state teardown wants.
+            _log.LogInformation(
+                "p1.ps.transition target={On} aborted by teardown during drain; radio left stopped", enable);
+        }
+        finally
+        {
+            Volatile.Write(ref _rxDiscard, 0);
+            Volatile.Write(ref _txPaused, 0);
+        }
+        _log.LogInformation(
+            "p1.ps.transition done target={On} stopToStart={Ms}ms", enable, sw.ElapsedMilliseconds);
+    }
+
+    /// <summary>
+    /// Reset all cross-packet RX parser state so a freshly (re)started EP6
+    /// stream is parsed from a clean slate: sequence-gap tracking (the radio
+    /// restarts EP6 sequence numbering), dropped-frame counters, the PS
+    /// pairing accumulator (partial 1024-sample block), the 4-DDC parse
+    /// stats window, and the stall-watchdog latches.
+    /// </summary>
+    private void ResetRxParserState()
+    {
+        _seenAnySequence = false;
+        _lastSeenSequence = 0;
+        Interlocked.Exchange(ref _droppedFrames, 0);
+        _psBlockFill = 0;
+        Interlocked.Exchange(ref _ps4DdcSyncFailTotal, 0);
+        Interlocked.Exchange(ref _ps4DdcOkTotal, 0);
+        _ps4WinStartTicks = 0;
+        _ps4WinDatagrams = 0;
+        _ps4WinOk = 0;
+        _ps4WinFail = 0;
+        _ps4FailWarned = false;
+        long now = Environment.TickCount64;
+        Volatile.Write(ref _lastPs4OkTicks, now);
+        Volatile.Write(ref _lastDatagramTicks, now);
+        Volatile.Write(ref _psStallFired, 0);
+    }
+
+    /// <summary>Next EP2 send-sequence value — shared between TxLoopAsync and
+    /// the pre-announce frames so the radio sees one monotonic stream
+    /// (piHPSDR likewise never resets send_sequence across run/stop).</summary>
+    private uint NextEp2Seq() => (uint)(Interlocked.Increment(ref _ep2SendSeq) - 1);
+
+    /// <summary>
+    /// Send two EP2 C&amp;C double-frames — (Config, TxFreq) then
+    /// (Config, RxFreq), 20 ms apart, zero IQ payload — mirroring the
+    /// piHPSDR old_protocol_run C1=0/2 + C1=0/4 pre-start packets
+    /// (old_protocol.c:2896-2903) and Thetis ForceCandCFrames. The Config
+    /// payload carries the CURRENT NumReceiversMinusOne so the radio's
+    /// persisted IF_last_chan is corrected before streaming (re)starts.
+    /// </summary>
+    private void SendPreAnnounceConfigFrames()
+    {
+        // Snapshot: DisconnectAsync can null/dispose the socket concurrently
+        // (e.g. the F3 watchdog raced a teardown) — never fault on that.
+        var sock = _socket;
+        var remote = _remote;
+        if (sock is null || remote is null) return;
+        var state = SnapshotState();
+        var buf = new byte[ControlFrame.PacketLength];
+        // The two 20 ms spacings are LOAD-BEARING, do not shrink: after the
+        // Config frame flips IF_last_chan the radio's free-running EP6
+        // builder must complete an overflow → Tx_fifo_clr cycle (~5.3 ms
+        // worst case at 48 k / 1-DDC, TX_FIFO 1024 words) so the FIFO
+        // realigns at a frame boundary before the start command lands.
+        // 2×20 ms also mirrors piHPSDR's usleep(20000) pre-start doubles
+        // (old_protocol.c:2896-2905).
+        ControlFrame.BuildDataPacket(buf, NextEp2Seq(), ControlFrame.CcRegister.Config, ControlFrame.CcRegister.TxFreq, in state);
+        try { sock.SendTo(buf, remote); }
+        catch (SocketException ex) { _log.LogWarning(ex, "p1.ps.preannounce send 1/2 failed"); }
+        catch (ObjectDisposedException) { return; }
+        Thread.Sleep(20);
+        ControlFrame.BuildDataPacket(buf, NextEp2Seq(), ControlFrame.CcRegister.Config, ControlFrame.CcRegister.RxFreq, in state);
+        try { sock.SendTo(buf, remote); }
+        catch (SocketException ex) { _log.LogWarning(ex, "p1.ps.preannounce send 2/2 failed"); }
+        catch (ObjectDisposedException) { return; }
+        Thread.Sleep(20);
+    }
+
+    /// <summary>Drop everything queued in the RX socket buffer (best-effort,
+    /// non-blocking). Used before (re)starting a HermesC10 stream so stale
+    /// datagrams from a previous run can't satisfy the F3 start handshake
+    /// or feed the parser old-format packets.</summary>
+    private void FlushReceiveBuffer()
+    {
+        var sock = _socket;
+        if (sock is null) return;
+        var scratch = new byte[PacketParser.PacketLength];
+        EndPoint any = new IPEndPoint(IPAddress.Any, 0);
+        try
+        {
+            while (sock.Available > 0)
+                sock.ReceiveFrom(scratch, ref any);
+        }
+        catch (SocketException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    /// <summary>
+    /// Start watchdog with two modes. InitialStart waits for the first valid
+    /// parsed EP6 packet after the caller's start command, then re-sends start
+    /// on a timeout up to <see cref="StartHandshakeAttempts"/> total attempts.
+    /// RxRecovery owns each bounded soft-recovery start re-send after an RX
+    /// silence budget is exhausted. While either mode is active, RxLoop
+    /// suppresses its consecutive-timeout give-up so the retries get their
+    /// chance; after the final failure the existing timeout-to-Disconnected
+    /// teardown fires unchanged.
+    /// </summary>
+    private void BeginStartHandshakeWatchdog(CancellationToken ct, StartWatchdogMode mode)
+    {
+        // Supersede any prior watchdog (see the _handshakeCts field comment):
+        // exactly one watchdog may own start re-sends at a time. Capture the
+        // token BEFORE publishing the CTS — a concurrent StopAsync could
+        // cancel+dispose it the instant it is visible, and .Token on a
+        // disposed CTS throws (a cancel-before-dispose token stays usable).
+        var mine = new CancellationTokenSource();
+        var mineToken = mine.Token;
+        var prev = Interlocked.Exchange(ref _handshakeCts, mine);
+        SafeCancelDispose(prev);
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, mineToken);
+        var token = linked.Token;
+        int gen = Interlocked.Increment(ref _handshakeGeneration);
+        Volatile.Write(ref _startHandshakeActive, 1);
+        long baseline = Interlocked.Read(ref _totalFrames);
+        int maxAttempts = mode == StartWatchdogMode.RxRecovery
+            ? Math.Max(1, RxSoftRecoveryAttempts)
+            : Math.Max(1, StartHandshakeAttempts);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                for (int attempt = 1; attempt <= maxAttempts; attempt++)
+                {
+                    if (mode == StartWatchdogMode.RxRecovery)
+                    {
+                        if (!await WaitForRxRecoveryGuardAsync(token).ConfigureAwait(false))
+                        {
+                            if (token.IsCancellationRequested) return;
+                            _log.LogWarning(
+                                "p1.rx.recover skipped - transition guard held for {Timeout}ms; firing Disconnected on next RX timeout",
+                                RxRecoveryTransitionGuardWaitMs);
+                            return;
+                        }
+                        _log.LogWarning(
+                            "p1.rx.recover attempt={Attempt}/{Max} - no RX packets from radio; re-sending start",
+                            attempt,
+                            maxAttempts);
+                        SendStartStop(start: true);
+                    }
+                    long deadline = Environment.TickCount64 + StartHandshakeTimeoutMs;
+                    while (Environment.TickCount64 < deadline)
+                    {
+                        if (token.IsCancellationRequested) return;
+                        if (Interlocked.Read(ref _totalFrames) > baseline)
+                        {
+                            if (mode == StartWatchdogMode.RxRecovery)
+                            {
+                                _log.LogInformation("p1.rx.recover ok attempt={Attempt}", attempt);
+                            }
+                            else if (attempt > 1)
+                            {
+                                _log.LogInformation("p1.start.handshake ok on attempt {Attempt}", attempt);
+                            }
+                            return;
+                        }
+                        await Task.Delay(50, token).ConfigureAwait(false);
+                    }
+                    if (mode == StartWatchdogMode.InitialStart && attempt < maxAttempts)
+                    {
+                        // Belt-and-braces: a PS transition cancels this
+                        // watchdog before its stop, but never re-send start
+                        // inside a transition window regardless — a start
+                        // there resumes the OLD receiver count mid-window.
+                        if (Volatile.Read(ref _txPaused) == 1 || Volatile.Read(ref _rxDiscard) == 1)
+                            continue;
+                        _log.LogWarning(
+                            "p1.start.handshake no valid EP6 within {Timeout}ms — re-sending start (attempt {Next}/{Max})",
+                            StartHandshakeTimeoutMs, attempt + 1, maxAttempts);
+                        SendStartStop(start: true);
+                    }
+                }
+                if (mode == StartWatchdogMode.RxRecovery)
+                {
+                    _log.LogWarning(
+                        "p1.rx.recover failed attempts={Max} - no RX packets after start re-sends; firing Disconnected on next RX timeout",
+                        maxAttempts);
+                }
+                else
+                {
+                    _log.LogWarning(
+                        "p1.start.handshake no valid EP6 after {Max} attempts — RX-timeout teardown takes over",
+                        maxAttempts);
+                }
+            }
+            catch (OperationCanceledException) { /* stop/dispose/superseded */ }
+            finally
+            {
+                // Generation guard: only the CURRENT watchdog may clear the
+                // RX give-up suppression — a superseded one exiting late
+                // must not strip it from its successor mid-retry.
+                if (Volatile.Read(ref _handshakeGeneration) == gen)
+                    Volatile.Write(ref _startHandshakeActive, 0);
+                linked.Dispose();
+            }
+        }, CancellationToken.None);
+
+        async Task<bool> WaitForRxRecoveryGuardAsync(CancellationToken token)
+        {
+            long start = Environment.TickCount64;
+            while (Volatile.Read(ref _txPaused) == 1 || Volatile.Read(ref _rxDiscard) == 1)
+            {
+                if (token.IsCancellationRequested)
+                    return false;
+                if (Environment.TickCount64 - start >= RxRecoveryTransitionGuardWaitMs)
+                    return false;
+                await Task.Delay(50, token).ConfigureAwait(false);
+            }
+            return true;
+        }
+    }
+
+    /// <summary>Cancel the current F3 start-handshake watchdog (if any) so it
+    /// cannot re-send a start command into a stop/drain window. Called by
+    /// <see cref="StopAsync"/> and at the top of the PS transition.</summary>
+    private void CancelStartHandshakeWatchdog() =>
+        SafeCancelDispose(Interlocked.Exchange(ref _handshakeCts, null));
+
+    private static void SafeCancelDispose(CancellationTokenSource? cts)
+    {
+        if (cts is null) return;
+        try { cts.Cancel(); } catch (ObjectDisposedException) { }
+        try { cts.Dispose(); } catch (ObjectDisposedException) { }
     }
 
     public bool PsEnabled => Volatile.Read(ref _psEnabled) != 0;
@@ -863,6 +1624,30 @@ public sealed class Protocol1Client : IProtocol1Client
         }
     }
 
+    public void SetPsTxAttenOnTxDb(int db)
+    {
+        // HermesC10 atten_on_Tx range is the 5-bit gateware field 0..31 dB
+        // (Hermes.v:2187 `atten_on_Tx <= IF_Rx_ctrl_3[4:0]`). ControlFrame.
+        // WriteLnaTxGainStablePayload writes the clamped value into C3[4:0]
+        // of the 0x1c frame on HermesC10 only.
+        int clamped = Math.Clamp(db, 0, 31);
+        Interlocked.Exchange(ref _psTxAttnOnTxDb, clamped);
+    }
+
+    public int PsTxAttenOnTxDb
+    {
+        // int.MinValue is the "never written" sentinel (see _psTxAttnOnTxDb
+        // decl). Surface it as 31 — the silicon reset default the payload
+        // writer also emits while unset (WriteLnaTxGainStablePayload) — so
+        // the PS-arm baseline sync reads the value the radio is actually
+        // holding, not a phantom 0.
+        get
+        {
+            int v = Volatile.Read(ref _psTxAttnOnTxDb);
+            return v == int.MinValue ? 31 : v;
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -882,7 +1667,11 @@ public sealed class Protocol1Client : IProtocol1Client
 
         bool psOn = Volatile.Read(ref _psEnabled) != 0;
         bool moxOn = Volatile.Read(ref _mox) != 0;
-        bool isHl2 = (HpsdrBoardKind)Volatile.Read(ref _boardKind) == HpsdrBoardKind.HermesLite2;
+        var board = (HpsdrBoardKind)Volatile.Read(ref _boardKind);
+        bool isHl2 = board == HpsdrBoardKind.HermesLite2;
+        bool isC10 = board == HpsdrBoardKind.HermesC10;
+        bool is10e = board == HpsdrBoardKind.HermesII;
+        UnpackOcMasks(Volatile.Read(ref _ocMasksPacked), out byte ocTxMask, out byte ocRxMask, out byte ocTuneMask);
         // Number of receivers requested in the Config payload (`(N-1) << 3`
         // in C4 bits [5:3]). mi0bot's HL2 path (Thetis console.cs:8186-8265)
         // uses **4 DDCs** during PS+MOX:
@@ -892,10 +1681,39 @@ public sealed class Protocol1Client : IProtocol1Client
         //   DDC2 → mix2_0+adcpipe[0] at TX freq → pscc "rx". On HL2 this
         //          is RF leakage of the radiated TX (no coupler hardware).
         //   DDC3 → mix2_2+tx_data_dac at TX freq → pscc "tx" (pre-PA DAC).
+        // HermesC10 (ANAN-G2E, P1) is classic Hermes v3.3 — the ORIGIN of
+        // this exact 4-DDC layout (`IF_last_chan = 3` required for RX4 to
+        // stream, Hermes.v:2151; Thetis console.cs:8634-8674 groups Hermes/
+        // HermesC10 with psrx=2, pstx=3). Same gate, same indices; the only
+        // semantic upgrade is that DDC2 is a real relay-routed sampler tap
+        // there instead of HL2's radiated leakage.
         // See HandlePs4DdcPacket above for the cross-reference to upstream
-        // gateware. Outside PS+MOX we stay at single-DDC so the existing
-        // 1-DDC EP6 packet shape and parser are bit-exact unchanged.
-        byte numRxMinus1 = (byte)(psOn && isHl2 && moxOn ? 3 : 0);
+        // gateware. Outside PS we stay at single-DDC so the existing 1-DDC
+        // EP6 packet shape and parser are bit-exact unchanged.
+        //
+        // GATE SEMANTICS DIFFER PER BOARD — deliberately:
+        //   HL2: 4-DDC only during PS+MOX (the shipped, field-working HL2
+        //        behaviour — do not touch).
+        //   HermesC10 (G2E): 4-DDC for the WHOLE armed period, keyed or not.
+        //   HermesII (10E): 2-DDC for the WHOLE armed period, keyed or not;
+        //        DDC0 is feedback/user RX and DDC1 is the TX-DAC reference while
+        //        FPGA_PTT is asserted.
+        //        Flipping the EP6 framing live at every TR edge is the
+        //        verified #1283 field failure (#1285): the Config register
+        //        rides only 2 of 16 C&C rotation phases, so the parser and
+        //        the radio disagreed about the packet shape for ~20-40 ms at
+        //        every key-down AND key-up — garbage parses plus a ~3.3×
+        //        TX-pacing error at every TX onset. No reference client
+        //        changes the P1 receiver count on a live stream: Thetis runs
+        //        the G2E at nddc=4 permanently (console.cs:8318-8322) and
+        //        piHPSDR switches only at PS-arm time behind a full protocol
+        //        stop/restart (transmitter.c:2504-2511). Arm-scoped framing
+        //        means the only format transitions happen at the arm/disarm
+        //        CLICK — unkeyed, where a brief self-healing mismatch window
+        //        costs a few ms of RX display, never TX.
+        byte numRxMinus1 = psOn
+            ? (byte)(is10e ? 1 : ((isHl2 && moxOn) || isC10 ? 3 : 0))
+            : (byte)0;
 
         return new(
             VfoAHz: Interlocked.Read(ref _vfoAHz),
@@ -907,11 +1725,13 @@ public sealed class Protocol1Client : IProtocol1Client
             EnableHl2BandVolts: Volatile.Read(ref _enableHl2BandVolts) != 0,
             AdcDitherEnabled: Volatile.Read(ref _adcDither) != 0,
             AdcRandomEnabled: Volatile.Read(ref _adcRandom) != 0,
-            Board: (HpsdrBoardKind)Volatile.Read(ref _boardKind),
+            Board: board,
             HasN2adr: Volatile.Read(ref _hasN2adr) != 0,
             DriveLevel: drive,
-            UserOcTxMask: (byte)Volatile.Read(ref _ocTxMask),
-            UserOcRxMask: (byte)Volatile.Read(ref _ocRxMask),
+            UserOcTxMask: ocTxMask,
+            UserOcRxMask: ocRxMask,
+            UserOcTuneMask: ocTuneMask,
+            TuneActive: Volatile.Read(ref _tune) != 0,
             PsEnabled: psOn,
             PsPredistortionValue: (byte)Volatile.Read(ref _psPredistortionValue),
             PsPredistortionSubindex: (byte)Volatile.Read(ref _psPredistortionSubindex),
@@ -921,6 +1741,10 @@ public sealed class Protocol1Client : IProtocol1Client
             // rx_step_attn to tx_step_attn. Sentinel int.MinValue means
             // untouched, fall through to the RX-side encoding above.
             Hl2TxAttnDb: Volatile.Read(ref _hl2TxAttnDb),
+            // HermesC10 atten_on_Tx — carried on the 0x1c frame's C3[4:0],
+            // scheduled only by the PS-armed rotation. Sentinel int.MinValue
+            // makes the writer emit 31 (silicon reset), never 0.
+            PsTxAttnOnTxDb: Volatile.Read(ref _psTxAttnOnTxDb),
             CwKeyerSpeedWpm: Volatile.Read(ref _cwKeyerSpeedWpm),
             CwKeyerMode: (CwKeyerMode)Volatile.Read(ref _cwKeyerMode),
             MicBoost: Volatile.Read(ref _micBoost) != 0,
@@ -954,11 +1778,16 @@ public sealed class Protocol1Client : IProtocol1Client
         // ReceiveFrom overload that fills a reusable SocketAddress in
         // place, eliminating the per-call allocation entirely.
         var sockAddr = new SocketAddress(sock.AddressFamily);
-        int consecutiveTimeouts = 0;
+        var failurePolicy = new RxFailurePolicy(ConsecutiveTimeoutsBeforeGiveUp);
+        int toleratedConnectionResets = 0;
+        long lastConnectionResetLogMs = 0;
         // TX-pacing counter — every Nth successfully-parsed RX packet signals
         // TxLoopAsync to emit one EP2 packet. N = rxRate / 48 kHz because the
         // HL2's TX DAC clock runs at a fixed 48 kHz regardless of the RX rate.
         int rxPktCounter = 0;
+        // HermesC10 PS pacing — fractional EP2 credit accumulator (exact
+        // 381 pkt/s release regardless of RX rate; see the 4-DDC branch).
+        double psTxCredit = 0.0;
 
         try
         {
@@ -971,23 +1800,7 @@ public sealed class Protocol1Client : IProtocol1Client
                 }
                 catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
                 {
-                    if (++consecutiveTimeouts >= ConsecutiveTimeoutsBeforeGiveUp)
-                    {
-                        if (OperatingSystem.IsWindows())
-                            _log.LogWarning(
-                                "p1.rx.timeout count={N} — no RX packets from radio. " +
-                                "If TX works but RX is silent, Windows Firewall may be blocking " +
-                                "inbound UDP. This is common when Tailscale or another VPN is " +
-                                "installed (it reclassifies the LAN adapter as Public network). " +
-                                "Temporarily disable Windows Firewall to confirm, then add a " +
-                                "permanent inbound rule for OpenhpsdrZeus.exe.",
-                                consecutiveTimeouts);
-                        else
-                            _log.LogWarning("p1.rx.timeout count={N} — no RX packets from radio", consecutiveTimeouts);
-                        try { Disconnected?.Invoke(); }
-                        catch (Exception handlerEx) { _log.LogWarning(handlerEx, "p1.rx Disconnected handler threw"); }
-                        return;
-                    }
+                    if (HandleTransientRxFailure(ex.SocketErrorCode)) return;
                     continue;
                 }
                 catch (ObjectDisposedException)
@@ -997,6 +1810,21 @@ public sealed class Protocol1Client : IProtocol1Client
                 catch (SocketException) when (ct.IsCancellationRequested)
                 {
                     return;
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+                {
+                    toleratedConnectionResets++;
+                    long nowMs = Environment.TickCount64;
+                    if (lastConnectionResetLogMs == 0 || nowMs - lastConnectionResetLogMs >= 1000)
+                    {
+                        lastConnectionResetLogMs = nowMs;
+                        _log.LogInformation(
+                            "p1.rx.connreset tolerated count={Count} consecutive={Consecutive}",
+                            toleratedConnectionResets,
+                            failurePolicy.ConsecutiveTransientFailures + 1);
+                    }
+                    if (HandleTransientRxFailure(ex.SocketErrorCode)) return;
+                    continue;
                 }
                 catch (SocketException ex)
                 {
@@ -1020,30 +1848,95 @@ public sealed class Protocol1Client : IProtocol1Client
                     catch (Exception handlerEx) { _log.LogWarning(handlerEx, "p1.rx Disconnected handler threw"); }
                     return;
                 }
-                consecutiveTimeouts = 0;
+                Volatile.Write(ref _lastDatagramTicks, Environment.TickCount64);
+                // NOTE: Ps4DdcHousekeeping (stall watchdog + 1 Hz stats) runs
+                // AFTER the parse outcome below, never here. Running it
+                // between the datagram-freshness write above and the parse
+                // would false-fire the stall watchdog on the first datagram
+                // after a ≥PsStallTimeoutMs gap that then resumes VALID — a
+                // network hiccup or a slow start-handshake would auto-disarm
+                // a healthy arm (#1302 audit).
 
-                if (n != PacketParser.PacketLength) continue;
+                // PS safe-transition window (#1302): the stream is stopped and
+                // being reconfigured — discard anything still in flight so a
+                // stale frame of the OLD format never reaches a parser already
+                // configured for the NEW one.
+                if (Volatile.Read(ref _rxDiscard) == 1) continue;
 
-                // PS-armed 4-DDC layout (HL2 only). HL2 emits the 26-byte-
-                // per-slot 4-DDC packet shape only when the last Config
-                // frame carried NumReceiversMinusOne=3 — and SnapshotState
-                // only requests that during MOX+PS+HL2. Outside that window
-                // the operator gets normal single-RX 8-byte packets, so the
-                // parser must follow the same gate (mi0bot Thetis
-                // console.cs:8186-8265 — the !_mox branch keeps single-DDC
-                // even with PS armed). Brief mismatch on MOX edges (1-3 ms
-                // while the new Config frame propagates) is tolerated;
-                // pscc resets cleanly on any garbage block via its
-                // MOX-delay state. The 4-DDC handler publishes DDC0 to
-                // the IqFrame channel (RX1 audio + panadapter stay alive)
-                // and DDC2/DDC3 to the PsFeedbackFrame channel.
-                if (Volatile.Read(ref _psEnabled) != 0
-                    && Volatile.Read(ref _mox) != 0
-                    && (HpsdrBoardKind)Volatile.Read(ref _boardKind) == HpsdrBoardKind.HermesLite2)
+                if (n != PacketParser.PacketLength)
                 {
-                    HandlePs4DdcPacket(buffer.AsSpan(0, n));
-                    // Pace the TX loop off the same RX clock so MOX TX
-                    // continues to fire while PS is armed.
+                    // Wrong-length datagrams still tick the armed-period
+                    // stats/watchdog — they can't refresh _lastPs4OkTicks, so
+                    // a flood of them while armed is correctly a stall.
+                    Ps4DdcHousekeeping();
+                    continue;
+                }
+
+                // PS-armed paired-DDC layouts. The radio emits
+                // the 26-byte-per-slot 4-DDC packet shape only when the last
+                // Config frame carried NumReceiversMinusOne=3 — and
+                // SnapshotState only requests that during MOX+PS on those two
+                // boards. HermesC10 (ANAN-G2E, P1) is classic Hermes v3.3,
+                // the origin of this exact framing (Hermes_Tx_fifo_ctrl.v:
+                // num_loops=18 for IF_last_chan=3), so the HL2 parser is
+                // reused wholesale. Outside that window the operator gets
+                // normal single-RX 8-byte packets, so the parser must follow
+                // the same gate (mi0bot Thetis console.cs:8186-8265 — the
+                // !_mox branch keeps single-DDC even with PS armed). Brief
+                // mismatch on MOX edges (1-3 ms while the new Config frame
+                // propagates) is tolerated; pscc resets cleanly on any
+                // garbage block via its MOX-delay state. The 4-DDC handler
+                // publishes DDC0 to the IqFrame channel (RX1 audio +
+                // panadapter stay alive) and DDC2/DDC3 to the
+                // PsFeedbackFrame channel.
+                var psBoard = (HpsdrBoardKind)Volatile.Read(ref _boardKind);
+                bool psEnabled = Volatile.Read(ref _psEnabled) != 0;
+                bool ps4DdcActive = psEnabled
+                    // Parser gate mirrors SnapshotState's NumReceiversMinusOne
+                    // gate EXACTLY (see the comment there): HL2 = PS+MOX only
+                    // (shipped behaviour, untouched); HermesC10 = the whole
+                    // armed period, keyed or not, so the packet shape never
+                    // changes at a TR edge (#1285).
+                    && (psBoard == HpsdrBoardKind.HermesC10
+                        || (psBoard == HpsdrBoardKind.HermesLite2
+                            && Volatile.Read(ref _mox) != 0));
+                if (ps4DdcActive)
+                {
+                    // #1302 F5: count parse outcomes — the old bare-return
+                    // discarded 100% of a sync-shifted stream with zero
+                    // evidence in the logs while `p1.tx.rate` stayed perfect.
+                    bool parsedOk = HandlePs4DdcPacket(buffer.AsSpan(0, n), micScratch);
+                    if (parsedOk)
+                    {
+                        failurePolicy.RecordSuccess();
+                        Interlocked.Increment(ref _ps4DdcOkTotal);
+                        Volatile.Write(ref _lastPs4OkTicks, Environment.TickCount64);
+                        Volatile.Write(ref _psStallFired, 0);
+                    }
+                    else
+                    {
+                        Interlocked.Increment(ref _ps4DdcSyncFailTotal);
+                    }
+                    // The 1 Hz window is flushed by Ps4DdcHousekeeping, which
+                    // is C10-gated — keep the window counters C10-gated too so
+                    // HL2's MOX-scoped bursts don't accumulate an unflushed
+                    // window across sessions.
+                    if (psBoard == HpsdrBoardKind.HermesC10)
+                    {
+                        _ps4WinDatagrams++;
+                        if (parsedOk) _ps4WinOk++;
+                        else _ps4WinFail++;
+                    }
+                    // Stall watchdog + 1 Hz stats — strictly AFTER the parse
+                    // outcome above, so a valid packet ending a long silent
+                    // gap refreshes _lastPs4OkTicks before the stall check
+                    // ever sees the fresh datagram timestamp (no false
+                    // auto-disarm on recovery; see the NOTE at the top of
+                    // the receive path).
+                    Ps4DdcHousekeeping();
+                    // Pace the TX loop off the same RX clock so EP2 (C&C at
+                    // rest, TX IQ during MOX) continues to fire while PS is
+                    // armed.
                     var psRateHz = (HpsdrSampleRate)Volatile.Read(ref _rate) switch
                     {
                         HpsdrSampleRate.Rate48k => 48_000,
@@ -1054,13 +1947,62 @@ public sealed class Protocol1Client : IProtocol1Client
                     };
                     // 4-DDC packets are 38 paired samples/packet, so the
                     // RX pkt rate is rateHz/38 (vs rateHz/126 for N=1).
-                    // Target TX pkt rate stays at 48k/126 ≈ 381. Rounded
-                    // division avoids the integer-truncation overshoot we
-                    // had earlier.
+                    // Target TX pkt rate stays at 48k/126 ≈ 381.
                     double rxPktsPerSec = psRateHz / (double)PacketParser.Hl2Ps4DdcSamplesPerPacket;
-                    int psTxDivider = Math.Max(1, (int)Math.Round(rxPktsPerSec / 381.0));
-                    if ((++rxPktCounter % psTxDivider) == 0)
+                    if (psBoard == HpsdrBoardKind.HermesC10)
                     {
+                        // Fractional accumulator — the rounded-integer divider
+                        // over/under-sends EP2 by up to ~10% depending on rate
+                        // (48k: 1263/381 = 3.315 → 3 → +10.5% oversend; 192k:
+                        // ~+2%), which drifts the radio's TX FIFO over a long
+                        // transmission. Accumulate exact credits instead:
+                        // release once per (rxPktsPerSec/381) packets on
+                        // average, error bounded by one packet.
+                        psTxCredit += 381.0 / rxPktsPerSec;
+                        if (psTxCredit >= 1.0)
+                        {
+                            psTxCredit -= 1.0;
+                            try { _txSignal.Release(); } catch (SemaphoreFullException) { }
+                        }
+                    }
+                    else
+                    {
+                        // HL2: shipped rounded-divider pacing, untouched.
+                        int psTxDivider = Math.Max(1, (int)Math.Round(rxPktsPerSec / 381.0));
+                        if ((++rxPktCounter % psTxDivider) == 0)
+                        {
+                            try { _txSignal.Release(); } catch (SemaphoreFullException) { }
+                        }
+                    }
+                    continue;
+                }
+
+                bool ps2DdcActive = psEnabled && UsesP1PsTwoDdcLayout(psBoard);
+                if (ps2DdcActive)
+                {
+                    bool parsedOk = HandlePs2DdcPacket(buffer.AsSpan(0, n), micScratch);
+                    if (parsedOk)
+                    {
+                        failurePolicy.RecordSuccess();
+                        Interlocked.Increment(ref _ps4DdcOkTotal);
+                        Volatile.Write(ref _lastPs4OkTicks, Environment.TickCount64);
+                        Volatile.Write(ref _psStallFired, 0);
+                    }
+                    else
+                    {
+                        Interlocked.Increment(ref _ps4DdcSyncFailTotal);
+                    }
+                    _ps4WinDatagrams++;
+                    if (parsedOk) _ps4WinOk++;
+                    else _ps4WinFail++;
+                    Ps4DdcHousekeeping();
+
+                    int psRateHz = CurrentRateHz();
+                    double rxPktsPerSec = psRateHz / (double)PacketParser.TwoDdcSamplesPerPacket;
+                    psTxCredit += 381.0 / rxPktsPerSec;
+                    if (psTxCredit >= 1.0)
+                    {
+                        psTxCredit -= 1.0;
                         try { _txSignal.Release(); } catch (SemaphoreFullException) { }
                     }
                     continue;
@@ -1083,6 +2025,7 @@ public sealed class Protocol1Client : IProtocol1Client
                 }
 
                 ObserveSequence(seq);
+                failurePolicy.RecordSuccess();
                 Interlocked.Increment(ref _totalFrames);
 
                 // Fire per-frame: each USB frame's C&C is processed independently,
@@ -1179,6 +2122,121 @@ public sealed class Protocol1Client : IProtocol1Client
         {
             _channel.Writer.TryComplete();
         }
+
+        bool HandleTransientRxFailure(SocketError code)
+        {
+            // Keep the armed-period observability + stall watchdog ticking even
+            // when no datagrams arrive at all, and count Windows ICMP reset
+            // echoes against the same budget as ordinary receive timeouts.
+            Ps4DdcHousekeeping();
+            var decision = failurePolicy.RecordSocketFailure(code, ct.IsCancellationRequested);
+            // Deliberate interplay: while a start watchdog is active, this may
+            // consume the StartSoftRestart decision unseen. That is intended
+            // for InitialStart: it already re-sent starts, and the next timeout
+            // after it clears fires Disconnected with the pre-change #1302 timing.
+            if (Volatile.Read(ref _startHandshakeActive) == 1
+                && decision is not RxFailureDecision.Exit)
+            {
+                return false;
+            }
+
+            switch (decision)
+            {
+                case RxFailureDecision.Continue:
+                    return false;
+                case RxFailureDecision.StartSoftRestart:
+                    BeginStartHandshakeWatchdog(ct, StartWatchdogMode.RxRecovery);
+                    return false;
+                case RxFailureDecision.Exit:
+                    return true;
+                case RxFailureDecision.Disconnect:
+                    if (OperatingSystem.IsWindows())
+                        _log.LogWarning(
+                            "p1.rx.timeout count={N} — no RX packets from radio. " +
+                            "If TX works but RX is silent, Windows Firewall may be blocking " +
+                            "inbound UDP. This is common when Tailscale or another VPN is " +
+                            "installed (it reclassifies the LAN adapter as Public network). " +
+                            "Temporarily disable Windows Firewall to confirm, then add a " +
+                            "permanent inbound rule for OpenhpsdrZeus.exe.",
+                            failurePolicy.ConsecutiveTransientFailures);
+                    else
+                        _log.LogWarning(
+                            "p1.rx.timeout count={N} — no RX packets from radio",
+                            failurePolicy.ConsecutiveTransientFailures);
+                    try { Disconnected?.Invoke(); }
+                    catch (Exception handlerEx) { _log.LogWarning(handlerEx, "p1.rx Disconnected handler threw"); }
+                    return true;
+                default:
+                    return false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Armed-period observability + stall watchdog (#1302 F4/F5). Called once
+    /// per RxLoop iteration — RX thread only. Call sites: the RX-timeout
+    /// branch, the wrong-length-datagram branch, and the 4-DDC branch AFTER
+    /// the parse outcome is recorded (ordering is load-bearing — a valid
+    /// packet ending a silent gap must refresh _lastPs4OkTicks before the
+    /// stall check runs, or recovery itself would trip the auto-disarm).
+    /// While PS is armed on a HermesC10:
+    ///  - emits a 1 Hz INFO line `p1.rx.ps4ddc pkts=… ok=… fail=… dropped=…`;
+    ///  - WARNs once (latched until parses recover) on a sustained window of
+    ///    parse failures with zero successes;
+    ///  - fires <see cref="PsFeedbackStalled"/> once when ZERO packets have
+    ///    parsed for <see cref="PsStallTimeoutMs"/> while datagrams are still
+    ///    arriving (a dead radio is the RX-timeout path's job, not ours).
+    /// </summary>
+    private void Ps4DdcHousekeeping()
+    {
+        var board = (HpsdrBoardKind)Volatile.Read(ref _boardKind);
+        if (Volatile.Read(ref _psEnabled) == 0
+            || !UsesP1PsSafeTransition(board)
+            || Volatile.Read(ref _rxDiscard) == 1)
+            return;
+
+        long now = Environment.TickCount64;
+        string stream = UsesP1PsTwoDdcLayout(board) ? "p1.rx.ps2ddc" : "p1.rx.ps4ddc";
+        if (_ps4WinStartTicks == 0) _ps4WinStartTicks = now;
+        if (now - _ps4WinStartTicks >= 1000)
+        {
+            _log.LogInformation(
+                "{Stream} pkts={Pkts} ok={Ok} fail={Fail} dropped={Dropped}",
+                stream,
+                _ps4WinDatagrams, _ps4WinOk, _ps4WinFail,
+                Interlocked.Read(ref _droppedFrames));
+            if (_ps4WinFail > 0 && _ps4WinOk == 0)
+            {
+                if (!_ps4FailWarned)
+                {
+                    _ps4FailWarned = true;
+                    _log.LogWarning(
+                        "{Stream} sustained sync-parse failure: {Fail} packets failed, 0 parsed in the last second — " +
+                        "EP6 stream is misframed (see issue #1302); every packet is being discarded",
+                        stream, _ps4WinFail);
+                }
+            }
+            else if (_ps4WinOk > 0)
+            {
+                _ps4FailWarned = false;
+            }
+            _ps4WinStartTicks = now;
+            _ps4WinDatagrams = 0;
+            _ps4WinOk = 0;
+            _ps4WinFail = 0;
+        }
+
+        if (now - Volatile.Read(ref _lastPs4OkTicks) >= PsStallTimeoutMs
+            && now - Volatile.Read(ref _lastDatagramTicks) <= PsStallDatagramWindowMs
+            && Interlocked.CompareExchange(ref _psStallFired, 1, 0) == 0)
+        {
+            _log.LogWarning(
+                "p1.ps.watchdog zero parsed paired-DDC packets for {Ms}ms while datagrams keep arriving — " +
+                "PS feedback stream is dead/misframed; requesting auto-disarm (#1302)",
+                PsStallTimeoutMs);
+            try { PsFeedbackStalled?.Invoke(); }
+            catch (Exception ex) { _log.LogWarning(ex, "PsFeedbackStalled handler threw"); }
+        }
     }
 
     private uint _lastSeenSequence;
@@ -1221,6 +2279,20 @@ public sealed class Protocol1Client : IProtocol1Client
         => PhaseRegisters(phase, mox, psArmed: false);
 
     /// <summary>
+    /// Whether the given snapshot selects the PS-armed 16-phase C&amp;C
+    /// rotation. True only when PS is armed AND the board actually has a P1
+    /// PS feedback path — HermesLite2 (mi0bot 4-DDC layout) or HermesC10
+    /// (ANAN-G2E, classic Hermes v3.3 — the origin of that same layout).
+    /// Every other P1 board stays on the 5-phase rotation even with
+    /// PsEnabled set, so its wire traffic is byte-identical to a disarmed
+    /// session (the 0x1c / RxFreq2-4 registers are never scheduled). Single
+    /// source of the predicate for TxLoopAsync and the rotation tests.
+    /// </summary>
+    internal static bool PsArmedRotation(in ControlFrame.CcState state)
+        => state.PsEnabled
+           && state.Board is HpsdrBoardKind.HermesLite2 or HpsdrBoardKind.HermesC10 or HpsdrBoardKind.HermesII;
+
+    /// <summary>
     /// Round-robin register selector. When <paramref name="psArmed"/> is true
     /// the rotation is widened to 16 phases and includes the HL2-PS
     /// registers — RxFreq2/3/4 (the four-DDC NCOs) and LnaTxGainStable
@@ -1243,7 +2315,7 @@ public sealed class Protocol1Client : IProtocol1Client
             int q = phase & 0xF;
             if (mox)
             {
-                // PS+MOX (HL2 4-DDC). Every 16-frame window emits each of
+                // PS+MOX (4-DDC). Every 16-frame window emits each of
                 // the nine PS-critical registers (Config, TxFreq, RxFreq,
                 // RxFreq2, RxFreq3, RxFreq4, LnaTxGainStable, Attenuator,
                 // DriveFilter) at least twice. RxFreq3/RxFreq4 carry the
@@ -1270,10 +2342,15 @@ public sealed class Protocol1Client : IProtocol1Client
                     _  => (ControlFrame.CcRegister.Config,     ControlFrame.CcRegister.RxFreq4),
                 };
             }
-            // PS armed but RX-only: cache RxFreq3 / RxFreq4 / LnaTxGainStable
-            // so the radio has them ready for the next MOX edge. Number-of-
-            // receivers in Config is 0 here so DDC2/DDC3 aren't streaming;
-            // these writes are harmless.
+            // PS armed but RX-only. On the HL2, Config carries
+            // NumReceiversMinusOne=0 here (4-DDC is MOX-scoped), so
+            // RxFreq3/RxFreq4/LnaTxGainStable are harmless pre-caching for
+            // the next MOX edge. On the HermesC10 the framing is ARM-scoped
+            // (NumReceiversMinusOne=3 for the whole armed period — see
+            // SnapshotState), so DDC2/DDC3 ARE streaming at rest: these same
+            // writes keep their NCOs tuned and the TX-time attenuation
+            // current, and the parser discards their rest-state samples
+            // (HandlePs4DdcPacket routes to pscc only while keyed).
             return q switch
             {
                 0  => (ControlFrame.CcRegister.Config,     ControlFrame.CcRegister.RxFreq),
@@ -1327,7 +2404,6 @@ public sealed class Protocol1Client : IProtocol1Client
         var sock = _socket!;
         var remote = _remote!;
         var buf = new byte[ControlFrame.PacketLength];
-        uint sendSeq = 0;
         int phase = 0;
         // Diagnostic: count packets per wall-second so we can verify the TX
         // rate actually lands near 381 pkt/s (HL2 48 kHz DAC / 126 pairs per
@@ -1340,28 +2416,39 @@ public sealed class Protocol1Client : IProtocol1Client
             while (!ct.IsCancellationRequested)
             {
                 await _txSignal.WaitAsync(ct).ConfigureAwait(false);
+                // PS safe-transition window (#1302): EP2 is paused while the
+                // stream is stopped/reconfigured — drop the pacing tick. The
+                // pre-announce frames are sent directly by the transition.
+                if (Volatile.Read(ref _txPaused) == 1) continue;
                 var state = SnapshotState();
-                // PS-armed rotation widens to 8 phases to fit the
-                // Predistortion (0x2b) register without crowding TxFreq.
-                // The phase counter wraps modulo whichever rotation is in
-                // effect, recomputed every tick so a mid-stream PS toggle
-                // doesn't lose its slot.
-                bool psArmed = state.PsEnabled && state.Board == HpsdrBoardKind.HermesLite2;
+                // PS-armed rotation widens to 16 phases to fit the four-DDC
+                // NCOs and the 0x1c register without crowding TxFreq. The
+                // phase counter wraps modulo whichever rotation is in effect,
+                // recomputed every tick so a mid-stream PS toggle doesn't
+                // lose its slot. HermesC10 (ANAN-G2E, P1) shares the HL2
+                // rotation verbatim — its LnaTxGainStable slots carry
+                // atten_on_Tx via the board-branched payload writer, and the
+                // RxFreq3/RxFreq4 slots it needs are already there.
+                bool psArmed = PsArmedRotation(in state);
                 var (first, second) = PhaseRegisters(phase, state.Mox, psArmed);
                 phase = psArmed ? ((phase + 1) & 0xF) : ((phase + 1) % 5);
-                ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource, _rxAudioSource);
+                ControlFrame.BuildDataPacket(buf, NextEp2Seq(), first, second, in state, _txIqSource, _rxAudioSource);
                 rateWindowPkts++;
                 var nowUtc = DateTime.UtcNow;
                 var elapsed = nowUtc - rateWindowStart;
                 if (elapsed >= TimeSpan.FromSeconds(1))
                 {
+                    UnpackOcMasks(Volatile.Read(ref _ocMasksPacked), out byte ocTxMask, out byte ocRxMask, out byte ocTuneMask);
                     _log.LogInformation(
-                        "p1.tx.rate pkts={Pkts} in {Ms:F0}ms = {Rate:F0} pkt/s (target 381) | wire: peak={Peak}/32767 mean={Mean} firstI={I} firstQ={Q} drv={Drv} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} mox={Mox}",
+                        "p1.tx.rate pkts={Pkts} in {Ms:F0}ms = {Rate:F0} pkt/s (target 381) | wire: peak={Peak}/32767 mean={Mean} firstI={I} firstQ={Q} drv={Drv} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocTune=0x{OcTune:X2} mox={Mox} tun={Tun} rxDropped={Dropped}",
                         rateWindowPkts, elapsed.TotalMilliseconds, rateWindowPkts / elapsed.TotalSeconds,
                         ControlFrame.LastPeakAbs, ControlFrame.LastMeanAbs,
                         ControlFrame.LastFirstI, ControlFrame.LastFirstQ, ControlFrame.LastDriveByte,
-                        (byte)Volatile.Read(ref _ocTxMask), (byte)Volatile.Read(ref _ocRxMask),
-                        Volatile.Read(ref _mox) != 0);
+                        ocTxMask, ocRxMask, ocTuneMask,
+                        Volatile.Read(ref _mox) != 0, Volatile.Read(ref _tune) != 0,
+                        // #1302 F5: surface the RX sequence-gap counter — it
+                        // was maintained but never logged anywhere.
+                        Interlocked.Read(ref _droppedFrames));
                     rateWindowStart = nowUtc;
                     rateWindowPkts = 0;
                 }
@@ -1383,16 +2470,31 @@ public sealed class Protocol1Client : IProtocol1Client
 
     private void SendStartStop(bool start)
     {
-        if (_socket is null || _remote is null) return;
+        // Snapshot: called from the F3 watchdog / transition tasks, which can
+        // race DisconnectAsync nulling+disposing the socket. An
+        // ObjectDisposedException escaping the watchdog's Task.Run would be
+        // an unobserved-task fault that silently kills the retry loop.
+        var sock = _socket;
+        var remote = _remote;
+        if (sock is null || remote is null) return;
         Span<byte> buf = stackalloc byte[64];
         ControlFrame.BuildStartStop(buf, start);
         byte[] heap = buf.ToArray();
-        // Send 3× on macOS (first-UDP-drop workaround). Harmless elsewhere.
-        int sends = OperatingSystem.IsMacOS() ? 3 : 1;
+        // Start: send 3× on macOS (first-UDP-drop workaround), 1× elsewhere —
+        // F3's handshake watchdog covers a lost start on every platform.
+        // Stop: ALWAYS send 3× (#1302 F1). A lost stop is not self-healing:
+        // the radio keeps streaming ~5 k pkt/s at a port Zeus may be about to
+        // abandon, Windows answers with ICMP port-unreachable, and the
+        // gateware clears `run` on ICMP type 3 (Rx_MAC.v:398-401) — a stale
+        // ICMP arriving after the NEXT start silently kills that session
+        // (the tester's "several attempts to reconnect"). Redundant stops are
+        // idempotent (run <= 0).
+        int sends = (!start || OperatingSystem.IsMacOS()) ? 3 : 1;
         for (int i = 0; i < sends; i++)
         {
-            try { _socket.SendTo(heap, _remote); }
+            try { sock.SendTo(heap, remote); }
             catch (SocketException ex) { _log.LogWarning(ex, "Start/stop send {I}/{N} failed", i + 1, sends); }
+            catch (ObjectDisposedException) { return; }
             if (sends > 1 && i < sends - 1) Thread.Sleep(30);
         }
     }

@@ -108,6 +108,30 @@ public sealed class HamClockServiceTests
     }
 
     [Fact]
+    public void ComputeStagingDir_StagesInSameParentAsInstallDir()
+    {
+        // Staging must share InstallDir's parent so Directory.Move is an
+        // in-filesystem rename — /tmp on Linux is frequently a separate mount
+        // (separate /home partition, tmpfs, btrfs subvolume) and cross-device
+        // rename fails with EXDEV → "Invalid cross-device link" (issue #1308).
+        var installDir = Path.Combine(Path.GetTempPath(), "zeus-hamclock-stage-" + Guid.NewGuid().ToString("N"), "hamclock");
+
+        var staging = HamClockService.ComputeStagingDir(installDir);
+
+        Assert.Equal(Path.GetDirectoryName(installDir), Path.GetDirectoryName(staging));
+        Assert.NotEqual(installDir, staging);
+        Assert.StartsWith("hamclock-stage-", Path.GetFileName(staging));
+    }
+
+    [Fact]
+    public void ComputeStagingDir_ProducesUniquePathsPerCall()
+    {
+        var installDir = Path.Combine(Path.GetTempPath(), "zeus-hamclock-stage-" + Guid.NewGuid().ToString("N"), "hamclock");
+
+        Assert.NotEqual(HamClockService.ComputeStagingDir(installDir), HamClockService.ComputeStagingDir(installDir));
+    }
+
+    [Fact]
     public void ReadEnvPortFromContent_UsesFirstUncommentedPort()
     {
         const string env = """

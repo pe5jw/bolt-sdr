@@ -57,6 +57,8 @@ HttpSupportBrokerClient? broker = null;
 PresenceCoordinator? coordinator = null;
 Task presenceTask = Task.CompletedTask;
 Task ipcTask = Task.CompletedTask;
+Task? crashBacklogTask = null;
+object crashBacklogLock = new();
 
 if (endpoints is not null)
 {
@@ -74,10 +76,35 @@ if (endpoints is not null)
         broker,
         initiallyAvailable: false,
         log: msg => Breadcrumb(opts, msg));
+    void StartCrashBacklogUpload()
+    {
+        lock (crashBacklogLock)
+        {
+            if (crashBacklogTask is not null) return;
+            crashBacklogTask = Task.Run(async () =>
+            {
+                try
+                {
+                    await CrashBacklogUploader.UploadEligibleAsync(
+                            opts.CrashDir,
+                            broker,
+                            msg => Breadcrumb(opts, msg),
+                            CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Breadcrumb(opts, $"crash backlog upload: error ({ex.GetType().Name})");
+                }
+            });
+        }
+    }
+
     coordinator = new PresenceCoordinator(
         broker, presence,
         initialAutoShare: opts.AutoShareOnCrash,
-        log: msg => Breadcrumb(opts, msg));
+        log: msg => Breadcrumb(opts, msg),
+        onCrashBacklogEligible: StartCrashBacklogUpload);
     presenceTask = presence.RunAsync(cts.Token);
 
     var listener = new SupportIpcListener(
@@ -130,6 +157,8 @@ try
     string? recordJson = written is not null ? TryReadAllText(written) : null;
     var outcome = await CrashAutoShare.TryShareAsync(autoShareEnabled, recordJson, shareBroker, CancellationToken.None)
         .ConfigureAwait(false);
+    if (outcome == CrashShareOutcome.Uploaded && written is not null)
+        CrashBacklogUploader.MarkUploaded(written);
     Breadcrumb(opts, $"crash auto-share: {outcome}");
 }
 catch (Exception ex)

@@ -205,6 +205,10 @@ export function startMidiLearn(signal?: AbortSignal): Promise<MidiStatus> {
   return jsonFetch('/api/midi/learn/start', { method: 'POST', signal }, normalizeStatus);
 }
 
+export function keepAliveMidiLearn(signal?: AbortSignal): Promise<MidiStatus> {
+  return jsonFetch('/api/midi/learn/keepalive', { method: 'POST', signal }, normalizeStatus);
+}
+
 export function stopMidiLearn(signal?: AbortSignal): Promise<MidiStatus> {
   return jsonFetch('/api/midi/learn/stop', { method: 'POST', signal }, normalizeStatus);
 }

@@ -36,6 +36,9 @@ public sealed class PluginSettingsStore : IDisposable
         _log?.LogInformation("PluginSettingsStore initialised at {Path}", dbPath);
     }
 
+    public string DataDirectory =>
+        Path.GetDirectoryName(Path.GetFullPath(_dbPath)) ?? Directory.GetCurrentDirectory();
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         WriteIndented = false,
@@ -96,6 +99,15 @@ public sealed class PluginSettingsStore : IDisposable
                 coll.DeleteMany(x => x.Key == kv.Key);
                 coll.Insert(new SettingDoc { Key = kv.Key, JsonValue = kv.Value });
             }
+        }
+    }
+
+    public void DropCollection(string pluginId)
+    {
+        if (string.IsNullOrWhiteSpace(pluginId)) return;
+        lock (_lock)
+        {
+            _db.DropCollection(CollectionName(pluginId));
         }
     }
 

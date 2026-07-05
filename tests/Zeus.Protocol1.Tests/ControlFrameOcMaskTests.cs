@@ -31,7 +31,12 @@ namespace Zeus.Protocol1.Tests;
 // switching on the wire — worth pinning.
 public class ControlFrameOcMaskTests
 {
-    private static ControlFrame.CcState BaseState(byte userTx = 0, byte userRx = 0, bool mox = false) =>
+    private static ControlFrame.CcState BaseState(
+        byte userTx = 0,
+        byte userRx = 0,
+        bool mox = false,
+        byte userTune = 0,
+        bool tune = false) =>
         new(
             VfoAHz: 7_100_000, // 40m — N2adrBands.RxOcMask returns 0x44 (pins 3+7)
             Rate: HpsdrSampleRate.Rate48k,
@@ -44,7 +49,9 @@ public class ControlFrameOcMaskTests
             HasN2adr: true,
             DriveLevel: 0,
             UserOcTxMask: userTx,
-            UserOcRxMask: userRx);
+            UserOcRxMask: userRx,
+            UserOcTuneMask: userTune,
+            TuneActive: tune);
 
     private static byte WriteConfigC2(ControlFrame.CcState state)
     {
@@ -87,6 +94,61 @@ public class ControlFrameOcMaskTests
         // bit 0 (class-E) stays 0; bits 1..7 carry 0x44 | 0x7F = 0x7F → << 1 = 0xFE.
         Assert.Equal(0, c2 & 0x01);
         Assert.Equal((byte)0xFE, c2);
+    }
+
+    [Fact]
+    public void Tune_Mask_Ors_On_Top_Of_Tx_When_Tune_Active()
+    {
+        // OcTune = 0x02 (pin 2). During TUN, wire = N2ADR | OcTx | OcTune.
+        // 0x44 | 0x01 | 0x02 = 0x47 → << 1 = 0x8E.
+        var state = BaseState(userTx: 0x01, userTune: 0x02, mox: true, tune: true);
+        Assert.Equal((byte)0x8E, WriteConfigC2(state));
+    }
+
+    [Fact]
+    public void Tune_Mask_Ignored_During_Regular_Mox_Without_Tune_Flag()
+    {
+        // Regular TX (MOX with TuneActive=false): OcTune must NOT contribute.
+        // 0x44 | 0x01 = 0x45 → << 1 = 0x8A — identical to the pre-#1325 wire.
+        var state = BaseState(userTx: 0x01, userTune: 0x40, mox: true, tune: false);
+        Assert.Equal((byte)0x8A, WriteConfigC2(state));
+    }
+
+    [Fact]
+    public void Tune_Mask_Ignored_When_Not_Mox()
+    {
+        // TuneActive is only meaningful under MOX (P1's TUN flow raises MOX
+        // too). With MOX off, OC RX is used and OcTune is dormant.
+        // 0x44 | 0x02 = 0x46 → << 1 = 0x8C.
+        var state = BaseState(userRx: 0x02, userTune: 0x40, mox: false, tune: true);
+        Assert.Equal((byte)0x8C, WriteConfigC2(state));
+    }
+
+    [Fact]
+    public void Tune_Mask_Additive_Never_Replaces_Band_Select_Bits()
+    {
+        // Regression guard on the safety invariant that separates this
+        // per-band additive OcTune from the removed global "OCtune" override
+        // (#124): OcTx bits must still appear in the wire mask under TUN
+        // regardless of what OcTune adds. 0x44 (N2ADR 40m) | 0x50 (OcTx pins
+        // 5+7) | 0x02 (OcTune pin 2) = 0x56 → << 1 = 0xAC.
+        var state = BaseState(userTx: 0x50, userTune: 0x02, mox: true, tune: true);
+        byte c2 = WriteConfigC2(state);
+        // OcTx pin bits survive: pin 5 (0x10<<1 = 0x20) and pin 7 (0x40<<1 = 0x80).
+        Assert.NotEqual(0, c2 & 0x20);
+        Assert.NotEqual(0, c2 & 0x80);
+    }
+
+    [Fact]
+    public void Tune_Mask_Above_7_Bits_Ignored()
+    {
+        // Bit 7 in the OcTune payload must be masked off — the wire pin bar
+        // is 7-bit and bit 0 of C2 is class-E, not an OC pin.
+        var state = BaseState(userTx: 0x01, userTune: 0x80, mox: true, tune: true);
+        byte c2 = WriteConfigC2(state);
+        // Only pin 1 (from OcTx) and N2ADR bits should contribute.
+        // 0x44 | 0x01 = 0x45 → << 1 = 0x8A.
+        Assert.Equal((byte)0x8A, c2);
     }
 
     [Fact]

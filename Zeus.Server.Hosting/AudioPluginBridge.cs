@@ -489,8 +489,8 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             _rxOrderChangedHandler = null;
         }
 
-        if (_pipeline.CurrentEngine is WdspDspEngine wdsp)
-            wdsp.SetTxAudioPluginHandler(null);
+        if (_pipeline.CurrentEngine is ITxAudioPluginHost txHost)
+            txHost.SetTxAudioPluginHandler(null);
 
         // Tear down the RX insert seam regardless of engine type — it lives on
         // DspPipelineService, not the engine.
@@ -509,20 +509,20 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
 
     private void AttachToEngine(IDspEngine engine)
     {
-        // The realtime seam is WdspDspEngine-only; SyntheticDspEngine has
-        // no TX block to intercept. Skip the install and let the chain
-        // sit idle until the next engine swap.
-        if (engine is not WdspDspEngine wdsp)
+        // The realtime seam exists only on engines with a real TXA block.
+        // SyntheticDspEngine has no TX path; disconnected preview uses a
+        // composite engine that still exposes this host interface.
+        if (engine is not ITxAudioPluginHost txHost)
         {
-            _log.LogDebug("Engine {Type} not WdspDspEngine; audio plugin bridge idle", engine.GetType().Name);
+            _log.LogDebug("Engine {Type} has no TX audio plugin host; audio plugin bridge idle", engine.GetType().Name);
             _engineIsWdsp = false;
             RefreshPreviewEnabled();
             return;
         }
-        wdsp.SetTxAudioPluginHandler(Process);
+        txHost.SetTxAudioPluginHandler(Process);
         _engineIsWdsp = true;
         RefreshPreviewEnabled();
-        _log.LogInformation("Audio plugin handler installed on WdspDspEngine.");
+        _log.LogInformation("Audio plugin handler installed on {Type}.", engine.GetType().Name);
     }
 
     /// <summary>WDSP TX-path entry point — never allocates, never logs.</summary>

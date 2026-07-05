@@ -82,12 +82,27 @@ public static class CrashCapture
                          .OrderByDescending(f => f, StringComparer.Ordinal) // filename is time-sortable
                          .Skip(MaxRetainedRecords))
             {
-                try { File.Delete(stale); } catch { /* best effort */ }
+                TryDeleteWithMarker(stale);
+            }
+
+            foreach (var marker in Directory.GetFiles(crashDir, "crash-*.json.uploaded"))
+            {
+                var record = marker[..^".uploaded".Length];
+                if (!File.Exists(record))
+                {
+                    try { File.Delete(marker); } catch { /* best effort */ }
+                }
             }
         }
         catch
         {
             // Pruning is housekeeping; never let it surface.
         }
+    }
+
+    private static void TryDeleteWithMarker(string recordPath)
+    {
+        try { File.Delete(recordPath); } catch { /* best effort */ }
+        try { File.Delete(CrashBacklogUploader.UploadedMarkerPath(recordPath)); } catch { /* best effort */ }
     }
 }

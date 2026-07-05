@@ -16,6 +16,7 @@ import {
   fetchInstalledPlugins,
   fetchRegistry,
   installPlugin,
+  registryEntryToManagedPlugin,
   uninstallPlugin,
   type InstallRequest,
   type PluginDto,
@@ -24,6 +25,7 @@ import {
   type UninstallResult,
 } from '../api/plugins';
 import { reloadInstalledPluginUis } from '../runtime/pluginRuntime';
+import { pluginAccessFor } from '../../state/user-access-store';
 
 type LoadState = {
   loaded: boolean;
@@ -38,8 +40,11 @@ const INITIAL_LOAD: LoadState = {
 };
 
 export type PluginsStoreState = {
-  // Installed plugins
+  // Installed Zeus plugin-repo plugins. Operator-scanned VST3 / AU wrappers
+  // are split into installedVsts so the plugin store can show them separately.
   installed: PluginDto[];
+  installedVsts: PluginDto[];
+  blocked: PluginDto[];
   sdkAbi: number;
   sdkVersion: string;
   installedLoad: LoadState;
@@ -72,6 +77,35 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** How long the "Installed …" confirmation stays visible before the reload. */
+const POST_INSTALL_RELOAD_DELAY_MS = 1200;
+
+/**
+ * Full app reload after a successful plugin install — the automatic
+ * equivalent of the operator hard-refreshing (Ctrl/Cmd+Shift+R). A freshly
+ * installed plugin's backend routes go live immediately, but frontend state
+ * that was decided at boot (per-plugin gate probes, mode buttons, panel
+ * wake-up) can be stale until the app re-runs its boot path; reloading is the
+ * one mechanism that refreshes ALL of it, for every plugin, on every
+ * platform (the desktop webview and the browser reload identically).
+ * The delay lets the "Installed X — reloading" confirmation render first.
+ *
+ * `reload` is injectable for tests; jsdom's location.reload throws.
+ */
+export function schedulePostInstallReload(
+  reload: () => void = () => window.location.reload(),
+  delayMs: number = POST_INSTALL_RELOAD_DELAY_MS,
+): void {
+  if (import.meta.env.MODE === 'test') return;
+  setTimeout(() => {
+    try {
+      reload();
+    } catch {
+      // Non-browser host (tests, SSR) — nothing to reload.
+    }
+  }, delayMs);
+}
+
 async function refreshRuntimePanels() {
   try {
     await reloadInstalledPluginUis();
@@ -92,6 +126,8 @@ async function refreshRuntimePanels() {
 
 export const usePluginsStore = create<PluginsStoreState>((set, get) => ({
   installed: [],
+  installedVsts: [],
+  blocked: [],
   sdkAbi: 0,
   sdkVersion: '',
   installedLoad: { ...INITIAL_LOAD },
@@ -115,12 +151,17 @@ export const usePluginsStore = create<PluginsStoreState>((set, get) => ({
     set({ installedLoad: { ...INITIAL_LOAD, inflight: true } });
     try {
       const resp: PluginListResponse = await fetchInstalledPlugins();
+      const entitled = resp.plugins.filter((p) => pluginAccessFor(p.id, p.scanned).allowed);
+      const blocked = resp.plugins.filter((p) => !p.scanned && !pluginAccessFor(p.id, p.scanned).allowed);
       set({
         // Operator-scanned VST3 / AU plugins (resp.plugins[].scanned) live in
-        // the Audio Suite rack only — they are not Zeus plugin-repo plugins, so
-        // the Settings ▸ Plugins list excludes them. The Audio Suite has its own
-        // consumer (pluginRuntime.fetchInstalledPlugins) that still sees them.
-        installed: resp.plugins.filter((p) => !p.scanned),
+        // their own Settings ▸ Plugins ▸ VSTs tab — they are not Zeus
+        // plugin-repo plugins, so the main Installed list excludes them. The
+        // Audio Suite has its own consumer (pluginRuntime.fetchInstalledPlugins)
+        // that still sees the full server list.
+        installed: entitled.filter((p) => !p.scanned),
+        installedVsts: entitled.filter((p) => p.scanned),
+        blocked,
         sdkAbi: resp.sdkAbi,
         sdkVersion: resp.sdkVersion,
         installedLoad: { loaded: true, inflight: false, loadError: null },
@@ -165,15 +206,26 @@ export const usePluginsStore = create<PluginsStoreState>((set, get) => ({
       lastInstallOk: null,
     });
     try {
+      if (req.source === 'registry' && req.id) {
+        const entry = get().registry?.plugins.find((plugin) => plugin.id === req.id) ?? null;
+        const access = pluginAccessFor(req.id, false, entry ? registryEntryToManagedPlugin(entry) : null);
+        if (!access.allowed) {
+          throw new Error(access.reason ?? 'Plugin subscription required');
+        }
+      }
       const dto = await installPlugin(req);
       set({
         installInflight: false,
         lastInstallError: null,
-        lastInstallOk: `Installed ${dto.name} ${dto.version}`,
+        lastInstallOk: `Installed ${dto.name} ${dto.version} — reloading…`,
       });
       // Refresh the installed list so the new plugin appears immediately.
       await get().refreshInstalled();
       await refreshRuntimePanels();
+      // Then reload the whole app so every boot-time gate (plugin probes,
+      // mode buttons, dormant panels) picks the new plugin up — the automatic
+      // hard-refresh operators otherwise had to do by hand.
+      schedulePostInstallReload();
       return dto;
     } catch (err) {
       set({

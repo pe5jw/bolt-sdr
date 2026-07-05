@@ -46,6 +46,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { _resetFrameConsumerCount, registerFrameConsumer } from '../state/display-store';
 import {
+  MSG_TYPE_DIAGNOSTICS_HEALTH,
   MSG_TYPE_DISPLAY_STREAM_REQUEST,
   MSG_TYPE_MIC_PCM,
   MSG_TYPE_RX_AUDIO_MASTER_BYPASS,
@@ -188,7 +189,7 @@ describe('sendMicPcm', () => {
       if (!(sentBuf instanceof ArrayBuffer)) throw new Error('expected ArrayBuffer');
       const view = new DataView(sentBuf);
       expect(view.getUint8(0)).toBe(MSG_TYPE_DISPLAY_STREAM_REQUEST);
-      expect(view.getUint8(1)).toBe(1);
+      expect(view.getUint8(1)).toBe(2);
     } finally {
       stop();
       release();
@@ -210,7 +211,7 @@ describe('sendMicPcm', () => {
       if (!(sentBuf instanceof ArrayBuffer)) throw new Error('expected ArrayBuffer');
       let view = new DataView(sentBuf);
       expect(view.getUint8(0)).toBe(MSG_TYPE_DISPLAY_STREAM_REQUEST);
-      expect(view.getUint8(1)).toBe(1);
+      expect(view.getUint8(1)).toBe(2);
 
       release();
       expect(ws?.sent.length).toBe(2);
@@ -221,6 +222,38 @@ describe('sendMicPcm', () => {
       expect(view.getUint8(1)).toBe(0);
     } finally {
       stop();
+    }
+  });
+
+  it('disables display stream while the document is hidden and resumes when visible', async () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    const { startRealtime } = await import('./ws-client');
+    const release = registerFrameConsumer();
+    const stop = startRealtime('/ws');
+    try {
+      const ws = MockWebSocket.instances[0];
+      expect(ws).toBeDefined();
+      if (ws?.onopen) ws.onopen({} as unknown);
+
+      expect(ws?.sent.length).toBe(1);
+      let sentBuf = ws!.sent[0];
+      if (!(sentBuf instanceof ArrayBuffer)) throw new Error('expected ArrayBuffer');
+      let view = new DataView(sentBuf);
+      expect(view.getUint8(0)).toBe(MSG_TYPE_DISPLAY_STREAM_REQUEST);
+      expect(view.getUint8(1)).toBe(0);
+
+      visibility.mockReturnValue('visible');
+      document.dispatchEvent(new Event('visibilitychange'));
+
+      expect(ws?.sent.length).toBe(2);
+      sentBuf = ws!.sent[1];
+      if (!(sentBuf instanceof ArrayBuffer)) throw new Error('expected ArrayBuffer');
+      view = new DataView(sentBuf);
+      expect(view.getUint8(0)).toBe(MSG_TYPE_DISPLAY_STREAM_REQUEST);
+      expect(view.getUint8(1)).toBe(2);
+    } finally {
+      stop();
+      release();
     }
   });
 
@@ -246,6 +279,29 @@ describe('sendMicPcm', () => {
 
       expect(useAudioSuiteStore.getState().masterBypassed).toBe(false);
       expect(useAudioSuiteStore.getState().rxMasterBypassed).toBe(true);
+    } finally {
+      stop();
+    }
+  });
+
+  it('silently accepts diagnostics health websocket frames', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { startRealtime } = await import('./ws-client');
+    const stop = startRealtime('/ws');
+    try {
+      const ws = MockWebSocket.instances[0];
+      expect(ws).toBeDefined();
+      if (ws?.onopen) ws.onopen({} as unknown);
+      warn.mockClear();
+
+      const payload = new TextEncoder().encode('{"status":"ok"}');
+      const frame = new ArrayBuffer(1 + payload.byteLength);
+      const bytes = new Uint8Array(frame);
+      bytes[0] = MSG_TYPE_DIAGNOSTICS_HEALTH;
+      bytes.set(payload, 1);
+      ws?.onmessage?.({ data: frame });
+
+      expect(warn).not.toHaveBeenCalled();
     } finally {
       stop();
     }

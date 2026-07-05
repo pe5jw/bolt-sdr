@@ -9,6 +9,7 @@
     <Authors>Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors</Authors>
     <PackageLicenseExpression>GPL-2.0-or-later</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus</RepositoryUrl>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
   </PropertyGroup>
 
   <ItemGroup>

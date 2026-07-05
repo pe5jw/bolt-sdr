@@ -76,6 +76,7 @@ public class RadioStateStoreTests : IDisposable
                 },
                 DrivePct = 47,
                 TunePct = 23,
+                RogerBeepEnabled = true,
                 Rx2Enabled = true,
                 VfoBHz = 7_100_000,
                 ModeB = RxMode.CWU,
@@ -123,6 +124,7 @@ public class RadioStateStoreTests : IDisposable
         Assert.Equal("auto", got.Notches[1].Source);
         Assert.Equal(47, got.DrivePct);
         Assert.Equal(23, got.TunePct);
+        Assert.True(got.RogerBeepEnabled);
         Assert.True(got.Rx2Enabled);
         Assert.Equal(7_100_000, got.VfoBHz);
         Assert.Equal(RxMode.CWU, got.ModeB);
@@ -152,6 +154,13 @@ public class RadioStateStoreTests : IDisposable
         var entry = new RadioStateEntry();
         Assert.Equal(0, entry.MicGainDb);
         Assert.Equal(8.0, entry.LevelerMaxGainDb);
+    }
+
+    [Fact]
+    public void RogerBeep_HasCorrectDefault_OnNewEntry()
+    {
+        var entry = new RadioStateEntry();
+        Assert.False(entry.RogerBeepEnabled);
     }
 
     // Snapshot is a single global row — saving twice should update, not insert.

@@ -64,6 +64,19 @@ public sealed class RadioServiceUnifiedReceiverWriteTests : IDisposable
     }
 
     [Fact]
+    public void SetReceiver_Rx1AndRx2_PreserveAdcSourceAcrossProjection()
+    {
+        using var radio = BuildRadio();
+
+        radio.SetReceiver(0, adcSource: 1);
+        radio.SetReceiver(1, enabled: true, adcSource: 1);
+        var s = radio.SetReceiver(0, vfoHz: 14_074_000);
+
+        Assert.Equal((byte)1, Rx(s, 0).AdcSource);
+        Assert.Equal((byte)1, Rx(s, 1).AdcSource);
+    }
+
+    [Fact]
     public void Snapshot_DisconnectedState_CanRepresentTenHardwareReceivers()
     {
         using var radio = BuildRadio();

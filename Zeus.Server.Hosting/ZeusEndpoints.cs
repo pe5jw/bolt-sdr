@@ -5,8 +5,12 @@
 // (service mode) and Zeus.Desktop (Photino in-process mode) share one
 // endpoint definition.
 
+using System.Buffers.Binary;
+using System.Globalization;
 using System.Net;
+using System.Text.Json.Serialization;
 using Zeus.Contracts;
+using Zeus.Plugins.Contracts.Extensions;
 using Zeus.Plugins.Host;
 using Zeus.Dsp;
 using Zeus.Dsp.Wdsp;
@@ -28,6 +32,22 @@ public static class ZeusEndpoints
     public static WebApplication MapZeusEndpoints(this WebApplication app)
     {
         var log = app.Services.GetRequiredService<ILogger<object>>();
+        var configuration = app.Configuration;
+
+        app.Use(async (ctx, next) =>
+        {
+            if (!IsUserAccessGateEnabled(app) ||
+                !IsUserAccessGateProtectedRequest(ctx.Request.Method, ctx.Request.Path))
+            {
+                await next().ConfigureAwait(false);
+                return;
+            }
+
+            if (await DenyIfUserAccessBlockedAsync(ctx, log).ConfigureAwait(false))
+                return;
+
+            await next().ConfigureAwait(false);
+        });
 
         // Live Diagnostics API v2 — unified, registry-driven surface
         // (/api/diagnostics/v2). Legacy diagnostics routes below delegate to
@@ -106,7 +126,7 @@ public static class ZeusEndpoints
         // PUT; the in-app Allow/Deny prompt + active-session badge poll /status.
         app.MapGet("/api/support/availability",
             (Zeus.Server.Hosting.Support.SupportAvailabilityStore store) =>
-                Results.Ok(new { available = store.IsAvailable, autoShareCrashes = store.AutoShareOnCrash }));
+                Results.Ok(BuildSupportAvailabilityResponse(store)));
 
         app.MapPut("/api/support/availability",
             (SupportAvailabilityRequest req, Zeus.Server.Hosting.Support.SupportAvailabilityStore store) =>
@@ -120,8 +140,15 @@ public static class ZeusEndpoints
                 log.LogInformation(
                     "api.support.availability available={Available} autoShareCrashes={AutoShare}",
                     newAvailable, newAutoShare);
-                return Results.Ok(new { available = newAvailable, autoShareCrashes = newAutoShare });
+                return Results.Ok(BuildSupportAvailabilityResponse(
+                    newAvailable,
+                    newAutoShare,
+                    store.AnsweredAgreementVersion));
             });
+
+        app.MapPost("/api/support/agreement",
+            (SupportAgreementRequest req, Zeus.Server.Hosting.Support.SupportAvailabilityStore store) =>
+                Results.Ok(AnswerSupportAgreement(req, store, log)));
 
         // Single poll surface for the operator UI: opt-in posture + live pending
         // requests + how many maintainer sessions are currently viewing.
@@ -146,49 +173,62 @@ public static class ZeusEndpoints
         app.MapGet("/api/capabilities",
             (HttpContext ctx, CapabilitiesService caps) => Results.Ok(caps.Snapshot(ctx)));
 
-        // FT8/FT4 native decode control. The FT8 workspace POSTs enable on
-        // entering the mode and disable on leaving; decodes arrive out-of-band as
-        // 0x38 Ft8Decode WS frames. nativeAvailable is false on a platform whose
-        // zeus_ft8 binary wasn't shipped (the workspace then shows "unavailable").
-        app.MapGet("/api/ft8",
-            (Ft8Service ft8) => Results.Ok(new
-            {
-                nativeAvailable = ft8.NativeAvailable,
-                enabled = ft8.IsEnabled,
-                receiver = ft8.ActiveReceiver,
-                protocol = ft8.ActiveProtocol == Zeus.Dsp.Ft8.Ft8Protocol.Ft4 ? "FT4" : "FT8",
-                passes = ft8.DecodePasses,
-            }));
+        static object FirewallStatusDto(WindowsFirewallStatus status, bool localRequest) => new
+        {
+            status.Supported,
+            CanApply = status.CanApply && localRequest,
+            LocalRequest = localRequest,
+            status.RuleName,
+            status.ProgramPath,
+            Message = localRequest
+                ? status.Message
+                : "Open Settings on the Windows machine running Zeus to change Windows Firewall.",
+        };
 
-        app.MapPost("/api/ft8/enable",
-            (Zeus.Contracts.Ft8EnableRequest body, Ft8Service ft8) =>
+        // Windows Firewall helper for source builds and non-elevated installs.
+        // It adds the same inbound program allow rule the installer attempts,
+        // scoped to the running Zeus executable. POST is local-only so a LAN
+        // browser cannot trigger a UAC prompt on the host machine.
+        app.MapGet("/api/system/windows-firewall",
+            (HttpContext ctx, IWindowsFirewallService firewall) =>
+                Results.Ok(FirewallStatusDto(firewall.GetStatus(), LocalRequestGuard.IsLocalRequest(ctx))));
+
+        app.MapPost("/api/system/windows-firewall/allow",
+            async (HttpContext ctx, IWindowsFirewallService firewall, CancellationToken ct) =>
             {
-                var proto = string.Equals(body.Protocol, "FT4", StringComparison.OrdinalIgnoreCase)
-                    ? Zeus.Dsp.Ft8.Ft8Protocol.Ft4 : Zeus.Dsp.Ft8.Ft8Protocol.Ft8;
-                if (body.Passes is int p) ft8.DecodePasses = Math.Clamp(p, 1, 4);
-                bool ok = ft8.Enable(body.Receiver ?? 0, proto);
-                log.LogInformation("api.ft8.enable rx={Rx} proto={Proto} ok={Ok}",
-                    body.Receiver ?? 0, proto, ok);
-                return ok
-                    ? Results.Ok(new { enabled = true, nativeAvailable = true })
-                    : Results.Ok(new { enabled = false, nativeAvailable = ft8.NativeAvailable });
+                if (!LocalRequestGuard.IsLocalRequest(ctx))
+                {
+                    return Results.Json(
+                        new
+                        {
+                            error = "Open Settings on the Windows machine running Zeus to change Windows Firewall.",
+                        },
+                        statusCode: StatusCodes.Status403Forbidden);
+                }
+
+                var result = await firewall.ApplyAllowRuleAsync(ct);
+                if (result.Applied)
+                    return Results.Ok(result);
+
+                var statusCode = !result.Supported
+                    ? StatusCodes.Status400BadRequest
+                    : result.ElevationCanceled
+                        ? StatusCodes.Status409Conflict
+                        : StatusCodes.Status500InternalServerError;
+                return Results.Json(new { error = result.Message, result }, statusCode: statusCode);
             });
 
-        // FT8/FT4 + WSPR ARMED auto-sequence TX keyer control surface (arm /
-        // stage / halt / status). Kept in its own extension file so this one
-        // stays manageable.
-        app.MapFt8TxEndpoints();
-
-        app.MapPost("/api/ft8/disable", (Ft8Service ft8) =>
-        {
-            ft8.Disable();
-            log.LogInformation("api.ft8.disable");
-            return Results.Ok(new { enabled = false });
-        });
+        // The FT8/FT4/WSPR decode + TX keyer suite (with its /api/ft8, /api/wspr
+        // and /api/spotting control surfaces) was extracted into the installable
+        // plugin com.kb2uka.digital (openhpsdr-zeus-plugins/modes/Digital); it
+        // now maps its routes under /api/plugins/com.kb2uka.digital/. Kept in
+        // core: the per-mode workspace settings store below (/api/ft8/settings),
+        // the shared operator identity, and the /api/log/digital-worked set.
 
         // Shared operator identity (callsign + Maidenhead grid). This is the SAME
-        // identity the spotting uploaders and FreeDV Reporter resolve from — set
-        // it once here and FT8/FT4 TX ungates everywhere. Server-persisted so the
+        // identity FreeDV Reporter and the log broadcasters resolve from, and the
+        // one the core UI pushes to the Zeus Digital plugin — set it once here and
+        // FT8/FT4 TX ungates everywhere. Server-persisted so the
         // desktop webview no longer loses it on restart. GET returns both the saved
         // override and the effective resolved value (override → QRZ home fallback),
         // so the Settings page can grey QRZ-sourced values.
@@ -226,36 +266,6 @@ public static class ZeusEndpoints
                 return Results.Ok(saved);
             });
 
-        // WSPR native spotting control. nativeAvailable is false where the
-        // zeus_wspr decoder isn't shipped (e.g. Windows encode-only build today).
-        app.MapGet("/api/wspr",
-            (WsprService wspr) => Results.Ok(new
-            {
-                nativeAvailable = wspr.NativeAvailable,
-                enabled = wspr.IsEnabled,
-                receiver = wspr.ActiveReceiver,
-                dialFreqMhz = wspr.DialFreqMhz,
-            }));
-
-        app.MapPost("/api/wspr/enable",
-            (Zeus.Contracts.WsprEnableRequest body, WsprService wspr) =>
-            {
-                double dial = body.DialFreqMhz ?? 14.0956; // 20 m default
-                bool ok = wspr.Enable(body.Receiver ?? 0, dial);
-                log.LogInformation("api.wspr.enable rx={Rx} dial={Dial:F4} ok={Ok}",
-                    body.Receiver ?? 0, dial, ok);
-                return ok
-                    ? Results.Ok(new { enabled = true, nativeAvailable = true })
-                    : Results.Ok(new { enabled = false, nativeAvailable = wspr.NativeAvailable });
-            });
-
-        app.MapPost("/api/wspr/disable", (WsprService wspr) =>
-        {
-            wspr.Disable();
-            log.LogInformation("api.wspr.disable");
-            return Results.Ok(new { enabled = false });
-        });
-
         // Activation spots — merged POTA + SOTA feed, polled server-side by
         // ActivationSpotsService. The Spots panel polls this and offers
         // click-to-tune. Returns whatever's currently cached (empty list until
@@ -283,7 +293,7 @@ public static class ZeusEndpoints
         // Self-update status. The latest PRODUCTION build is read from the Zeus
         // download domain (downloads.openhpsdrzeus.com), which is published from
         // `main` only — never develop/nightly. The GET response carries the
-        // platform-matched installer/DMG/AppImage/tarball URL + its SHA-256; the
+        // platform-matched installer/package/AppImage/tarball URL + its SHA-256; the
         // app opens that download. Zeus never pulls/rebuilds/restarts itself.
         app.MapGet("/api/system/update",
             async (RepoUpdateService updates, bool? fetch, CancellationToken ct) =>
@@ -1516,18 +1526,39 @@ public static class ZeusEndpoints
             ConnectRequest req,
             Protocol3PresenceProbe p3Presence,
             Protocol3SidecarBridge sidecar,
+            DspPipelineService dsp,
             RadioService radio,
             HttpContext ctx) =>
         {
-            const int p3RxStreams = Zeus.Contracts.WireContract.MaxReceivers;
-            const int p3RxRateHz = 1_536_000;
+            var p3RxRateHz = Protocol3RxRateHz(configuration);
 
             log.LogInformation("api.connect.p3 endpoint={Ep}", req.Endpoint);
 
             if (!TryParseIpEndpoint(req.Endpoint, out var ipEndpoint))
                 return Results.BadRequest(new { error = $"Invalid endpoint '{req.Endpoint}'." });
             if (radio.IsConnected)
+            {
+                var currentState = radio.Snapshot();
+                if (radio.IsProtocol3Active && SameIpEndpoint(currentState.Endpoint, ipEndpoint))
+                {
+                    return Results.Ok(new
+                    {
+                        protocol = "P3",
+                        endpoint = currentState.Endpoint ?? req.Endpoint,
+                        sampleRateHz = currentState.SampleRate,
+                        maxReceivers = currentState.MaxReceivers,
+                        hardwareMaxReceivers = currentState.MaxReceivers,
+                        diagnosticsUrl = sidecar.DiagnosticsUrl?.ToString(),
+                        dspEngine = "n9dsp",
+                        txEngine = "WDSP",
+                        txEngineRateHz = currentState.SampleRate,
+                        txIqRateHz = 192_000,
+                        alreadyConnected = true,
+                    });
+                }
+
                 return Results.Conflict(new { error = "Already connected. Disconnect first." });
+            }
 
             var p3 = await p3Presence
                 .ProbeAsync(ipEndpoint.Address, TimeSpan.FromMilliseconds(700), ctx.RequestAborted)
@@ -1538,6 +1569,9 @@ public static class ZeusEndpoints
                     new { error = "Protocol 3 p3app was not detected on this radio.", protocol3Available = false },
                     statusCode: StatusCodes.Status409Conflict);
             }
+            var initialState = radio.Snapshot();
+            var p3MaxRxStreams = p3.MaxRxStreams > int.MaxValue ? int.MaxValue : (int)p3.MaxRxStreams;
+            var p3RxStreams = Protocol3RequestedRxStreams(initialState, p3MaxRxStreams);
             if (p3.MaxRxStreams < p3RxStreams)
             {
                 return Results.Json(
@@ -1552,21 +1586,28 @@ public static class ZeusEndpoints
             try
             {
                 var snapshot = await sidecar
-                    .ConnectAsync(ipEndpoint, p3.Port, p3RxRateHz, p3RxStreams, ctx.RequestAborted)
+                    .ConnectAsync(ipEndpoint, p3.Port, p3RxRateHz, p3RxStreams, initialState, ctx.RequestAborted)
                     .ConfigureAwait(false);
                 radio.MarkProtocol3Connected(
                     req.Endpoint,
                     p3RxRateHz,
                     Math.Min(snapshot.RxActiveStreams, Zeus.Contracts.WireContract.MaxReceivers),
                     p3.FirmwareVersion.ToString());
+                var txEngineRateHz = dsp.ConnectP3TxEngine(p3RxRateHz);
+                radio.ReplayPaSnapshot();
+                radio.ReplayAudioFrontEnd();
                 return Results.Ok(new
                 {
                     protocol = "P3",
                     endpoint = req.Endpoint,
                     sampleRateHz = p3RxRateHz,
                     maxReceivers = snapshot.RxActiveStreams,
+                    hardwareMaxReceivers = p3.MaxRxStreams,
                     diagnosticsUrl = snapshot.DiagnosticsUrl.ToString(),
                     dspEngine = snapshot.DspEngine,
+                    txEngine = "WDSP",
+                    txEngineRateHz,
+                    txIqRateHz = 192_000,
                 });
             }
             catch (InvalidOperationException ex)
@@ -1590,6 +1631,7 @@ public static class ZeusEndpoints
 
         app.MapPost("/api/disconnect/p3", async (
             Protocol3SidecarBridge sidecar,
+            DspPipelineService dsp,
             RadioService radio,
             HttpContext ctx) =>
         {
@@ -1597,15 +1639,25 @@ public static class ZeusEndpoints
             await sidecar.DisconnectAsync(ctx.RequestAborted);
             if (radio.IsProtocol3Active)
                 radio.MarkProtocol3Disconnected();
+            dsp.DisconnectP3TxEngine();
             return Results.Ok(new { status = "disconnected" });
         });
 
-        app.MapGet("/api/protocol3/sidecar", (Protocol3SidecarBridge sidecar) =>
-            Results.Ok(sidecar.Status));
+        app.MapGet("/api/protocol3/sidecar", (
+            Protocol3SidecarBridge sidecar,
+            Protocol3SidecarFrameForwarder frames,
+            Protocol3SidecarControlForwarder control) =>
+            Results.Ok(new
+            {
+                bridge = sidecar.Status,
+                frames = frames.Status,
+                control = control.Status,
+            }));
 
         app.MapPost("/api/disconnect", async (
             RadioService r,
             Protocol3SidecarBridge sidecar,
+            DspPipelineService dsp,
             HttpContext ctx) =>
         {
             log.LogInformation("api.disconnect");
@@ -1613,6 +1665,7 @@ public static class ZeusEndpoints
             {
                 await sidecar.DisconnectAsync(ctx.RequestAborted);
                 r.MarkProtocol3Disconnected();
+                dsp.DisconnectP3TxEngine();
                 return Results.Ok(r.Snapshot());
             }
             return Results.Ok(await r.DisconnectAsync(ctx.RequestAborted));
@@ -1818,10 +1871,12 @@ public static class ZeusEndpoints
             return r.SetCtunEnabled(req.Enabled);
         });
 
-        app.MapPost("/api/mode", (ModeSetRequest req, RadioService r) =>
+        app.MapPost("/api/mode", (ModeSetRequest req, RadioService r, AudioModemPluginBridge modemBridge) =>
         {
             if (req.Receiver is not (0 or 1))
                 return Results.BadRequest(new { error = $"unknown receiver {req.Receiver}" });
+            if (req.Mode == RxMode.FreeDv && !modemBridge.HasActiveModem)
+                return Results.Conflict(new { error = "FreeDV plugin is not installed or active." });
             var receiver = req.Receiver == 1 ? TxVfo.B : TxVfo.A;
             log.LogInformation("api.mode mode={Mode} receiver={Receiver}", req.Mode, receiver);
             return Results.Ok(r.SetMode(req.Mode, receiver));
@@ -1831,81 +1886,6 @@ public static class ZeusEndpoints
         {
             log.LogInformation("api.bandwidth low={L} high={H}", req.Low, req.High);
             return r.SetFilter(req.Low, req.High);
-        });
-
-        // FreeDV digital-voice telemetry + config. The mode itself is selected
-        // via /api/mode (RxMode.FreeDv); these surface the live modem state
-        // (sync/SNR/submode) polled by the FreeDV panel and apply submode /
-        // squelch / TX-text changes. No-op-safe when the codec2 native library
-        // is missing (NativeAvailable=false).
-        app.MapGet("/api/freedv/status", (FreeDvService fd) => Results.Ok(fd.Status()));
-
-        // FreeDV Reporter stations — live roster mirrored from qso.freedv.org by
-        // FreeDvReporterService (persistent read-only Socket.IO link). Returns the
-        // current snapshot (connection state + stations sorted by frequency);
-        // empty until the first bulk_update arrives. The Stations panel polls this
-        // and offers click-to-tune.
-        app.MapGet("/api/freedv/stations",
-            (FreeDvReporterService svc) => Results.Ok(svc.GetSnapshot()));
-
-        // FreeDV Reporter "report mode" — strictly opt-in (default OFF). When
-        // enabled with a callsign + Maidenhead grid, Zeus connects to the reporter
-        // in "report" role and broadcasts the operator's callsign / grid / freq /
-        // TX activity to the public qso.freedv.org map. GET returns the current
-        // (normalized) settings; POST saves them and forces a reconnect so the new
-        // role / identity takes effect.
-        app.MapGet("/api/freedv/reporter/settings",
-            (FreeDvReporterService svc) => Results.Ok(svc.GetSettings()));
-        app.MapPost("/api/freedv/reporter/settings",
-            (FreeDvReporterSettings req, FreeDvReporterService svc) =>
-            {
-                var saved = svc.SaveSettings(req);
-                log.LogInformation(
-                    "api.freedv.reporter.settings report={Enabled} call={Call} grid={Grid}",
-                    saved.ReportEnabled, saved.Callsign, saved.GridSquare);
-                return Results.Ok(saved);
-            });
-
-        // QSY request — ask the station identified by {sid} to move to the
-        // operator's current VFO frequency. Requires report mode active and a
-        // known sid; 400 otherwise.
-        app.MapPost("/api/freedv/stations/{sid}/qsy",
-            (string sid, FreeDvReporterService svc) =>
-                svc.RequestQsy(sid)
-                    ? Results.Ok(new { ok = true })
-                    : Results.BadRequest(new { error = "Not reporting, or station unknown." }));
-        app.MapPut("/api/freedv/config", (FreeDvConfigRequest req, FreeDvService fd) =>
-        {
-            log.LogInformation(
-                "api.freedv.config submode={Submode} squelch={Sq} thresh={Th}",
-                req.Submode, req.SquelchEnabled, req.SnrSquelchThreshDb);
-            return Results.Ok(fd.ApplyConfig(req));
-        });
-
-        // FreeDV codec2 library install. codec2 can't be built on an operator's
-        // machine, so when the bundled binary is missing this fetches the prebuilt
-        // lib Zeus committed for the running platform from the repo and stages it,
-        // reloading the modem live (see FreeDvNativeInstaller). GET reports install
-        // progress + whether codec2 is already present; POST starts a background
-        // download (idempotent — no-op if already installed/running). The panel
-        // polls GET until phase is "done" / "failed".
-        static object FreeDvInstallDto(FreeDvNativeInstaller installer)
-        {
-            var s = installer.Current;
-            return new
-            {
-                phase = s.Phase.ToString().ToLowerInvariant(),
-                percent = s.Percent,
-                message = s.Message,
-                installed = installer.Installed,
-            };
-        }
-        app.MapGet("/api/freedv/install", (FreeDvNativeInstaller installer) =>
-            Results.Ok(FreeDvInstallDto(installer)));
-        app.MapPost("/api/freedv/install", (FreeDvNativeInstaller installer) =>
-        {
-            installer.Start();
-            return Results.Ok(FreeDvInstallDto(installer));
         });
 
         // TX bandpass filter — signed Hz pair (LSB negative, DSB symmetric). Per-mode
@@ -2269,6 +2249,85 @@ public static class ZeusEndpoints
                 return Results.BadRequest(new { error = "delayMs must be 0..500" });
             var state = r.SetTxMoxPreKeyDelayMs(req.DelayMs);
             return Results.Ok(new { txMoxPreKeyDelayMs = state.TxMoxPreKeyDelayMs });
+        });
+
+        // TX tail (MOX hang) delay (issue #1294). Holds the wire MOX bit
+        // asserted for N ms after a UI PTT release so audio still in the
+        // browser→WDSP→IQ pipeline finishes clocking out before the radio
+        // drops off the air. Voice modes only; ignored on CW.
+        app.MapPost("/api/tx/tail-delay", (TxTailDelaySetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.tx.tailDelay ms={Ms}", req.DelayMs);
+            if (req.DelayMs < 0 || req.DelayMs > 500)
+                return Results.BadRequest(new { error = "delayMs must be 0..500" });
+            var state = r.SetTxMoxTailDelayMs(req.DelayMs);
+            return Results.Ok(new { txMoxTailDelayMs = state.TxMoxTailDelayMs });
+        });
+
+        app.MapPost("/api/tx/roger-beep", (RogerBeepSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.tx.rogerBeep enabled={Enabled}", req.Enabled);
+            var state = r.SetRogerBeepEnabled(req.Enabled);
+            return Results.Ok(new { rogerBeepEnabled = state.RogerBeepEnabled });
+        });
+
+        // Hidden QRM test source. This arms a generated audio source into the
+        // normal TX ingest path, but deliberately does not key MOX. It reaches
+        // RF only while the operator has keyed TX.
+        app.MapPost("/api/tx/qrm", (SignalJammerSetRequest req, SignalJammerTxSource qrm) =>
+        {
+            if (req is null)
+                return Results.BadRequest(new { error = "body required" });
+
+            var snapshot = qrm.Configure(req);
+            log.LogInformation(
+                "api.tx.qrm enabled={Enabled} preset={Preset} level={Level} tone={ToneHz} drift={DriftHz} pulse={PulseRateHz:F1}",
+                snapshot.Enabled, snapshot.Preset, snapshot.Level, snapshot.ToneHz, snapshot.DriftHz, snapshot.PulseRateHz);
+            return Results.Ok(snapshot);
+        });
+
+        app.MapPost("/api/tx/qrm/text", (SignalJammerTextRequest req, SignalJammerTxSource qrm) =>
+        {
+            if (req is null || string.IsNullOrWhiteSpace(req.SamplesBase64))
+                return Results.BadRequest(new { error = "samplesBase64 required" });
+            if (!TryDecodeFloat32Base64(req.SamplesBase64, out var samples, out var error))
+                return Results.BadRequest(new { error });
+
+            try
+            {
+                var snapshot = qrm.EnqueueText(samples, req.SampleRate, req.AutoTransmit);
+                log.LogInformation(
+                    "api.tx.qrm.text samples={Samples} rate={Rate} autoTx={AutoTx} queued={Queued}",
+                    samples.Length, req.SampleRate, req.AutoTransmit, snapshot.TextQueued);
+                return Results.Ok(snapshot);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Conflict(new { error = ex.Message });
+            }
+            catch (ArgumentOutOfRangeException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
+        // TX timeout (issue #1270). Maximum single-transmission length that
+        // TxMetersService allows before it trips MOX/TUN to protect the PA.
+        // 0 disables the guard entirely; any other value is clamped to
+        // [30, 600] s, so the echoed value may differ from the request. A
+        // pre-warning AlertKind.TxTimeoutWarning is emitted ~30 s before the
+        // trip fires so the operator gets a heads-up rather than a silent drop.
+        app.MapPost("/api/tx/timeout", (TxTimeoutSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.tx.timeout seconds={S}", req.Seconds);
+            if (req.Seconds != 0 && (req.Seconds < RadioService.MinTxTimeoutSec || req.Seconds > RadioService.MaxTxTimeoutSec))
+                return Results.BadRequest(new { error = $"seconds must be 0 (disabled) or {RadioService.MinTxTimeoutSec}..{RadioService.MaxTxTimeoutSec}" });
+            var state = r.SetTxTimeoutSec(req.Seconds);
+            return Results.Ok(new { txTimeoutSec = state.TxTimeoutSec });
         });
 
         // TUN drive %. Symmetric with /api/tx/drive; the same PA-gain math applies,
@@ -2705,11 +2764,13 @@ public static class ZeusEndpoints
                 req.DbMin, req.DbMax, req.TxDbMin, req.TxDbMax,
                 req.WfDbMin, req.WfDbMax, req.WfTxDbMin, req.WfTxDbMax,
                 req.TxDisplayCalOffsetDb, req.TxDisplayFftSize,
-                req.TxDisplayWindow, req.TxDisplayAvgTauMs);
+                req.TxDisplayWindow, req.TxDisplayAvgTauMs,
+                req.WidebandDisplayEnabled,
+                req.DisplayMaxFrameRateHz);
             var saved = store.Get();
-            // Push the (validated, merged) TX display config to the running
-            // engine so the change is live without a reconnect. Display-only.
-            dsp.ApplyTxDisplaySettings(saved);
+            // Push the (validated, merged) display config to the running
+            // engine/client so the change is live without a reconnect.
+            dsp.ApplyDisplaySettings(saved);
             return Results.Ok(saved);
         });
 
@@ -3228,6 +3289,24 @@ public static class ZeusEndpoints
             return Results.Ok(new Hl2GpioDto(Supported: true, Bits: radio.GetHl2GpioMask()));
         });
 
+        // Thetis-style Alex RF filter matrix. GET returns the editable RX BPF /
+        // HPF and TX LPF windows plus a live active-filter readout. PUT replaces
+        // the matrix atomically; RadioService persists, normalizes, and replays
+        // the P2 Alex snapshot server-authoritatively. POST /reset restores the
+        // stock Zeus/pihpsdr thresholds and disables custom mode.
+        app.MapGet("/api/radio/rf-filters", (RadioService radio) =>
+            Results.Ok(radio.GetRfFilterSettings()));
+
+        app.MapPut("/api/radio/rf-filters", (RfFilterSettingsSetRequest req, RadioService radio) =>
+        {
+            if (req is null)
+                return Results.BadRequest(new { error = "body required" });
+            return Results.Ok(radio.SetRfFilterSettings(req));
+        });
+
+        app.MapPost("/api/radio/rf-filters/reset", (RadioService radio) =>
+            Results.Ok(radio.ResetRfFilterSettings()));
+
         // External antenna ports (external-ports plan — antenna slice, #804).
         // GET returns the per-band TX/RX antenna + RX-aux selection plus the
         // board-capability gates the frontend renders the right selectors from.
@@ -3574,14 +3653,18 @@ public static class ZeusEndpoints
             }
         });
 
-        app.MapPost("/api/app/restart", (AppRestartService restart) =>
+        app.MapPost("/api/app/restart", (HttpContext ctx, AppRestartService restart) =>
         {
+            if (LocalRequestGuard.RejectIfNotLocalSameOrigin(ctx, "restart Zeus") is { } rejected)
+                return rejected;
             restart.RequestRestart();
             return Results.Ok(new { restarting = true });
         });
 
-        app.MapPost("/api/app/quit", (AppRestartService restart) =>
+        app.MapPost("/api/app/quit", (HttpContext ctx, AppRestartService restart) =>
         {
+            if (LocalRequestGuard.RejectIfNotLocalSameOrigin(ctx, "quit Zeus") is { } rejected)
+                return rejected;
             restart.RequestQuit();
             return Results.Ok(new { quitting = true });
         });
@@ -3619,20 +3702,27 @@ public static class ZeusEndpoints
 
         app.MapGet("/api/qrz/status", (QrzService qrz) => qrz.GetStatus());
 
-        app.MapPost("/api/qrz/login", async (QrzLoginRequest req, QrzService qrz, HttpContext ctx) =>
+        app.MapPost("/api/qrz/login", async (
+            QrzLoginRequest req,
+            QrzService qrz,
+            Zeus.Server.Hosting.RemoteUserAccessClient remoteUsers,
+            HttpContext ctx) =>
         {
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
                 return Results.BadRequest(new { error = "username and password required" });
             log.LogInformation("api.qrz.login user={User}", req.Username);
+            remoteUsers.InvalidateSessionCache();
             try
             {
                 var status = await qrz.LoginAsync(req.Username, req.Password, ctx.RequestAborted);
+                remoteUsers.InvalidateSessionCache();
                 if (!status.Connected && status.Error != null)
                     return Results.Json(status, statusCode: StatusCodes.Status401Unauthorized);
                 return Results.Ok(status);
             }
             catch (HttpRequestException ex)
             {
+                remoteUsers.InvalidateSessionCache();
                 return Results.Json(new { error = $"QRZ unreachable: {ex.Message}" }, statusCode: StatusCodes.Status502BadGateway);
             }
         });
@@ -3657,9 +3747,14 @@ public static class ZeusEndpoints
             }
         });
 
-        app.MapPost("/api/qrz/logout", async (QrzService qrz, HttpContext ctx) =>
+        app.MapPost("/api/qrz/logout", async (
+            QrzService qrz,
+            Zeus.Server.Hosting.RemoteUserAccessClient remoteUsers,
+            HttpContext ctx) =>
         {
+            remoteUsers.InvalidateSessionCache();
             await qrz.LogoutAsync(ctx.RequestAborted);
+            remoteUsers.InvalidateSessionCache();
             return Results.Ok(qrz.GetStatus());
         });
 
@@ -3669,11 +3764,165 @@ public static class ZeusEndpoints
             return Results.Ok(qrz.GetStatus());
         });
 
+        app.MapGet("/api/users/session", async (
+            QrzService qrz,
+            UserManagementStore users,
+            Zeus.Server.Hosting.RemoteUserAccessClient remoteUsers,
+            HttpContext ctx) =>
+        {
+            var qrzStatus = qrz.GetStatus();
+            if (!qrzStatus.Connected)
+                return Results.Ok(users.GetSession(qrzStatus));
+
+            var remoteSession = await remoteUsers.GetSessionResultAsync(qrz, qrzStatus, ctx.RequestAborted)
+                .ConfigureAwait(false);
+            if (remoteSession.Outcome != Zeus.Server.Hosting.RemoteUserAccessSessionOutcome.Unavailable)
+                return Results.Ok(remoteSession.Session);
+
+            if (remoteUsers.Enabled)
+                remoteUsers.LogUnavailableFallbackOnce(log, qrzStatus);
+
+            return Results.Ok(users.GetSession(qrzStatus));
+        });
+
+        app.MapPost("/api/plugins/checkout", async (
+            Zeus.Server.Hosting.PluginCheckoutRequest req,
+            QrzService qrz,
+            Zeus.Server.Hosting.RemoteUserAccessClient remoteUsers,
+            HttpContext ctx) =>
+        {
+            var pluginIds = req.PluginIds
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id.Trim().ToLowerInvariant())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (pluginIds.Length == 0)
+                return Results.BadRequest(new { error = "pluginId required" });
+
+            try
+            {
+                var response = await remoteUsers.CreateCheckoutAsync(
+                    qrz,
+                    pluginIds,
+                    req.ReturnUrl,
+                    ctx.RequestAborted).ConfigureAwait(false);
+                return Results.Ok(response);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status402PaymentRequired);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
+        app.MapGet("/api/admin/users", (QrzService qrz, UserManagementStore users) =>
+        {
+            var session = users.GetSession(qrz.GetStatus());
+            var denied = RequireAdminSession(session);
+            if (denied is not null) return denied;
+            return Results.Ok(new ZeusUsersAdminResponse(session, users.ListUsers(), users.ListManagedPlugins()));
+        });
+
+        app.MapPost("/api/admin/users", (ZeusUserUpsertRequest req, QrzService qrz, UserManagementStore users) =>
+        {
+            var session = users.GetSession(qrz.GetStatus());
+            var denied = RequireAdminSession(session);
+            if (denied is not null) return denied;
+
+            try
+            {
+                var user = users.Upsert(req);
+                log.LogInformation(
+                    "api.admin.users.upsert actor={Actor} callsign={Callsign} access={Access} admin={Admin} subscription={Subscription}",
+                    session.Callsign,
+                    user.Callsign,
+                    user.AccessAllowed,
+                    user.IsAdmin,
+                    user.SubscriptionStatus);
+                return Results.Ok(user);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Conflict(new { error = ex.Message });
+            }
+        });
+
+        app.MapPut("/api/admin/users/{callsign}", (
+            string callsign,
+            ZeusUserUpdateRequest req,
+            QrzService qrz,
+            UserManagementStore users) =>
+        {
+            var session = users.GetSession(qrz.GetStatus());
+            var denied = RequireAdminSession(session);
+            if (denied is not null) return denied;
+
+            try
+            {
+                var user = users.Update(callsign, req);
+                log.LogInformation(
+                    "api.admin.users.update actor={Actor} callsign={Callsign} access={Access} admin={Admin} subscription={Subscription}",
+                    session.Callsign,
+                    user.Callsign,
+                    user.AccessAllowed,
+                    user.IsAdmin,
+                    user.SubscriptionStatus);
+                return Results.Ok(user);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return Results.NotFound(new { error = ex.Message });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Conflict(new { error = ex.Message });
+            }
+        });
+
+        app.MapPut("/api/admin/plugins/{pluginId}", (
+            string pluginId,
+            ZeusManagedPluginUpdateRequest req,
+            QrzService qrz,
+            UserManagementStore users) =>
+        {
+            var session = users.GetSession(qrz.GetStatus());
+            var denied = RequireAdminSession(session);
+            if (denied is not null) return denied;
+
+            try
+            {
+                var plugin = users.UpsertManagedPlugin(pluginId, req);
+                log.LogInformation(
+                    "api.admin.plugins.update actor={Actor} plugin={PluginId} required={Required} priceCents={PriceCents} active={Active}",
+                    session.Callsign,
+                    plugin.PluginId,
+                    plugin.SubscriptionRequired,
+                    plugin.MonthlyPriceCents,
+                    plugin.Active);
+                return Results.Ok(plugin);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
         // ── ZeusChat — operator-to-operator chat over the Cloudflare relay ──
         app.MapGet("/api/chat/status", (ChatService chat) => chat.GetStatus());
 
-        // Web-client heartbeat: presence is published only while the operator is
-        // showing the Chat panel (so closing/hiding it drops them off the roster).
+        // Legacy web-client heartbeat. Presence is now owned by the persisted
+        // chat opt-in; this endpoint remains for compatibility with old bundles.
         app.MapPost("/api/chat/visible", (ChatVisibleRequest req, ChatService chat) =>
             Results.Ok(chat.ReportPanelVisible(req.Visible)));
 
@@ -3805,28 +4054,91 @@ public static class ZeusEndpoints
         app.MapGet("/api/spacewx", async (SpaceWeatherService sw, HttpContext ctx) =>
             Results.Ok(await sw.GetAsync(ctx.RequestAborted)));
 
-        app.MapGet("/api/log/entries", async (LogService logService, HttpContext ctx, int skip = 0, int take = 100) =>
+        app.MapGet("/api/log/entries", async (LogbookPluginBridge logbook, HttpContext ctx, int skip = 0, int take = 100) =>
         {
-            var response = await logService.GetLogEntriesAsync(skip, take, ctx.RequestAborted);
-            return Results.Ok(response);
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return Results.Ok(new LogEntriesResponse(Array.Empty<LogEntry>(), 0));
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var response = await plugin.GetEntriesAsync(skip, take, ctx.RequestAborted);
+                return Results.Ok(LogbookPluginMappings.ToContract(response));
+            }, logbook, plugin, log);
         });
 
-        app.MapGet("/api/log/worked", async (LogService logService, HttpContext ctx, string callsign, int recent = 5) =>
+        app.MapGet("/api/log/capabilities", (LogbookPluginBridge logbook) =>
+        {
+            var plugin = logbook.Current;
+            var v2 = plugin is ILogbookPluginV2;
+            return Results.Ok(new
+            {
+                pluginInstalled = plugin is not null,
+                canEdit = v2,
+                canQsl = v2,
+                canTags = v2,
+            });
+        });
+
+        app.MapGet("/api/log/tags", async (LogbookPluginBridge logbook, HttpContext ctx) =>
+        {
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return Results.Ok(Array.Empty<string>());
+            if (plugin is not ILogbookPluginV2 v2)
+                return Results.Ok(Array.Empty<string>());
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var tags = await v2.GetAllTagsAsync(ctx.RequestAborted);
+                return Results.Ok(tags);
+            }, logbook, plugin, log);
+        });
+
+        app.MapGet("/api/log/worked", async (LogbookPluginBridge logbook, HttpContext ctx, string callsign, int recent = 5) =>
         {
             if (string.IsNullOrWhiteSpace(callsign))
                 return Results.BadRequest(new { error = "callsign required" });
 
-            var response = await logService.GetWorkedCallsignSummaryAsync(callsign, recent, ctx.RequestAborted);
-            return Results.Ok(response);
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return Results.Ok(LogbookPluginMappings.EmptyWorkedSummary(callsign));
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var response = await plugin.GetWorkedSummaryAsync(callsign, recent, ctx.RequestAborted);
+                return Results.Ok(response is null
+                    ? LogbookPluginMappings.EmptyWorkedSummary(callsign)
+                    : LogbookPluginMappings.ToContract(response));
+            }, logbook, plugin, log);
+        });
+
+        // Digital worked-before set — every callsign with a prior FT8/FT4 QSO
+        // in the logbook (upper-cased; digital modes ONLY, never SSB/CW). The
+        // Zeus Digital pop-out fetches this to decorate decode rows with the
+        // worked-B4 highlight; the enrichment moved client-side when the decode
+        // pipeline moved into the com.kb2uka.digital plugin.
+        app.MapGet("/api/log/digital-worked", async (LogbookPluginBridge logbook, HttpContext ctx) =>
+        {
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return Results.Ok(new { calls = Array.Empty<string>() });
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var worked = await plugin.GetDigitalWorkedCallsignsAsync(ctx.RequestAborted);
+                return Results.Ok(new { calls = worked.ToArray() });
+            }, logbook, plugin, log);
         });
 
         app.MapPost("/api/log/entry", async (
             CreateLogEntryRequest req,
-            LogService logService,
+            LogbookPluginBridge logbook,
             QrzService qrz,
             WsjtxUdpBroadcaster wsjtx,
             Wsjtx.N1mmBroadcaster n1mm,
             CloudLog.CloudLogService cloudLog,
+            LotwService lotw,
             HttpContext ctx) =>
         {
             if (string.IsNullOrWhiteSpace(req.Callsign))
@@ -3845,49 +4157,115 @@ public static class ZeusEndpoints
                     req = req with { Name = enriched };
             }
 
-            var entry = await logService.CreateLogEntryAsync(req, ctx.RequestAborted);
-            // Push the just-logged QSO to every opted-in external logger. Each
-            // target is OFF by default and no-ops when disabled; this is the only
-            // logging path that egresses (ADIF bulk import never does).
-            // Fire-and-forget so a slow/blocked target (e.g. a free-text Host whose
-            // DNS is dead) can never delay the operator's log confirmation. Each
-            // client swallows its own failures internally; use a detached token so
-            // the post-response request abort doesn't cancel them.
-            _ = wsjtx.BroadcastLoggedQsoAsync(entry, CancellationToken.None);   // Class A: WSJT-X type-12 UDP
-            _ = n1mm.BroadcastLoggedQsoAsync(entry, CancellationToken.None);    // Class B: N1MM contactinfo UDP
-            _ = cloudLog.PublishAsync(entry, CancellationToken.None);           // Class C: Wavelog/Cloudlog + Club Log HTTP
-            return Results.Ok(entry);
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return LogbookPluginMappings.MissingPlugin();
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var snapshot = await plugin.CreateAsync(LogbookPluginMappings.ToPlugin(req), ctx.RequestAborted);
+                var entry = LogbookPluginMappings.ToContract(snapshot);
+                if (plugin is ILogbookPluginV2 v2 && lotw.HasStationDefaults())
+                {
+                    var updated = await v2.UpdateAsync(entry.Id, lotw.BuildDefaultUpdate(), ctx.RequestAborted);
+                    if (updated is not null)
+                        entry = LogbookPluginMappings.ToContract(updated);
+                }
+
+                // Push the just-logged QSO to every opted-in external logger. Each
+                // target is OFF by default and no-ops when disabled; this is the only
+                // logging path that egresses (ADIF bulk import never does).
+                // Fire-and-forget so a slow/blocked target (e.g. a free-text Host whose
+                // DNS is dead) can never delay the operator's log confirmation. Each
+                // client swallows its own failures internally; use a detached token so
+                // the post-response request abort doesn't cancel them.
+                _ = wsjtx.BroadcastLoggedQsoAsync(entry, CancellationToken.None);   // Class A: WSJT-X type-12 UDP
+                _ = n1mm.BroadcastLoggedQsoAsync(entry, CancellationToken.None);    // Class B: N1MM contactinfo UDP
+                _ = cloudLog.PublishAsync(entry, CancellationToken.None);           // Class C: Wavelog/Cloudlog + Club Log HTTP
+                return Results.Ok(entry);
+            }, logbook, plugin, log);
         });
 
-        app.MapGet("/api/log/export/adif", async (LogService logService, HttpContext ctx) =>
+        app.MapPatch("/api/log/entry/{id}", async (
+            string id,
+            UpdateLogEntryRequest req,
+            LogbookPluginBridge logbook,
+            HttpContext ctx) =>
         {
-            var adif = await logService.ExportToAdifAsync(null, ctx.RequestAborted);
-            var fileName = $"zeus-log-{DateTime.UtcNow:yyyyMMdd-HHmmss}.adi";
-            return Results.File(
-                System.Text.Encoding.UTF8.GetBytes(adif),
-                "text/plain",
-                fileName);
+            if (string.IsNullOrWhiteSpace(id))
+                return Results.BadRequest(new { error = "log entry id required" });
+
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return LogbookPluginMappings.MissingPlugin();
+            if (plugin is not ILogbookPluginV2 v2)
+                return Results.Json(
+                    new { error = LogbookPluginMappings.EditingUnsupportedError },
+                    statusCode: StatusCodes.Status501NotImplemented);
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var updated = await v2.UpdateAsync(id, LogbookPluginMappings.ToPlugin(req), ctx.RequestAborted);
+                return updated is null
+                    ? Results.NotFound(new { error = "log entry not found" })
+                    : Results.Ok(LogbookPluginMappings.ToContract(updated));
+            }, logbook, plugin, log);
+        });
+
+        app.MapGet("/api/log/export/adif", async (LogbookPluginBridge logbook, HttpContext ctx) =>
+        {
+            var plugin = logbook.Current;
+            if (plugin is null)
+            {
+                var emptyAdif = LogbookPluginMappings.EmptyAdifExport();
+                var emptyFileName = $"zeus-log-{DateTime.UtcNow:yyyyMMdd-HHmmss}.adi";
+                return Results.File(
+                    System.Text.Encoding.UTF8.GetBytes(emptyAdif),
+                    "text/plain",
+                    emptyFileName);
+            }
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var adif = await plugin.ExportAdifAsync(null, ctx.RequestAborted);
+                var fileName = $"zeus-log-{DateTime.UtcNow:yyyyMMdd-HHmmss}.adi";
+                return Results.File(
+                    System.Text.Encoding.UTF8.GetBytes(adif),
+                    "text/plain",
+                    fileName);
+            }, logbook, plugin, log);
         });
 
         // Write the logbook (or a selected subset) to an ADIF file in a
         // directory on the machine running the backend, returning the path so
         // the Logbook panel can confirm where it landed (a silent browser
         // download gave the operator no feedback). Null directory => Downloads.
-        app.MapPost("/api/log/export/adif/file", async (AdifExportToFileRequest req, LogService logService, HttpContext ctx) =>
+        app.MapPost("/api/log/export/adif/file", async (AdifExportToFileRequest req, LogbookPluginBridge logbook, HttpContext ctx) =>
         {
-            try
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return LogbookPluginMappings.MissingPlugin();
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
             {
-                var result = await logService.ExportToAdifFileAsync(req.Directory, req.LogEntryIds, ctx.RequestAborted);
-                return Results.Ok(result);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-            {
-                return Results.BadRequest(new { error = $"Could not write ADIF file: {ex.Message}" });
-            }
+                try
+                {
+                    var result = await plugin.ExportAdifToFileAsync(req.Directory, req.LogEntryIds, ctx.RequestAborted);
+                    return Results.Ok(LogbookPluginMappings.ToContract(result));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+                {
+                    return Results.BadRequest(new { error = $"Could not write ADIF file: {ex.Message}" });
+                }
+            }, logbook, plugin, log);
         });
 
-        app.MapPost("/api/log/import/adif", async (LogService logService, HttpContext ctx) =>
+        app.MapPost("/api/log/import/adif", async (LogbookPluginBridge logbook, HttpContext ctx) =>
         {
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return LogbookPluginMappings.MissingPlugin();
+
             using var reader = new StreamReader(
                 ctx.Request.Body,
                 System.Text.Encoding.UTF8,
@@ -3896,45 +4274,153 @@ public static class ZeusEndpoints
             if (string.IsNullOrWhiteSpace(adif))
                 return Results.BadRequest(new { error = "ADIF file is empty" });
 
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                try
+                {
+                    var response = await plugin.ImportAdifAsync(adif, ctx.RequestAborted);
+                    return Results.Ok(LogbookPluginMappings.ToContract(response));
+                }
+                catch (FormatException ex)
+                {
+                    return Results.BadRequest(new { error = ex.Message });
+                }
+            }, logbook, plugin, log);
+        });
+
+        app.MapPost("/api/log/publish/qrz", async (QrzPublishRequest req, QrzService qrz, LogbookPluginBridge logbook, HttpContext ctx) =>
+        {
+            if (req.LogEntryIds == null || !req.LogEntryIds.Any())
+                return Results.BadRequest(new { error = "no log entry IDs provided" });
+
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return LogbookPluginMappings.MissingPlugin();
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var entries = (await plugin.GetByIdsAsync(req.LogEntryIds, ctx.RequestAborted))
+                    .Select(LogbookPluginMappings.ToContract)
+                    .ToList();
+                var results = new List<QrzPublishResult>();
+
+                foreach (var entry in entries)
+                {
+                    var result = await qrz.PublishLogEntryAsync(entry, ctx.RequestAborted);
+                    results.Add(result);
+
+                    // Update log entry with QRZ log ID if successful
+                    if (result.Success && !string.IsNullOrEmpty(result.QrzLogId))
+                    {
+                        await plugin.UpdateQrzUploadStatusAsync(entry.Id, result.QrzLogId, ctx.RequestAborted);
+                    }
+                }
+
+                var successCount = results.Count(r => r.Success);
+                var failedCount = results.Count - successCount;
+
+                return Results.Ok(new QrzPublishResponse(
+                    TotalCount: results.Count,
+                    SuccessCount: successCount,
+                    FailedCount: failedCount,
+                    Results: results));
+            }, logbook, plugin, log);
+        });
+
+        // Permanently delete selected logbook entries. Mirrors the publish
+        // select-then-act pattern: the Logbook panel sends the ids of the
+        // selected rows. Local-only delete — nothing is retracted from QRZ or
+        // any cloud logger, only Zeus's own record is removed.
+        app.MapPost("/api/log/delete", async (LogDeleteRequest req, LogbookPluginBridge logbook, HttpContext ctx) =>
+        {
+            if (req.LogEntryIds == null || !req.LogEntryIds.Any())
+                return Results.BadRequest(new { error = "no log entry IDs provided" });
+
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return LogbookPluginMappings.MissingPlugin();
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
+            {
+                var deleted = await plugin.DeleteAsync(req.LogEntryIds, ctx.RequestAborted);
+                return Results.Ok(new LogDeleteResponse(deleted));
+            }, logbook, plugin, log);
+        });
+
+        app.MapGet("/api/log/lotw/status", async (LotwService lotw, HttpContext ctx) =>
+            Results.Ok(await lotw.GetStatusAsync(ctx.RequestAborted)));
+
+        app.MapPost("/api/log/lotw/credentials", async (
+            LotwCredentialsRequest req,
+            LotwService lotw,
+            HttpContext ctx) =>
+        {
             try
             {
-                var response = await logService.ImportAdifAsync(adif, ctx.RequestAborted);
-                return Results.Ok(response);
+                return Results.Ok(await lotw.SetCredentialsAsync(req, ctx.RequestAborted));
             }
-            catch (FormatException ex)
+            catch (LotwBadRequestException ex)
             {
                 return Results.BadRequest(new { error = ex.Message });
             }
         });
 
-        app.MapPost("/api/log/publish/qrz", async (QrzPublishRequest req, QrzService qrz, LogService logService, HttpContext ctx) =>
+        app.MapPost("/api/log/lotw/settings", async (
+            LotwSettingsRequest req,
+            LotwService lotw,
+            HttpContext ctx) =>
+            Results.Ok(await lotw.SetSettingsAsync(req, ctx.RequestAborted)));
+
+        app.MapPost("/api/log/lotw/sync", async (LotwService lotw, HttpContext ctx) =>
         {
-            if (req.LogEntryIds == null || !req.LogEntryIds.Any())
-                return Results.BadRequest(new { error = "no log entry IDs provided" });
-
-            var entries = await logService.GetLogEntriesByIdsAsync(req.LogEntryIds, ctx.RequestAborted);
-            var results = new List<QrzPublishResult>();
-
-            foreach (var entry in entries)
+            try
             {
-                var result = await qrz.PublishLogEntryAsync(entry, ctx.RequestAborted);
-                results.Add(result);
-
-                // Update log entry with QRZ log ID if successful
-                if (result.Success && !string.IsNullOrEmpty(result.QrzLogId))
-                {
-                    await logService.UpdateQrzUploadStatusAsync(entry.Id, result.QrzLogId, ctx.RequestAborted);
-                }
+                return Results.Ok(await lotw.SyncAsync(ctx.RequestAborted));
             }
+            catch (InvalidOperationException ex) when (ex.Message == LogbookPluginMappings.MissingPluginError)
+            {
+                return LogbookPluginMappings.MissingPlugin();
+            }
+            catch (NotSupportedException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status501NotImplemented);
+            }
+            catch (LotwAuthException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+            }
+            catch (HttpRequestException ex)
+            {
+                return Results.Json(new { error = $"Confirmation sync unreachable: {ex.Message}" }, statusCode: StatusCodes.Status502BadGateway);
+            }
+        });
 
-            var successCount = results.Count(r => r.Success);
-            var failedCount = results.Count - successCount;
-
-            return Results.Ok(new QrzPublishResponse(
-                TotalCount: results.Count,
-                SuccessCount: successCount,
-                FailedCount: failedCount,
-                Results: results));
+        app.MapPost("/api/log/lotw/upload", async (
+            LotwUploadRequest req,
+            LotwService lotw,
+            HttpContext ctx) =>
+        {
+            try
+            {
+                var result = await lotw.UploadAsync(req, ctx.RequestAborted);
+                if (result.TqslMissing)
+                    return Results.Json(result, statusCode: StatusCodes.Status409Conflict);
+                if (!result.Success)
+                    return Results.Json(result, statusCode: StatusCodes.Status502BadGateway);
+                return Results.Ok(result);
+            }
+            catch (InvalidOperationException ex) when (ex.Message == LogbookPluginMappings.MissingPluginError)
+            {
+                return LogbookPluginMappings.MissingPlugin();
+            }
+            catch (NotSupportedException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status501NotImplemented);
+            }
+            catch (LotwBadRequestException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
         });
 
         // -- Logging v2: HTTP cloud-log uploaders (Wavelog/Cloudlog + Club Log) --
@@ -3964,21 +4450,31 @@ public static class ZeusEndpoints
         });
 
         app.MapPost("/api/log/publish/cloud", async (
-            QrzPublishRequest req, CloudLog.CloudLogService cloud, LogService logService, HttpContext ctx) =>
+            QrzPublishRequest req, CloudLog.CloudLogService cloud, LogbookPluginBridge logbook, HttpContext ctx) =>
         {
             if (req.LogEntryIds == null || !req.LogEntryIds.Any())
                 return Results.BadRequest(new { error = "no log entry IDs provided" });
-            var entries = await logService.GetLogEntriesByIdsAsync(req.LogEntryIds, ctx.RequestAborted);
-            var results = new List<CloudLog.CloudLogResult>();
-            foreach (var entry in entries)
-                results.AddRange(await cloud.PublishOnceAsync(entry, ctx.RequestAborted));
-            return Results.Ok(new
+
+            var plugin = logbook.Current;
+            if (plugin is null)
+                return LogbookPluginMappings.MissingPlugin();
+
+            return await LogbookPluginMappings.GuardAsync(async () =>
             {
-                total = results.Count,
-                successCount = results.Count(r => r.Success),
-                failedCount = results.Count(r => !r.Success),
-                results,
-            });
+                var entries = (await plugin.GetByIdsAsync(req.LogEntryIds, ctx.RequestAborted))
+                    .Select(LogbookPluginMappings.ToContract)
+                    .ToList();
+                var results = new List<CloudLog.CloudLogResult>();
+                foreach (var entry in entries)
+                    results.AddRange(await cloud.PublishOnceAsync(entry, ctx.RequestAborted));
+                return Results.Ok(new
+                {
+                    total = results.Count,
+                    successCount = results.Count(r => r.Success),
+                    failedCount = results.Count(r => !r.Success),
+                    results,
+                });
+            }, logbook, plugin, log);
         });
 
         // -- Logging v2: N1MM-format UDP broadcaster (HRD / DXKeeper gateway) -----
@@ -4145,6 +4641,8 @@ public static class ZeusEndpoints
 
         app.MapPost("/api/midi/learn/start", (Midi.MidiService midi) => Results.Ok(midi.StartLearn()));
 
+        app.MapPost("/api/midi/learn/keepalive", (Midi.MidiService midi) => Results.Ok(midi.KeepLearnAlive()));
+
         app.MapPost("/api/midi/learn/stop", (Midi.MidiService midi) => Results.Ok(midi.StopLearn()));
 
         app.MapGet("/api/midi/streamdeck/devices",
@@ -4162,20 +4660,6 @@ public static class ZeusEndpoints
                 req.Enabled, req.Transport, req.Host, req.Port, req.MulticastGroup, req.MulticastTtl,
                 req.SendQsoLogged, req.SendLiveDecodes);
             var status = wsjtx.SetConfig(req);
-            return Results.Ok(status);
-        });
-
-        // Digital-mode spotting uploaders (FT8/FT4 -> PSK Reporter, WSPR ->
-        // WSPRnet). NEW network egress, both DISABLED by default; config applies
-        // live (the uploaders only send UDP/HTTP — there is no listener).
-        app.MapGet("/api/spotting/status", (SpottingManagementService spotting) => spotting.GetStatus());
-
-        app.MapPost("/api/spotting/config", (SpottingRuntimeConfig req, SpottingManagementService spotting) =>
-        {
-            log.LogInformation(
-                "api.spotting.config psk={Psk} wsprnet={Wspr}",
-                req.PskReporterEnabled, req.WsprnetEnabled);
-            var status = spotting.SetConfig(req);
             return Results.Ok(status);
         });
 
@@ -4348,7 +4832,217 @@ public static class ZeusEndpoints
         return app;
     }
 
+    internal static SupportAvailabilityResponse BuildSupportAvailabilityResponse(
+        Zeus.Server.Hosting.Support.SupportAvailabilityStore store) =>
+        BuildSupportAvailabilityResponse(
+            store.IsAvailable,
+            store.AutoShareOnCrash,
+            store.AnsweredAgreementVersion);
+
+    internal static SupportAvailabilityResponse BuildSupportAvailabilityResponse(
+        bool available,
+        bool autoShareCrashes,
+        int agreementVersion) =>
+        new(
+            available,
+            autoShareCrashes,
+            agreementVersion,
+            Zeus.Server.Hosting.Support.SupportAvailabilityStore.CurrentAgreementVersion);
+
+    internal static SupportAvailabilityResponse AnswerSupportAgreement(
+        SupportAgreementRequest req,
+        Zeus.Server.Hosting.Support.SupportAvailabilityStore store,
+        ILogger log)
+    {
+        var beforeAvailable = store.IsAvailable;
+        var beforeAutoShare = store.AutoShareOnCrash;
+        var (newAvailable, newAutoShare, agreementVersion) = store.AnswerAgreement(req.OptIn);
+        if (beforeAvailable != newAvailable || beforeAutoShare != newAutoShare)
+        {
+            Zeus.Server.SupportSidecar.NotifyAvailabilityChanged(newAvailable, newAutoShare, log: log);
+        }
+
+        log.LogInformation(
+            "api.support.agreement optIn={OptIn} available={Available} autoShareCrashes={AutoShare} agreementVersion={AgreementVersion}",
+            req.OptIn, newAvailable, newAutoShare, agreementVersion);
+        return BuildSupportAvailabilityResponse(newAvailable, newAutoShare, agreementVersion);
+    }
+
+    public static bool IsUserAccessGateProtectedRequest(string method, PathString path)
+    {
+        if (!path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (HttpMethods.IsGet(method) || HttpMethods.IsHead(method) || HttpMethods.IsOptions(method))
+            return false;
+
+        var value = path.Value ?? string.Empty;
+        return !IsUserAccessGatePublicMutation(value);
+    }
+
+    private static bool IsUserAccessGateEnabled(WebApplication app)
+    {
+        if (!app.Environment.IsEnvironment("Test"))
+            return true;
+
+        return string.Equals(
+            app.Configuration["ZEUS_TEST_USER_ACCESS_GATE"],
+            "on",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsUserAccessGatePublicMutation(string path)
+    {
+        return string.Equals(path, "/api/qrz/login", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "/api/qrz/logout", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "/api/qrz/apikey", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "/api/disconnect", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "/api/disconnect/p2", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(path, "/api/disconnect/p3", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task<bool> DenyIfUserAccessBlockedAsync(HttpContext ctx, ILogger log)
+    {
+        var qrz = ctx.RequestServices.GetRequiredService<QrzService>();
+        var users = ctx.RequestServices.GetRequiredService<UserManagementStore>();
+        var remoteUsers = ctx.RequestServices.GetRequiredService<Zeus.Server.Hosting.RemoteUserAccessClient>();
+        var qrzStatus = qrz.GetStatus();
+
+        if (!qrzStatus.Connected)
+        {
+            await WriteUserAccessDeniedAsync(
+                ctx,
+                StatusCodes.Status401Unauthorized,
+                "QRZ login required",
+                "Sign in to QRZ before using Zeus.").ConfigureAwait(false);
+            return true;
+        }
+
+        ZeusUserSession session;
+        if (remoteUsers.Enabled)
+        {
+            var remoteSession = await remoteUsers.GetSessionResultAsync(qrz, qrzStatus, ctx.RequestAborted)
+                .ConfigureAwait(false);
+            if (remoteSession.Outcome == Zeus.Server.Hosting.RemoteUserAccessSessionOutcome.Unavailable)
+            {
+                remoteUsers.LogUnavailableFallbackOnce(log, qrzStatus);
+                session = users.GetSession(qrzStatus);
+            }
+            else
+            {
+                session = remoteSession.Session!;
+            }
+        }
+        else
+        {
+            session = users.GetSession(qrzStatus);
+        }
+
+        if (session.AccessAllowed)
+            return false;
+
+        await RevokeActiveRadioAccessAsync(ctx, log).ConfigureAwait(false);
+        await WriteUserAccessDeniedAsync(
+            ctx,
+            StatusCodes.Status403Forbidden,
+            session.DenialReason ?? "Zeus app access disabled",
+            "Your Zeus account is blocked by user management.").ConfigureAwait(false);
+        return true;
+    }
+
+    private static async Task WriteUserAccessDeniedAsync(
+        HttpContext ctx,
+        int statusCode,
+        string error,
+        string message)
+    {
+        ctx.Response.StatusCode = statusCode;
+        ctx.Response.ContentType = "application/json";
+        await ctx.Response.WriteAsJsonAsync(new
+        {
+            error,
+            message,
+            accessAllowed = false,
+        }, ctx.RequestAborted).ConfigureAwait(false);
+    }
+
+    private static async Task RevokeActiveRadioAccessAsync(HttpContext ctx, ILogger log)
+    {
+        try
+        {
+            var tx = ctx.RequestServices.GetService<TxService>();
+            tx?.TrySetTun(false, out _);
+            tx?.TrySetMox(false, out _);
+        }
+        catch (Exception ex)
+        {
+            log.LogDebug(ex, "user.access.revoke.tx.failed");
+        }
+
+        var radio = ctx.RequestServices.GetService<RadioService>();
+        if (radio is null || !radio.IsConnected)
+            return;
+
+        var ct = ctx.RequestAborted;
+        try
+        {
+            if (radio.IsProtocol3Active)
+            {
+                var sidecar = ctx.RequestServices.GetService<Protocol3SidecarBridge>();
+                var dsp = ctx.RequestServices.GetService<DspPipelineService>();
+                if (sidecar is not null)
+                    await sidecar.DisconnectAsync(ct).ConfigureAwait(false);
+                radio.MarkProtocol3Disconnected();
+                dsp?.DisconnectP3TxEngine();
+                return;
+            }
+
+            if (radio.IsProtocol2Active)
+            {
+                var dsp = ctx.RequestServices.GetService<DspPipelineService>();
+                if (dsp is not null)
+                    await dsp.DisconnectP2Async(ct).ConfigureAwait(false);
+                return;
+            }
+
+            await radio.DisconnectAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "user.access.revoke.disconnect.failed");
+        }
+    }
+
     // ---------- helpers (formerly local functions in Program.cs) -------------
+
+    private static IResult? RequireAdminSession(ZeusUserSession session)
+    {
+        if (!session.QrzConnected)
+        {
+            return Results.Json(
+                new { error = "QRZ login required", session },
+                statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        if (!session.AccessAllowed)
+        {
+            return Results.Json(
+                new { error = session.DenialReason ?? "Zeus access disabled", session },
+                statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        if (!session.IsAdmin)
+        {
+            return Results.Json(
+                new { error = "Admin privileges required", session },
+                statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Best-effort QRZ lookup that returns the operator's full display name
@@ -4512,20 +5206,20 @@ public static class ZeusEndpoints
     static string[] AvailableRxAux(RxAuxInputs caps)
     {
         var list = new List<string>(4);
-        if (caps.HasFlag(RxAuxInputs.Ext1))   list.Add(nameof(RxAuxInputSel.Ext1));
-        if (caps.HasFlag(RxAuxInputs.Ext2))   list.Add(nameof(RxAuxInputSel.Ext2));
-        if (caps.HasFlag(RxAuxInputs.Xvtr))   list.Add(nameof(RxAuxInputSel.Xvtr));
+        if (caps.HasFlag(RxAuxInputs.Ext1)) list.Add(nameof(RxAuxInputSel.Ext1));
+        if (caps.HasFlag(RxAuxInputs.Ext2)) list.Add(nameof(RxAuxInputSel.Ext2));
+        if (caps.HasFlag(RxAuxInputs.Xvtr)) list.Add(nameof(RxAuxInputSel.Xvtr));
         if (caps.HasFlag(RxAuxInputs.Bypass)) list.Add(nameof(RxAuxInputSel.Bypass));
         return list.ToArray();
     }
 
     static bool RxAuxSupported(RxAuxInputSel sel, RxAuxInputs caps) => sel switch
     {
-        RxAuxInputSel.Ext1   => caps.HasFlag(RxAuxInputs.Ext1),
-        RxAuxInputSel.Ext2   => caps.HasFlag(RxAuxInputs.Ext2),
-        RxAuxInputSel.Xvtr   => caps.HasFlag(RxAuxInputs.Xvtr),
+        RxAuxInputSel.Ext1 => caps.HasFlag(RxAuxInputs.Ext1),
+        RxAuxInputSel.Ext2 => caps.HasFlag(RxAuxInputs.Ext2),
+        RxAuxInputSel.Xvtr => caps.HasFlag(RxAuxInputs.Xvtr),
         RxAuxInputSel.Bypass => caps.HasFlag(RxAuxInputs.Bypass),
-        _                    => true, // None always allowed
+        _ => true, // None always allowed
     };
 
     static bool TryParseIpEndpoint(string raw, out IPEndPoint ep)
@@ -4538,6 +5232,56 @@ public static class ZeusEndpoints
         if (!IPAddress.TryParse(host, out var ip)) return false;
         ep = new IPEndPoint(ip, port);
         return true;
+    }
+
+    internal static bool SameIpEndpoint(string? current, IPEndPoint requested)
+    {
+        if (string.IsNullOrWhiteSpace(current))
+            return false;
+        return TryParseIpEndpoint(current, out var parsed) &&
+               parsed.Address.Equals(requested.Address) &&
+               parsed.Port == requested.Port;
+    }
+
+    internal static int Protocol3RequestedRxStreams(StateDto state, int radioMaxRxStreams)
+    {
+        var cappedMax = Math.Clamp(radioMaxRxStreams, 1, WireContract.MaxReceivers);
+        var requested = 1;
+
+        if (state.Rx2Enabled)
+            requested = 2;
+
+        if (state.Receivers is not null)
+        {
+            foreach (var receiver in state.Receivers)
+            {
+                if (!receiver.Enabled)
+                    continue;
+                if (receiver.Index < 0 || receiver.Index >= WireContract.MaxReceivers)
+                    continue;
+                requested = Math.Max(requested, receiver.Index + 1);
+            }
+        }
+
+        return Math.Clamp(requested, 1, cappedMax);
+    }
+
+    internal static int Protocol3RxRateHz(IConfiguration configuration)
+    {
+        const int fallback = 192_000;
+        var raw = Environment.GetEnvironmentVariable("ZEUS_PROTOCOL3_RX_RATE_HZ");
+        if (string.IsNullOrWhiteSpace(raw))
+            raw = configuration["Zeus:Protocol3:RxRateHz"] ??
+                  configuration["Zeus:Protocol3:Sidecar:RxRateHz"];
+        if (string.IsNullOrWhiteSpace(raw))
+            return fallback;
+        if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+            return fallback;
+
+        var rateHz = parsed < 10_000 ? checked(parsed * 1000) : parsed;
+        return rateHz is 48_000 or 96_000 or 192_000 or 384_000 or 768_000 or 1_536_000
+            ? rateHz
+            : fallback;
     }
 
     // Connect-time projection of the discovered board byte → kind. Protocol 1
@@ -4557,7 +5301,7 @@ public static class ZeusEndpoints
         0x06 => HpsdrBoardKind.HermesLite2,
         0x0A => HpsdrBoardKind.OrionMkII,
         0x14 => HpsdrBoardKind.HermesC10,
-        _    => HpsdrBoardKind.Unknown,
+        _ => HpsdrBoardKind.Unknown,
     };
 
     static HpsdrBoardKind MapBoardByteP2(byte raw) => raw switch
@@ -4571,7 +5315,7 @@ public static class ZeusEndpoints
         0x06 => HpsdrBoardKind.HermesLite2,
         0x0A => HpsdrBoardKind.OrionMkII,    // Saturn / ANAN-G2
         0x14 => HpsdrBoardKind.HermesC10,    // ANAN-G2E
-        _    => HpsdrBoardKind.Unknown,
+        _ => HpsdrBoardKind.Unknown,
     };
 
     static HpsdrBoardKind? ParseBoardKind(string? raw)
@@ -4890,6 +5634,43 @@ public static class ZeusEndpoints
     }
 
     static bool IsFinite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
+
+    private static bool TryDecodeFloat32Base64(
+        string samplesBase64,
+        out float[] samples,
+        out string error)
+    {
+        samples = [];
+        error = "";
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(samplesBase64);
+        }
+        catch (FormatException)
+        {
+            error = "samplesBase64 must be valid base64";
+            return false;
+        }
+
+        if (bytes.Length == 0 || bytes.Length % sizeof(float) != 0)
+        {
+            error = "samplesBase64 must contain float32 little-endian samples";
+            return false;
+        }
+
+        int count = bytes.Length / sizeof(float);
+        if (count > SignalJammerTxSource.MaxTextSamples)
+        {
+            error = $"text audio may not exceed {SignalJammerTxSource.MaxTextSamples} samples";
+            return false;
+        }
+
+        samples = new float[count];
+        for (int i = 0; i < samples.Length; i++)
+            samples[i] = BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(i * sizeof(float), sizeof(float)));
+        return true;
+    }
 
     internal static SmartNrRxChainRuntimeDto BuildSmartNrRxChainRuntime(StateDto state, AdcProtectionStatusDto adc)
     {
@@ -5555,6 +6336,17 @@ internal sealed record NativeMuteRequest(bool Muted);
 internal sealed record SupportDecisionRequest(string? RequestId);
 /// <summary>Operator opt-in body for the L1 Remote Diagnostics master switch (remote-diag P5).</summary>
 internal sealed record SupportAvailabilityRequest(bool? Available, bool? AutoShareCrashes);
+/// <summary>Operator answer body for the crash-report agreement prompt.</summary>
+internal sealed record SupportAgreementRequest(bool OptIn);
+internal sealed record SupportAvailabilityResponse(
+    [property: JsonPropertyName("available")]
+    bool Available,
+    [property: JsonPropertyName("autoShareCrashes")]
+    bool AutoShareCrashes,
+    [property: JsonPropertyName("agreementVersion")]
+    int AgreementVersion,
+    [property: JsonPropertyName("currentAgreementVersion")]
+    int CurrentAgreementVersion);
 internal sealed record NativeAudioDevicesSetRequest(string? InputDeviceId, string? OutputDeviceId);
 internal sealed record NativeAudioDeviceDto(string Id, string Name, bool IsDefault);
 internal sealed record NativeAudioDevicesResponse(

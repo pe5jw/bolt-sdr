@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // freedv-stations-store — client state for the FreeDV Stations panel.
-// Polls GET /api/freedv/stations (served by the backend FreeDvReporterService),
+// Polls the FreeDV plugin's /stations endpoint,
 // holds the live station list and implements click-to-tune by driving the Zeus
 // VFO (setVfo + setMode + setFreeDvConfig) over the native radio connection.
 
@@ -19,6 +19,7 @@ import {
   type FreeDvSubmode,
 } from '../api/client';
 import { useConnectionStore } from './connection-store';
+import { freeDvPluginUnavailableReason, isFreeDvPluginReady } from './freedv-plugin-store';
 import { freqHzToBand } from './spots-store';
 
 export { freqHzToBand };
@@ -168,6 +169,10 @@ export const useFreeDvStationsStore = create<FreeDvStationsState>()((set, get) =
   tuneToStation: async (station) => {
     if (useConnectionStore.getState().status !== 'Connected') {
       set({ tuneError: 'No radio connected — connect first.' });
+      return;
+    }
+    if (!isFreeDvPluginReady()) {
+      set({ tuneError: freeDvPluginUnavailableReason() ?? 'FreeDV plugin is unavailable.' });
       return;
     }
     set({ tuneError: null });

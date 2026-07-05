@@ -84,6 +84,9 @@ public sealed class TxService
     // ExternalPttService.IsCwMode.
     private static bool IsCwMode(RxMode mode) => mode is RxMode.CWU or RxMode.CWL;
 
+    private static bool IsRogerBeepMode(RxMode mode) =>
+        mode is RxMode.LSB or RxMode.USB or RxMode.AM or RxMode.SAM or RxMode.DSB or RxMode.FM;
+
     public TxService(RadioService radio, DspPipelineService pipeline, StreamingHub hub, IBandPlanService bandPlan, ILogger<TxService> log)
     {
         _radio = radio;
@@ -91,6 +94,8 @@ public sealed class TxService
         _hub = hub;
         _bandPlan = bandPlan;
         _log = log;
+        _radio.Disconnected += OnRadioDisconnected;
+        _radio.P2Disconnected += OnRadioDisconnected;
     }
 
     public bool IsMoxOn { get { lock (_sync) return _moxOn; } }
@@ -144,6 +149,34 @@ public sealed class TxService
         catch (Exception ex)
         {
             _log.LogWarning(ex, "tx.txActiveChanged subscriber threw");
+        }
+    }
+
+    private void OnRadioDisconnected()
+    {
+        bool wasMoxOn;
+        bool wasTunOn;
+        bool? txActiveCaptured;
+        lock (_sync)
+        {
+            wasMoxOn = _moxOn;
+            wasTunOn = _tunOn;
+            _moxOn = false;
+            _tunOn = false;
+            _moxStartedAt = null;
+            _tunStartedAt = null;
+            _moxOwner = null;
+            Interlocked.Exchange(ref _preKeyOpenAtTicks, 0);
+            txActiveCaptured = CaptureTxActiveChangeUnderLock();
+        }
+
+        RaiseTxActiveChanged(txActiveCaptured);
+        _radio.NotifyTunActive(false);
+
+        if (wasMoxOn || wasTunOn)
+        {
+            _log.LogInformation("tx.disconnect.clear mox={Mox} tun={Tun}", wasMoxOn, wasTunOn);
+            _hub.Broadcast(new MoxStateFrame(MoxOn: false, TunOn: false));
         }
     }
 
@@ -222,18 +255,43 @@ public sealed class TxService
             ? (long)(preKeyMs / 1000.0 * System.Diagnostics.Stopwatch.Frequency)
             : 0;
 
-        // FreeDV end-of-over TX tail. On a genuine, accepted mic un-key, clock the
-        // final modem frame out to the radio while the wire MOX bit is STILL
-        // asserted and _moxOn is still true — done here, before the state lock, so
-        // the audio thread never runs its falling-edge ring-clear mid-tail and the
-        // receiver gets whole OFDM frames instead of a mid-symbol cut. No-op unless
-        // FreeDV is engaged; blocks briefly (bounded) for the tail to transmit.
-        // The acceptance test mirrors the lock below (only the owner / UI may
-        // drop), so we never transmit a tail for a drop that will be rejected.
-        if (!on && IsMoxOn
-            && (source == MoxSource.UI || MoxOwner is null || MoxOwner == source))
+        // End-of-over TX tails. On a genuine, accepted mic un-key, clock any tail
+        // out while the wire MOX bit is STILL asserted and _moxOn is still true.
+        // This runs before the state lock so the audio thread never performs its
+        // falling-edge ring-clear mid-tail. The acceptance test mirrors the lock
+        // below (only the owner / UI may drop), so a rejected drop never emits a
+        // tail.
+        MoxSource? ownerBeforeDrop = MoxOwner;
+        var stateBeforeDrop = !on && IsMoxOn
+            && (source == MoxSource.UI || ownerBeforeDrop is null || ownerBeforeDrop == source)
+            ? _radio.Snapshot()
+            : null;
+        if (stateBeforeDrop is not null)
         {
             _pipeline.DrainFreeDvTxTail();
+
+            // Voice-mode TX tail (issue #1294). Hold the wire MOX bit
+            // asserted a while longer so mic frames still crossing the
+            // browser→WS→WDSP→IQ pipeline finish clocking out to the radio
+            // before it drops off the air. Only UI-sourced releases arm this
+            // — hardware / MIDI / plugin drops have already been decided by
+            // physical timing. CW is excluded (a hold would key dead carrier
+            // past the last dit); FreeDV is exempt because DrainFreeDvTxTail
+            // already ran its own bounded, backlog-derived drain above.
+            int tailMs = _radio.TxMoxTailDelayMs;
+            if (tailMs > 0
+                && source == MoxSource.UI
+                && !IsCwMode(stateBeforeDrop.Mode)
+                && !(_pipeline.IsFreeDvActive))
+            {
+                Thread.Sleep(tailMs);
+            }
+
+            if (stateBeforeDrop.RogerBeepEnabled
+                && IsRogerBeepMode(stateBeforeDrop.Mode))
+            {
+                _pipeline.DrainRogerBeepTail();
+            }
         }
 
         bool wasTunOn;
@@ -315,6 +373,7 @@ public sealed class TxService
         {
             // Engine handles the RXA/TXA pair atomically under its own lock.
             _pipeline.SetMox(true);
+            _pipeline.PrimeTxDspForKeyDown();
             _log.LogInformation("tx.mox.on.recv ts={Ts}",
                 System.Diagnostics.Stopwatch.GetTimestamp());
             _radio.SetMox(true);

@@ -47,6 +47,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Threading.Channels;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Zeus.Contracts;
 using Zeus.Dsp;
@@ -61,6 +62,7 @@ public class DspPipelineService : BackgroundService,
 {
     private const int Width = 2048;
     private const int SyntheticSampleRateHz = 192_000;
+    private const int OfflinePreviewTxOutputRateHz = 192_000;
     public const int AudioOutputRateHz = 48_000;
     private const int AudioDrainCapacity = 2048;
     private const float DisplayInvalidBinDb = -200f;
@@ -69,8 +71,14 @@ public class DspPipelineService : BackgroundService,
     private readonly RadioService _radio;
     private readonly StreamingHub _hub;
     private readonly IRxAudioSink[] _audioSinks;
+    private readonly TxIqRing? _txIqRing;
+    // Operator RX master mute (desktop "Mute" button, issue #1252). Read once per
+    // tick so the local-monitor lane (Recorder playback) can stay audible while
+    // real RX audio is muted. Null in unit tests / non-desktop hosts => never muted.
+    private readonly RxAudioMuteState? _rxAudioMute;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<DspPipelineService> _log;
+    private double _displayMaxFrameRateHz;
 
     /// <summary>
     /// Raised when an RX S-meter reading is available (approximately 5 Hz).
@@ -756,6 +764,31 @@ public class DspPipelineService : BackgroundService,
     // growing a P2 variant there would require a larger refactor; for now
     // keeping it isolated avoids touching any P1 behavior.
     private Zeus.Protocol2.Protocol2Client? _p2Client;
+    private readonly Protocol3SidecarBridge? _p3Sidecar;
+
+    // Wideband display mode. P2 uses bounded ADC snapshots; P3 consumes a
+    // sidecar-projected full-span DisplayFrame when available. The radio/sidecar
+    // transport is enabled only when this user setting is on AND at least one
+    // display client is mounted. The P2 RX socket thread only copies the latest
+    // assembled ADC snapshot into _widebandPendingSamples; FFT/binning runs on
+    // RunWidebandDisplayAnalyzerAsync so display work cannot stall packet
+    // receive or audio.
+    private int _widebandDisplayEnabled;
+    private int _widebandTransportEnabled;
+    private int _p2WidebandTransportEnabled;
+    private readonly WidebandSpectrumAnalyzer _widebandAnalyzer = new();
+    private readonly object _widebandFrameLock = new();
+    private readonly SemaphoreSlim _widebandFrameSignal = new(0, int.MaxValue);
+    private readonly short[] _widebandPendingSamples =
+        new short[Zeus.Protocol2.Protocol2Client.WidebandFrameSamples];
+    private readonly short[] _widebandAnalysisSamples =
+        new short[Zeus.Protocol2.Protocol2Client.WidebandFrameSamples];
+    private readonly float[] _widebandPanBuf = new float[Width];
+    private readonly float[] _widebandWfBuf = new float[Width];
+    private bool _widebandFramePending;
+    private int _widebandPendingSampleRateHz = Zeus.Protocol2.Protocol2Client.WidebandAdcSampleRateHz;
+    private long _p3WidebandDisplayMissingLogMs;
+    private long _p3WidebandDisplayErrorLogMs;
 
     // Radio-mic (UDP 1026) routing — external-audio-jacks re-port. The
     // re-blocker buffers 64-sample 1026 packets into the 960-sample mic blocks
@@ -1010,7 +1043,7 @@ public class DspPipelineService : BackgroundService,
     private int _appliedEffectiveAttDb = -1;
     private bool _appliedPreampOn;
 
-    private uint _seq;
+    private int _seq;
     private uint _audioSeq;
     // Latched from MoxChanged so Tick can route the panadapter to the TX
     // analyzer during keying without snapshotting RadioService. TUN also flips
@@ -1118,6 +1151,7 @@ public class DspPipelineService : BackgroundService,
     private IProtocol1Client? _attachedSinkP1;
     private Zeus.Protocol2.Protocol2Client? _attachedSinkP2;
     private long _lastTickStopwatchTicks;
+    private long _lastInlineTickStopwatchTicks;
     private static readonly long TickPeriodStopwatchTicks =
         (long)(Stopwatch.Frequency / 30.0);
 
@@ -1149,6 +1183,9 @@ public class DspPipelineService : BackgroundService,
     // ExecuteAsync), so no synchronisation is needed.
     private readonly float[] _panBuf = new float[Width];
     private readonly float[] _wfBuf = new float[Width];
+    private readonly object _displayFrameRateLock = new();
+    private long _displayFrameBudgetLastTicks;
+    private double _displayFrameBudget = 1.0;
     // Per-receiver display/audio probe: 1 Hz tally of how often each receiver's
     // pan/wf pixout reports fresh data. If a secondary's wf advances but pan stays
     // ~0, the freeze is backend (pan pixout never goes fresh); if both advance like
@@ -1251,10 +1288,10 @@ public class DspPipelineService : BackgroundService,
     // to register a stub. See CwSidetoneSource for the keying contract.
     private readonly CwSidetoneSource? _sidetone;
     private readonly FrontendDspSceneDiagnosticsService? _frontendDspScene;
-    // FreeDV digital-voice modem coordinator. Null in test constructions.
+    // Plugin-provided audio modem coordinator. Null in test constructions.
     // When FreeDV is the active RX0 mode, the post-demod insert below replaces
     // the received modem audio with decoded speech.
-    private readonly FreeDvService? _freeDv;
+    private readonly AudioModemPluginBridge? _audioModem;
 
     public DspPipelineService(
         RadioService radio,
@@ -1264,15 +1301,22 @@ public class DspPipelineService : BackgroundService,
         CwSidetoneSource? sidetone = null,
         FrontendDspSceneDiagnosticsService? frontendDspScene = null,
         DisplaySettingsStore? displaySettings = null,
-        FreeDvService? freeDv = null,
+        AudioModemPluginBridge? audioModem = null,
         Func<TxAudioIngest?>? txIngestFactory = null,
         Nr3ModelStore? nr3ModelStore = null,
-        IKiwiAudioBus? kiwiAudioBus = null)
+        IKiwiAudioBus? kiwiAudioBus = null,
+        RxAudioMuteState? rxAudioMute = null,
+        TxIqRing? txIqRing = null,
+        Protocol3SidecarBridge? p3Sidecar = null,
+        IConfiguration? configuration = null)
     {
         _radio = radio;
         _hub = hub;
-        _freeDv = freeDv;
+        _txIqRing = txIqRing;
+        _audioModem = audioModem;
         _kiwiAudioBus = kiwiAudioBus;
+        _rxAudioMute = rxAudioMute;
+        _p3Sidecar = p3Sidecar;
         // Materialise once at construction so the per-tick fan-out is an
         // array-index loop (no enumerator allocation, no LINQ on the hot path).
         _audioSinks = audioSinks.ToArray();
@@ -1282,6 +1326,18 @@ public class DspPipelineService : BackgroundService,
         _displaySettings = displaySettings;
         _txIngestFactory = txIngestFactory;
         _log = loggerFactory.CreateLogger<DspPipelineService>();
+        var persistedDisplaySettings = _displaySettings?.Get();
+        _displayMaxFrameRateHz =
+            persistedDisplaySettings?.DisplayMaxFrameRateHz ??
+            DisplayPerformanceOptions.Resolve(configuration).MaxFrameRateHz;
+        if (_displayMaxFrameRateHz < DisplayPerformanceOptions.DefaultFrameRateHz)
+        {
+            _log.LogInformation(
+                "display.performance maxFrameRateHz={MaxFrameRateHz:F1}",
+                _displayMaxFrameRateHz);
+        }
+        Volatile.Write(ref _widebandDisplayEnabled,
+            (persistedDisplaySettings?.WidebandDisplayEnabled ?? false) ? 1 : 0);
         // Allocate secondary-receiver slots 1..N-1 up front (slot 0 stays null —
         // RX1 is _channelId). Buffers live for the service lifetime, mirroring the
         // old _rx2* fields; only activated slots open a WDSP channel.
@@ -1359,6 +1415,40 @@ public class DspPipelineService : BackgroundService,
     /// </summary>
     public void DrainFreeDvTxTail() => ResolveTxIngest()?.DrainFreeDvTxTail();
 
+    public bool IsFreeDvTailDraining => ResolveTxIngest()?.IsFreeDvTailDraining ?? false;
+
+    /// <summary>True while FreeDV is the active TX modem. Used by
+    /// <see cref="TxService"/> to skip the plain voice-mode TX tail delay
+    /// (issue #1294) — FreeDV runs its own bounded end-of-over drain instead.</summary>
+    public bool IsFreeDvActive => _audioModem?.Current?.Active ?? false;
+
+    /// <summary>
+    /// Old-school roger beep tail. Called by TxService on an accepted local
+    /// MOX release, before the wire MOX bit drops.
+    /// </summary>
+    public virtual bool DrainRogerBeepTail() => ResolveTxIngest()?.DrainRogerBeepTail() ?? false;
+
+    /// <summary>
+    /// Clocks any stale WDSP TXA output through silence and discards it before
+    /// the radio wire MOX bit is asserted on a new key-down.
+    /// </summary>
+    public virtual bool PrimeTxDspForKeyDown() => ResolveTxIngest()?.PrimeTxDspForKeyDown() ?? false;
+
+    public virtual bool DrainTxIqTransportTail(TimeSpan timeout)
+    {
+        var p2 = _p2Client;
+        if (p2 is not null)
+        {
+            p2.FlushPendingTxIqTailPacket();
+            return p2.WaitForTxIqQueueIdle(timeout);
+        }
+
+        if (_radio.ActiveClient is not null && _txIqRing is not null)
+            return _txIqRing.WaitForEmpty(timeout);
+
+        return true;
+    }
+
     // Persisted TX display analyzer config (live TX waterfall feature). Optional
     // so test constructions of DspPipelineService keep working; when null the
     // engine just runs at its built-in defaults. Display-only — never affects
@@ -1380,11 +1470,11 @@ public class DspPipelineService : BackgroundService,
     /// operator's FFT/window/smoothing rather than engine defaults. Also seeds
     /// the cal-offset field read by <see cref="Tick"/>. Display-only — never
     /// touches the transmitted signal.</summary>
-    private void SeedTxDisplayConfig(WdspDspEngine wdsp)
+    private void SeedTxDisplayConfig(IDspEngine engine)
     {
         var dto = _displaySettings?.Get();
         Volatile.Write(ref _txDisplayCalOffsetDb, ResolveCalOffset(dto));
-        wdsp.ConfigureTxDisplayAnalyzer(
+        engine.ConfigureTxDisplayAnalyzer(
             dto?.TxDisplayFftSize ?? DefaultTxDisplayFftSize,
             dto?.TxDisplayWindow ?? DefaultTxDisplayWindow,
             (dto?.TxDisplayAvgTauMs ?? DefaultTxDisplayAvgTauMs) / 1000.0);
@@ -1408,6 +1498,68 @@ public class DspPipelineService : BackgroundService,
         }
     }
 
+    public void ApplyDisplaySettings(DisplaySettingsDto dto)
+    {
+        ApplyTxDisplaySettings(dto);
+        SetWidebandDisplayEnabled(dto.WidebandDisplayEnabled);
+        SetDisplayMaxFrameRateHz(dto.DisplayMaxFrameRateHz);
+    }
+
+    private void SetDisplayMaxFrameRateHz(double frameRateHz)
+    {
+        var next = DisplayPerformanceOptions.NormalizeFrameRate(frameRateHz);
+        var changed = false;
+        lock (_displayFrameRateLock)
+        {
+            if (Math.Abs(_displayMaxFrameRateHz - next) < 0.0001)
+                return;
+            _displayMaxFrameRateHz = next;
+            _displayFrameBudgetLastTicks = 0;
+            _displayFrameBudget = 1.0;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            _log.LogInformation(
+                "display.performance maxFrameRateHz={MaxFrameRateHz:F1}",
+                next);
+        }
+    }
+
+    private void SetWidebandDisplayEnabled(bool enabled)
+    {
+        Volatile.Write(ref _widebandDisplayEnabled, enabled ? 1 : 0);
+        RefreshWidebandDisplayState();
+    }
+
+    private bool RefreshWidebandDisplayState()
+    {
+        var client = _p2Client;
+        bool enabled = Volatile.Read(ref _widebandDisplayEnabled) != 0;
+        bool displayRequested = _hub.DisplayStreamRequested;
+        bool p2Desired = client is not null && enabled && displayRequested;
+        bool p3Desired = client is null && _p3Sidecar is not null && _radio.IsProtocol3Active && enabled && displayRequested;
+        bool anyDesired = p2Desired || p3Desired;
+
+        bool p2Current = Volatile.Read(ref _p2WidebandTransportEnabled) != 0;
+        if (p2Desired != p2Current)
+        {
+            Volatile.Write(ref _p2WidebandTransportEnabled, p2Desired ? 1 : 0);
+            try { client?.SetWidebandDisplayEnabled(p2Desired); }
+            catch (ObjectDisposedException) { }
+        }
+
+        bool current = Volatile.Read(ref _widebandTransportEnabled) != 0;
+        if (anyDesired != current)
+            Volatile.Write(ref _widebandTransportEnabled, anyDesired ? 1 : 0);
+        if (!anyDesired)
+        {
+            lock (_widebandFrameLock) { _widebandFramePending = false; }
+        }
+        return anyDesired;
+    }
+
     private static double ResolveCalOffset(DisplaySettingsDto? dto)
     {
         double v = dto?.TxDisplayCalOffsetDb ?? 0.0;
@@ -1423,10 +1575,213 @@ public class DspPipelineService : BackgroundService,
         for (int i = 0; i < buf.Length; i++) buf[i] += d;
     }
 
+    private uint NextDisplaySeq() => unchecked((uint)Interlocked.Increment(ref _seq));
+
+    private bool ShouldProcessDisplayFrame(long nowTicks)
+    {
+        lock (_displayFrameRateLock)
+        {
+            var frameRateHz = _displayMaxFrameRateHz;
+            if (frameRateHz >= DisplayPerformanceOptions.DefaultFrameRateHz)
+                return true;
+
+            if (_displayFrameBudgetLastTicks == 0)
+            {
+                _displayFrameBudgetLastTicks = nowTicks;
+                _displayFrameBudget = 0.0;
+                return true;
+            }
+
+            var elapsedTicks = Math.Max(0, nowTicks - _displayFrameBudgetLastTicks);
+            _displayFrameBudgetLastTicks = nowTicks;
+            _displayFrameBudget = Math.Min(
+                1.0,
+                _displayFrameBudget + (elapsedTicks / (double)Stopwatch.Frequency * frameRateHz));
+
+            if (_displayFrameBudget + 1.0e-9 < 1.0)
+                return false;
+
+            _displayFrameBudget -= 1.0;
+            return true;
+        }
+    }
+
+    private async Task RunWidebandDisplayAnalyzerAsync(CancellationToken ct)
+    {
+        while (true)
+        {
+            await _widebandFrameSignal.WaitAsync(ct).ConfigureAwait(false);
+
+            int sampleRateHz;
+            lock (_widebandFrameLock)
+            {
+                if (!_widebandFramePending) continue;
+                Array.Copy(_widebandPendingSamples, _widebandAnalysisSamples, _widebandAnalysisSamples.Length);
+                sampleRateHz = _widebandPendingSampleRateHz;
+                _widebandFramePending = false;
+            }
+
+            if (Volatile.Read(ref _widebandDisplayEnabled) == 0 || !_hub.DisplayStreamRequested)
+                continue;
+            if (!ShouldProcessDisplayFrame(Stopwatch.GetTimestamp()))
+                continue;
+
+            _widebandAnalyzer.Analyze(_widebandAnalysisSamples, sampleRateHz, _widebandPanBuf, _widebandWfBuf);
+            SanitizeDisplayBuffer(_widebandPanBuf);
+            SanitizeDisplayBuffer(_widebandWfBuf);
+
+            double nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var frame = new DisplayFrame(
+                Seq: NextDisplaySeq(),
+                TsUnixMs: nowMs,
+                RxId: 0,
+                BodyFlags: DisplayBodyFlags.PanValid | DisplayBodyFlags.WfValid,
+                Width: Width,
+                CenterHz: WidebandSpectrumAnalyzer.DisplayCenterHz,
+                HzPerPixel: WidebandSpectrumAnalyzer.HzPerPixel,
+                PanDb: _widebandPanBuf,
+                WfDb: _widebandWfBuf);
+
+            lock (_calPanLock)
+            {
+                Array.Copy(_widebandPanBuf, _calPanSnapshot, Width);
+                Array.Copy(_widebandWfBuf, _diagWfSnapshot, Width);
+                _calPanHzPerPixel = WidebandSpectrumAnalyzer.HzPerPixel;
+                _calPanCenterHz = WidebandSpectrumAnalyzer.DisplayCenterHz;
+                _calPanSnapshotMs = (long)nowMs;
+                _diagWfSnapshotMs = (long)nowMs;
+                _diagDisplayFrameMs = (long)nowMs;
+                _diagDisplaySeq = frame.Seq;
+                _diagDisplayFrameCount++;
+                _diagLastPanValid = true;
+                _diagLastWfValid = true;
+                _diagLastPanSource = "wideband";
+                _diagLastWfSource = "wideband";
+                _diagLastKeyed = _keyed;
+                _diagLastPsMonitorRequested = false;
+                _diagLastPsFeedbackCorrecting = false;
+            }
+
+            _hub.Broadcast(frame);
+        }
+    }
+
+    private async Task RunP3WidebandDisplayPollerAsync(CancellationToken ct)
+    {
+        if (_p3Sidecar is null) return;
+
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(100));
+        while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+        {
+            if (!ShouldPollP3WidebandDisplay()) continue;
+            if (!ShouldProcessDisplayFrame(Stopwatch.GetTimestamp())) continue;
+
+            Protocol3SidecarDisplayFrame? sidecarFrame;
+            try
+            {
+                sidecarFrame = await _p3Sidecar.FetchWidebandDisplayFrameAsync(Width, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                LogP3WidebandDisplayError(ex);
+                continue;
+            }
+
+            if (sidecarFrame is null)
+            {
+                LogP3WidebandDisplayMissing();
+                continue;
+            }
+            if (!ShouldPollP3WidebandDisplay()) continue;
+
+            PublishP3WidebandDisplayFrame(sidecarFrame);
+        }
+    }
+
+    private bool ShouldPollP3WidebandDisplay() =>
+        _p3Sidecar is not null &&
+        _radio.IsProtocol3Active &&
+        Volatile.Read(ref _widebandDisplayEnabled) != 0 &&
+        _hub.DisplayStreamRequested;
+
+    private void PublishP3WidebandDisplayFrame(Protocol3SidecarDisplayFrame source)
+    {
+        if (source.PanDb.Length != Width || source.WfDb.Length != Width) return;
+
+        SanitizeDisplayBuffer(source.PanDb);
+        SanitizeDisplayBuffer(source.WfDb);
+
+        double nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var frame = new DisplayFrame(
+            Seq: NextDisplaySeq(),
+            TsUnixMs: nowMs,
+            RxId: source.RxId,
+            BodyFlags: source.BodyFlags,
+            Width: Width,
+            CenterHz: source.CenterHz,
+            HzPerPixel: source.HzPerPixel,
+            PanDb: source.PanDb,
+            WfDb: source.WfDb);
+
+        lock (_calPanLock)
+        {
+            Array.Copy(source.PanDb, _calPanSnapshot, Width);
+            Array.Copy(source.WfDb, _diagWfSnapshot, Width);
+            _calPanHzPerPixel = source.HzPerPixel;
+            _calPanCenterHz = source.CenterHz;
+            _calPanSnapshotMs = (long)nowMs;
+            _diagWfSnapshotMs = (long)nowMs;
+            _diagDisplayFrameMs = (long)nowMs;
+            _diagDisplaySeq = frame.Seq;
+            _diagDisplayFrameCount++;
+            _diagLastPanValid = true;
+            _diagLastWfValid = true;
+            _diagLastPanSource = "p3-wideband";
+            _diagLastWfSource = "p3-wideband";
+            _diagLastKeyed = _keyed;
+            _diagLastPsMonitorRequested = false;
+            _diagLastPsFeedbackCorrecting = false;
+        }
+
+        _hub.Broadcast(frame);
+    }
+
+    private void LogP3WidebandDisplayMissing()
+    {
+        long now = Environment.TickCount64;
+        long last = Interlocked.Read(ref _p3WidebandDisplayMissingLogMs);
+        if (now - last < 5_000) return;
+        if (Interlocked.CompareExchange(ref _p3WidebandDisplayMissingLogMs, now, last) != last) return;
+        _log.LogInformation(
+            "p3.wideband-display.waiting reason=sidecar-full-span-frame-unavailable");
+    }
+
+    private void LogP3WidebandDisplayError(Exception ex)
+    {
+        long now = Environment.TickCount64;
+        long last = Interlocked.Read(ref _p3WidebandDisplayErrorLogMs);
+        if (now - last < 5_000) return;
+        if (Interlocked.CompareExchange(ref _p3WidebandDisplayErrorLogMs, now, last) != last) return;
+        _log.LogWarning(ex, "p3.wideband-display.poll.error");
+    }
+
     private void PublishAudio(in AudioFrame frame)
     {
         for (int i = 0; i < _audioSinks.Length; i++)
             _audioSinks[i].Publish(in frame);
+    }
+
+    // Fan out a mute-EXEMPT frame (local monitor audio the operator explicitly
+    // asked to hear, such as Recorder playback or TX Monitor preview).
+    // Only NativeAudioSink honours it; every other sink inherits the interface's
+    // default no-op, so exempt playback reaches the desktop PC output but never
+    // the WebSocket fan-out or the onboard radio speakers.
+    private void PublishExemptAudio(in AudioFrame frame)
+    {
+        for (int i = 0; i < _audioSinks.Length; i++)
+            _audioSinks[i].PublishExempt(in frame);
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -1451,24 +1806,32 @@ public class DspPipelineService : BackgroundService,
         // listen for changes here and forward them to the live P2 client.
         _radio.FrequencyCorrectionFactorChanged += OnFrequencyCorrectionFactorChanged;
         using var timer = new PeriodicTimer(TickPeriod);
+        using var widebandAnalyzerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var widebandAnalyzerTask = RunWidebandDisplayAnalyzerAsync(widebandAnalyzerCts.Token);
+        var p3WidebandDisplayTask = RunP3WidebandDisplayPollerAsync(widebandAnalyzerCts.Token);
 
         try
         {
             while (await timer.WaitForNextTickAsync(ct))
             {
+                long nowTicks = Stopwatch.GetTimestamp();
                 // iter5: when a radio is connected, the sink (called on the
-                // RX OS thread) drives Tick inline via Stopwatch elapsed
-                // checks — see OnIqFrame. Skip the timer-driven Tick to avoid
-                // a double-tick and keep WDSP truly single-thread-owned on
-                // the hot path. The "no sink attached" branch keeps the
-                // synthetic-mode display alive when there's no radio.
-                if (_rxSinkAttached) continue;
+                // RX OS thread) normally drives Tick inline via Stopwatch
+                // elapsed checks — see OnIqFrame. If the sink is attached but
+                // RX packets stall, the timer becomes the fallback driver so
+                // monitor/preview audio, commands, and diagnostics still drain.
+                if (_rxSinkAttached &&
+                    !ShouldTimerTickWhenSinkAttached(
+                        nowTicks,
+                        Volatile.Read(ref _lastInlineTickStopwatchTicks),
+                        Volatile.Read(ref _lastTickStopwatchTicks),
+                        TickPeriodStopwatchTicks))
+                    continue;
                 // Drain any cross-thread commands posted while no sink was
-                // attached (rare — most commands arrive while a radio is
-                // connected and the sink is the consumer).
+                // attached, or while an attached sink has gone stale.
                 DrainDspCommands();
-                Tick(_panBuf, _wfBuf, _audioBuf);
-                _lastTickStopwatchTicks = Stopwatch.GetTimestamp();
+                if (Tick(_panBuf, _wfBuf, _audioBuf))
+                    Volatile.Write(ref _lastTickStopwatchTicks, nowTicks);
             }
         }
         catch (OperationCanceledException) { }
@@ -1492,6 +1855,11 @@ public class DspPipelineService : BackgroundService,
             DetachRxSinkP1();
             DetachRxSinkP2();
             CloseCurrentEngine();
+            widebandAnalyzerCts.Cancel();
+            try { await widebandAnalyzerTask.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+            try { await p3WidebandDisplayTask.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
         }
     }
 
@@ -1511,8 +1879,8 @@ public class DspPipelineService : BackgroundService,
         lock (_engineLock) { _engine?.SetTxTune(on); }
     }
 
-    /// <summary>Current engine snapshot (may be <see cref="SyntheticDspEngine"/>
-    /// while disconnected). TxAudioIngest calls ProcessTxBlock on this; the
+    /// <summary>Current engine snapshot (may be <see cref="OfflinePreviewDspEngine"/>
+    /// or <see cref="SyntheticDspEngine"/> while disconnected). TxAudioIngest calls ProcessTxBlock on this; the
     /// engine handles a disposed-during-call race internally by returning 0.
     /// Virtual so tests can subclass this service and substitute a stub engine
     /// without running the full Synthetic/WDSP lifecycle.
@@ -1539,6 +1907,7 @@ public class DspPipelineService : BackgroundService,
         var nrRuntime = BuildNrRuntime(engine, state);
         bool wdspActive = nrRuntime.WdspActive;
         bool synthetic = engine is SyntheticDspEngine;
+        bool offlinePreview = engine is OfflinePreviewDspEngine;
         var squelchConfig = state.Squelch ?? new SquelchConfig();
         var rxDsp = BuildRxDspChainDiagnostics(
             state,
@@ -1557,9 +1926,10 @@ public class DspPipelineService : BackgroundService,
         {
             schemaVersion = 1,
             engine = engine?.GetType().Name ?? "None",
-            engineKind = wdspActive ? "WDSP" : synthetic ? "Synthetic" : engine is null ? "None" : "Other",
+            engineKind = wdspActive ? "WDSP" : offlinePreview ? "OfflinePreview" : synthetic ? "Synthetic" : engine is null ? "None" : "Other",
             wdspActive = nrRuntime.WdspActive,
             synthetic,
+            offlinePreview,
             wdspNativeLoadable = nrRuntime.WdspNativeLoadable,
             wdspEmnrPost2Available = nrRuntime.WdspEmnrPost2Available,
             wdspNr4SbnrAvailable = nrRuntime.WdspNr4SbnrAvailable,
@@ -1598,6 +1968,8 @@ public class DspPipelineService : BackgroundService,
             wdspWisdomStatus = wisdom.Status,
             readiness = wdspActive
                 ? "wdsp-active"
+                : offlinePreview
+                    ? "offline-preview-active"
                 : synthetic
                     ? "synthetic-idle-or-fallback"
                     : "no-engine",
@@ -1691,10 +2063,14 @@ public class DspPipelineService : BackgroundService,
         OrionMkIIVariant variant = OrionMkIIVariant.G2,
         bool protocol2Active = false)
     {
-        bool wdsp = engine is WdspDspEngine;
+        bool wdsp = engine is WdspDspEngine or OfflinePreviewDspEngine;
         int txBlock = engine?.TxBlockSamples ?? 0;
         int txOut = engine?.TxOutputSamples ?? 0;
-        string status = wdsp ? "runtime-rate-writable-fixed-profile" : engine is SyntheticDspEngine ? "synthetic-profile" : "engine-unavailable";
+        string status = engine is OfflinePreviewDspEngine
+            ? "offline-preview-tx-profile"
+            : wdsp
+                ? "runtime-rate-writable-fixed-profile"
+                : engine is SyntheticDspEngine ? "synthetic-profile" : "engine-unavailable";
         int[] sampleRates = [48_000, 96_000, 192_000, 384_000, 768_000, 1_536_000];
         int[] iqBufferSizes = [64, 128, 256, 512, 1024];
         int[] filterTapSizes = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144];
@@ -3041,12 +3417,15 @@ public class DspPipelineService : BackgroundService,
         bool wdspActive = engine is WdspDspEngine;
         bool wdspNativeLoadable = WdspDspEngine.NativeLibraryLoadable;
         bool wdspEmnrPost2Available = WdspDspEngine.EmnrPost2Available;
+        bool wdspNr3RnnrAvailable = WdspDspEngine.Nr3RnnrAvailable;
         bool wdspNr4SbnrAvailable = WdspDspEngine.Nr4SbnrAvailable;
+        bool nr3ModelActive = !string.IsNullOrWhiteSpace(state.Nr3ModelName);
         var nr = NormalizeNrConfig(state.Nr ?? new NrConfig());
         string requestedNrMode = nr.NrMode.ToString();
         string effectiveNrMode = wdspActive
             ? nr.NrMode switch
             {
+                NrMode.Rnnr when !wdspNr3RnnrAvailable || !nr3ModelActive => NrMode.Off.ToString(),
                 NrMode.Sbnr when !wdspNr4SbnrAvailable => NrMode.Off.ToString(),
                 _ => requestedNrMode,
             }
@@ -3065,11 +3444,11 @@ public class DspPipelineService : BackgroundService,
             EffectiveNrMode: effectiveNrMode);
     }
 
-    private static NrConfig NormalizeNrConfig(NrConfig cfg) =>
+    internal static NrConfig NormalizeNrConfig(NrConfig cfg) =>
         IsSupportedNrMode(cfg.NrMode) ? cfg : cfg with { NrMode = NrMode.Off };
 
-    private static bool IsSupportedNrMode(NrMode mode) =>
-        mode is NrMode.Off or NrMode.Anr or NrMode.Emnr or NrMode.Sbnr;
+    internal static bool IsSupportedNrMode(NrMode mode) =>
+        mode is NrMode.Off or NrMode.Anr or NrMode.Emnr or NrMode.Rnnr or NrMode.Sbnr;
 
     internal static DspRxChainDiagnosticsDto BuildRxDspChainDiagnostics(
         StateDto state,
@@ -3227,7 +3606,8 @@ public class DspPipelineService : BackgroundService,
     /// <summary>
     /// Manually set the PS TX feedback attenuation (operator alternative to
     /// AutoAttenuate). Pushes the value to the connected radio — HL2 via the
-    /// AD9866 TX-PGA step, every other board via the P2 step attenuator — then
+    /// AD9866 TX-PGA step, HermesC10 on P1 via the gateware atten_on_Tx
+    /// register, every other board via the P2 step attenuator — then
     /// persists it per board and surfaces it in state via RadioService. This
     /// is what lets an operator on a fixed external-tap chain dial the
     /// feedback into calcc's range once and run with AutoAttenuate off.
@@ -3241,6 +3621,17 @@ public class DspPipelineService : BackgroundService,
             _radio.ActiveClient?.SetHl2TxStepAttenuationDb(clamped);
             _radio.SetPsTxAttenuationDb(clamped);
         }
+        else if ((_radio.ConnectedBoardKind is HpsdrBoardKind.HermesC10 or HpsdrBoardKind.HermesII)
+                 && _radio.ActiveClient is { } singleAdcP1)
+        {
+            // HermesC10 / HermesII on Protocol 1: the Hermes-family gateware
+            // muxes atten_on_Tx (0..31 dB) onto the step attenuator while
+            // FPGA_PTT. Carried in C3[4:0] of the PS-armed rotation's 0x1c
+            // frame (board-branched in ControlFrame).
+            int clamped = Math.Clamp(db, 0, 31);
+            singleAdcP1.SetPsTxAttenOnTxDb(clamped);
+            _radio.SetPsTxAttenuationDb(clamped);
+        }
         else
         {
             int clamped = Math.Clamp(db, 0, 31);
@@ -3251,9 +3642,7 @@ public class DspPipelineService : BackgroundService,
 
     private void OpenSynthetic()
     {
-        var engine = new SyntheticDspEngine();
-        int channelId = engine.OpenChannel(SyntheticSampleRateHz, Width);
-        ApplyStateToNewChannel(engine, channelId);
+        var engine = CreateDisconnectedEngine(out int channelId);
         // iter5 pass-2: _engineLock serialises CONCURRENT WRITERS. Volatile.Write
         // is used so a lock-free sink-side Volatile.Read sees the new engine
         // pointer; the lock-release fence also publishes the writes, but
@@ -3266,8 +3655,38 @@ public class DspPipelineService : BackgroundService,
             ResetSecondaryRxChannels();
             Volatile.Write(ref _sampleRateHz, SyntheticSampleRateHz);
         }
-        _log.LogInformation("dsp.pipeline engine=synthetic channel={Id}", channelId);
+        _log.LogInformation("dsp.pipeline engine={Engine} channel={Id}", engine.GetType().Name, channelId);
         RaiseEngineChanged(engine);
+    }
+
+    private IDspEngine CreateDisconnectedEngine(out int channelId)
+    {
+        OfflinePreviewDspEngine? preview = null;
+        try
+        {
+            preview = new OfflinePreviewDspEngine(_loggerFactory.CreateLogger<WdspDspEngine>());
+            channelId = preview.OpenChannel(SyntheticSampleRateHz, Width);
+            SeedTxDisplayConfig(preview);
+            preview.OpenTxChannel(outputRateHz: OfflinePreviewTxOutputRateHz);
+            try
+            {
+                ApplyStateToNewChannel(preview, channelId);
+            }
+            catch (EntryPointNotFoundException ex)
+            {
+                _log.LogWarning(ex, "dsp.pipeline offline-preview wdsp missing entry point - partial config applied");
+            }
+            return preview;
+        }
+        catch (Exception ex)
+        {
+            try { preview?.Dispose(); } catch { }
+            _log.LogWarning(ex, "dsp.pipeline offline-preview wdsp open failed, falling back to synthetic engine");
+            var synth = new SyntheticDspEngine();
+            channelId = synth.OpenChannel(SyntheticSampleRateHz, Width);
+            ApplyStateToNewChannel(synth, channelId);
+            return synth;
+        }
     }
 
     private void OnRadioConnected(IProtocol1Client client)
@@ -3280,6 +3699,16 @@ public class DspPipelineService : BackgroundService,
         // Seed the operator's persisted TX display config before TXA opens so
         // the analyzer comes up at their FFT/window/smoothing. Display-only.
         SeedTxDisplayConfig(wdsp);
+        // Hermes-family single-ADC P1 boards feed PS back at the WIRE rate:
+        // G2E (HermesC10) via its 4-DDC EP6 stream, ANAN-10E (HermesII) via
+        // its 2-DDC EP6 stream. All P1 DDCs share the single global rate, not
+        // the fixed 192 kHz of the P2 paired-DDC scheme. Tell WDSP the truth
+        // BEFORE TXA opens (SetPSFeedbackRate latches at open) or calcc's
+        // delay/sample math runs 4x off at 48 kHz and the fit never
+        // converges. piHPSDR model (receiver.c:1590-1596). P1 rate changes
+        // rebuild the engine through this same path, so the value tracks.
+        // HL2 keeps the shipped 192 kHz default untouched.
+        ApplyP1PsFeedbackRateOverride(_radio.ConnectedBoardKind, rate, wdsp.SetPsFeedbackRateHz);
         // P1 DAC runs at 48 kHz; keep TXA at the 48/48/48 profile Hermes is
         // calibrated against.
         wdsp.OpenTxChannel(outputRateHz: 48_000);
@@ -3323,13 +3752,21 @@ public class DspPipelineService : BackgroundService,
         _radio.ApplyPsHwPeakForConnection(isProtocol2: false, _radio.ConnectedBoardKind);
         // Restore the persisted PS feedback attenuation so a hot external-tap
         // chain isn't sitting at 0 dB on a fresh connect — at 0 dB the
-        // feedback ADC rails and calcc can never fit. HL2 only on the P1 side
-        // (it owns the AD9866 TX-PGA step attenuator). No-op when nothing was
-        // saved for this board yet.
+        // feedback ADC rails and calcc can never fit. On the P1 side HL2 owns
+        // the AD9866 TX-PGA step attenuator and HermesC10 owns the gateware
+        // atten_on_Tx register (0x1c C3[4:0], PTT-muxed); other P1 boards
+        // have no PS feedback attenuator. No-op when nothing was saved for
+        // this board yet — HermesC10 then keeps emitting the silicon reset
+        // default 31 via the sentinel path (never a force-seeded value).
         if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2
             && _radio.GetPersistedPsTxAttnDb() is int hl2Attn)
         {
             _radio.ActiveClient?.SetHl2TxStepAttenuationDb(hl2Attn);
+        }
+        else if ((_radio.ConnectedBoardKind is HpsdrBoardKind.HermesC10 or HpsdrBoardKind.HermesII)
+            && _radio.GetPersistedPsTxAttnDb() is int c10Attn)
+        {
+            _radio.ActiveClient?.SetPsTxAttenOnTxDb(c10Attn);
         }
         // P1's Connected event is raised after RadioService already broadcast
         // Status=Connected, so the first state callback can hit the synthetic
@@ -3347,9 +3784,7 @@ public class DspPipelineService : BackgroundService,
         // the timer-driven Tick take over for synthetic-mode display.
         DetachRxSinkP1();
 
-        var synth = new SyntheticDspEngine();
-        int channelId = synth.OpenChannel(SyntheticSampleRateHz, Width);
-        ApplyStateToNewChannel(synth, channelId);
+        var disconnectedEngine = CreateDisconnectedEngine(out int channelId);
 
         IDspEngine? old;
         int oldChannel;
@@ -3357,15 +3792,17 @@ public class DspPipelineService : BackgroundService,
         {
             old = _engine;
             oldChannel = _channelId;
-            Volatile.Write(ref _engine, synth);
+            Volatile.Write(ref _engine, disconnectedEngine);
             Volatile.Write(ref _channelId, channelId);
             ResetSecondaryRxChannels();
             Volatile.Write(ref _sampleRateHz, SyntheticSampleRateHz);
         }
 
         TeardownEngine(old, oldChannel);
-        _log.LogInformation("dsp.pipeline engine=synthetic channel={Id}", channelId);
-        RaiseEngineChanged(synth);
+        _appliedTxMonitorEnabled = false;
+        _log.LogInformation("dsp.pipeline engine={Engine} channel={Id}", disconnectedEngine.GetType().Name, channelId);
+        RaiseEngineChanged(disconnectedEngine);
+        OnRadioStateChanged(_radio.Snapshot());
     }
 
     // FreeDV is a linear digital mode: the OFDM waveform must pass the TX chain
@@ -3417,6 +3854,7 @@ public class DspPipelineService : BackgroundService,
         // RadioService.SetRadioLo). See docs/prd/panfall_behavior.md.
         var p2 = _p2Client;
         p2?.SetVfoAHz(s.RadioLoHz);
+        p2?.SetReceiverAdcSources(ReceiverAdcSource(s, 0), ReceiverAdcSource(s, 1));
         // RX2 (true second receiver): enable/disable its DDC and tune its NCO to
         // VFO B's effective LO so it demodulates its own band, independent of
         // RX1. SetRx2Enabled is idempotent (only re-sends on a real change);
@@ -3773,29 +4211,6 @@ public class DspPipelineService : BackgroundService,
         }
         if (resync || s.PsEnabled != _appliedPsEnabled)
         {
-            // pihpsdr transmitter.c:2467-2473 inverts the order: write the
-            // wire (RxSpec / HighPriority with PS bits set) FIRST, then sleep
-            // 100 ms to let the radio firmware spin up DDC0/DDC1 sync, then
-            // arm the engine. Without the settle window, the first 5-20
-            // pscc calls receive partial / glitched samples, scheck flags
-            // binfo[6], bs_count climbs to 2, calcc resets to LRESET — and
-            // the loop sometimes thrashes instead of converging.
-            //
-            // Disarm path stays engine-first: drop the engine run flag, then
-            // close the wire, then drain any in-flight paired frames so they
-            // don't arrive after PS has shut down.
-            //
-            // Task.Delay(100).Wait() is acceptable here — OnRadioStateChanged
-            // runs on a state-change handler thread, not the request path.
-            //
-            // P1 sibling (issue #172): the active P1 client gets the same
-            // arm/disarm sequencing — flip the wire bit (which also
-            // bumps NumReceiversMinusOne in the next Config frame so the
-            // gateware switches to the 2-DDC paired layout), wait the
-            // same 100 ms settle window, then arm the engine. On a
-            // non-HL2 P1 board this is harmless: SetPsEnabled stores the
-            // flag locally and the C0=0x14 wire byte is unaffected
-            // (board-gated in WriteAttenuatorPayload).
             var p1Active = _radio.ActiveClient;
             if (s.PsEnabled && _keyed)
             {
@@ -3808,41 +4223,39 @@ public class DspPipelineService : BackgroundService,
                 // OnRadioMoxChanged falling-edge re-apply arm it cleanly on
                 // key-up. Disarm (abort) below stays immediate.
             }
-            else if (s.PsEnabled)
-            {
-                _p2Client?.SetPsFeedbackEnabled(true);
-                p1Active?.SetPsEnabled(true);
-                // PS engine arm requires a feedback path that delivers paired
-                // samples. On P2 ANAN-class that's SetPsFeedbackEnabled above.
-                // On P1, only HermesLite2 delivers the 2-DDC paired layout
-                // PS needs — Protocol1Client.cs:643 (NumReceiversMinusOne
-                // wire bump) and :1004 (4-DDC parser path) are both HL2-gated.
-                // On a non-HL2 P1 board WDSP arms with no possible feedback
-                // source, sits in COLLECT waiting on paired samples that
-                // never arrive, and the blocking 100 ms settle below stacks
-                // on the state-change thread — together that freezes RX
-                // audio + waterfall (GH #426). Skip the engine arm in that
-                // case; the wire calls above are no-ops on non-HL2 P1
-                // (board-gated in WriteAttenuatorPayload + SnapshotState).
-                bool p1Connected = p1Active is not null;
-                bool psEngineSupported = !p1Connected
-                    || _radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2;
-                if (psEngineSupported)
-                {
-                    try { Task.Delay(100).Wait(); } catch { /* ignore */ }
-                    engine.SetPsEnabled(true);
-                }
-            }
             else
             {
-                engine.SetPsEnabled(false);
-                _p2Client?.SetPsFeedbackEnabled(false);
-                p1Active?.SetPsEnabled(false);
-                DrainPsFeedback();
+                // PS engine arm requires a feedback path that delivers paired
+                // samples. On P2 ANAN-class that's SetPsFeedbackEnabled. On
+                // P1, HermesLite2 and HermesC10 (ANAN-G2E) deliver the 4-DDC
+                // paired layout PS needs; on any other P1 board WDSP would
+                // arm with no possible feedback source, sit in COLLECT, and
+                // freeze RX audio + waterfall (GH #426) — skip the engine arm
+                // there. The wire calls are board-gated no-ops on those
+                // boards (WriteAttenuatorPayload + SnapshotState).
+                bool psEngineSupported = P1PsEngineArmSupported(
+                    p1Connected: p1Active is not null, _radio.ConnectedBoardKind);
+                // #1302 F1/F6: the arm/disarm sequence is async now — on a
+                // HermesC10 the wire flip rides a stop/drain/restart
+                // transition (SetPsEnabledAsync) that must never run inline
+                // under _engineLock on the state-change thread, and the
+                // 100 ms pihpsdr settle (transmitter.c:2467-2473: wire first,
+                // settle, then engine arm) becomes a proper await instead of
+                // Task.Delay(100).Wait(). Single-flight FIFO worker: requests
+                // serialize, and SetPsEnabledAsync's idempotence collapses
+                // redundant transitions (e.g. the post-connect resync after a
+                // connect-while-armed is a wire no-op).
+                SchedulePsArmTransition(s.PsEnabled, p1Active, engine, psEngineSupported);
             }
             // Mark applied only when we actually armed or disarmed. A deferred
             // (keyed) arm leaves _appliedPsEnabled stale on purpose so the
             // MOX-off re-apply re-enters this block and arms.
+            // Known benign divergence: this latches at SCHEDULING time — if
+            // the async transition later fails (logged at ERROR by the
+            // worker) the DTO and wire disagree until the next resync/
+            // reconnect replays the state. Accepted; a failed transition
+            // means the session is already tearing down or the radio is
+            // unreachable, and the reconnect path re-seeds from Snapshot().
             if (!(s.PsEnabled && _keyed))
                 _appliedPsEnabled = s.PsEnabled;
         }
@@ -3950,6 +4363,109 @@ public class DspPipelineService : BackgroundService,
     // "16/256" → (16, 256). Falls back to (16, 256) on any parse failure
     // because that's the only ints/spi pair WDSP allows save/restore on
     // (Thetis PSForm.cs:865) — a safe default.
+    /// <summary>
+    /// Whether the WDSP PS engine may be armed for the live connection — the
+    /// GH #426 guard. On Protocol 2 (no P1 client) the ANAN-class feedback
+    /// DDC path always exists. On Protocol 1 only HermesLite2 and HermesC10
+    /// (ANAN-G2E, classic Hermes v3.3 — relay-routed feedback tap on DDC2 +
+    /// TX DAC reference on DDC3) deliver the 4-DDC paired layout PS needs;
+    /// on any other P1 board WDSP would arm with no possible feedback
+    /// source, park in COLLECT, and the blocking 100 ms settle would freeze
+    /// RX audio + waterfall (GH #426). Pure so the carve-out is pinned by
+    /// tests board-by-board.
+    /// </summary>
+    internal static bool P1PsEngineArmSupported(bool p1Connected, HpsdrBoardKind board) =>
+        !p1Connected
+        || board == HpsdrBoardKind.HermesLite2
+        || board == HpsdrBoardKind.HermesC10
+        || board == HpsdrBoardKind.HermesII;
+
+    internal static void ApplyP1PsFeedbackRateOverride(
+        HpsdrBoardKind board,
+        int wireRateHz,
+        Action<int> setPsFeedbackRateHz)
+    {
+        if (board is HpsdrBoardKind.HermesC10 or HpsdrBoardKind.HermesII)
+            setPsFeedbackRateHz(wireRateHz);
+    }
+
+    // ---- PS arm/disarm worker (#1302 F1/F6) --------------------------------
+    // Single-flight FIFO chain: each request runs strictly after the previous
+    // one completes, off the state-change thread and outside _engineLock.
+    // Ordering per request preserves the shipped sequences:
+    //   arm    = wire (P2 bit / P1 SetPsEnabledAsync) → 100 ms settle →
+    //            engine.SetPsEnabled(true)          (pihpsdr order)
+    //   disarm = engine.SetPsEnabled(false) → wire → drain leftover frames
+    // On HermesC10 the P1 wire call is the stop/drain/restart transition —
+    // the receiver count is never flipped on a live stream.
+    private readonly object _psArmWorkSync = new();
+    private Task _psArmWork = Task.CompletedTask;
+
+    /// <summary>Tail of the PS arm/disarm worker chain — awaitable by tests
+    /// to observe completion of all scheduled transitions.</summary>
+    internal Task PsArmWorkForTests { get { lock (_psArmWorkSync) return _psArmWork; } }
+
+    private void SchedulePsArmTransition(
+        bool enable, IProtocol1Client? p1, IDspEngine engine, bool engineArmSupported)
+    {
+        lock (_psArmWorkSync)
+        {
+            var prev = _psArmWork;
+            _psArmWork = Task.Run(async () =>
+            {
+                try { await prev.ConfigureAwait(false); }
+                catch { /* previous request already logged its failure */ }
+                try
+                {
+                    await RunPsArmTransitionAsync(enable, p1, engine, engineArmSupported)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogError(ex, "ps.arm transition target={Enable} failed", enable);
+                }
+            });
+        }
+    }
+
+    private async Task RunPsArmTransitionAsync(
+        bool enable, IProtocol1Client? p1, IDspEngine engine, bool engineArmSupported)
+    {
+        if (enable)
+        {
+            _p2Client?.SetPsFeedbackEnabled(true);
+            if (p1 is not null)
+                await p1.SetPsEnabledAsync(true).ConfigureAwait(false);
+            if (engineArmSupported)
+            {
+                // pihpsdr settle window: without it the first 5-20 pscc calls
+                // receive partial/glitched samples, scheck flags binfo[6] and
+                // calcc thrashes through LRESET instead of converging.
+                await Task.Delay(100).ConfigureAwait(false);
+                lock (_engineLock)
+                {
+                    // The engine may have been replaced (reconnect) since this
+                    // request was scheduled; the new engine's resync re-arms
+                    // through its own state replay, so skip a stale arm.
+                    if (ReferenceEquals(engine, _engine))
+                        engine.SetPsEnabled(true);
+                }
+            }
+        }
+        else
+        {
+            lock (_engineLock)
+            {
+                if (ReferenceEquals(engine, _engine))
+                    engine.SetPsEnabled(false);
+            }
+            _p2Client?.SetPsFeedbackEnabled(false);
+            if (p1 is not null)
+                await p1.SetPsEnabledAsync(false).ConfigureAwait(false);
+            DrainPsFeedback();
+        }
+    }
+
     private static (int Ints, int Spi) ParseIntsSpi(string preset)
     {
         if (string.IsNullOrWhiteSpace(preset)) return (16, 256);
@@ -4084,6 +4600,9 @@ public class DspPipelineService : BackgroundService,
     // Receivers[] array, which RadioService keeps current on every Mutate.
     private static bool IsReceiverMuted(StateDto s, int rxIndex) =>
         s.Receivers is { } rs && rxIndex >= 0 && rxIndex < rs.Count && rs[rxIndex].Muted;
+
+    private static byte ReceiverAdcSource(StateDto s, int rxIndex) =>
+        s.Receivers is { } rs && rxIndex >= 0 && rxIndex < rs.Count ? rs[rxIndex].AdcSource : (byte)0;
 
     // Per-secondary-receiver tuning params, read from the canonical Receivers[]
     // entry (RX2 = index 1, RX3+ = index N). RadioService keeps the array
@@ -4405,6 +4924,12 @@ public class DspPipelineService : BackgroundService,
         // matches the persisted setting; RadioService also replays after
         // MarkProtocol2Connected and on live setting changes.
         _radio.ApplyG2AdcOptionsToP2Client(client, boardKind);
+        client.AttachWidebandFrameHandler(OnP2WidebandFrame);
+        bool initialWidebandTransport =
+            Volatile.Read(ref _widebandDisplayEnabled) != 0 && _hub.DisplayStreamRequested;
+        Volatile.Write(ref _widebandTransportEnabled, initialWidebandTransport ? 1 : 0);
+        Volatile.Write(ref _p2WidebandTransportEnabled, initialWidebandTransport ? 1 : 0);
+        client.SetWidebandDisplayEnabled(initialWidebandTransport);
 
         int rateHz = _radio.ResolveConnectSampleRateHz(
             boardKind,
@@ -4465,6 +4990,7 @@ public class DspPipelineService : BackgroundService,
         RaiseEngineChanged(newEngine);
 
         _p2Client = client;
+        RefreshWidebandDisplayState();
         // Sync the change-detect cache with the values we just seeded so the
         // first OnRadioStateChanged after connect doesn't redundantly re-push
         // (which would emit a duplicate CmdHighPriority). Re-read in case the
@@ -4537,13 +5063,14 @@ public class DspPipelineService : BackgroundService,
         var p2 = _p2Client;
         if (p2 is null) return;
         p2.SetDriveByte(snap.DriveByte);
-        p2.SetOcMasks(snap.OcTxMask, snap.OcRxMask);
+        p2.SetOcMasks(snap.OcTxMask, snap.OcRxMask, snap.OcTuneMask);
         // Anvelina-PRO3 DX OC masks (#407). Always forwarded; Protocol2Client
         // gates whether they hit byte 1397 on the wire by checking the
         // connected board+variant. Non-Anvelina P2 boards see byte 1397
         // stay at zero per EU2AV's reserved-bit rule.
         p2.SetOcDxMasks(snap.OcDxTxMask, snap.OcDxRxMask);
         p2.SetPaEnabled(snap.PaEnabled);
+        p2.SetRfFilters(snap.RfFilters);
         // External antenna (antenna slice — #804). HpsdrAntenna.Ant1=0 → wire 1
         // → ALEX_TX_ANTENNA_1, so the +1 maps the 0-based enum to the 1-based
         // wire selector. SetAntennas gates the TX-antenna emission on
@@ -4652,6 +5179,14 @@ public class DspPipelineService : BackgroundService,
         if (on) _rxFadeOutPending = true;
         else _rxFadeInPending = true;
         _p2Client?.SetMox(on);
+        // Reset the FreeDV RECEIVER on both MOX edges so it resumes empty and
+        // unsynced. WDSP RX is drained every tick regardless of MOX, so without
+        // this the modem keeps decoding the operator's own transmission during
+        // the over and the resuming RX dumps that self-decoded backlog at
+        // un-key — an end-of-over garble in Zeus's own audio, on both RADE and
+        // codec2. Key-down drops any pre-TX residual; key-up clears anything
+        // decoded from TX bleed. No-op when FreeDV isn't engaged.
+        _audioModem?.Current?.FlushRx();
         // Falling edge: pick up any PS knob changes that OnRadioStateChanged
         // deferred while we were keyed (HwPeak / Ptol / Advanced / Control).
         // Without this re-trigger a deferred change would sit unapplied until
@@ -4773,13 +5308,88 @@ public class DspPipelineService : BackgroundService,
     }
 
     /// <summary>
-    /// Forward a WDSP TXA block of interleaved float IQ to the live P2 client.
-    /// No-op when P2 isn't connected; safe to call from TxTuneDriver / future
-    /// mic-MOX feeders without branching on protocol.
+    /// Forward a WDSP TXA block of interleaved float IQ to the live protocol
+    /// client. P2 sends directly to the radio DUC; P3 sends the same IQ
+    /// payload into the hosted sidecar's credit-paced TX egress.
     /// </summary>
     public void ForwardTxIqToP2(ReadOnlySpan<float> iqInterleaved)
     {
         _p2Client?.SendTxIq(iqInterleaved);
+        if (_radio.IsProtocol3Active)
+            _p3Sidecar?.ForwardTxIq(iqInterleaved);
+    }
+
+    /// <summary>
+    /// Protocol 3 RX/display/audio is supplied by the hosted sidecar, but Zeus
+    /// still owns the local WDSP TXA chain. Open that TX path explicitly on P3
+    /// connect so MOX/TUN can produce 192 kHz IQ for the sidecar TX ingress.
+    /// </summary>
+    public int ConnectP3TxEngine(int sampleRateHz)
+    {
+        int rateHz = sampleRateHz > 0 ? sampleRateHz : 192_000;
+
+        var current = Volatile.Read(ref _engine);
+        if (current is WdspDspEngine && Volatile.Read(ref _sampleRateHz) == rateHz)
+            return rateHz;
+
+        var wdsp = new WdspDspEngine(_loggerFactory.CreateLogger<WdspDspEngine>());
+        int channelId = wdsp.OpenChannel(rateHz, Width);
+        SeedTxDisplayConfig(wdsp);
+        // Saturn/G2 DUC-compatible host-IQ mode is 48 kHz mic -> 96 kHz DSP ->
+        // 192 kHz IQ, matching the proven P2 G2 path.
+        wdsp.OpenTxChannel(outputRateHz: 192_000);
+        try { ApplyStateToNewChannel(wdsp, channelId); }
+        catch (EntryPointNotFoundException ex)
+        {
+            _log.LogWarning(ex, "dsp.pipeline p3 wdsp missing entry point - partial config applied");
+        }
+
+        IDspEngine? old;
+        int oldChannel;
+        lock (_engineLock)
+        {
+            old = _engine;
+            oldChannel = _channelId;
+            Volatile.Write(ref _engine, wdsp);
+            Volatile.Write(ref _channelId, channelId);
+            ResetSecondaryRxChannels();
+            Volatile.Write(ref _sampleRateHz, rateHz);
+        }
+
+        TeardownEngine(old, oldChannel);
+        _psResyncRequired = true;
+        _appliedTxMonitorEnabled = false;
+        _log.LogInformation("dsp.pipeline p3 tx engine=wdsp channel={Id} rxRate={Rate} txIqRate=192000", channelId, rateHz);
+        RaiseEngineChanged(wdsp);
+        OnRadioStateChanged(_radio.Snapshot());
+        return rateHz;
+    }
+
+    public void DisconnectP3TxEngine()
+    {
+        if (!_radio.IsProtocol3Active && Volatile.Read(ref _engine) is SyntheticDspEngine or OfflinePreviewDspEngine)
+            return;
+
+        var disconnectedEngine = CreateDisconnectedEngine(out int channelId);
+
+        IDspEngine? old;
+        int oldChannel;
+        lock (_engineLock)
+        {
+            old = _engine;
+            oldChannel = _channelId;
+            Volatile.Write(ref _engine, disconnectedEngine);
+            Volatile.Write(ref _channelId, channelId);
+            ResetSecondaryRxChannels();
+            Volatile.Write(ref _sampleRateHz, SyntheticSampleRateHz);
+        }
+
+        TeardownEngine(old, oldChannel);
+        _psResyncRequired = true;
+        _appliedTxMonitorEnabled = false;
+        RaiseEngineChanged(disconnectedEngine);
+        OnRadioStateChanged(_radio.Snapshot());
+        _log.LogInformation("dsp.pipeline p3 tx disconnected, engine={Engine}", disconnectedEngine.GetType().Name);
     }
 
     public async Task DisconnectP2Async(CancellationToken ct)
@@ -4802,9 +5412,7 @@ public class DspPipelineService : BackgroundService,
         try { await client.StopAsync(ct).ConfigureAwait(false); } catch { }
         await client.DisposeAsync().ConfigureAwait(false);
 
-        var synth = new SyntheticDspEngine();
-        int channelId = synth.OpenChannel(SyntheticSampleRateHz, Width);
-        ApplyStateToNewChannel(synth, channelId);
+        var disconnectedEngine = CreateDisconnectedEngine(out int channelId);
 
         IDspEngine? old;
         int oldChannel;
@@ -4812,13 +5420,13 @@ public class DspPipelineService : BackgroundService,
         {
             old = _engine;
             oldChannel = _channelId;
-            Volatile.Write(ref _engine, synth);
+            Volatile.Write(ref _engine, disconnectedEngine);
             Volatile.Write(ref _channelId, channelId);
             ResetSecondaryRxChannels();
             Volatile.Write(ref _sampleRateHz, SyntheticSampleRateHz);
         }
         TeardownEngine(old, oldChannel);
-        RaiseEngineChanged(synth);
+        RaiseEngineChanged(disconnectedEngine);
         // Mark PS state for forced re-push on the next ConnectP2Async. The
         // change-detect cache (`_appliedPs*`) is preserved across disconnect
         // — by design, so a reconnect with unchanged operator state doesn't
@@ -4830,8 +5438,9 @@ public class DspPipelineService : BackgroundService,
         // `project_ps_reconnect_state_loss.md` for the rack reproduction.
         _psResyncRequired = true;
         _appliedTxMonitorEnabled = false;
+        OnRadioStateChanged(_radio.Snapshot());
         _radio.MarkProtocol2Disconnected();
-        _log.LogInformation("dsp.pipeline p2 disconnected, engine=synthetic");
+        _log.LogInformation("dsp.pipeline p2 disconnected, engine={Engine}", disconnectedEngine.GetType().Name);
     }
 
     public Zeus.Protocol2.Protocol2Client? ActiveP2Client => _p2Client;
@@ -5153,7 +5762,15 @@ public class DspPipelineService : BackgroundService,
         DrainDspCommands();
         var engine = Volatile.Read(ref _engine);
         engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
-        // No Tick on PS-feedback — display cadence is paced by IQ frames.
+        // PS-feedback frames drive the display tick too (see the P2 sink for
+        // the full rationale): on a single-ADC time-mux board the user-RX IQ
+        // stream — the normal tick pacer — stops entirely for the keyed burst,
+        // and without this the panadapter/waterfall freeze for the whole
+        // transmission. Same RX-loop thread as OnIqFrame; the elapsed-time
+        // throttle inside keeps the cadence at ~30 Hz when both streams flow
+        // (HL2 4-DDC keeps DDC0 user RX alive during PS, so this is a no-op
+        // there in practice).
+        MaybeTickInline();
     }
 
     // ---- IRxPacketSink (Protocol 2) -----------------------------------------
@@ -5208,6 +5825,20 @@ public class DspPipelineService : BackgroundService,
         DrainDspCommands();
         var engine = Volatile.Read(ref _engine);
         engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+        // Display tick (#960 G2E bench): the display cadence is normally paced
+        // by OnIqFrame, and ExecuteAsync's PeriodicTimer stands down while an
+        // RX sink is attached. On a single-ADC time-mux board (HermesC10/G2E)
+        // a keyed PS burst diverts the operator's ONLY DDC to these feedback
+        // frames, so no IQ frame — and therefore no display tick — arrives for
+        // the entire transmission: the panadapter/waterfall freeze at the last
+        // RX frame until unkey. Ticking from the feedback cadence keeps the
+        // display alive; while keyed, Tick's source-select already prefers the
+        // TX / PS-feedback analyzers, so the operator sees a live TX spectrum
+        // during the burst — the same UX as the dual-ADC G2/Orion family.
+        // Same RX-loop thread as OnIqFrame (HandlePsPairedPacket runs on the
+        // RxLoop thread), and MaybeTickInline's elapsed-time gate throttles to
+        // ~30 Hz on dual-ADC boards where IQ and feedback frames both flow.
+        MaybeTickInline();
     }
 
     // RX2 bring-up probe: 1 Hz log of incoming IQ RMS/peak per receiver. A live
@@ -5267,13 +5898,45 @@ public class DspPipelineService : BackgroundService,
     private void MaybeTickInline()
     {
         long now = Stopwatch.GetTimestamp();
-        long last = _lastTickStopwatchTicks;
-        if (last == 0 || (now - last) >= TickPeriodStopwatchTicks)
+        long last = Volatile.Read(ref _lastTickStopwatchTicks);
+        if (ShouldTickInline(now, last, TickPeriodStopwatchTicks))
         {
-            if (last != 0) RecordTickInterval(now - last, now);
-            _lastTickStopwatchTicks = now;
-            Tick(_panBuf, _wfBuf, _audioBuf);
+            if (Tick(_panBuf, _wfBuf, _audioBuf))
+            {
+                if (last != 0) RecordTickInterval(now - last, now);
+                Volatile.Write(ref _lastTickStopwatchTicks, now);
+                Volatile.Write(ref _lastInlineTickStopwatchTicks, now);
+            }
         }
+    }
+
+    /// <summary>
+    /// Pure inline-tick throttle: tick on the very first call, then at most
+    /// once per <paramref name="periodTicks"/>. Extracted static + internal so
+    /// the cadence contract is unit-testable — it is what keeps the display at
+    /// ~30 Hz no matter how many producers call <see cref="MaybeTickInline"/>
+    /// (user-RX IQ frames AND PS-feedback frames both pace it; on a single-ADC
+    /// time-mux board the feedback frames are the ONLY pacer during a keyed
+    /// burst — see the P2 <c>OnPsFeedbackFrame</c> sink).
+    /// </summary>
+    internal static bool ShouldTickInline(long nowTicks, long lastTicks, long periodTicks)
+        => lastTicks == 0 || (nowTicks - lastTicks) >= periodTicks;
+
+    /// <summary>
+    /// Timer fallback cadence while an RX sink is attached. The inline RX packet
+    /// thread remains the preferred pacer; the timer only takes over after two
+    /// missed inline periods, then ticks at the normal cadence until packets
+    /// resume. This drains TX monitor/preview audio during a P2 DDC packet stall
+    /// without stealing ticks from a healthy RX thread.
+    /// </summary>
+    internal static bool ShouldTimerTickWhenSinkAttached(
+        long nowTicks,
+        long lastInlineTicks,
+        long lastAnyTickTicks,
+        long periodTicks)
+    {
+        bool inlineStale = lastInlineTicks == 0 || (nowTicks - lastInlineTicks) >= periodTicks * 2;
+        return inlineStale && ShouldTickInline(nowTicks, lastAnyTickTicks, periodTicks);
     }
 
     // #1148: accumulate inline-tick interval stats and emit at ~1 Hz. Called
@@ -5319,7 +5982,8 @@ public class DspPipelineService : BackgroundService,
         // Reset the tick clock so the first IQ frame on the new connection
         // gets a fresh display tick (avoids a stale ~33 ms gap if the timer
         // was running synthetic ticks just before connect).
-        _lastTickStopwatchTicks = 0;
+        Volatile.Write(ref _lastTickStopwatchTicks, 0);
+        Volatile.Write(ref _lastInlineTickStopwatchTicks, 0);
         _attachedSinkP1 = client;
         client.AttachRxSink(this);
         _rxSinkAttached = true;
@@ -5346,11 +6010,33 @@ public class DspPipelineService : BackgroundService,
 
     private void AttachRxSinkP2(Zeus.Protocol2.Protocol2Client client)
     {
-        _lastTickStopwatchTicks = 0;
+        Volatile.Write(ref _lastTickStopwatchTicks, 0);
+        Volatile.Write(ref _lastInlineTickStopwatchTicks, 0);
         _attachedSinkP2 = client;
         client.AttachRxSink(this);
         _rxSinkAttached = true;
         _log.LogInformation("dsp.pipeline rx-sink attached protocol=p2");
+    }
+
+    private void OnP2WidebandFrame(int adcIndex, ReadOnlySpan<short> samples, int sampleRateHz)
+    {
+        if (adcIndex != 0) return;
+        if (Volatile.Read(ref _widebandDisplayEnabled) == 0 || !_hub.DisplayStreamRequested) return;
+        if (samples.Length < _widebandPendingSamples.Length) return;
+
+        bool release = false;
+        lock (_widebandFrameLock)
+        {
+            samples.Slice(0, _widebandPendingSamples.Length).CopyTo(_widebandPendingSamples);
+            _widebandPendingSampleRateHz = sampleRateHz;
+            if (!_widebandFramePending)
+            {
+                _widebandFramePending = true;
+                release = true;
+            }
+        }
+
+        if (release) _widebandFrameSignal.Release();
     }
 
     private void DetachRxSinkP2()
@@ -5358,6 +6044,12 @@ public class DspPipelineService : BackgroundService,
         var client = _attachedSinkP2;
         _attachedSinkP2 = null;
         _rxSinkAttached = false;
+        Volatile.Write(ref _widebandTransportEnabled, 0);
+        Volatile.Write(ref _p2WidebandTransportEnabled, 0);
+        try { client?.SetWidebandDisplayEnabled(false); }
+        catch (ObjectDisposedException) { }
+        client?.DetachWidebandFrameHandler();
+        lock (_widebandFrameLock) { _widebandFramePending = false; }
         client?.DetachRxSink();
         _log.LogInformation("dsp.pipeline rx-sink detached protocol=p2");
     }
@@ -5434,14 +6126,14 @@ public class DspPipelineService : BackgroundService,
         return count;
     }
 
-    private void Tick(float[] panBuf, float[] wfBuf, float[] audioBuf)
+    private bool Tick(float[] panBuf, float[] wfBuf, float[] audioBuf)
     {
         // issue #1167: the timer thread and the RX inline-tick thread can both
         // be live during the sink attach/detach window. FloatSpscRing is strict
         // single-producer; this gate guarantees only one Tick runs at a time so
         // the producer side stays single-threaded. ~30 Hz, so the CompareExchange
         // is free. A skipped tick is harmless — the holder is ticking ~now.
-        if (!_tickGate.TryEnter()) { Interlocked.Increment(ref _tickReentrySkips); return; }
+        if (!_tickGate.TryEnter()) { Interlocked.Increment(ref _tickReentrySkips); return false; }
         try
         {
         // iter5 pass-2: lock-free hot path. Tick runs inline on the RX OS
@@ -5452,7 +6144,7 @@ public class DspPipelineService : BackgroundService,
         var engine = Volatile.Read(ref _engine);
         int channel = Volatile.Read(ref _channelId);
         int sampleRate = Volatile.Read(ref _sampleRateHz);
-        if (engine is null) return;
+        if (engine is null) return true;
 
         var state = _radio.Snapshot();
         // Synthetic engine stays open while disconnected so SetMode/SetFilter
@@ -5464,7 +6156,7 @@ public class DspPipelineService : BackgroundService,
         // race window — visible as a brief flash of the fake waterfall right
         // when the user clicked Connect. The synthetic engine never produces
         // real-radio data, so suppressing it unconditionally is correct.
-        if (engine is SyntheticDspEngine) return;
+        if (engine is SyntheticDspEngine) return true;
 
         // Issue #597 Phase 0: restore the default display tau once the LO has
         // been quiet for FastAttackRestoreMs. Runs on the RX/pipeline thread;
@@ -5490,7 +6182,12 @@ public class DspPipelineService : BackgroundService,
         // record construction, and the 16 KB-ish byte[] payload fanout would
         // allocate. Control-only clients still receive meters/state/audio as
         // appropriate; they just do not pin the high-rate display stream on.
-        bool hasDisplaySubscribers = _hub.DisplayStreamRequested;
+        bool widebandDisplayActive = RefreshWidebandDisplayState();
+        bool displayStreamRequested = _hub.DisplayStreamRequested;
+        bool hasDisplaySubscribers =
+            displayStreamRequested &&
+            !widebandDisplayActive &&
+            ShouldProcessDisplayFrame(Stopwatch.GetTimestamp());
         // Audio path uses nowMs too (it runs even when no clients are connected,
         // for in-process RxAudioAvailable subscribers like TCI). Hoisted above
         // the display gate to keep one timestamp call per tick.
@@ -5566,6 +6263,31 @@ public class DspPipelineService : BackgroundService,
             {
                 wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
                 if (wf) wfSource = "rx";
+            }
+
+            // Last-resort keyed source (#960 G2E freeze): on a single-ADC
+            // time-mux board (HermesC10 / ANAN-G2E) a keyed PS burst diverts
+            // the board's ONLY DDC to feedback, starving the RX analyzer, and
+            // at RX rates ≥ 192k the TX display analyzer never opened (TXA DSP
+            // rate below the span) — so every source above returns stale and
+            // the panadapter/waterfall freeze for the whole transmission. The
+            // PS-feedback analyzer is fed by the burst itself (the actual
+            // post-PA on-air signal), making it the board's one live spectrum
+            // while keyed. Ordering keeps every other board byte-identical: a
+            // dual-ADC radio's RX analyzer stays fresh during TX and wins
+            // above; this fires only when nothing else produced pixels.
+            if (_keyed && _appliedPsEnabled)
+            {
+                if (!pan)
+                {
+                    pan = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Panadapter, panBuf);
+                    if (pan) { panSource = "ps-feedback"; psFbPanUsed = true; }
+                }
+                if (!wf)
+                {
+                    wf = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+                    if (wf) { wfSource = "ps-feedback"; psFbWfUsed = true; }
+                }
             }
 
             // TX display calibration offset (Thetis TXDisplayCalOffset). Pure
@@ -5674,7 +6396,7 @@ public class DspPipelineService : BackgroundService,
             }
 
             var frame = new DisplayFrame(
-                Seq: ++_seq,
+                Seq: NextDisplaySeq(),
                 TsUnixMs: nowMs,
                 RxId: 0,
                 BodyFlags: flags,
@@ -5728,7 +6450,7 @@ public class DspPipelineService : BackgroundService,
 
                 UpdateRxLo(ri, state);
                 var secFrame = new DisplayFrame(
-                    Seq: ++_seq,
+                    Seq: NextDisplaySeq(),
                     TsUnixMs: nowMs,
                     RxId: (byte)ri,
                     BodyFlags: secFlags,
@@ -5766,7 +6488,7 @@ public class DspPipelineService : BackgroundService,
         {
             // Still reset the PS-monitor tick counter on no-client ticks so a
             // fresh client doesn't pick up a stale gate counter.
-            _psMonitorTickCount = 0;
+            if (!displayStreamRequested) _psMonitorTickCount = 0;
         }
 
         // Audio broadcast — when TX monitor is on, replace RX audio with the
@@ -5847,6 +6569,15 @@ public class DspPipelineService : BackgroundService,
         audioSampleCount = MixRxAudioN(
             audioBuf, audioSampleCount, _mixSlices.AsSpan(0, mixSliceCount),
             rx1Muted: IsReceiverMuted(state, 0));
+
+        // Operator RX master mute, read ONCE this tick so every branch below agrees.
+        // While muted, real RX audio (and CW sidetone) is published normally and the
+        // sinks drop it — the mute is preserved. The Recorder's local-monitor lane is
+        // the sole exception: it must stay audible on the PC output, so when muted we
+        // do NOT mix it into the RX frame here and instead route it, recorder-only,
+        // through the mute-exempt lane after the RX-publish block (see below).
+        bool rxAudioMuted = _rxAudioMute?.IsMuted ?? false;
+
         if (audioSampleCount > 0)
         {
             SanitizeAudioBuffer(audioBuf.AsSpan(0, audioSampleCount));
@@ -5908,12 +6639,13 @@ public class DspPipelineService : BackgroundService,
                 // demodulates+decodes it back to speech in place (same sample
                 // count, internally buffered, silence until sync). Runs BEFORE
                 // the RX audio plugin + squelch so those shape decoded speech.
-                if (_freeDv is not null)
+                var modem = _audioModem?.Current;
+                if (modem is not null)
                 {
-                    _freeDv.SyncMode(state.Mode);
-                    if (_freeDv.Active && audioSampleCount > 0)
+                    modem.SyncMode((byte)state.Mode);
+                    if (modem.Active && audioSampleCount > 0)
                     {
-                        _freeDv.ProcessRx(audioBuf.AsSpan(0, audioSampleCount));
+                        modem.ProcessRx(audioBuf.AsSpan(0, audioSampleCount));
                         // AF (listening) volume for FreeDV is applied HERE, on the
                         // decoded speech. WDSP's panel gain ran on the pre-decode
                         // modem audio that ProcessRx just discarded, so without
@@ -5958,7 +6690,12 @@ public class DspPipelineService : BackgroundService,
                 // plugin playing a clip back while not transmitting) into the RX
                 // block, so it reaches every sink in browser and desktop modes
                 // alike. No-op (one volatile read) when nothing is queued.
-                MixMonitorInject(audioBuf.AsSpan(0, audioSampleCount));
+                // Skipped while master-muted: the RX frame must stay pure so the
+                // mute still silences it, and the recorder is instead drained onto
+                // the mute-exempt lane below. Not skipping here would sum recorder
+                // into the RX frame that the sink then drops => recorder inaudible.
+                if (!rxAudioMuted)
+                    MixMonitorInject(audioBuf.AsSpan(0, audioSampleCount));
                 LimitRxAudioBuffer(audioBuf.AsSpan(0, audioSampleCount));
                 double finalAudioRms = Rms(audioBuf.AsSpan(0, audioSampleCount));
                 double finalAudioPeak = PeakAbs(audioBuf.AsSpan(0, audioSampleCount));
@@ -5976,7 +6713,7 @@ public class DspPipelineService : BackgroundService,
                 RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
             }
         }
-        else if (!txMonitorOn && MonitorBacklog > 0)
+        else if (!txMonitorOn && !rxAudioMuted && MonitorBacklog > 0)
         {
             // FIX 4: RX produced no audio this tick (RX1 muted, or no band audio)
             // yet a local clip is playing back through the monitor-inject ring.
@@ -6004,6 +6741,36 @@ public class DspPipelineService : BackgroundService,
                 Samples: new ReadOnlyMemory<float>(audioBuf, 0, monBlock));
             PublishAudio(in injectFrame);
         }
+
+        // RX master mute + Recorder local playback. The RX-publish block above kept
+        // the RX frame PURE (recorder was not mixed in while muted), so the sinks
+        // dropped it and the radio is genuinely muted — RX and CW sidetone silenced
+        // on the PC output and both onboard speakers, exactly as before. Now drain
+        // the monitor-inject ring into a recorder-ONLY block and publish it on the
+        // mute-EXEMPT lane so the operator still hears their own playback on the PC
+        // output. This is the SOLE monitor-ring consumer while muted (the in-frame
+        // mix and the FIX-4 drain are both gated off by rxAudioMuted), so the ring
+        // is drained exactly once per tick — no double-drain, no starvation. Like
+        // FIX 4 it deliberately does NOT fire RxAudioAvailable: the RX-capture tap
+        // (TCI / Recorder RX capture) must stay recorder-free and byte-identical.
+        if (rxAudioMuted && !txMonitorOn && MonitorBacklog > 0)
+        {
+            int monBlock = Math.Min(audioBuf.Length, MonitorInjectSilentBlockSamples);
+            Array.Clear(audioBuf, 0, monBlock);
+            MixMonitorInject(audioBuf.AsSpan(0, monBlock));
+            LimitRxAudioBuffer(audioBuf.AsSpan(0, monBlock));
+
+            var exemptFrame = new AudioFrame(
+                Seq: ++_audioSeq,
+                TsUnixMs: nowMs,
+                RxId: 0,
+                Channels: 1,
+                SampleRateHz: (uint)AudioOutputRateHz,
+                SampleCount: (ushort)monBlock,
+                Samples: new ReadOnlyMemory<float>(audioBuf, 0, monBlock));
+            PublishExemptAudio(in exemptFrame);
+        }
+
         if (txMonitorOn)
         {
             // Drain whatever the monitor RXA produced this tick. The buffer
@@ -6033,7 +6800,12 @@ public class DspPipelineService : BackgroundService,
                 // operator hears nothing while the sample is captured in the
                 // background. The TX-air tap below still fires (read-only).
                 if (!_txMonitorMeterOnly)
-                    PublishAudio(in monFrame);
+                {
+                    if (rxAudioMuted)
+                        PublishExemptAudio(in monFrame);
+                    else
+                        PublishAudio(in monFrame);
+                }
                 // TX-air tap source: the processed transmit audio (what goes on
                 // the air). Read-only fan-out to IRxAudioTapPlugin/ITxAudioTapPlugin
                 // taps; null subscriber list = no cost.
@@ -6105,6 +6877,7 @@ public class DspPipelineService : BackgroundService,
             _hub.Broadcast(v2);
             RxMetersV2Updated?.Invoke(channel, v2);
         }
+        return true;
         }
         finally { _tickGate.Exit(); }
     }

@@ -87,10 +87,10 @@ import './styles/zeus-digital-settings.css';
 import './styles/pa-settings.css';
 import './styles/analog-meter.css';
 import './styles/rotator-dial.css';
+import './styles/user-management.css';
 import App from './App.tsx';
 import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import { installFetchInterceptor } from './serverUrl';
-import { loadInstalledPluginUis } from './plugins/runtime/pluginRuntime';
 // Side-effect import: registers the `beforeinstallprompt` capture before the
 // lazily-loaded mobile shell mounts, so the install banner can replay it.
 import './pwa/pwa-install';
@@ -98,11 +98,6 @@ import './pwa/pwa-install';
 // Capacitor / standalone-host builds set localStorage["zeus.serverUrl"]
 // to a LAN address; on plain web this is a no-op (relative paths).
 installFetchInterceptor();
-
-// Fire and forget — plugin UIs join the workspace once their ES modules
-// finish loading. The Add Panel modal subscribes via usePluginPanels()
-// and re-renders when entries land.
-void loadInstalledPluginUis();
 
 // Seed the operator's chosen theme on <html> BEFORE React paints. The
 // ThemeApplier component reapplies on store changes; this just prevents

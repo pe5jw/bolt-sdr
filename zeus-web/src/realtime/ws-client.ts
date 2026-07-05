@@ -63,9 +63,6 @@ import { useAudioSuiteStore } from '../state/audio-suite-store';
 import { CW_STATE_FROM_BYTE, useCwStore } from '../state/cw-store';
 import { useSpotStore } from '../state/spot-store';
 import { useChatStore, type ChatEnvelope } from '../state/chat-store';
-import { useFt8Store, type Ft8DecodeBatch } from '../state/ft8-store';
-import { useWsprStore, type WsprSpotBatch } from '../state/wspr-store';
-import { useFt8TxStore, type Ft8TxStatus } from '../state/ft8-tx-store';
 import { useMidiStore } from '../state/midi-store';
 import type { MidiLearnFrame } from '../api/midi';
 import { usePttStore } from '../state/ptt-store';
@@ -204,6 +201,11 @@ const RX_AUDIO_MASTER_BYPASS_BYTES = 2;
 // Zeus.Contracts/ChatEventFrame.cs.
 export const MSG_TYPE_CHAT_EVENT = 0x35;
 
+// Diagnostics health snapshot. Variable-length frame:
+// [0x36][UTF-8 JSON DiagnosticsHealthDto]. The diagnostics panel still reads
+// REST today; the WS push is known and should not hit the unknown-frame log.
+export const MSG_TYPE_DIAGNOSTICS_HEALTH = 0x36;
+
 // Hardware PTT-IN status edge — broadcast on every footswitch / mic-PTT /
 // rear-KEY edge so the Radio Settings PTT-IN lamp tracks the physical input
 // (P1 HardwarePttChanged, P2 UDP-1025 PttIn). Read-only indicator; does NOT
@@ -212,19 +214,10 @@ export const MSG_TYPE_CHAT_EVENT = 0x35;
 export const MSG_TYPE_PTT_STATUS = 0x37;
 const PTT_STATUS_BYTES = 2;
 
-// FT8/FT4 decode batch — one per completed UTC slot, carrying all of that
-// slot's decodes for one RX. Variable-length UTF-8 JSON (Ft8DecodeBatchDto)
-// after the type byte; dispatched into ft8-store's ingest(). Contract:
-// Zeus.Contracts/Ft8DecodeFrame.cs.
-export const MSG_TYPE_FT8_DECODE = 0x38;
-// 0x39 WsprSpot: variable-length UTF-8 JSON WsprSpotBatchDto after the type
-// byte, one per completed 120 s WSPR slot; dispatched into wspr-store's
-// ingest(). Contract: Zeus.Contracts/WsprSpotFrame.cs.
-export const MSG_TYPE_WSPR_SPOT = 0x39;
-// 0x3A Ft8TxStatus: variable-length UTF-8 JSON Ft8TxStatusDto after the type
-// byte, pushed on every FT8/FT4/WSPR keyer arm/stage/transmit edge; dispatched
-// into ft8-tx-store's ingest(). Contract: Zeus.Contracts/Ft8TxStatusFrame.cs.
-export const MSG_TYPE_FT8_TX_STATUS = 0x3a;
+// 0x38 / 0x39 / 0x3A — RESERVED. The FT8 decode / WSPR spot / FT8 TX status
+// frames moved to the Zeus Digital plugin's SSE stream
+// (/api/plugins/{resolved digital plugin id}/events — see api/digital-plugin.ts). The
+// byte values stay reserved in Zeus.Contracts.MsgType; do not reuse them.
 
 // 0x3B MidiLearn: variable-length UTF-8 JSON MidiLearnFrame after the type
 // byte, pushed ONLY while the MIDI settings panel is in Learn mode (one frame
@@ -300,6 +293,8 @@ getAudioBus().subscribe((frame) => getAudioClient().push(frame));
 // this is what feeds the browser CW decoder there. No-op when disconnected.
 const MSG_TYPE_AUDIO_STREAM_REQUEST = 0x21;
 export const MSG_TYPE_DISPLAY_STREAM_REQUEST = 0x22;
+const DISPLAY_STREAM_OFF = 0;
+const DISPLAY_STREAM_VISIBLE_ON = 2;
 export function sendAudioStreamRequest(enable: boolean): void {
   const buf = new ArrayBuffer(2);
   const view = new DataView(buf);
@@ -322,7 +317,7 @@ export function sendDisplayStreamRequest(enable: boolean): void {
   const buf = new ArrayBuffer(2);
   const view = new DataView(buf);
   view.setUint8(0, MSG_TYPE_DISPLAY_STREAM_REQUEST);
-  view.setUint8(1, enable ? 1 : 0);
+  view.setUint8(1, displayStreamRequestLevel(enable));
   if (controlSender) {
     controlSender(buf);
     return;
@@ -334,6 +329,17 @@ export function sendDisplayStreamRequest(enable: boolean): void {
   } catch (err) {
     warnOnce('ws-display-stream-request', 'display stream request send failed', err);
   }
+}
+
+function isDocumentVisible(): boolean {
+  if (typeof document === 'undefined') return true;
+  return document.visibilityState !== 'hidden';
+}
+
+function displayStreamRequestLevel(enable: boolean): number {
+  if (!enable) return DISPLAY_STREAM_OFF;
+  if (!isDocumentVisible()) return DISPLAY_STREAM_OFF;
+  return DISPLAY_STREAM_VISIBLE_ON;
 }
 
 export type MicPcmSendResult = 'sent' | 'native' | 'closed' | 'bad-size' | 'send-error';
@@ -430,7 +436,7 @@ export function dispatchServerFrame(data: ArrayBuffer): void {
       // mini-pan are all closed. Consumers register via
       // registerFrameConsumer() in display-store.ts; the moment any of
       // them mounts we resume decoding on the next tick.
-      if (!hasActiveFrameConsumers()) return;
+      if (!hasActiveFrameConsumers() || !isDocumentVisible()) return;
       const frame = decodeDisplayFrame(ev.data);
       useDisplayStore.getState().pushFrame(frame);
       return;
@@ -530,42 +536,6 @@ export function dispatchServerFrame(data: ArrayBuffer): void {
       }
       return;
     }
-    if (peekType === MSG_TYPE_FT8_DECODE) {
-      // Variable-length UTF-8 JSON Ft8DecodeBatchDto after the type byte.
-      const bytes = new Uint8Array(ev.data, 1);
-      const json = new TextDecoder('utf-8').decode(bytes);
-      try {
-        const batch = JSON.parse(json) as Ft8DecodeBatch;
-        useFt8Store.getState().ingest(batch);
-      } catch (err) {
-        warnOnce('ws-ft8-decode-parse', 'ft8 decode frame parse failed', err);
-      }
-      return;
-    }
-    if (peekType === MSG_TYPE_WSPR_SPOT) {
-      // Variable-length UTF-8 JSON WsprSpotBatchDto after the type byte.
-      const bytes = new Uint8Array(ev.data, 1);
-      const json = new TextDecoder('utf-8').decode(bytes);
-      try {
-        const batch = JSON.parse(json) as WsprSpotBatch;
-        useWsprStore.getState().ingest(batch);
-      } catch (err) {
-        warnOnce('ws-wspr-spot-parse', 'wspr spot frame parse failed', err);
-      }
-      return;
-    }
-    if (peekType === MSG_TYPE_FT8_TX_STATUS) {
-      // Variable-length UTF-8 JSON Ft8TxStatusDto after the type byte.
-      const bytes = new Uint8Array(ev.data, 1);
-      const json = new TextDecoder('utf-8').decode(bytes);
-      try {
-        const status = JSON.parse(json) as Ft8TxStatus;
-        useFt8TxStore.getState().ingest(status);
-      } catch (err) {
-        warnOnce('ws-ft8-tx-status-parse', 'ft8 tx status frame parse failed', err);
-      }
-      return;
-    }
     if (peekType === MSG_TYPE_MIDI_LEARN) {
       // Variable-length UTF-8 JSON MidiLearnFrame after the type byte. Only
       // emitted while the MIDI panel is in Learn mode.
@@ -643,6 +613,9 @@ export function dispatchServerFrame(data: ArrayBuffer): void {
       }
       const bypassed = new DataView(ev.data).getUint8(1) !== 0;
       useAudioSuiteStore.getState().setRxMasterBypassedFromServer(bypassed);
+      return;
+    }
+    if (peekType === MSG_TYPE_DIAGNOSTICS_HEALTH) {
       return;
     }
     if (peekType === MSG_TYPE_PTT_STATUS) {
@@ -788,6 +761,10 @@ export function dispatchServerFrame(data: ArrayBuffer): void {
         // is intentional asymmetric: server-side MOX-on never raises
         // localMicArmed (only local interaction does — see issue #346).
         if (txStore.localMicArmed) txStore.setLocalMicArmed(false);
+        // TX-timeout pre-warning auto-dismisses on unkey (issue #1270). The
+        // sticky SwrTrip / TxTimeout / OutOfBand alerts still wait for the
+        // operator's explicit Dismiss so they retain the post-trip context.
+        if (txStore.alert?.kind === AlertKind.TxTimeoutWarning) txStore.setAlert(null);
       }
       return;
     }
@@ -846,6 +823,10 @@ export function startRealtime(path = '/ws'): () => void {
   };
   const unsubscribeFrameConsumerPresence =
     subscribeFrameConsumerPresence(syncDisplayStreamRequest);
+  const onVisibilityChange = () => syncDisplayStreamRequest();
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVisibilityChange);
+  }
 
   const connect = () => {
     if (stopped) return;
@@ -902,6 +883,9 @@ export function startRealtime(path = '/ws'): () => void {
     stopped = true;
     if (timer != null) clearTimeout(timer);
     unsubscribeFrameConsumerPresence();
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    }
     sendDisplayStreamRequest(false);
     if (ws) {
       ws.onopen = null;
