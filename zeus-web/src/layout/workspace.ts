@@ -228,6 +228,16 @@ export function resolveWorkspaceColumnCount({
   return Math.max(occupied, Math.min(monitor, widthCols));
 }
 
+export function shouldRenderDetachedSingleTileFill({
+  isPrimary,
+  tileCount,
+}: {
+  isPrimary: boolean;
+  tileCount: number;
+}): boolean {
+  return !isPrimary && tileCount === 1;
+}
+
 export function repairWorkspaceTileOverlaps(
   tiles: WorkspaceTile[],
 ): WorkspaceTile[] {

@@ -54,6 +54,7 @@ import {
   WORKSPACE_TILE_MIN_H,
   WORKSPACE_TILE_MIN_W,
   resolveWorkspaceColumnCount,
+  shouldRenderDetachedSingleTileFill,
   type WorkspaceTile,
 } from './workspace';
 import { AddPanelModal } from './AddPanelModal';
@@ -110,7 +111,7 @@ interface FlexWorkspaceProps {
 export function FlexWorkspace({
   layoutId,
   showAddPanelModal = true,
-}: FlexWorkspaceProps = {}) {
+}: FlexWorkspaceProps) {
   const { terminatorActive } = useWorkspace();
   // Loading is driven by App.tsx via loadForRadio(boardKey) — no local
   // first-load effect here. The dock-selected layout uses `workspace`; a
@@ -265,7 +266,59 @@ interface WorkspaceCanvasProps {
   ) => void;
 }
 
-function WorkspaceCanvas({
+function WorkspaceCanvas(props: WorkspaceCanvasProps) {
+  if (
+    shouldRenderDetachedSingleTileFill({
+      isPrimary: props.isPrimary,
+      tileCount: props.tiles.length,
+    })
+  ) {
+    return <DetachedSingleTileCanvas {...props} />;
+  }
+
+  return <WorkspaceGridCanvas {...props} />;
+}
+
+function DetachedSingleTileCanvas({
+  tiles,
+  workspaceLocked,
+  isLoaded,
+  layoutId,
+  onRequestRemoveTile,
+  onToggleTileLock,
+}: WorkspaceCanvasProps) {
+  const tile = tiles[0];
+  const handleToggleTileLock = useCallback(
+    (uid: string, locked: boolean) => onToggleTileLock(uid, locked),
+    [onToggleTileLock],
+  );
+
+  return (
+    <div className="all-panels-workspace all-panels-workspace--detached-fill">
+      {!isLoaded || !tile ? (
+        <div style={{ minHeight: 80 }} aria-hidden />
+      ) : (
+        <div
+          className="detached-single-tile-fill"
+          data-tile-uid={tile.uid}
+          data-tile-locked={
+            workspaceLocked || tile.locked === true ? 'true' : undefined
+          }
+        >
+          <PanelTile
+            tile={tile}
+            layoutId={layoutId}
+            workspaceLocked={workspaceLocked}
+            onRequestRemoveTile={onRequestRemoveTile}
+            onToggleTileLock={handleToggleTileLock}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WorkspaceGridCanvas({
   tiles,
   workspaceLocked,
   isLoaded,
