@@ -20,11 +20,24 @@ public sealed class RemoteUserAccessClient
     private static readonly Uri DefaultSessionEndpoint = new("https://remote.openhpsdrzeus.com/users/session");
     private static readonly Uri DefaultCheckoutEndpoint = new("https://remote.openhpsdrzeus.com/billing/checkout");
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly TimeSpan AllowedSessionCacheTtl = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan DeniedOrUnavailableSessionCacheTtl = TimeSpan.FromSeconds(5);
+    // Grace window: when the broker cannot answer, the last decision it DID
+    // give for this callsign (allow or deny) keeps applying for this long
+    // before the gate falls back to the local user store.
     private static readonly TimeSpan SessionGraceTtl = TimeSpan.FromMinutes(5);
 
     private readonly IHttpClientFactory _httpFactory;
     private readonly ILogger<RemoteUserAccessClient> _log;
-    private readonly ConcurrentDictionary<string, CachedUserSession> _sessionCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _sessionCacheLock = new();
+    private readonly ConcurrentDictionary<string, CachedUserSession> _lastKnownRemoteByCallsign =
+        new(StringComparer.OrdinalIgnoreCase);
+    private CachedSessionResult? _cachedSession;
+    private InflightSessionFetch? _sessionFetch;
+    private long _sessionCacheVersion;
+    private bool _unavailableWarningOpen;
+
+    private sealed record CachedUserSession(ZeusUserSession Session, DateTimeOffset CachedAt);
 
     public RemoteUserAccessClient(
         IHttpClientFactory httpFactory,
@@ -45,11 +58,168 @@ public sealed class RemoteUserAccessClient
         QrzStatus qrzStatus,
         CancellationToken ct)
     {
-        if (!Enabled || !qrzStatus.Connected) return null;
-        var statusCallsign = NormalizeCallsign(qrzStatus.Home?.Callsign);
+        var result = await GetSessionResultAsync(qrz, qrzStatus, ct).ConfigureAwait(false);
+        return result.Outcome == RemoteUserAccessSessionOutcome.Unavailable ? null : result.Session;
+    }
+
+    public async Task<RemoteUserAccessSessionResult> GetSessionResultAsync(
+        QrzService qrz,
+        QrzStatus qrzStatus,
+        CancellationToken ct)
+    {
+        if (!Enabled || !qrzStatus.Connected)
+            return RemoteUserAccessSessionResult.Unavailable();
+
+        var callsign = NormalizeCallsign(qrzStatus.Home?.Callsign);
+        if (callsign is null)
+            return RemoteUserAccessSessionResult.Unavailable();
+
+        var now = DateTimeOffset.UtcNow;
+        Task<RemoteUserAccessSessionResult> fetch;
+        lock (_sessionCacheLock)
+        {
+            if (_cachedSession is { } cached &&
+                string.Equals(cached.Callsign, callsign, StringComparison.OrdinalIgnoreCase) &&
+                cached.ExpiresUtc > now)
+            {
+                return cached.Result;
+            }
+
+            if (_sessionFetch is { } existing &&
+                string.Equals(existing.Callsign, callsign, StringComparison.OrdinalIgnoreCase))
+            {
+                fetch = existing.Fetch;
+            }
+            else
+            {
+                var version = _sessionCacheVersion;
+                fetch = FetchAndCacheSessionResultAsync(qrz, qrzStatus, callsign, version, CancellationToken.None);
+                _sessionFetch = new InflightSessionFetch(callsign, fetch);
+                _ = fetch.ContinueWith(
+                    completed =>
+                    {
+                        lock (_sessionCacheLock)
+                        {
+                            if (ReferenceEquals(_sessionFetch?.Fetch, completed))
+                                _sessionFetch = null;
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+        }
+
+        return await fetch.WaitAsync(ct).ConfigureAwait(false);
+    }
+
+    public void InvalidateSessionCache()
+    {
+        lock (_sessionCacheLock)
+        {
+            _sessionCacheVersion++;
+            _cachedSession = null;
+            _sessionFetch = null;
+            _unavailableWarningOpen = false;
+        }
+
+        _lastKnownRemoteByCallsign.Clear();
+    }
+
+    // Drops only the fresh TTL entry, keeping the grace store, so tests can
+    // force the next call back to the broker and exercise the outage path.
+    internal void ExpireFreshSessionCacheForTests()
+    {
+        lock (_sessionCacheLock)
+            _cachedSession = null;
+    }
+
+    private ZeusUserSession? TryGetGraceSession(string callsign)
+    {
+        if (!_lastKnownRemoteByCallsign.TryGetValue(callsign, out var cached))
+            return null;
+
+        var age = DateTimeOffset.UtcNow - cached.CachedAt;
+        if (age > SessionGraceTtl)
+        {
+            _lastKnownRemoteByCallsign.TryRemove(callsign, out _);
+            return null;
+        }
+
+        _log.LogWarning(
+            "remote user-management unavailable; using cached decision for {Callsign} age={AgeSeconds}s accessAllowed={AccessAllowed}",
+            callsign,
+            (int)age.TotalSeconds,
+            cached.Session.AccessAllowed);
+        return cached.Session;
+    }
+
+    public void LogUnavailableFallbackOnce(ILogger log, QrzStatus qrzStatus)
+    {
+        var shouldLog = false;
+        lock (_sessionCacheLock)
+        {
+            if (!_unavailableWarningOpen)
+            {
+                _unavailableWarningOpen = true;
+                shouldLog = true;
+            }
+        }
+
+        if (shouldLog)
+        {
+            log.LogWarning(
+                "remote user-management unavailable; allowing QRZ user {Callsign} via local user store",
+                qrzStatus.Home?.Callsign);
+        }
+    }
+
+    private async Task<RemoteUserAccessSessionResult> FetchAndCacheSessionResultAsync(
+        QrzService qrz,
+        QrzStatus qrzStatus,
+        string callsign,
+        long version,
+        CancellationToken ct)
+    {
+        var result = await FetchSessionResultAsync(qrz, qrzStatus, ct).ConfigureAwait(false);
+
+        if (result.Outcome != RemoteUserAccessSessionOutcome.Unavailable && result.Session is { } fresh)
+        {
+            _lastKnownRemoteByCallsign[callsign] = new CachedUserSession(fresh, DateTimeOffset.UtcNow);
+        }
+        else if (result.Outcome == RemoteUserAccessSessionOutcome.Unavailable &&
+                 TryGetGraceSession(callsign) is { } grace)
+        {
+            // Broker unreachable but it gave a decision for this callsign within
+            // the grace window — keep honouring that decision (allow OR deny)
+            // instead of dropping to the local-store fallback.
+            result = grace.AccessAllowed
+                ? RemoteUserAccessSessionResult.Success(grace)
+                : RemoteUserAccessSessionResult.ExplicitDeny(grace);
+        }
+
+        var ttl = CacheTtlFor(result);
+        var expiresUtc = DateTimeOffset.UtcNow + ttl;
+
+        lock (_sessionCacheLock)
+        {
+            if (version == _sessionCacheVersion)
+                _cachedSession = new CachedSessionResult(callsign, result, expiresUtc);
+        }
+
+        if (result.Outcome != RemoteUserAccessSessionOutcome.Unavailable)
+            ClearUnavailableWarning();
+
+        return result;
+    }
+
+    private async Task<RemoteUserAccessSessionResult> FetchSessionResultAsync(
+        QrzService qrz,
+        QrzStatus qrzStatus,
+        CancellationToken ct)
+    {
         var identity = await TryGetIdentityAsync(qrz, ct).ConfigureAwait(false);
-        if (identity is null)
-            return TryGetCachedSession(statusCallsign, "identity-unavailable");
+        if (identity is null) return RemoteUserAccessSessionResult.Unavailable();
 
         try
         {
@@ -58,21 +228,22 @@ public sealed class RemoteUserAccessClient
             using var res = await _httpFactory.CreateClient(HttpClientName).SendAsync(req, ct).ConfigureAwait(false);
             if (!res.IsSuccessStatusCode)
             {
-                _log.LogWarning(
+                _log.LogDebug(
                     "remote user-management session returned {Status} for {Callsign}",
                     (int)res.StatusCode,
                     identity.Value.Callsign);
-                return TryGetCachedSession(identity.Value.Callsign, $"http-{(int)res.StatusCode}");
+                return RemoteUserAccessSessionResult.Unavailable();
             }
 
             var remote = await res.Content.ReadFromJsonAsync<BrokerUserSessionResponse>(JsonOptions, ct)
                 .ConfigureAwait(false);
             if (remote?.User is null)
-                return TryGetCachedSession(identity.Value.Callsign, "empty-response");
+                return RemoteUserAccessSessionResult.Unavailable();
 
             var session = ToSession(remote, qrzStatus);
-            CacheSession(session);
-            return session;
+            return session.AccessAllowed
+                ? RemoteUserAccessSessionResult.Success(session)
+                : RemoteUserAccessSessionResult.ExplicitDeny(session);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -80,10 +251,21 @@ public sealed class RemoteUserAccessClient
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "remote user-management session failed");
-            return TryGetCachedSession(identity.Value.Callsign, "request-failed");
+            _log.LogDebug(ex, "remote user-management session failed");
+            return RemoteUserAccessSessionResult.Unavailable();
         }
     }
+
+    private void ClearUnavailableWarning()
+    {
+        lock (_sessionCacheLock)
+            _unavailableWarningOpen = false;
+    }
+
+    private static TimeSpan CacheTtlFor(RemoteUserAccessSessionResult result) =>
+        result.Outcome == RemoteUserAccessSessionOutcome.Success && result.Session?.AccessAllowed == true
+            ? AllowedSessionCacheTtl
+            : DeniedOrUnavailableSessionCacheTtl;
 
     public async Task<PluginCheckoutResponse> CreateCheckoutAsync(
         QrzService qrz,
@@ -112,25 +294,6 @@ public sealed class RemoteUserAccessClient
         var response = await res.Content.ReadFromJsonAsync<PluginCheckoutResponse>(JsonOptions, ct)
             .ConfigureAwait(false);
         return response ?? new PluginCheckoutResponse(null, false, Array.Empty<string>());
-    }
-
-    internal ZeusUserSession RemoteUnavailableSession(QrzStatus qrzStatus)
-    {
-        var callsign = NormalizeCallsign(qrzStatus.Home?.Callsign);
-        return new ZeusUserSession(
-            QrzConnected: qrzStatus.Connected,
-            Callsign: callsign,
-            DisplayName: DisplayName(qrzStatus.Home) ?? callsign,
-            AccessAllowed: false,
-            IsAdmin: false,
-            HasQrzXmlSubscription: qrzStatus.HasXmlSubscription,
-            SubscriptionStatus: "unavailable",
-            SubscriptionExpiresUtc: null,
-            PluginAccessMode: UserManagementStore.DefaultPluginAccessMode,
-            PluginEntitlements: Array.Empty<ZeusPluginEntitlement>(),
-            ManagedPlugins: Array.Empty<ZeusManagedPluginRecord>(),
-            DenialReason: "Zeus user management is unavailable",
-            User: null);
     }
 
     private static ZeusUserSession ToSession(BrokerUserSessionResponse remote, QrzStatus qrzStatus)
@@ -218,35 +381,6 @@ public sealed class RemoteUserAccessClient
         req.Headers.TryAddWithoutValidation("X-QRZ-Session", identity.SessionKey);
     }
 
-    private void CacheSession(ZeusUserSession session)
-    {
-        var callsign = NormalizeCallsign(session.Callsign);
-        if (callsign is null) return;
-        _sessionCache[callsign] = new CachedUserSession(session, DateTimeOffset.UtcNow);
-    }
-
-    private ZeusUserSession? TryGetCachedSession(string? callsign, string reason)
-    {
-        var normalized = NormalizeCallsign(callsign);
-        if (normalized is null) return null;
-        if (!_sessionCache.TryGetValue(normalized, out var cached)) return null;
-
-        var age = DateTimeOffset.UtcNow - cached.CachedAt;
-        if (age > SessionGraceTtl)
-        {
-            _sessionCache.TryRemove(normalized, out _);
-            return null;
-        }
-
-        _log.LogWarning(
-            "remote user-management session unavailable ({Reason}); using cached decision for {Callsign} age={AgeSeconds}s accessAllowed={AccessAllowed}",
-            reason,
-            normalized,
-            (int)age.TotalSeconds,
-            cached.Session.AccessAllowed);
-        return cached.Session;
-    }
-
     private static async Task<string?> ReadErrorAsync(HttpResponseMessage response, CancellationToken ct)
     {
         try
@@ -332,7 +466,35 @@ public sealed class RemoteUserAccessClient
         long? CreatedAt,
         long? UpdatedAt);
 
-    private sealed record CachedUserSession(ZeusUserSession Session, DateTimeOffset CachedAt);
+    private sealed record CachedSessionResult(
+        string Callsign,
+        RemoteUserAccessSessionResult Result,
+        DateTimeOffset ExpiresUtc);
+
+    private sealed record InflightSessionFetch(
+        string Callsign,
+        Task<RemoteUserAccessSessionResult> Fetch);
+}
+
+public enum RemoteUserAccessSessionOutcome
+{
+    Success,
+    ExplicitDeny,
+    Unavailable,
+}
+
+public sealed record RemoteUserAccessSessionResult(
+    RemoteUserAccessSessionOutcome Outcome,
+    ZeusUserSession? Session)
+{
+    public static RemoteUserAccessSessionResult Success(ZeusUserSession session) =>
+        new(RemoteUserAccessSessionOutcome.Success, session);
+
+    public static RemoteUserAccessSessionResult ExplicitDeny(ZeusUserSession session) =>
+        new(RemoteUserAccessSessionOutcome.ExplicitDeny, session);
+
+    public static RemoteUserAccessSessionResult Unavailable() =>
+        new(RemoteUserAccessSessionOutcome.Unavailable, null);
 }
 
 public sealed record PluginCheckoutRequest(

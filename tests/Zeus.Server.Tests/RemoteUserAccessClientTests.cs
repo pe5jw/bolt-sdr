@@ -30,6 +30,9 @@ public sealed class RemoteUserAccessClientTests : IDisposable
             NullLogger<RemoteUserAccessClient>.Instance);
 
         var first = await client.TryGetSessionAsync(qrz, qrz.GetStatus(), CancellationToken.None);
+        // Age out the fresh TTL entry (but not the grace store) so the second
+        // call goes back to the broker and hits the outage response.
+        client.ExpireFreshSessionCacheForTests();
         var second = await client.TryGetSessionAsync(qrz, qrz.GetStatus(), CancellationToken.None);
 
         Assert.NotNull(first);
@@ -53,6 +56,9 @@ public sealed class RemoteUserAccessClientTests : IDisposable
             NullLogger<RemoteUserAccessClient>.Instance);
 
         var first = await client.TryGetSessionAsync(qrz, qrz.GetStatus(), CancellationToken.None);
+        // Age out the fresh TTL entry (but not the grace store) so the second
+        // call goes back to the broker and hits the outage response.
+        client.ExpireFreshSessionCacheForTests();
         var second = await client.TryGetSessionAsync(qrz, qrz.GetStatus(), CancellationToken.None);
 
         Assert.NotNull(first);

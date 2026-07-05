@@ -37,14 +37,14 @@ public sealed class PluginInstallAccessGate : IPluginInstallAccessGate
         if (!_remote.Enabled)
             return AccessFor(_users.GetSession(qrzStatus), normalized);
 
-        var session = await _remote.TryGetSessionAsync(_qrz, qrzStatus, ct).ConfigureAwait(false);
-        if (session is null)
+        var remote = await _remote.GetSessionResultAsync(_qrz, qrzStatus, ct).ConfigureAwait(false);
+        if (remote.Outcome == RemoteUserAccessSessionOutcome.Unavailable)
         {
             _log.LogWarning("plugin install remote user management unavailable; falling back to local QRZ user policy");
-            session = _users.GetSession(qrzStatus);
+            return AccessFor(_users.GetSession(qrzStatus), normalized);
         }
 
-        return AccessFor(session, normalized);
+        return AccessFor(remote.Session!, normalized);
     }
 
     private static PluginInstallAccessDecision AccessFor(ZeusUserSession session, string pluginId)

@@ -3702,20 +3702,27 @@ public static class ZeusEndpoints
 
         app.MapGet("/api/qrz/status", (QrzService qrz) => qrz.GetStatus());
 
-        app.MapPost("/api/qrz/login", async (QrzLoginRequest req, QrzService qrz, HttpContext ctx) =>
+        app.MapPost("/api/qrz/login", async (
+            QrzLoginRequest req,
+            QrzService qrz,
+            Zeus.Server.Hosting.RemoteUserAccessClient remoteUsers,
+            HttpContext ctx) =>
         {
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
                 return Results.BadRequest(new { error = "username and password required" });
             log.LogInformation("api.qrz.login user={User}", req.Username);
+            remoteUsers.InvalidateSessionCache();
             try
             {
                 var status = await qrz.LoginAsync(req.Username, req.Password, ctx.RequestAborted);
+                remoteUsers.InvalidateSessionCache();
                 if (!status.Connected && status.Error != null)
                     return Results.Json(status, statusCode: StatusCodes.Status401Unauthorized);
                 return Results.Ok(status);
             }
             catch (HttpRequestException ex)
             {
+                remoteUsers.InvalidateSessionCache();
                 return Results.Json(new { error = $"QRZ unreachable: {ex.Message}" }, statusCode: StatusCodes.Status502BadGateway);
             }
         });
@@ -3740,9 +3747,14 @@ public static class ZeusEndpoints
             }
         });
 
-        app.MapPost("/api/qrz/logout", async (QrzService qrz, HttpContext ctx) =>
+        app.MapPost("/api/qrz/logout", async (
+            QrzService qrz,
+            Zeus.Server.Hosting.RemoteUserAccessClient remoteUsers,
+            HttpContext ctx) =>
         {
+            remoteUsers.InvalidateSessionCache();
             await qrz.LogoutAsync(ctx.RequestAborted);
+            remoteUsers.InvalidateSessionCache();
             return Results.Ok(qrz.GetStatus());
         });
 
@@ -3762,17 +3774,13 @@ public static class ZeusEndpoints
             if (!qrzStatus.Connected)
                 return Results.Ok(users.GetSession(qrzStatus));
 
-            var remoteSession = await remoteUsers.TryGetSessionAsync(qrz, qrzStatus, ctx.RequestAborted)
+            var remoteSession = await remoteUsers.GetSessionResultAsync(qrz, qrzStatus, ctx.RequestAborted)
                 .ConfigureAwait(false);
-            if (remoteSession is not null) return Results.Ok(remoteSession);
+            if (remoteSession.Outcome != Zeus.Server.Hosting.RemoteUserAccessSessionOutcome.Unavailable)
+                return Results.Ok(remoteSession.Session);
 
             if (remoteUsers.Enabled)
-            {
-                log.LogWarning(
-                    "api.users.session remote user management unavailable; denying QRZ user {Callsign}",
-                    qrzStatus.Home?.Callsign);
-                return Results.Ok(remoteUsers.RemoteUnavailableSession(qrzStatus));
-            }
+                remoteUsers.LogUnavailableFallbackOnce(log, qrzStatus);
 
             return Results.Ok(users.GetSession(qrzStatus));
         });
@@ -4909,10 +4917,25 @@ public static class ZeusEndpoints
             return true;
         }
 
-        var remoteSession = await remoteUsers.TryGetSessionAsync(qrz, qrzStatus, ctx.RequestAborted)
-            .ConfigureAwait(false);
-        var session = remoteSession
-            ?? (remoteUsers.Enabled ? remoteUsers.RemoteUnavailableSession(qrzStatus) : users.GetSession(qrzStatus));
+        ZeusUserSession session;
+        if (remoteUsers.Enabled)
+        {
+            var remoteSession = await remoteUsers.GetSessionResultAsync(qrz, qrzStatus, ctx.RequestAborted)
+                .ConfigureAwait(false);
+            if (remoteSession.Outcome == Zeus.Server.Hosting.RemoteUserAccessSessionOutcome.Unavailable)
+            {
+                remoteUsers.LogUnavailableFallbackOnce(log, qrzStatus);
+                session = users.GetSession(qrzStatus);
+            }
+            else
+            {
+                session = remoteSession.Session!;
+            }
+        }
+        else
+        {
+            session = users.GetSession(qrzStatus);
+        }
 
         if (session.AccessAllowed)
             return false;
@@ -5183,20 +5206,20 @@ public static class ZeusEndpoints
     static string[] AvailableRxAux(RxAuxInputs caps)
     {
         var list = new List<string>(4);
-        if (caps.HasFlag(RxAuxInputs.Ext1))   list.Add(nameof(RxAuxInputSel.Ext1));
-        if (caps.HasFlag(RxAuxInputs.Ext2))   list.Add(nameof(RxAuxInputSel.Ext2));
-        if (caps.HasFlag(RxAuxInputs.Xvtr))   list.Add(nameof(RxAuxInputSel.Xvtr));
+        if (caps.HasFlag(RxAuxInputs.Ext1)) list.Add(nameof(RxAuxInputSel.Ext1));
+        if (caps.HasFlag(RxAuxInputs.Ext2)) list.Add(nameof(RxAuxInputSel.Ext2));
+        if (caps.HasFlag(RxAuxInputs.Xvtr)) list.Add(nameof(RxAuxInputSel.Xvtr));
         if (caps.HasFlag(RxAuxInputs.Bypass)) list.Add(nameof(RxAuxInputSel.Bypass));
         return list.ToArray();
     }
 
     static bool RxAuxSupported(RxAuxInputSel sel, RxAuxInputs caps) => sel switch
     {
-        RxAuxInputSel.Ext1   => caps.HasFlag(RxAuxInputs.Ext1),
-        RxAuxInputSel.Ext2   => caps.HasFlag(RxAuxInputs.Ext2),
-        RxAuxInputSel.Xvtr   => caps.HasFlag(RxAuxInputs.Xvtr),
+        RxAuxInputSel.Ext1 => caps.HasFlag(RxAuxInputs.Ext1),
+        RxAuxInputSel.Ext2 => caps.HasFlag(RxAuxInputs.Ext2),
+        RxAuxInputSel.Xvtr => caps.HasFlag(RxAuxInputs.Xvtr),
         RxAuxInputSel.Bypass => caps.HasFlag(RxAuxInputs.Bypass),
-        _                    => true, // None always allowed
+        _ => true, // None always allowed
     };
 
     static bool TryParseIpEndpoint(string raw, out IPEndPoint ep)
@@ -5278,7 +5301,7 @@ public static class ZeusEndpoints
         0x06 => HpsdrBoardKind.HermesLite2,
         0x0A => HpsdrBoardKind.OrionMkII,
         0x14 => HpsdrBoardKind.HermesC10,
-        _    => HpsdrBoardKind.Unknown,
+        _ => HpsdrBoardKind.Unknown,
     };
 
     static HpsdrBoardKind MapBoardByteP2(byte raw) => raw switch
@@ -5292,7 +5315,7 @@ public static class ZeusEndpoints
         0x06 => HpsdrBoardKind.HermesLite2,
         0x0A => HpsdrBoardKind.OrionMkII,    // Saturn / ANAN-G2
         0x14 => HpsdrBoardKind.HermesC10,    // ANAN-G2E
-        _    => HpsdrBoardKind.Unknown,
+        _ => HpsdrBoardKind.Unknown,
     };
 
     static HpsdrBoardKind? ParseBoardKind(string? raw)
