@@ -33,10 +33,10 @@ public sealed class CapabilitiesService
         var architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
 
         var httpsPort = options.UseHttpsLanCert
-            ? (options.HttpsPort > 0 ? options.HttpsPort : LanCertificate.GetHttpsPort())
+            ? (options.HttpsPort > 0 ? options.HttpsPort : 0)
             : 0;
         var lanHttpsUrls = httpsPort > 0
-            ? LanCertificate.GetLanIps()
+            ? Array.Empty<System.Net.IPAddress>()
                 .Select(ip => $"https://{ip}:{httpsPort}")
                 .ToArray()
             : Array.Empty<string>();
@@ -119,3 +119,4 @@ public sealed record CapabilitiesSnapshot(
     FeatureMatrix Features);
 
 public sealed record FeatureMatrix(bool Vst = false, bool VstEditor = false);
+

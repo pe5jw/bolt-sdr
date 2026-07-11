@@ -62,7 +62,7 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
     private readonly TxAudioIngest _ingest;
     private readonly StreamingHub _hub;
-    private readonly AudioPluginBridge _bridge;
+
     private readonly ILogger<NativeMicCapture> _log;
     private readonly AudioDeviceSettingsStore? _deviceSettings;
 
@@ -93,13 +93,13 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
     public NativeMicCapture(
         TxAudioIngest ingest,
         StreamingHub hub,
-        AudioPluginBridge bridge,
+
         ILogger<NativeMicCapture> log,
         AudioDeviceSettingsStore? deviceSettings = null)
     {
         _ingest = ingest;
         _hub = hub;
-        _bridge = bridge;
+
         _log = log;
         _deviceSettings = deviceSettings;
     }
@@ -340,9 +340,7 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
                 {
                     try
                     {
-                        _bridge.ProcessLivePreview(
-                            new ReadOnlySpan<float>(_accum, 0, MicBlockSamples),
-                            sampleRate: 48_000);
+                        // Bolt SDR: plugin preview removed
                     }
                     catch (Exception ex)
                     {
@@ -453,3 +451,4 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
         return SanitizeCapturedSample(sum * inverseChannels);
     }
 }
+

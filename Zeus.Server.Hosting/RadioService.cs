@@ -81,7 +81,6 @@ public sealed class RadioService : IDisposable
     private readonly DspSettingsStore _dspSettingsStore;
     // NR3 (RNNoise) operator-installed model store. Optional (null in older test
     // constructions); when null, NR3 reports no installed model.
-    private readonly Nr3ModelStore? _nr3ModelStore;
     private readonly PaSettingsStore _paStore;
     // Per-band external-antenna selection (external-ports plan — antenna slice,
     // #804). Optional so existing constructions (tests) stay valid; null → the
@@ -403,9 +402,8 @@ public sealed class RadioService : IDisposable
     // appended to the projected receiver list (reserved index
     // WireContract.KiwiReceiverIndex) and a change re-broadcasts state. Null in
     // tests / hosts without the Kiwi feature wired.
-    private readonly IKiwiReceiverProvider? _kiwiReceiverProvider;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null, Nr3ModelStore? nr3ModelStore = null, Hl2GpioSettingsStore? hl2GpioStore = null, BandMemoryStore? bandMemoryStore = null, IKiwiReceiverProvider? kiwiReceiverProvider = null, Zeus.Protocol1.IRxAudioSource? rxAudioSource = null, RfFilterSettingsStore? rfFilterStore = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null, Hl2GpioSettingsStore? hl2GpioStore = null, BandMemoryStore? bandMemoryStore = null, Zeus.Protocol1.IRxAudioSource? rxAudioSource = null, RfFilterSettingsStore? rfFilterStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
@@ -5041,3 +5039,6 @@ internal static class HpsdrSampleRateExtensions
         _ => throw new ArgumentOutOfRangeException(nameof(rate), rate, null),
     };
 }
+
+
+
