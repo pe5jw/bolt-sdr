@@ -1,3 +1,11 @@
+# Why the Fork
+I like to studie it to learn.
+This is a nice stabile start to do that as a base.
+
+Thx to the Zeus developpers and Brian for the repo.
+Zeus is a create piece of software, and the concept is so nice.
+
+> orginal readme
 # Status
 I'm no longer involved in this project or decisions of the current contributors as of June 26.
 this repo is now being archived.
