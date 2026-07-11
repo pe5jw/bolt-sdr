@@ -283,8 +283,7 @@ public sealed class TxAudioIngest : IDisposable
         DspPipelineService pipeline,
         TxService tx,
         StreamingHub hub,
-        ILogger<TxAudioIngest> log,
-        AudioModemPluginBridge? audioModem = null)
+        ILogger<TxAudioIngest> log)
         : this(ring, () => pipeline.CurrentEngine, () => tx.IsMoxOn, hub, log,
                forwardP2: iq => pipeline.ForwardTxIqToP2(iq.Span),
                drainTxTransport: pipeline.DrainTxIqTransportTail,
@@ -309,8 +308,7 @@ public sealed class TxAudioIngest : IDisposable
         Func<TimeSpan, bool>? drainTxTransport = null,
         Action<int>? onWdspConsumed = null,
         Func<bool>? txOwnedByTuneDriver = null,
-        Func<long>? preKeyOpenAtTicks = null,
-        AudioModemPluginBridge? audioModem = null)
+        Func<long>? preKeyOpenAtTicks = null)
     {
         _ring = ring;
         _engineProvider = engineProvider;
@@ -628,7 +626,7 @@ public sealed class TxAudioIngest : IDisposable
     // mic speech is replaced (in place, pre-WDSP) with the transmitted modem
     // signal so WDSP's USB TXA modulates the modem audio onto the carrier.
     // Null in unit tests.
-    private readonly AudioModemPluginBridge? _audioModem;
+    private readonly object? _audioModemStub = null; // Bolt SDR: modem removed
 
     private readonly Action<ReadOnlyMemory<float>>? _forwardP2;
     private readonly Func<TimeSpan, bool>? _drainTxTransport;
@@ -1033,3 +1031,7 @@ public sealed class TxAudioIngest : IDisposable
         }
     }
 }
+
+
+
+

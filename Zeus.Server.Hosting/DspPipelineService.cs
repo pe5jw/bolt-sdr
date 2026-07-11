@@ -758,7 +758,6 @@ public class DspPipelineService : BackgroundService,
     // bus as the hardware receivers (IKiwiAudioBus). Optional — null in tests and
     // when no Kiwi service is registered. Drained into _kiwiMixBuf each tick,
     // clocked by RX1, then averaged in by MixRxAudioN alongside RX2..RXn.
-    private readonly IKiwiAudioBus? _kiwiAudioBus;
     private readonly float[] _kiwiMixBuf = new float[AudioDrainCapacity];
 
     // Protocol 2 path (parallel to the RadioService-owned P1 path). Held
@@ -766,7 +765,6 @@ public class DspPipelineService : BackgroundService,
     // growing a P2 variant there would require a larger refactor; for now
     // keeping it isolated avoids touching any P1 behavior.
     private Zeus.Protocol2.Protocol2Client? _p2Client;
-    private readonly Protocol3SidecarBridge? _p3Sidecar;
 
     // Wideband display mode. P2 uses bounded ADC snapshots; P3 consumes a
     // sidecar-projected full-span DisplayFrame when available. The radio/sidecar
@@ -1308,7 +1306,6 @@ public class DspPipelineService : BackgroundService,
     // Plugin-provided audio modem coordinator. Null in test constructions.
     // When FreeDV is the active RX0 mode, the post-demod insert below replaces
     // the received modem audio with decoded speech.
-    private readonly AudioModemPluginBridge? _audioModem;
 
     public DspPipelineService(
         RadioService radio,
@@ -1318,13 +1315,9 @@ public class DspPipelineService : BackgroundService,
         CwSidetoneSource? sidetone = null,
         FrontendDspSceneDiagnosticsService? frontendDspScene = null,
         DisplaySettingsStore? displaySettings = null,
-        AudioModemPluginBridge? audioModem = null,
         Func<TxAudioIngest?>? txIngestFactory = null,
-        Nr3ModelStore? nr3ModelStore = null,
-        IKiwiAudioBus? kiwiAudioBus = null,
         RxAudioMuteState? rxAudioMute = null,
         TxIqRing? txIqRing = null,
-        Protocol3SidecarBridge? p3Sidecar = null,
         IConfiguration? configuration = null)
     {
         _radio = radio;
@@ -1385,7 +1378,6 @@ public class DspPipelineService : BackgroundService,
     // Operator-installed RNNoise (NR3) model store. Optional so test
     // constructions keep working; when null, NR3 model loading is skipped
     // entirely (NR3 stays inert).
-    private readonly Nr3ModelStore? _nr3ModelStore;
 
     // Push the active NR3 model path into the given engine under the engine
     // lock. A null/empty path clears the model (NR3 inert) — we always call so
@@ -1841,7 +1833,7 @@ public class DspPipelineService : BackgroundService,
             if (!ShouldPollP3WidebandDisplay()) continue;
             if (!TryBeginDisplayFrame(Stopwatch.GetTimestamp(), out var displayPlan)) continue;
 
-            Protocol3SidecarDisplayFrame? sidecarFrame;
+            Protocol3SidecarDisplayFrame? sidecarFrame = null;
             try
             {
                 sidecarFrame = await _p3Sidecar.FetchWidebandDisplayFrameAsync(Width, ct)
@@ -7563,3 +7555,4 @@ internal sealed record AudioPathDiagnosticsDto(
     long MonitorBacklogSamples,
     int AudioSinkCount,
     string DiagnosticRecommendation);
+
