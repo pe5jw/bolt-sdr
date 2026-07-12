@@ -8,4 +8,6 @@
   <Project Path="Zeus.VirtualRadio.Host/Zeus.VirtualRadio.Host.csproj" />
   <Project Path="Zeus.Server.Hosting/Zeus.Server.Hosting.csproj" />
   <Project Path="Zeus.Plugins.Host.Stub/Zeus.Plugins.Host.Stub.csproj" />
+  <Project Path="BoltServer/BoltServer.csproj" />
 </Solution>
+
