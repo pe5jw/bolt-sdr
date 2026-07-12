@@ -70,7 +70,7 @@ public sealed class DspLiveDiagnosticsProvider : IDiagnosticsProvider
         var state = _radio.Snapshot();
         var condition = _scene.SmartNrCondition(
             _dsp.SnapshotNrRuntime(),
-            ZeusEndpoints.BuildSmartNrRxChainRuntime(state, _radio.GetAdcProtectionStatus()));
+            null);
         return DspLiveDiagnosticsService.Build(condition, _dsp.SnapshotLiveRuntimeEvidence(), state);
     }
 

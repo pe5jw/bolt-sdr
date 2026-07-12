@@ -408,7 +408,6 @@ public sealed class RadioService : IDisposable
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
         _dspSettingsStore = dspSettingsStore;
-        _nr3ModelStore = nr3ModelStore;
         _paStore = paStore;
         _antennaStore = antennaStore;
         _rfFilterStore = rfFilterStore;
@@ -443,9 +442,8 @@ public sealed class RadioService : IDisposable
         // KiwiSDR slice: a change to the Kiwi receiver (enable/disable, tune,
         // mute) re-projects + re-broadcasts state so the "Kiwi" entry appears /
         // updates live on every client, exactly like a hardware DDC mutation.
-        _kiwiReceiverProvider = kiwiReceiverProvider;
-        if (_kiwiReceiverProvider is not null)
-            _kiwiReceiverProvider.KiwiReceiverChanged += () => StateChanged?.Invoke(Snapshot());
+                // Bolt SDR: kiwi removed
+                    // Bolt SDR: kiwi removed
         _txIqSource = txIqSource;
         _rxAudioSource = rxAudioSource;
         // Seed the on-board CW keyer config from persisted settings so a
@@ -503,28 +501,7 @@ public sealed class RadioService : IDisposable
         int? overlayMicGain = null;
         double? overlayLevelerMaxGain = null;
         int? overlayTxFilterLow = null, overlayTxFilterHigh = null;
-        if (txAudioProfileStore is not null)
-        {
-            var lastId = txAudioProfileStore.GetLastLoadedId();
-            var lastProfile = string.IsNullOrWhiteSpace(lastId) ? null : txAudioProfileStore.Get(lastId);
-            if (lastProfile is not null)
-            {
-                persistedCfc = lastProfile.CfcConfig ?? persistedCfc;
-                persistedTxLeveling = lastProfile.TxLeveling ?? persistedTxLeveling;
-                persistedTxPhaseRotator = NormalizeTxPhaseRotator(
-                    lastProfile.TxPhaseRotator ?? persistedTxPhaseRotator);
-                overlayMicGain = Math.Clamp(lastProfile.MicGainDb, -40, 10);
-                overlayLevelerMaxGain = Math.Clamp(lastProfile.LevelerMaxGainDb, 0.0, 20.0);
-                // Re-sign the operator-typed positive magnitudes for the startup
-                // mode so the TX bandpass comes up correctly.
-                int loAbs = Math.Min(Math.Abs(lastProfile.LowCutHz), Math.Abs(lastProfile.HighCutHz));
-                int hiAbs = Math.Max(Math.Abs(lastProfile.LowCutHz), Math.Abs(lastProfile.HighCutHz));
-                var startupMode = radioStateStore?.Get()?.Mode ?? RxMode.USB;
-                var (sLo, sHi) = SignedFilterForMode(startupMode, loAbs, hiAbs);
-                overlayTxFilterLow = sLo;
-                overlayTxFilterHigh = sHi;
-            }
-        }
+        // Bolt SDR: txAudioProfile removed
 
         // Seed the last-preset cache from persisted store for all modes so
         // the first mode-switch in a session recalls the correct slot.
@@ -628,8 +605,8 @@ public sealed class RadioService : IDisposable
             // operator's model store. The frontend reveals NR3 only when both
             // are present (symbols available AND a model installed).
             WdspNr3RnnrAvailable: Zeus.Dsp.Wdsp.WdspDspEngine.Nr3RnnrAvailable,
-            Nr3ModelName: _nr3ModelStore?.GetActiveModelName(),
-            Nr3UsingBundledDefault: _nr3ModelStore?.UsingBundledDefault() ?? false,
+            Nr3ModelName: null,
+            Nr3UsingBundledDefault: true,
             ZoomLevel: rsSnap?.ZoomLevel ?? 1,
             WorkspaceZoomPct: ClampWorkspaceZoomPct(rsSnap?.WorkspaceZoomPct ?? DefaultWorkspaceZoomPct),
             AutoAttEnabled: _adcProtection.Enabled,
@@ -3719,50 +3696,13 @@ public sealed class RadioService : IDisposable
     public StateDto InstallNr3Model(byte[] content, string fileName)
     {
         ArgumentNullException.ThrowIfNull(content);
-        if (_nr3ModelStore is null)
-            throw new InvalidOperationException("NR3 model store is not configured.");
-        // Install writes the file and synchronously fires Changed, which the DSP
-        // pipeline observes to (re)load it into a live engine. After that returns,
-        // the store carries the load outcome — reject a model the native RNNoise
-        // loader couldn't parse instead of silently leaving NR3 inert. When no
-        // engine is live the result is null (unverified) and we accept it; the
-        // load is re-attempted on the next connect.
-        _nr3ModelStore.Install(content, fileName);
-        if (_nr3ModelStore.LastLoadResult == Zeus.Dsp.Nr3ModelLoadResult.LoadFailed)
-        {
-            _nr3ModelStore.Remove(); // drop the bad file — reverts to the bundled default
-            throw new ArgumentException(
-                "That file isn't a compatible RNNoise model — it failed to load. " +
-                "Use an RNNoise weights file (DNNw format) matching the bundled model's architecture.");
-        }
-        var name = _nr3ModelStore.GetActiveModelName();
+        var name = string.Empty; // Bolt SDR: nr3 removed
         Mutate(s => s with { Nr3ModelName = name, Nr3UsingBundledDefault = false });
         return Snapshot();
     }
 
-    public StateDto RemoveNr3Model()
-    {
-        if (_nr3ModelStore is null || !_nr3ModelStore.Remove())
-            return Snapshot();
-        // Removing the operator model reverts to the bundled default (if shipped),
-        // not to inert. Mirror the now-active model (default name, or null when no
-        // default exists) into StateDto.
-        Mutate(s => s with
-        {
-            Nr3ModelName = _nr3ModelStore.GetActiveModelName(),
-            Nr3UsingBundledDefault = _nr3ModelStore.UsingBundledDefault(),
-        });
-        // Only strand-proof the NR mode when NO model remains active (no bundled
-        // default). With a default still active, NR3 stays valid — leave it be.
-        if (!_nr3ModelStore.UsingBundledDefault())
-        {
-            var cur = Snapshot().Nr;
-            if (cur?.NrMode == NrMode.Rnnr)
-                return SetNr(cur with { NrMode = NrMode.Off });
-        }
-        return Snapshot();
-    }
-
+    public StateDto RemoveNr3Model() { return Snapshot(); } // Bolt SDR: nr3 removed
+    
     private static NrConfig NormalizeNrConfig(NrConfig cfg) =>
         IsSupportedNrMode(cfg.NrMode) ? cfg : cfg with { NrMode = NrMode.Off };
 
@@ -4424,9 +4364,7 @@ public sealed class RadioService : IDisposable
         // Non-hardware KiwiSDR slice (reserved index KiwiReceiverIndex). Appended
         // out of the contiguous DDC run — it is a remote receiver, not a DDC, so
         // it never participates in the no-gap cascade above. Null when disabled.
-        var kiwi = _kiwiReceiverProvider?.GetKiwiReceiver();
-        if (kiwi is not null)
-            list.Add(kiwi);
+        // Bolt SDR: kiwi removed
         return list;
     }
 
@@ -5039,6 +4977,3 @@ internal static class HpsdrSampleRateExtensions
         _ => throw new ArgumentOutOfRangeException(nameof(rate), rate, null),
     };
 }
-
-
-

@@ -1323,10 +1323,7 @@ public class DspPipelineService : BackgroundService,
         _radio = radio;
         _hub = hub;
         _txIqRing = txIqRing;
-        _audioModem = audioModem;
-        _kiwiAudioBus = kiwiAudioBus;
         _rxAudioMute = rxAudioMute;
-        _p3Sidecar = p3Sidecar;
         // Materialise once at construction so the per-tick fan-out is an
         // array-index loop (no enumerator allocation, no LINQ on the hot path).
         _audioSinks = audioSinks.ToArray();
@@ -1361,18 +1358,7 @@ public class DspPipelineService : BackgroundService,
         _secondaryRx = new SecondaryRx[MaxReceivers];
         for (int i = 1; i < MaxReceivers; i++)
             _secondaryRx[i] = new SecondaryRx();
-
-        _nr3ModelStore = nr3ModelStore;
-        if (_nr3ModelStore is not null)
-        {
-            // NR3 (RNNoise) model is process-global in libwdsp. Re-push the
-            // operator's installed model whenever a fresh engine spins up
-            // (reconnect / WDSP↔synthetic swap) and whenever the operator
-            // installs/removes a model. Both funnel through LoadNr3ModelInto so
-            // the engine-lock discipline lives in one place.
-            EngineChanged += LoadNr3ModelInto;
-            _nr3ModelStore.Changed += _ => ReloadNr3ModelToCurrentEngine();
-        }
+        // Bolt SDR: nr3 removed
     }
 
     // Operator-installed RNNoise (NR3) model store. Optional so test
@@ -1384,13 +1370,13 @@ public class DspPipelineService : BackgroundService,
     // a reused process never keeps a stale model after a remove.
     private void LoadNr3ModelInto(IDspEngine engine)
     {
-        var path = _nr3ModelStore?.GetActiveModelPath();
+        var path = (string?)null;
         Zeus.Dsp.Nr3ModelLoadResult result;
         lock (_engineLock) { result = engine.LoadNr3Model(path); }
         // Record the outcome so RadioService.InstallNr3Model — which triggers this
         // synchronously via the store's Changed event — can reject a model the
         // native loader couldn't parse.
-        _nr3ModelStore?.ReportLoadStatus(result);
+        // Bolt SDR: nr3 removed
         if (result == Zeus.Dsp.Nr3ModelLoadResult.LoadFailed)
             _log.LogWarning(
                 "dsp.nr3.loadFailed path=\"{Path}\" — not a compatible RNNoise weights file", path);
@@ -1436,7 +1422,7 @@ public class DspPipelineService : BackgroundService,
     /// <summary>True while FreeDV is the active TX modem. Used by
     /// <see cref="TxService"/> to skip the plain voice-mode TX tail delay
     /// (issue #1294) — FreeDV runs its own bounded end-of-over drain instead.</summary>
-    public bool IsFreeDvActive => _audioModem?.Current?.Active ?? false;
+    public bool IsFreeDvActive => false;
 
     /// <summary>
     /// Old-school roger beep tail. Called by TxService on an accepted local
@@ -1574,7 +1560,7 @@ public class DspPipelineService : BackgroundService,
         bool enabled = Volatile.Read(ref _widebandDisplayEnabled) != 0;
         bool displayRequested = _hub.DisplayStreamRequested;
         bool p2Desired = client is not null && enabled && displayRequested;
-        bool p3Desired = client is null && _p3Sidecar is not null && _radio.IsProtocol3Active && enabled && displayRequested;
+        bool p3Desired = false;
         bool anyDesired = p2Desired || p3Desired;
 
         bool p2Current = Volatile.Read(ref _p2WidebandTransportEnabled) != 0;
@@ -1825,40 +1811,11 @@ public class DspPipelineService : BackgroundService,
 
     private async Task RunP3WidebandDisplayPollerAsync(CancellationToken ct)
     {
-        if (_p3Sidecar is null) return;
-
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(100));
-        while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
-        {
-            if (!ShouldPollP3WidebandDisplay()) continue;
-            if (!TryBeginDisplayFrame(Stopwatch.GetTimestamp(), out var displayPlan)) continue;
-
-            Protocol3SidecarDisplayFrame? sidecarFrame = null;
-            try
-            {
-                sidecarFrame = await _p3Sidecar.FetchWidebandDisplayFrameAsync(Width, ct)
-                    .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                LogP3WidebandDisplayError(ex);
-                continue;
-            }
-
-            if (sidecarFrame is null)
-            {
-                LogP3WidebandDisplayMissing();
-                continue;
-            }
-            if (!ShouldPollP3WidebandDisplay()) continue;
-
-            PublishP3WidebandDisplayFrame(sidecarFrame, displayPlan);
-        }
+        return; // Bolt SDR: P3 removed
     }
 
     private bool ShouldPollP3WidebandDisplay() =>
-        _p3Sidecar is not null &&
+        false &&
         _radio.IsProtocol3Active &&
         Volatile.Read(ref _widebandDisplayEnabled) != 0 &&
         _hub.DisplayStreamRequested;
@@ -5449,7 +5406,7 @@ public class DspPipelineService : BackgroundService,
         // un-key — an end-of-over garble in Zeus's own audio, on both RADE and
         // codec2. Key-down drops any pre-TX residual; key-up clears anything
         // decoded from TX bleed. No-op when FreeDV isn't engaged.
-        _audioModem?.Current?.FlushRx();
+        // Bolt SDR: modem removed
         // Falling edge: pick up any PS knob changes that OnRadioStateChanged
         // deferred while we were keyed (HwPeak / Ptol / Advanced / Control).
         // Without this re-trigger a deferred change would sit unapplied until
@@ -5579,7 +5536,7 @@ public class DspPipelineService : BackgroundService,
     {
         _p2Client?.SendTxIq(iqInterleaved);
         if (_radio.IsProtocol3Active)
-            _p3Sidecar?.ForwardTxIq(iqInterleaved);
+            // Bolt SDR: P3 removed
         // Measurement-only: record the egress instant for TX-turnaround stats
         // after the IQ has been forwarded, so observation never delays egress.
         _txTurnaround?.OnTxIqEgress();
@@ -6887,12 +6844,7 @@ public class DspPipelineService : BackgroundService,
         // latency to bound that drift), then average it in via MixRxAudioN. When
         // the slice is disabled/muted AudioActive is false and this is one bool
         // read. RX1 silent (audioSampleCount==0) reads nothing this tick.
-        if (audioSampleCount > 0 && _kiwiAudioBus is { AudioActive: true })
-        {
-            int want = Math.Min(audioSampleCount, _kiwiMixBuf.Length);
-            int n = _kiwiAudioBus.ReadAudio(_kiwiMixBuf.AsSpan(0, want));
-            if (n > 0) _mixSlices[mixSliceCount++] = new RxAudioSlice(_kiwiMixBuf, n);
-        }
+        // Bolt SDR: removed unreachable block
 
         // RX1's own samples were already zeroed above when it's muted; tell the
         // mixer to drop RX1 from the divisor too, so an unmuted secondary plays at
@@ -6972,13 +6924,13 @@ public class DspPipelineService : BackgroundService,
                 // demodulates+decodes it back to speech in place (same sample
                 // count, internally buffered, silence until sync). Runs BEFORE
                 // the RX audio plugin + squelch so those shape decoded speech.
-                var modem = _audioModem?.Current;
+                var modem = (object?)null;
                 if (modem is not null)
                 {
-                    modem.SyncMode((byte)state.Mode);
-                    if (modem.Active && audioSampleCount > 0)
+                    // Bolt SDR: modem removed
+                    if (false && audioSampleCount > 0)
                     {
-                        modem.ProcessRx(audioBuf.AsSpan(0, audioSampleCount));
+                        // Bolt SDR: modem removed
                         // AF (listening) volume for FreeDV is applied HERE, on the
                         // decoded speech. WDSP's panel gain ran on the pre-decode
                         // modem audio that ProcessRx just discarded, so without
@@ -7555,4 +7507,10 @@ internal sealed record AudioPathDiagnosticsDto(
     long MonitorBacklogSamples,
     int AudioSinkCount,
     string DiagnosticRecommendation);
+
+
+
+
+
+
 
