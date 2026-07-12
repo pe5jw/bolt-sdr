@@ -60,7 +60,7 @@ const DEFAULT_STATE: RadioState = {
   radioName: '',
 }
 
-export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws/radio') {
+export function useRadioSocket(serverUrl = '/ws') {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected')
   const [radioState, setRadioState] = useState<RadioState>(DEFAULT_STATE)
   const [meters, setMeters] = useState<MeterFrame>({ sMeter: -120, alc: 0, swr: 1, power: 0 })
@@ -131,3 +131,4 @@ export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws/radio') {
 
   return { status, radioState, meters, display, send }
 }
+
