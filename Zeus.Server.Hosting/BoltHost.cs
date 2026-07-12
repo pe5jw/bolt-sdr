@@ -166,7 +166,10 @@ public static class BoltHost
         // Bolt SDR: not a service
         // Bolt SDR: not a service
 
-        // DSP pipeline
+        // WDSP wisdom initializer
+        builder.Services.AddSingleton<Zeus.Dsp.Wdsp.WdspWisdomInitializer>();
+
+                // DSP pipeline
         builder.Services.AddSingleton<WisdomBootstrapService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<WisdomBootstrapService>());
         builder.Services.AddSingleton<DspPipelineService>();
@@ -347,3 +350,4 @@ public sealed class BoltHostOptions
     public int HttpPort { get; init; } = 6060;
     public bool BindAllInterfaces { get; init; }
 }
+
