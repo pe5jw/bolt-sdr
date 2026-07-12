@@ -75,3 +75,10 @@ public sealed class RadioCapabilitiesProvider : IDiagnosticsProvider
             _ => DiagnosticsProbe.NonNull(_caps.Snapshot(), "capabilities")),
     };
 }
+internal static class DiagnosticsProbe
+{
+    public static SelfCheckResult NonNull(object? value, string what) =>
+        value is not null
+            ? new SelfCheckResult(SelfCheckOutcome.Pass, $"{what} snapshot available.", DateTimeOffset.UtcNow)
+            : new SelfCheckResult(SelfCheckOutcome.Fail, $"{what} snapshot returned null.", DateTimeOffset.UtcNow);
+}

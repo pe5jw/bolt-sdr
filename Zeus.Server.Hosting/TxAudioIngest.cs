@@ -288,8 +288,7 @@ public sealed class TxAudioIngest : IDisposable
                forwardP2: iq => pipeline.ForwardTxIqToP2(iq.Span),
                drainTxTransport: pipeline.DrainTxIqTransportTail,
                txOwnedByTuneDriver: () => tx.IsTunOn || tx.IsTwoToneOn,
-               preKeyOpenAtTicks: () => tx.PreKeyOpenAtTicks,
-               audioModem: audioModem)
+               preKeyOpenAtTicks: () => tx.PreKeyOpenAtTicks)
     {
     }
 
@@ -313,7 +312,6 @@ public sealed class TxAudioIngest : IDisposable
         _ring = ring;
         _engineProvider = engineProvider;
         _isMoxOn = isMoxOn;
-        _audioModem = audioModem;
         _forwardP2 = forwardP2;
         _drainTxTransport = drainTxTransport;
         _onWdspConsumed = onWdspConsumed;
@@ -341,8 +339,8 @@ public sealed class TxAudioIngest : IDisposable
     /// </summary>
     public void DrainFreeDvTxTail()
     {
-        var freeDv = _audioModem?.Current;
-        if (freeDv is null || !freeDv.Active) return;
+        // Bolt SDR: freeDv removed
+        // Bolt SDR: unreachable removed
         if (_txOwnedByTuneDriver()) return;        // TUN/two-tone owns TX
         var engine = _engineProvider();
         int blockSize = engine?.TxBlockSamples ?? 0;
@@ -361,7 +359,7 @@ public sealed class TxAudioIngest : IDisposable
             // Complete the final frame (residual + RADE EOO) so a well-formed last
             // OFDM symbol exists, and capture the queued 48 kHz backlog so the drain
             // budget can cover it — a fixed budget truncated a large tail on air.
-            int pendingOut = freeDv.FinishTx();
+            int pendingOut = 0; // Bolt SDR: modem removed
             double pendingMs = pendingOut * 1000.0 / TxRateHz;
 
             long freq = System.Diagnostics.Stopwatch.Frequency;
@@ -378,7 +376,7 @@ public sealed class TxAudioIngest : IDisposable
             bool queueEmptied = false;
             while (System.Diagnostics.Stopwatch.GetTimestamp() < hardStop)
             {
-                int real = freeDv.DrainTx(new Span<float>(_tailMic, 0, blockSize));
+                int real = 0; // Bolt SDR: modem removed
                 // DrainTx silence-pads a short block; once the queue is empty
                 // (two fully-silent blocks) stop so we don't key dead carrier.
                 if (real == 0) { if (++idle >= 2) { queueEmptied = true; break; } }
@@ -435,7 +433,7 @@ public sealed class TxAudioIngest : IDisposable
                 _accumulatorFill = 0;
                 _lastSeenMox = false;
             }
-            freeDv.FlushTx();
+            // Bolt SDR: modem removed
             Volatile.Write(ref _tailDraining, 0);
         }
     }
@@ -447,7 +445,7 @@ public sealed class TxAudioIngest : IDisposable
     /// </summary>
     public bool DrainRogerBeepTail()
     {
-        if (_audioModem?.Current?.Active == true) return false;
+        // Bolt SDR: modem check removed
         if (_txOwnedByTuneDriver()) return false;
 
         var engine = _engineProvider();
@@ -554,7 +552,7 @@ public sealed class TxAudioIngest : IDisposable
     /// </summary>
     public bool PrimeTxDspForKeyDown()
     {
-        if (_audioModem?.Current?.Active == true) return false;
+        // Bolt SDR: modem check removed
         if (_txOwnedByTuneDriver()) return false;
 
         var engine = _engineProvider();
@@ -626,7 +624,6 @@ public sealed class TxAudioIngest : IDisposable
     // mic speech is replaced (in place, pre-WDSP) with the transmitted modem
     // signal so WDSP's USB TXA modulates the modem audio onto the carrier.
     // Null in unit tests.
-    private readonly object? _audioModemStub = null; // Bolt SDR: modem removed
 
     private readonly Action<ReadOnlyMemory<float>>? _forwardP2;
     private readonly Func<TimeSpan, bool>? _drainTxTransport;
@@ -808,7 +805,7 @@ public sealed class TxAudioIngest : IDisposable
                     // MOX fell since our last frame — drain the IQ ring so the
                     // next keyed TX starts clean, without the tail of this one.
                     _ring.Clear();
-                    _audioModem?.Current?.FlushTx();
+                    // Bolt SDR: modem removed
                     _lastSeenMox = false;
                 }
             }
@@ -822,7 +819,7 @@ public sealed class TxAudioIngest : IDisposable
             lock (_sync)
             {
                 _ring.Clear();
-                _audioModem?.Current?.FlushTx();
+                // Bolt SDR: modem removed
                 _lastSeenMox = false;
             }
         }
@@ -938,9 +935,7 @@ public sealed class TxAudioIngest : IDisposable
                 // FreeDV modem signal (in place, same count, internally
                 // buffered). WDSP's USB TXA then SSB-modulates the modem audio.
                 // No-op unless FreeDV is the active mode.
-                var modem = _audioModem?.Current;
-                if (modem is not null && modem.Active)
-                    modem.ProcessTx(new Span<float>(_scratchMic, 0, blockSize));
+                                // Bolt SDR: modem removed
                 int produced = engine.ProcessTxBlock(
                     new ReadOnlySpan<float>(_scratchMic, 0, blockSize),
                     new Span<float>(_scratchIq, 0, 2 * iqOut));
@@ -1031,7 +1026,3 @@ public sealed class TxAudioIngest : IDisposable
         }
     }
 }
-
-
-
-

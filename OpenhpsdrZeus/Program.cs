@@ -52,7 +52,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using OpenhpsdrZeus;
 using Photino.NET;
-using Zeus.Plugins.Host.Audio;
+// Bolt SDR: Zeus.Plugins.Host.Audio removed
 using Zeus.Server;
 
 // Single binary, three modes:
@@ -1250,7 +1250,7 @@ public partial class Program
         Dictionary<string, PhotinoWindow> detachedAudioSuiteWindows,
         WorkspaceWindowRequest request,
         string iconPath,
-        AudioSuiteWindowGeometryStore audioSuiteGeometryStore)
+        object? audioSuiteGeometryStore = null)
     {
         if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var uri)) return;
         var route = request.Route ?? "tx";
