@@ -212,6 +212,7 @@ public static class BoltHost
 
         // Band plan
         builder.Services.AddSingleton<BandPlanService>();
+        builder.Services.AddSingleton<IBandPlanService>(sp => sp.GetRequiredService<BandPlanService>());
         // Bolt SDR: not a service
 
         // Settings stores
@@ -271,11 +272,16 @@ public static class BoltHost
         builder.Services.AddSingleton<CatSerialConfigStore>();
 
         // MIDI
+        builder.Services.AddSingleton<Zeus.Midi.IMidiEngine>(sp =>
+            new Zeus.Midi.DryWetMidiEngine(sp.GetRequiredService<ILogger<Zeus.Midi.DryWetMidiEngine>>()));
+        builder.Services.AddSingleton<Zeus.Midi.IStreamDeckEngine>(sp =>
+            new Zeus.Midi.HidStreamDeckEngine(sp.GetRequiredService<ILogger<Zeus.Midi.HidStreamDeckEngine>>()));
         builder.Services.AddSingleton<Midi.MidiService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<Midi.MidiService>());
         builder.Services.AddSingleton<Midi.MidiConfigStore>();
 
         // TCI
+        builder.Services.AddSingleton<Zeus.Server.Tci.SpotManager>();
         if (tciEnabled)
         {
             builder.Services.AddSingleton<TciServer>();
@@ -309,6 +315,7 @@ public static class BoltHost
         app.UseRouting();
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
         app.MapFallbackToFile("index.html");
+        app.MapBoltEndpoints();
 
         return app;
     }
@@ -350,4 +357,8 @@ public sealed class BoltHostOptions
     public int HttpPort { get; init; } = 6060;
     public bool BindAllInterfaces { get; init; }
 }
+
+
+
+
 
