@@ -86,7 +86,7 @@ function parseDisplayFrame(buf: ArrayBuffer): DisplayFrame | null {
   } catch { return null }
 }
 
-export function useRadioSocket(serverUrl = '/ws') {
+export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws') {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected')
   const [radioState, setRadioState] = useState<RadioState>(DEFAULT_STATE)
   const [meters, setMeters] = useState<MeterFrame>({ sMeter: -120, alc: 0, swr: 1, power: 0 })

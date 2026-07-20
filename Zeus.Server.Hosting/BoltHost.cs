@@ -144,6 +144,7 @@ public static class BoltHost
         });
 
         builder.Services.AddSignalR();
+        builder.Services.AddCors();
 
         // Radio discovery
         // Bolt SDR: RadioDiscoveryOptions removed
@@ -311,6 +312,7 @@ public static class BoltHost
 
         var app = builder.Build();
 
+        app.UseCors(p => p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
         app.UseStaticFiles();
         app.UseRouting();
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
@@ -357,6 +359,7 @@ public sealed class BoltHostOptions
     public int HttpPort { get; init; } = 6060;
     public bool BindAllInterfaces { get; init; }
 }
+
 
 
 
