@@ -162,5 +162,5 @@ export function useRadioSocket(serverUrl = '/ws') {
     }
   }, [])
 
-  return { status, radioState, meters, display, send }
+  return { status, radioState, setRadioState, meters, display, send }
 }
