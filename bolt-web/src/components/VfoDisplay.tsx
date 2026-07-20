@@ -1,9 +1,11 @@
-import { useState, useCallback } from 'react'
+import { useCallback } from 'react'
 
 interface Props {
   hz: number
   mode: string
   onChange: (hz: number) => void
+  step: number
+  onStepChange: (step: number) => void
 }
 
 const STEPS = [1000000, 100000, 10000, 1000, 100, 10, 1]
@@ -11,13 +13,11 @@ const STEP_LABELS = ['1M', '100k', '10k', '1k', '100', '10', '1']
 
 function formatFreq(hz: number): string {
   const mhz = hz / 1_000_000
-  return mhz.toFixed(6).replace(/(\d)(?=(\d{3})+\.)/g, '$1,')
+  return mhz.toFixed(6).replace(/(\d)(?=(\d{3})+\.)/g, ',')
 }
 
-export function VfoDisplay({ hz, onChange }: Props) {
-  const [stepIdx, setStepIdx] = useState(3) // 1 kHz default
-
-  const step = STEPS[stepIdx]
+export function VfoDisplay({ hz, onChange, step, onStepChange }: Props) {
+  const stepIdx = STEPS.indexOf(step) === -1 ? 3 : STEPS.indexOf(step)
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
@@ -47,7 +47,7 @@ export function VfoDisplay({ hz, onChange }: Props) {
           <button
             key={label}
             className={`vfo-step ${i === stepIdx ? 'active' : ''}`}
-            onClick={() => setStepIdx(i)}
+            onClick={() => onStepChange(STEPS[i])}
           >
             {label}
           </button>
