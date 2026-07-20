@@ -50,7 +50,25 @@ public static class BoltEndpoints
             return Results.Ok();
         });
         app.MapGet("/api/radio/discover", async (Zeus.Protocol1.Discovery.IRadioDiscovery discovery, HttpContext ctx) =>
-            Results.Ok(await discovery.DiscoverAsync(TimeSpan.FromSeconds(2), ctx.RequestAborted)));
+        {
+            var radios = await discovery.DiscoverAsync(TimeSpan.FromSeconds(2), ctx.RequestAborted);
+            return Results.Ok(radios.Select(r => new {
+                ip = r.Ip.ToString(),
+                mac = r.Mac.ToString(),
+                board = r.Board.ToString(),
+                firmware = r.FirmwareString,
+                busy = r.Details.Busy
+            }));
+        });
+
+        // Connect radio
+        app.MapPost("/api/radio/connect", async (ConnectRequest req, RadioService radio, HttpContext ctx) =>
+        {
+            if (!System.Net.IPAddress.TryParse(req.Ip, out var ip))
+                return Results.BadRequest(new { error = "Invalid IP" });
+            var result = await radio.ConnectAsync(req.Ip, req.SampleRate, ctx.RequestAborted);
+            return Results.Ok(result);
+        });
 
         // CAT config
         app.MapGet("/api/cat/config", (CatConfigStore store) =>
@@ -69,3 +87,8 @@ record MoxRequest(bool On);
 
 
 
+
+
+
+
+record ConnectRequest(string Ip, int SampleRate = 192000);
