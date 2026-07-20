@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useRadioSocket } from './ws/useRadioSocket'
 import { VfoDisplay } from './components/VfoDisplay'
 import { ModeFilter } from './components/ModeFilter'
@@ -9,11 +10,12 @@ import './App.css'
 
 export default function App() {
   const { status, radioState, meters, display, send, setRadioState } = useRadioSocket()
+  const [tuneStep, setTuneStep] = useState(1000)
 
   const sendVfo = (hz: number) => {
-    send({ type: 'set_vfo', hz })
-    setRadioState(s => ({ ...s, vfoHz: hz }))
-    fetch('/api/radio/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz }) })
+    const snapped = Math.round(hz / tuneStep) * tuneStep
+    setRadioState(s => ({ ...s, vfoHz: snapped }))
+    fetch('/api/radio/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: snapped }) })
   }
 
   const sendMode = (mode: string) => {
@@ -24,9 +26,7 @@ export default function App() {
   return (
     <div className="bolt-app">
       <StatusBar status={status} radioName={radioState.radioName} />
-
       <main className="bolt-main">
-        {/* Panadapter — top, full width */}
         <section className="bolt-pan">
           <Panadapter
             display={display}
@@ -34,13 +34,13 @@ export default function App() {
             onTune={sendVfo}
           />
         </section>
-
-        {/* VFO + Mode + Filter row */}
         <section className="bolt-controls">
           <VfoDisplay
             hz={radioState.vfoHz}
             mode={radioState.mode}
             onChange={sendVfo}
+            step={tuneStep}
+            onStepChange={setTuneStep}
           />
           <ModeFilter
             mode={radioState.mode}
@@ -51,8 +51,6 @@ export default function App() {
           />
           <SMeter dbm={meters.sMeter} />
         </section>
-
-        {/* TX Panel */}
         <section className="bolt-tx">
           <TxPanel
             mox={radioState.mox}
