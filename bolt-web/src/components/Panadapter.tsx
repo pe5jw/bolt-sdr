@@ -138,9 +138,9 @@ export function Panadapter({ display, centerHz, onTune }: Props) {
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!display) return
     const rect = e.currentTarget.getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const freqStart = centerHz - (rect.width / 2) * display.hzPerPixel
-    onTune(freqStart + x * display.hzPerPixel)
+    const frac = (e.clientX - rect.left) / rect.width
+    const freqStart = display.centerHz - (display.width / 2) * display.hzPerPixel
+    onTune(freqStart + frac * display.width * display.hzPerPixel)
   }
 
   return (

@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useRef, useEffect } from 'react'
 
 interface Props {
   hz: number
@@ -25,18 +25,31 @@ export function VfoDisplay({ hz, onChange, step, onStepChange }: Props) {
     onChange(Math.max(0, hz + delta))
   }, [hz, step, onChange])
 
+  const vfoRef = useRef<HTMLDivElement>(null)
+
   const handleKey = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'ArrowUp') onChange(hz + step)
     if (e.key === 'ArrowDown') onChange(Math.max(0, hz - step))
   }, [hz, step, onChange])
 
+  useEffect(() => {
+    const el = vfoRef.current
+    if (!el) return
+    const handler = (e: WheelEvent) => {
+      e.preventDefault()
+      const delta = e.deltaY < 0 ? step : -step
+      onChange(Math.max(0, hz + delta))
+    }
+    el.addEventListener('wheel', handler, { passive: false })
+    return () => el.removeEventListener('wheel', handler)
+  }, [hz, step, onChange])
+
   return (
-    <div className="vfo-wrap">
+    <div className="vfo-wrap" ref={vfoRef}>
       <div className="vfo-label">VFO A</div>
       <div
         className="vfo-freq"
         tabIndex={0}
-        onWheel={handleWheel}
         onKeyDown={handleKey}
         title="Scroll or arrow keys to tune"
       >

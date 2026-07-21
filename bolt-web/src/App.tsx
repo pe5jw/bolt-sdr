@@ -17,6 +17,11 @@ export default function App() {
     setRadioState(s => ({ ...s, vfoHz: snapped }))
     fetch('/api/radio/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: snapped }) })
   }
+  const sendVfoExact = (hz: number) => {
+    const rounded = Math.round(hz)
+    setRadioState(s => ({ ...s, vfoHz: rounded }))
+    fetch('/api/radio/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: rounded }) })
+  }
 
   const sendMode = (mode: string) => {
     send({ type: 'set_mode', mode })
