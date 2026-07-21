@@ -1,17 +1,17 @@
 /* Bolt SDR — dark transceiver UI */
 :root {
   --bg-deep:    #0a0c10;
-  --bg-panel:   #111418;
-  --bg-control: #181c22;
-  --bg-input:   #1e232b;
+  --bg-panel:   #13171e;
+  --bg-control: #1c2028;
+  --bg-input:   #22272f;
   --accent:     #f5c400;
   --accent-dim: #7a6200;
   --rx:         #00c8ff;
   --tx:         #ff4444;
   --green:      #22dd66;
-  --text:       #c8cdd6;
-  --text-dim:   #5a6070;
-  --border:     #2a2f3a;
+  --text:       #e8ecf4;
+  --text-dim:   #8a95a8;
+  --border:     #323848;
   --font-data:  'JetBrains Mono', 'Fira Mono', 'Courier New', monospace;
   --font-ui:    system-ui, -apple-system, sans-serif;
   --radius:     4px;
@@ -332,3 +332,4 @@ html, body, #root {
   font-size: 13px;
   letter-spacing: 2px;
 }
+

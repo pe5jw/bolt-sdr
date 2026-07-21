@@ -48,4 +48,6 @@ namespace Zeus.Protocol1.Discovery;
 public interface IRadioDiscovery
 {
     Task<IReadOnlyList<DiscoveredRadio>> DiscoverAsync(TimeSpan timeout, CancellationToken ct = default);
+    Task<DiscoveredRadio?> DiscoverDirectAsync(System.Net.IPAddress ip, CancellationToken ct = default);
 }
+
