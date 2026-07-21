@@ -8,8 +8,8 @@ interface Props {
   onStepChange: (step: number) => void
 }
 
-const STEPS = [1000000, 100000, 10000, 1000, 100, 10, 1]
-const STEP_LABELS = ['1M', '100k', '10k', '1k', '100', '10', '1']
+const STEPS = [100000, 10000, 1000, 250, 100, 10, 1]
+const STEP_LABELS = ['100k', '10k', '1k', '250', '100', '10', '1']
 
 function formatFreq(hz: number): string {
   const mhz = hz / 1_000_000
