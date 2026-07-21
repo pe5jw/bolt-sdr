@@ -307,6 +307,9 @@ public static class BoltHost
         builder.Services.AddSingleton<WindowsFirewallService>();
         builder.Services.AddSingleton<IWindowsFirewallService, WindowsFirewallService>();
 
+        // Auto-connect
+        builder.Services.AddHostedService<AutoConnectService>();
+
         // App restart
         builder.Services.AddSingleton<AppRestartService>();
 
@@ -359,6 +362,7 @@ public sealed class BoltHostOptions
     public int HttpPort { get; init; } = 6060;
     public bool BindAllInterfaces { get; init; }
 }
+
 
 
 
