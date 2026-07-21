@@ -63,6 +63,7 @@ const DEFAULT_STATE: RadioState = {
 }
 
 const MSG_DISPLAY_FRAME = 0x01
+const MSG_RX_METER = 0x14
 const MSG_DISPLAY_STREAM_REQUEST = 0x22
 const HEADER_SIZE = 16
 
@@ -122,8 +123,16 @@ export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws') {
 
     ws.onmessage = (ev) => {
       if (ev.data instanceof ArrayBuffer) {
-        const frame = parseDisplayFrame(ev.data)
-        if (frame) setDisplay(frame)
+        const buf = ev.data as ArrayBuffer
+        const view = new DataView(buf)
+        const msgType = view.getUint8(0)
+        if (msgType === MSG_DISPLAY_FRAME) {
+          const frame = parseDisplayFrame(buf)
+          if (frame) { setDisplay(frame); (window as any)._lastDisplayCenter = frame.centerHz; (window as any)._lastHzPerPixel = frame.hzPerPixel; (window as any)._lastWidth = frame.width; }
+        } else if (msgType === MSG_RX_METER && buf.byteLength >= 5) {
+          const dbm = view.getFloat32(1, true)
+          setMeters(m => ({ ...m, sMeter: dbm }))
+        }
         return
       }
       try {
