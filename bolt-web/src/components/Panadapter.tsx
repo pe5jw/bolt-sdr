@@ -5,6 +5,7 @@ interface Props {
   display: DisplayFrame | null
   centerHz: number
   onTune: (hz: number) => void
+  tuneStep?: number
 }
 
 function wfColor(db: number): [number, number, number] {
@@ -23,6 +24,7 @@ export function Panadapter({ display, centerHz, onTune }: Props) {
   const wfRef = useRef<HTMLCanvasElement>(null)
   const wfCtxRef = useRef<CanvasRenderingContext2D | null>(null)
   const wfOffscreenRef = useRef<HTMLCanvasElement | null>(null)
+  const dragRef = useRef<{ startX: number; startHz: number } | null>(null)
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
@@ -135,7 +137,28 @@ export function Panadapter({ display, centerHz, onTune }: Props) {
   useEffect(() => { draw() }, [draw])
   useEffect(() => { drawWf() }, [drawWf])
 
+  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    e.preventDefault()
+    if (!tuneStep) return
+    const delta = e.deltaY < 0 ? tuneStep : -tuneStep
+    onTune(centerHz + delta)
+  }
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    dragRef.current = { startX: e.clientX, startHz: centerHz }
+  }
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!dragRef.current || !display) return
+    const dx = e.clientX - dragRef.current.startX
+    const hzShift = Math.round(-dx / e.currentTarget.getBoundingClientRect().width * display.width * display.hzPerPixel)
+    onTune(dragRef.current.startHz + hzShift)
+  }
+
+  const handleMouseUp = () => { dragRef.current = null }
+
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (dragRef.current) return
     if (!display) return
     const rect = e.currentTarget.getBoundingClientRect()
     const frac = (e.clientX - rect.left) / rect.width
@@ -145,7 +168,7 @@ export function Panadapter({ display, centerHz, onTune }: Props) {
 
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#0a0c10' }}>
-      <canvas ref={canvasRef} style={{ width: '100%', display: 'block' }} onClick={handleClick} className="pan-canvas" />
+      <canvas ref={canvasRef} style={{ width: '100%', display: 'block', cursor: 'crosshair' }} onClick={handleClick} onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} className="pan-canvas" />
       <canvas ref={wfRef} style={{ width: '100%', display: 'block', cursor: 'crosshair' }} onClick={handleClick} />
     </div>
   )

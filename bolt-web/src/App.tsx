@@ -37,6 +37,7 @@ export default function App() {
             display={display}
             centerHz={radioState.vfoHz}
             onTune={sendVfo}
+            tuneStep={tuneStep}
           />
         </section>
         <section className="bolt-controls">
