@@ -42,17 +42,45 @@ public static class BoltEndpoints
             return Results.Ok();
         });
 
-        // MOX
+        // Zoom
+        app.MapPost("/api/radio/zoom", (ZoomRequest req, RadioService radio) =>
+        {
+            radio.SetZoom(Math.Clamp(req.Level, 1, 32));
+            return Results.Ok(new { level = req.Level });
+        });
+
+                // Filter
+        app.MapPost("/api/radio/filter", (FilterRequest req, RadioService radio) =>
+        {
+            radio.SetFilter(req.Low, req.High);
+            return Results.Ok();
+        });
+
+                // MOX
         app.MapPost("/api/radio/mox", (MoxRequest req, TxService tx) =>
         {
             if (req.On) tx.TrySetMox(true, Zeus.Contracts.MoxSource.UI, out _);
             else tx.TrySetMox(false, Zeus.Contracts.MoxSource.UI, out _);
             return Results.Ok();
         });
-        app.MapGet("/api/radio/discover", async (Zeus.Protocol1.Discovery.IRadioDiscovery discovery, HttpContext ctx) =>
+        app.MapGet("/api/radio/discover", async (Zeus.Protocol1.Discovery.IRadioDiscovery discovery, AutoConnectSettingsStore acStore, HttpContext ctx) =>
         {
-            var radios = await discovery.DiscoverAsync(TimeSpan.FromSeconds(2), ctx.RequestAborted);
-            return Results.Ok(radios.Select(r => new {
+            var prefs = acStore.Get();
+            var broadcastTask = discovery.DiscoverAsync(TimeSpan.FromSeconds(2), ctx.RequestAborted);
+            var extraTasks = prefs.ExtraIps
+                .Select(ip => System.Net.IPAddress.TryParse(ip, out var addr)
+                    ? discovery.DiscoverDirectAsync(addr, ctx.RequestAborted)
+                    : Task.FromResult<Zeus.Protocol1.Discovery.DiscoveredRadio?>(null))
+                .ToList();
+            await Task.WhenAll(new Task[] { broadcastTask }.Concat(extraTasks.Cast<Task>()));
+            var all = broadcastTask.Result.ToList();
+            foreach (var t in extraTasks)
+            {
+                var r = t.Result;
+                if (r != null && !all.Any(x => x.Mac.Equals(r.Mac)))
+                    all.Add(r);
+            }
+            return Results.Ok(all.Select(r => new {
                 ip = r.Ip.ToString(),
                 mac = r.Mac.ToString(),
                 board = r.Board.ToString(),
@@ -61,7 +89,31 @@ public static class BoltEndpoints
             }));
         });
 
-        // Connect radio
+        // Extra IPs beheer
+        app.MapPost("/api/radio/extraip", (ExtraIpRequest req, AutoConnectSettingsStore store) =>
+        {
+            if (req.Remove) store.RemoveExtraIp(req.Ip);
+            else store.AddExtraIp(req.Ip);
+            return Results.Ok(store.Get().ExtraIps);
+        });
+
+                // Direct unicast discover (voor Tailscale / cross-subnet)
+        app.MapPost("/api/radio/discover/direct", async (DirectDiscoverRequest req, Zeus.Protocol1.Discovery.IRadioDiscovery discovery, HttpContext ctx) =>
+        {
+            if (!System.Net.IPAddress.TryParse(req.Ip, out var ip))
+                return Results.BadRequest(new { error = "Invalid IP" });
+            var radio = await discovery.DiscoverDirectAsync(ip, ctx.RequestAborted);
+            if (radio is null) return Results.NotFound(new { error = "No response from " + req.Ip });
+            return Results.Ok(new {
+                ip = radio.Ip.ToString(),
+                mac = radio.Mac.ToString(),
+                board = radio.Board.ToString(),
+                firmware = radio.FirmwareString,
+                busy = radio.Details.Busy
+            });
+        });
+
+                // Connect radio
         app.MapPost("/api/radio/connect", async (ConnectRequest req, RadioService radio, HttpContext ctx) =>
         {
             if (!System.Net.IPAddress.TryParse(req.Ip, out var ip))
@@ -74,6 +126,22 @@ public static class BoltEndpoints
         app.MapGet("/api/cat/config", (CatConfigStore store) =>
             Results.Ok(store.Get()));
 
+        // Disconnect
+        app.MapPost("/api/radio/disconnect", async (RadioService radio, HttpContext ctx) =>
+        {
+            await radio.DisconnectAsync(ctx.RequestAborted);
+            return Results.Ok();
+        });
+
+        // AutoConnect get/set
+        app.MapGet("/api/radio/autoconnect", (AutoConnectSettingsStore store) =>
+            Results.Ok(store.Get()));
+
+        app.MapPost("/api/radio/autoconnect", (AutoConnectRequest req, AutoConnectSettingsStore store) =>
+        {
+            store.Set(req.Enabled, req.PreferredMac);
+            return Results.Ok();
+        });
         // Health check
         app.MapGet("/api/health", () => Results.Ok(new { status = "ok", app = "bolt-sdr" }));
 
@@ -81,6 +149,8 @@ public static class BoltEndpoints
     }
 }
 
+record FilterRequest(int Low, int High);
+record ZoomRequest(int Level);
 record VfoRequest(long Hz);
 record ModeRequest(string Mode);
 record MoxRequest(bool On);
@@ -91,4 +161,14 @@ record MoxRequest(bool On);
 
 
 
+record ExtraIpRequest(string Ip, bool Remove = false);
+record DirectDiscoverRequest(string Ip);
+record AutoConnectRequest(bool Enabled, string? PreferredMac);
 record ConnectRequest(string Ip, int SampleRate = 192000);
+
+
+
+
+
+
+

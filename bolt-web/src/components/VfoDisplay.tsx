@@ -45,7 +45,7 @@ export function VfoDisplay({ hz, onChange, step, onStepChange }: Props) {
   }, [hz, step, onChange])
 
   return (
-    <div className="vfo-wrap" ref={vfoRef}>
+    <div className="vfo-wrap" ref={vfoRef} onWheel={handleWheel}>
       <div className="vfo-label">VFO A</div>
       <div
         className="vfo-freq"
@@ -69,3 +69,4 @@ export function VfoDisplay({ hz, onChange, step, onStepChange }: Props) {
     </div>
   )
 }
+

@@ -109,6 +109,37 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
         }
     }
 
+
+    public async Task<DiscoveredRadio?> DiscoverDirectAsync(System.Net.IPAddress ip, CancellationToken ct = default)
+    {
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        DisableUdpConnReset(socket);
+        socket.Bind(new IPEndPoint(IPAddress.Any, 0));
+        var packet = BuildDiscoveryPacket();
+        var endpoint = new IPEndPoint(ip, HpsdrPort);
+        try
+        {
+            await socket.SendToAsync(packet, SocketFlags.None, endpoint, ct).ConfigureAwait(false);
+            var buf = new byte[ReceiveBufferSize];
+            var any = new IPEndPoint(IPAddress.Any, 0);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(2));
+            try
+            {
+                var res = await socket.ReceiveFromAsync(buf, SocketFlags.None, any, cts.Token).ConfigureAwait(false);
+                var fromIp = ((IPEndPoint)res.RemoteEndPoint).Address;
+                var slice = new ReadOnlySpan<byte>(buf, 0, res.ReceivedBytes);
+                if (ReplyParser.TryParse(slice, fromIp, out var radio))
+                {
+                    _log.LogInformation("discovery.direct.reply from={Ip} board={Board} mac={Mac} fw={Firmware}", radio.Ip, radio.Board, radio.Mac, radio.FirmwareString);
+                    return radio;
+                }
+            }
+            catch (OperationCanceledException) { }
+        }
+        finally { socket.Dispose(); }
+        return null;
+    }
     private async Task SendProbesAsync(
         IReadOnlyList<DiscoverySocket> sockets,
         ReadOnlyMemory<byte> packet,
@@ -372,3 +403,4 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
 
     private sealed record DiscoverySocket(Socket Socket, DiscoverySocketPlan Plan);
 }
+
