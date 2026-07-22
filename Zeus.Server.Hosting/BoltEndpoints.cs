@@ -170,6 +170,29 @@ public static class BoltEndpoints
             return Results.Ok();
         });
 
+                // Frequentie kalibratie
+        app.MapGet("/api/radio/freq-cal", (RadioService radio) =>
+            Results.Ok(new { factor = radio.GetFrequencyCorrectionFactor() }));
+
+        app.MapPost("/api/radio/freq-cal", (FreqCalRequest req, RadioService radio) =>
+        {
+            radio.SetFrequencyCorrectionFactor(req.Factor);
+            return Results.Ok(new { factor = req.Factor });
+        });
+
+                // Display rate
+        app.MapGet("/api/display/settings", (DisplaySettingsStore store) =>
+            Results.Ok(store.Get()));
+
+        app.MapPost("/api/display/rate", (DisplayRateRequest req, DspPipelineService dsp, DisplaySettingsStore store) =>
+        {
+            var clamped = Math.Clamp(req.Hz, 1.0, 60.0);
+            var dto = store.Get();
+            store.SaveMode(dto.Mode ?? "basic", dto.Fit ?? "fill", dto.RxTraceColor ?? "#FFA028", displayMaxFrameRateHz: clamped);
+            dsp.ApplyDisplaySettings(store.Get());
+            return Results.Ok(new { hz = clamped });
+        });
+
                 // Health check
         app.MapGet("/api/health", () => Results.Ok(new { status = "ok", app = "bolt-sdr" }));
 
@@ -177,6 +200,8 @@ public static class BoltEndpoints
     }
 }
 
+record DisplayRateRequest(double Hz);
+record FreqCalRequest(double Factor);
 record RxAfGainRequest(double Db);
 record SquelchRequest(bool Enabled, int Level);
 record AgcTopRequest(double Db);
@@ -197,6 +222,13 @@ record ExtraIpRequest(string Ip, bool Remove = false);
 record DirectDiscoverRequest(string Ip);
 record AutoConnectRequest(bool Enabled, string? PreferredMac);
 record ConnectRequest(string Ip, int SampleRate = 192000);
+
+
+
+
+
+
+
 
 
 
