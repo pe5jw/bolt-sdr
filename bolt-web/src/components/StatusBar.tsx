@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ThemePicker } from './ThemePicker'
+import { SettingsModal } from './SettingsModal'
 import type { ConnectionStatus } from '../ws/useRadioSocket'
 interface DiscoveredRadio {
   ip: string
@@ -26,7 +26,8 @@ export function StatusBar({ status, radioName, onConnect, onDisconnect, audioEna
   const [showPicker, setShowPicker] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [prefs, setPrefs] = useState<AutoConnectPrefs>({ enabled: true, preferredMac: null, extraIps: [] })
-  const [manualIp, setManualIp] = useState('')
+  const [showSettings, setShowSettings] = useState(false)
+    const [manualIp, setManualIp] = useState('')
   const labels: Record<ConnectionStatus, string> = {
     disconnected: 'Disconnected',
     connecting: 'Connecting...',
@@ -161,10 +162,13 @@ export function StatusBar({ status, radioName, onConnect, onDisconnect, audioEna
           </div>
         </div>
       )}
-      <ThemePicker />
+      <button onClick={() => setShowSettings(true)} style={{ fontSize: 10, padding: "2px 8px", background: "var(--bg-input)", border: "1px solid var(--border)", color: "var(--text-dim)", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-data)" }}>⚙ SETTINGS</button>
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
       <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--accent)', fontFamily: 'var(--font-data)', letterSpacing: 2 }}>BOLT SDR</span>
     </div>
   )
 }
+
+
 
 

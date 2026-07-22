@@ -12,6 +12,10 @@ export interface RadioState {
   agcMode: string
   preamp: boolean
   attDb: number
+  rxAfGainDb: number
+  agcTopDb: number
+  squelchEnabled: boolean
+  squelchLevel: number
   micGainDb: number
   driveDb: number
   connected: boolean
@@ -57,6 +61,10 @@ const DEFAULT_STATE: RadioState = {
   agcMode: 'MEDIUM',
   preamp: false,
   attDb: 0,
+  rxAfGainDb: 0,
+  agcTopDb: 90,
+  squelchEnabled: false,
+  squelchLevel: 46,
   micGainDb: 0,
   driveDb: 80,
   connected: false,
@@ -177,6 +185,11 @@ export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws') {
           vfoHz: state.vfoHz ?? s.vfoHz,
           mode: state.mode ?? s.mode,
           filterLow: state.filterLowHz ?? s.filterLow,
+          rxAfGainDb: state.rxAfGainDb ?? s.rxAfGainDb,
+          agcTopDb: state.agcTopDb ?? s.agcTopDb,
+          attDb: state.attenDb ?? s.attDb,
+          squelchEnabled: state.squelch?.enabled ?? s.squelchEnabled,
+          squelchLevel: state.squelch?.level ?? s.squelchLevel,
           filterHigh: state.filterHighHz ?? s.filterHigh,
           connected: true,
         }))
@@ -233,3 +246,4 @@ export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws') {
 
   return { status, radioState, setRadioState, meters, display, send, audioEnabled, setAudioEnabled }
 }
+

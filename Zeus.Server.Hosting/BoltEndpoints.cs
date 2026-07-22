@@ -142,13 +142,45 @@ public static class BoltEndpoints
             store.Set(req.Enabled, req.PreferredMac);
             return Results.Ok();
         });
-        // Health check
+        // RX AF Gain
+        app.MapPost("/api/radio/rx-af-gain", (RxAfGainRequest req, RadioService radio) =>
+        {
+            radio.SetRxAfGain(req.Db);
+            return Results.Ok();
+        });
+
+        // Squelch
+        app.MapPost("/api/radio/squelch", (SquelchRequest req, RadioService radio) =>
+        {
+            radio.SetSquelch(new Zeus.Contracts.SquelchConfig(req.Enabled, req.Level, false, 70));
+            return Results.Ok();
+        });
+
+        // AGC Top
+        app.MapPost("/api/radio/agc-top", (AgcTopRequest req, RadioService radio) =>
+        {
+            radio.SetAgcTop(req.Db);
+            return Results.Ok();
+        });
+
+        // Attenuator
+        app.MapPost("/api/radio/atten", (AttenRequest req, RadioService radio) =>
+        {
+            radio.SetAttenuator(new Zeus.Protocol1.HpsdrAtten(Math.Clamp(req.Db, 0, 31)));
+            return Results.Ok();
+        });
+
+                // Health check
         app.MapGet("/api/health", () => Results.Ok(new { status = "ok", app = "bolt-sdr" }));
 
         return app;
     }
 }
 
+record RxAfGainRequest(double Db);
+record SquelchRequest(bool Enabled, int Level);
+record AgcTopRequest(double Db);
+record AttenRequest(int Db);
 record FilterRequest(int Low, int High);
 record ZoomRequest(int Level);
 record VfoRequest(long Hz);
@@ -165,6 +197,9 @@ record ExtraIpRequest(string Ip, bool Remove = false);
 record DirectDiscoverRequest(string Ip);
 record AutoConnectRequest(bool Enabled, string? PreferredMac);
 record ConnectRequest(string Ip, int SampleRate = 192000);
+
+
+
 
 
 

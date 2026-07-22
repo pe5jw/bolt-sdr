@@ -4,7 +4,8 @@ import { VfoDisplay } from './components/VfoDisplay'
 import { ModeFilter } from './components/ModeFilter'
 import { Panadapter } from './components/Panadapter'
 import { TxPanel } from './components/TxPanel'
-import { SMeter } from './components/SMeter'
+import { BandSelector } from './components/BandSelector'
+import { RxControls } from './components/RxControls'
 import { StatusBar } from './components/StatusBar'
 import './App.css'
 
@@ -49,8 +50,11 @@ export default function App() {
             onChange={sendVfo}
             step={tuneStep}
             onStepChange={setTuneStep}
+            dbm={meters.sMeter}
           />
-          <ModeFilter
+          <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
+          <BandSelector hz={radioState.vfoHz} onBand={sendVfo} />
+                    <ModeFilter
             mode={radioState.mode}
             filterLow={radioState.filterLow}
             filterHigh={radioState.filterHigh}
@@ -60,7 +64,30 @@ export default function App() {
             }}
             onMode={sendMode}
           />
-          <SMeter dbm={meters.sMeter} />
+          </div>
+                    <RxControls
+            squelchEnabled={radioState.squelchEnabled}
+            squelchLevel={radioState.squelchLevel}
+            rxAfGainDb={radioState.rxAfGainDb}
+            agcTopDb={radioState.agcTopDb}
+            attenDb={radioState.attDb}
+            onSquelch={(enabled, level) => {
+              setRadioState(s => ({ ...s, squelchEnabled: enabled, squelchLevel: level }))
+              fetch('/api/radio/squelch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, level }) })
+            }}
+            onRxAfGain={db => {
+              setRadioState(s => ({ ...s, rxAfGainDb: db }))
+              fetch('/api/radio/rx-af-gain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
+            }}
+            onAgcTop={db => {
+              setRadioState(s => ({ ...s, agcTopDb: db }))
+              fetch('/api/radio/agc-top', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
+            }}
+            onAtten={db => {
+              setRadioState(s => ({ ...s, attenDb: db }))
+              fetch('/api/radio/atten', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
+            }}
+          />
         </section>
         <section className="bolt-tx">
           <TxPanel
@@ -81,6 +108,8 @@ export default function App() {
     </div>
   )
 }
+
+
 
 
 
