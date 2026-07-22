@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { THEMES, SPECTRUM_COLORS } from '../themes'
 import { useTheme } from '../ThemeContext'
 
@@ -7,6 +8,16 @@ interface Props {
 
 export function SettingsModal({ onClose }: Props) {
   const { theme, setTheme } = useTheme()
+  const [displayRate, setDisplayRate] = useState(30)
+  useEffect(() => {
+    fetch("/api/display/settings").then(r => r.json()).then(d => {
+      if (d.displayMaxFrameRateHz) setDisplayRate(Math.round(d.displayMaxFrameRateHz))
+    }).catch(() => {})
+  }, [])
+    const [calFactor, setCalFactor] = useState(1.0)
+  useEffect(() => {
+    fetch("/api/radio/freq-cal").then(r => r.json()).then(d => setCalFactor(d.factor)).catch(() => {})
+  }, [])
 
   const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }
   const lbl: React.CSSProperties = { fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 80 }
@@ -81,6 +92,51 @@ export function SettingsModal({ onClose }: Props) {
           </div>
         </div>
 
+        {/* Display rate */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 80 }}>DISP RATE</span>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flex: 1 }}>
+            {[10, 15, 20, 25, 30, 60].map(hz => (
+              <button key={hz} onClick={async () => {
+                await fetch('/api/display/rate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz }) })
+                setDisplayRate(hz)
+              }} style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                background: displayRate === hz ? 'var(--accent)' : 'var(--bg-control)',
+                border: '1px solid var(--border)',
+                color: displayRate === hz ? 'var(--bg)' : 'var(--text-dim)' }}>
+                {hz}
+              </button>
+            ))}
+            <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>Hz</span>
+          </div>
+        </div>
+        {/* Frequentie kalibratie */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 80 }}>FREQ CAL</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>REF Hz</span>
+              <input type="number" id="cal-ref" defaultValue="10000000" style={{ width: 110, fontSize: 10, padding: '2px 6px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 3, fontFamily: 'var(--font-data)' }} />
+              <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>MEAS Hz</span>
+              <input type="number" id="cal-meas" defaultValue="9999000" style={{ width: 110, fontSize: 10, padding: '2px 6px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 3, fontFamily: 'var(--font-data)' }} />
+            </div>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <button onClick={async () => {
+                const ref = parseFloat((document.getElementById('cal-ref') as HTMLInputElement).value)
+                const meas = parseFloat((document.getElementById('cal-meas') as HTMLInputElement).value)
+                if (!ref || !meas) return
+                const factor = ref / meas
+                await fetch('/api/radio/freq-cal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ factor }) })
+                setCalFactor(factor)
+              }} style={{ fontSize: 10, padding: '2px 10px', borderRadius: 3, cursor: 'pointer', background: 'var(--accent)', border: 'none', color: 'var(--bg)', fontFamily: 'var(--font-data)' }}>CALIBRATE</button>
+              <button onClick={async () => {
+                await fetch('/api/radio/freq-cal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ factor: 1.0 }) })
+                setCalFactor(1.0)
+              }} style={{ fontSize: 10, padding: '2px 10px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>RESET</button>
+              <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>factor: {calFactor.toFixed(8)}</span>
+            </div>
+          </div>
+        </div>
         <div style={{ marginTop: 8, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>
           Meer instellingen komen hier: audio buffer, display rate, CAT, etc.
         </div>
@@ -89,4 +145,8 @@ export function SettingsModal({ onClose }: Props) {
     </div>
   )
 }
+
+
+
+
 
