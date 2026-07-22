@@ -1,6 +1,5 @@
 export interface Theme {
   name: string
-  // UI kleuren
   bgDeep: string
   bgPanel: string
   bgControl: string
@@ -13,10 +12,8 @@ export interface Theme {
   text: string
   textDim: string
   border: string
-  // Spectrum
   spectrumLine: string
   spectrumFill: string
-  // Waterfall palet
   wfPalette: 'classic' | 'night' | 'hot'
 }
 
@@ -48,15 +45,14 @@ export const THEMES: Theme[] = [
     spectrumLine: '#00ff44', spectrumFill: 'rgba(0,255,68,0.2)',
     wfPalette: 'night',
   },
-  {
-    name: 'Purple',
-    bgDeep: '#09080f', bgPanel: '#100f1a', bgControl: '#181628', bgInput: '#1e1c30',
-    accent: '#b060ff', accentDim: '#5020a0',
-    rx: '#a080ff', tx: '#ff4444', green: '#22dd66',
-    text: '#e0d8f8', textDim: '#7060a0', border: '#2a2448',
-    spectrumLine: '#a080ff', spectrumFill: 'rgba(160,128,255,0.2)',
-    wfPalette: 'hot',
-  },
+]
+
+export const SPECTRUM_COLORS = [
+  { name: 'Cyan',   line: '#00c8ff', fill: 'rgba(0,200,255,0.25)' },
+  { name: 'Green',  line: '#00ff44', fill: 'rgba(0,255,68,0.2)' },
+  { name: 'Yellow', line: '#f5c400', fill: 'rgba(245,196,0,0.2)' },
+  { name: 'White',  line: '#e0e8f0', fill: 'rgba(220,235,245,0.15)' },
+  { name: 'Orange', line: '#ff8800', fill: 'rgba(255,136,0,0.2)' },
 ]
 
 export const WF_PALETTES = {

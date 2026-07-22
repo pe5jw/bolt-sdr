@@ -52,7 +52,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
     const t = themeRef.current
     ctx.fillStyle = t.bgDeep
     ctx.fillRect(0, 0, W, H)
-    if (!display) {
+        if (!display) {
       ctx.fillStyle = t.textDim; ctx.font = '12px monospace'; ctx.textAlign = 'center'
       ctx.fillText('Waiting for display data', W / 2, H / 2); return
     }
@@ -119,7 +119,8 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
       ctx.beginPath(); ctx.moveTo(fhX, 0); ctx.lineTo(fhX, H); ctx.stroke()
     }
 
-    // VFO line
+
+        // VFO line
     ctx.strokeStyle = t.accent; ctx.lineWidth = 1; ctx.setLineDash([4, 4])
     ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke()
     ctx.setLineDash([])
@@ -293,3 +294,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
     </div>
   )
 }
+
+
+
+
