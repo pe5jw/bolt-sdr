@@ -57,10 +57,11 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
       ctx.fillText('Waiting for display data', W / 2, H / 2); return
     }
     const { panDb, hzPerPixel } = display
+    const hzPerPixelCanvas = hzPerPixel * display.width / W
     const len = panDb.length
     const dbMax = dbMaxRef.current
     const dbMin = dbMinRef.current
-    const freqStart = centerHz - (W / 2) * hzPerPixel
+    const freqStart = centerHz - (W / 2) * hzPerPixelCanvas
 
     for (let db = dbMax; db >= dbMin; db -= 20) {
       const y = H - ((db - dbMin) / (dbMax - dbMin)) * H
@@ -70,11 +71,11 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
       ctx.fillText(String(db), 2, y + 9)
     }
 
-    const major = hzPerPixel * W > 500000 ? 500000 : 100000
+    const major = hzPerPixelCanvas * W > 500000 ? 500000 : 100000
     const minor = 10000
     const startMinor = Math.ceil(freqStart / minor) * minor
-    for (let f = startMinor; f < freqStart + W * hzPerPixel; f += minor) {
-      const x = (f - freqStart) / hzPerPixel
+    for (let f = startMinor; f < freqStart + W * hzPerPixelCanvas; f += minor) {
+      const x = (f - freqStart) / hzPerPixelCanvas
       const isMajor = f % major === 0
       ctx.strokeStyle = isMajor ? '#3a4555' : '#252e3a'
       ctx.lineWidth = isMajor ? 1 : 0.8
@@ -106,10 +107,10 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
     grad.addColorStop(1, t.spectrumFill.replace(/[\d.]+\)$/, '0.02)'))
     ctx.fillStyle = grad; ctx.fill()
 
-    // Filter overlay
+        // Filter overlay
     if (hzPerPixel > 0) {
-      const flX = W / 2 + filterLowRef.current / hzPerPixel
-      const fhX = W / 2 + filterHighRef.current / hzPerPixel
+      const flX = W / 2 + filterLowRef.current / hzPerPixelCanvas
+      const fhX = W / 2 + filterHighRef.current / hzPerPixelCanvas
       const left = Math.min(flX, fhX)
       const width = Math.abs(fhX - flX)
       ctx.fillStyle = 'rgba(0,200,255,0.07)'
@@ -181,9 +182,13 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
     if (!canvas || !wf) return
     wfCtxRef.current = wf.getContext('2d')
     const ro = new ResizeObserver(() => {
-      const W = canvas.parentElement?.offsetWidth ?? 800
-      canvas.width = W; canvas.height = 200
-      wf.width = W; wf.height = 120
+      const dpr = window.devicePixelRatio || 1
+      const cssW = canvas.parentElement?.offsetWidth ?? 800
+      const W = Math.round(cssW * dpr)
+      canvas.width = W; canvas.height = Math.round(200 * dpr)
+      canvas.style.width = cssW + "px"; canvas.style.height = "200px"
+      wf.width = W; wf.height = Math.round(120 * dpr)
+      wf.style.width = cssW + "px"; wf.style.height = "120px"
       draw(); drawWf()
     })
     ro.observe(canvas.parentElement ?? canvas)
@@ -294,6 +299,12 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
     </div>
   )
 }
+
+
+
+
+
+
 
 
 
