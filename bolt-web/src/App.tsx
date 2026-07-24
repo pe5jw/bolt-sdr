@@ -12,7 +12,8 @@ import './App.css'
 export default function App() {
   const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled } = useRadioSocket()
   const [tuneStep, setTuneStep] = useState(1000)
-  const [_mox, setMox] = useState(false)
+  const [txMonitor, setTxMonitor] = useState(false)
+    const [_mox, setMox] = useState(false)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -118,7 +119,12 @@ export default function App() {
             alc={meters.alc}
             swr={meters.swr}
             power={meters.power}
-            onMox={on => {
+            monitor={txMonitor}
+            onMonitor={on => {
+              setTxMonitor(on)
+              fetch('/api/radio/tx-monitor', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: on }) })
+            }}
+                        onMox={on => {
               setRadioState(s => ({ ...s, mox: on }))
               fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
             }}
