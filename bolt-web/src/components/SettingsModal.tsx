@@ -8,7 +8,17 @@ interface Props {
 
 export function SettingsModal({ onClose }: Props) {
   const { theme, setTheme } = useTheme()
-  const [displayRate, setDisplayRate] = useState(30)
+  const [audioDevices, setAudioDevices] = useState<{inputs: {id:string,name:string}[], outputs: {id:string,name:string}[]}>({inputs:[],outputs:[]})
+  const [inputDevice, setInputDevice] = useState<string>("")
+  const [outputDevice, setOutputDevice] = useState<string>("")
+  useEffect(() => {
+    fetch("/api/audio/devices").then(r=>r.json()).then(d => setAudioDevices(d)).catch(()=>{})
+    fetch("/api/audio/device-settings").then(r=>r.json()).then(d => {
+      if (d.inputDeviceId) setInputDevice(d.inputDeviceId)
+      if (d.outputDeviceId) setOutputDevice(d.outputDeviceId)
+    }).catch(()=>{})
+  }, [])
+    const [displayRate, setDisplayRate] = useState(30)
   useEffect(() => {
     fetch("/api/display/settings").then(r => r.json()).then(d => {
       if (d.displayMaxFrameRateHz) setDisplayRate(Math.round(d.displayMaxFrameRateHz))
@@ -94,6 +104,25 @@ export function SettingsModal({ onClose }: Props) {
 
         {/* Display rate */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        {/* Audio devices */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 80 }}>MIC IN</span>
+          <select value={inputDevice} onChange={async e => {
+            setInputDevice(e.target.value)
+            await fetch('/api/audio/input-device', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceId: e.target.value }) })
+          }} style={{ flex: 1, fontSize: 10, padding: '3px 6px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 3, fontFamily: 'var(--font-data)' }}>
+            <option value="">-- default --</option>
+            {audioDevices.inputs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 80 }}>AUDIO OUT</span>
+          <select value={outputDevice} onChange={e => setOutputDevice(e.target.value)}
+            style={{ flex: 1, fontSize: 10, padding: '3px 6px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 3, fontFamily: 'var(--font-data)' }}>
+            <option value="">-- default --</option>
+            {audioDevices.outputs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </div>
           <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 80 }}>DISP RATE</span>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flex: 1 }}>
             {[10, 15, 20, 25, 30, 60].map(hz => (
@@ -145,6 +174,7 @@ export function SettingsModal({ onClose }: Props) {
     </div>
   )
 }
+
 
 
 

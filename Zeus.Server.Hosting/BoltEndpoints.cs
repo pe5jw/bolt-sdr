@@ -42,7 +42,36 @@ public static class BoltEndpoints
             return Results.Ok();
         });
 
-        // Zoom
+        // TX Drive
+        app.MapPost("/api/radio/drive", (DriveRequest req, RadioService radio) =>
+        {
+            radio.SetDrive(Math.Clamp(req.Pct, 0, 100));
+            return Results.Ok();
+        });
+
+        // TX Mic Gain
+        app.MapPost("/api/radio/mic-gain", (MicGainRequest req, RadioService radio) =>
+        {
+            radio.SetTxMicGain(Math.Clamp(req.Db, -40, 10));
+            return Results.Ok();
+        });
+
+        // TX Monitor
+        app.MapPost("/api/radio/tx-monitor", (TxMonitorRequest req, RadioService radio) =>
+        {
+            radio.SetTxMonitor(new Zeus.Contracts.TxMonitorSetRequest(req.Enabled));
+            return Results.Ok();
+        });
+
+                // TX Tune
+        app.MapPost("/api/radio/tune", (TuneRequest req, RadioService radio, TxService tx) =>
+        {
+            if (!tx.TrySetTun(req.On, out var tunError))
+                return Results.BadRequest(new { error = tunError });
+            return Results.Ok();
+        });
+
+                // Zoom
         app.MapPost("/api/radio/zoom", (ZoomRequest req, RadioService radio) =>
         {
             radio.SetZoom(Math.Clamp(req.Level, 1, 32));
@@ -193,6 +222,26 @@ public static class BoltEndpoints
             return Results.Ok(new { hz = clamped });
         });
 
+                // Audio device settings
+        app.MapGet("/api/audio/device-settings", (AudioDeviceSettingsStore store) =>
+            Results.Ok(store.Get()));
+        app.MapPost("/api/audio/input-device", async (AudioDeviceRequest req, AudioDeviceSettingsStore store, NativeMicCapture mic, HttpContext ctx) =>
+        {
+            store.SetInputDeviceId(req.DeviceId);
+            await mic.SetInputDeviceAsync(req.DeviceId, ctx.RequestAborted);
+            return Results.Ok();
+        });
+
+                // Audio devices
+        app.MapGet("/api/audio/devices", () =>
+        {
+            var snap = Zeus.Server.MiniAudioDevices.Enumerate();
+            return Results.Ok(new {
+                inputs = snap.Inputs.Select(d => new { d.Id, d.Name }),
+                outputs = snap.Outputs.Select(d => new { d.Id, d.Name })
+            });
+        });
+
                 // Health check
         app.MapGet("/api/health", () => Results.Ok(new { status = "ok", app = "bolt-sdr" }));
 
@@ -200,6 +249,11 @@ public static class BoltEndpoints
     }
 }
 
+record AudioDeviceRequest(string? DeviceId);
+record DriveRequest(int Pct);
+record MicGainRequest(int Db);
+record TxMonitorRequest(bool Enabled);
+record TuneRequest(bool On);
 record DisplayRateRequest(double Hz);
 record FreqCalRequest(double Factor);
 record RxAfGainRequest(double Db);
@@ -222,6 +276,16 @@ record ExtraIpRequest(string Ip, bool Remove = false);
 record DirectDiscoverRequest(string Ip);
 record AutoConnectRequest(bool Enabled, string? PreferredMac);
 record ConnectRequest(string Ip, int SampleRate = 192000);
+
+
+
+
+
+
+
+
+
+
 
 
 
