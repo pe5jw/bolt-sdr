@@ -317,7 +317,15 @@ public static class BoltHost
         var app = builder.Build();
 
         app.UseCors(p => p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
-        app.UseStaticFiles();
+        app.UseStaticFiles(new StaticFileOptions
+        {
+            OnPrepareResponse = ctx =>
+            {
+                ctx.Context.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+                ctx.Context.Response.Headers["Pragma"] = "no-cache";
+                ctx.Context.Response.Headers["Expires"] = "0";
+            }
+        });
         app.UseRouting();
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
         app.MapFallbackToFile("index.html");
@@ -363,6 +371,7 @@ public sealed class BoltHostOptions
     public int HttpPort { get; init; } = 6060;
     public bool BindAllInterfaces { get; init; }
 }
+
 
 
 

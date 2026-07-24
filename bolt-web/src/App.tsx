@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRadioSocket } from './ws/useRadioSocket'
 import { VfoDisplay } from './components/VfoDisplay'
 import { ModeFilter } from './components/ModeFilter'
@@ -12,6 +12,26 @@ import './App.css'
 export default function App() {
   const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled } = useRadioSocket()
   const [tuneStep, setTuneStep] = useState(1000)
+  const [_mox, setMox] = useState(false)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (e.code === 'Space') {
+        e.preventDefault()
+        if (e.type === 'keydown' && !e.repeat) {
+          setMox(true)
+          fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: true }) })
+        } else if (e.type === 'keyup') {
+          setMox(false)
+          fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: false }) })
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('keyup', onKey)
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKey) }
+  }, [])
 
   const sendVfo = (hz: number) => {
     const snapped = Math.round(hz / tuneStep) * tuneStep
@@ -98,16 +118,32 @@ export default function App() {
             alc={meters.alc}
             swr={meters.swr}
             power={meters.power}
-            onMox={on => send({ type: 'set_mox', on })}
-            onTune={on => send({ type: 'set_tune', on })}
-            onDrive={db => send({ type: 'set_drive', db })}
-            onMicGain={db => send({ type: 'set_mic_gain', db })}
+            onMox={on => {
+              setRadioState(s => ({ ...s, mox: on }))
+              fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
+            }}
+            onTune={on => {
+              setRadioState(s => ({ ...s, tune: on }))
+              fetch('/api/radio/tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
+            }}
+            onDrive={db => {
+              setRadioState(s => ({ ...s, driveDb: db }))
+              fetch('/api/radio/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
+            }}
+            onMicGain={db => {
+              setRadioState(s => ({ ...s, micGainDb: db }))
+              fetch('/api/radio/mic-gain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
+            }}
           />
         </section>
       </main>
     </div>
   )
 }
+
+
+
+
 
 
 
