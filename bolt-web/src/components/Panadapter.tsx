@@ -14,7 +14,7 @@ interface Props {
 }
 
 export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter }: Props) {
-  const { theme } = useTheme()
+  const { theme, showLogo } = useTheme()
   const [zoom, setZoom] = useState(1)
   const [dbMax, setDbMax] = useState(-40)
   const [dbMin, setDbMin] = useState(-140)
@@ -50,8 +50,8 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
     if (!ctx) return
     const W = canvas.width, H = canvas.height
     const t = themeRef.current
-    ctx.fillStyle = t.bgDeep
-    ctx.fillRect(0, 0, W, H)
+    // transparent background so logo shows through
+    ctx.clearRect(0, 0, W, H)
         if (!display) {
       ctx.fillStyle = t.textDim; ctx.font = '12px monospace'; ctx.textAlign = 'center'
       ctx.fillText('Waiting for display data', W / 2, H / 2); return
@@ -266,9 +266,8 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
   const lbl: React.CSSProperties = { fontSize: 9, color: "var(--text-dim)", fontFamily: "var(--font-data)", letterSpacing: 2 }
   const val: React.CSSProperties = { fontSize: 9, color: "var(--accent)", fontFamily: "var(--font-data)", minWidth: 28, textAlign: "center" }
   const sep: React.CSSProperties = { width: 1, height: 14, background: "var(--border)", margin: "0 4px" }
-
   return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-deep)' }}>
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", background: "var(--bg-deep)" }}>
       <div style={{ display: "flex", gap: 4, padding: "3px 8px", background: "var(--bg-panel)", alignItems: "center", flexWrap: "wrap" }}>
         <span style={lbl}>ZOOM</span>
         {[1,2,4,8,16,32].map(z => (
@@ -287,11 +286,14 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
         <span style={val}>{dbMin}</span>
         <button onClick={() => setDbMin(d => Math.max(-220, d - 10))} style={sBtn}>−</button>
       </div>
+      <div style={{ position: "relative" }}>
+        {showLogo && <img src="/bolt-logo.svg" alt="" style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", width: "40%", maxWidth: 280, opacity: 0.1, pointerEvents: "none", zIndex: 1, userSelect: "none" }} />}
       <canvas ref={canvasRef} style={{ width: '100%', display: 'block', cursor: 'crosshair' }}
         onClick={onClick} onWheel={onWheel}
         onMouseDown={onMouseDown} onMouseMove={onMouseMove}
         onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
         onContextMenu={e => e.preventDefault()} />
+      </div>
       <canvas ref={wfRef} style={{ width: '100%', display: 'block', cursor: 'crosshair' }}
         onClick={onWfClick} onWheel={onWfWheel}
         onMouseDown={onWfMouseDown} onMouseMove={onWfMouseMove}
@@ -299,6 +301,11 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
     </div>
   )
 }
+
+
+
+
+
 
 
 

@@ -12,7 +12,8 @@ import './App.css'
 export default function App() {
   const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled } = useRadioSocket()
   const [tuneStep, setTuneStep] = useState(1000)
-  const [txMonitor, setTxMonitor] = useState(false)
+  const [connectedIp, setConnectedIp] = useState("")
+    const [txMonitor, setTxMonitor] = useState(false)
     const [_mox, setMox] = useState(false)
 
   useEffect(() => {
@@ -48,7 +49,12 @@ export default function App() {
 
   return (
     <div className="bolt-app">
-      <StatusBar status={status} radioName={radioState.radioName} onConnect={(ip) => { fetch('/api/radio/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip }) }) }} onDisconnect={() => {}} audioEnabled={audioEnabled} onAudio={setAudioEnabled} />
+      <StatusBar status={status} radioName={radioState.radioName} connectedIp={connectedIp} onConnect={(ip) => { setConnectedIp(ip);
+              fetch('/api/radio/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip }) })
+                .then(r => r.json())
+                .then(state => { if (state.vfoHz) setRadioState(s => ({ ...s, ...state })) })
+                .catch(() => {})
+            }} onDisconnect={() => {}} audioEnabled={audioEnabled} onAudio={setAudioEnabled} />
       <main className="bolt-main">
         <section className="bolt-pan">
           <Panadapter
@@ -124,6 +130,11 @@ export default function App() {
               setTxMonitor(on)
               fetch('/api/radio/tx-monitor', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: on }) })
             }}
+                        tunePct={radioState.tunePct}
+            onTuneDrive={pct => {
+              setRadioState(s => ({ ...s, tunePct: pct }))
+              fetch('/api/radio/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pct }) })
+            }}
                         onMox={on => {
               setRadioState(s => ({ ...s, mox: on }))
               fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
@@ -146,6 +157,7 @@ export default function App() {
     </div>
   )
 }
+
 
 
 

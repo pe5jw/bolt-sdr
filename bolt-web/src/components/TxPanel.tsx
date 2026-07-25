@@ -3,6 +3,7 @@ interface Props {
   tune: boolean
   monitor: boolean
   driveDb: number
+  tunePct: number
   micGainDb: number
   alc: number
   swr: number
@@ -11,9 +12,10 @@ interface Props {
   onTune: (on: boolean) => void
   onMonitor: (on: boolean) => void
   onDrive: (db: number) => void
+  onTuneDrive: (pct: number) => void
   onMicGain: (db: number) => void
 }
-export function TxPanel({ mox, tune, monitor, driveDb, micGainDb, alc, swr, power, onMox, onTune, onMonitor, onDrive, onMicGain }: Props) {
+export function TxPanel({ mox, tune, monitor, driveDb, tunePct, micGainDb, alc, swr, power, onMox, onTune, onMonitor, onDrive, onTuneDrive, onMicGain }: Props) {
   return (
     <div className="tx-wrap">
       <button className={`tx-btn mox-btn ${mox ? 'active' : ''}`} onClick={() => onMox(!mox)}>
@@ -32,6 +34,13 @@ export function TxPanel({ mox, tune, monitor, driveDb, micGainDb, alc, swr, powe
           <span className="tx-slider-val">{driveDb}%</span>
         </div>
         <input type="range" min={0} max={100} value={driveDb} onChange={e => onDrive(Number(e.target.value))} />
+      </div>
+      <div className="tx-slider-group">
+        <div className="tx-slider-label">
+          <span>TUNE</span>
+          <span className="tx-slider-val">{tunePct}%</span>
+        </div>
+        <input type="range" min={0} max={100} value={tunePct} onChange={e => onTuneDrive(Number(e.target.value))} />
       </div>
       <div className="tx-slider-group">
         <div className="tx-slider-label">

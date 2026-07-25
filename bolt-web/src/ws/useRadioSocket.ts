@@ -18,6 +18,7 @@ export interface RadioState {
   squelchLevel: number
   micGainDb: number
   driveDb: number
+  tunePct: number
   connected: boolean
   radioName: string
 }
@@ -67,6 +68,7 @@ const DEFAULT_STATE: RadioState = {
   squelchLevel: 46,
   micGainDb: 0,
   driveDb: 80,
+  tunePct: 10,
   connected: false,
   radioName: '',
 }
@@ -246,4 +248,5 @@ export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws') {
 
   return { status, radioState, setRadioState, meters, display, send, audioEnabled, setAudioEnabled }
 }
+
 

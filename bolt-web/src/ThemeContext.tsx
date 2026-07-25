@@ -1,11 +1,18 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react'
 import { THEMES, type Theme } from './themes'
 
-interface ThemeCtx { theme: Theme; setTheme: (t: Theme) => void }
-const Ctx = createContext<ThemeCtx>({ theme: THEMES[0], setTheme: () => {} })
+interface ThemeCtx { theme: Theme; setTheme: (t: Theme) => void; showLogo: boolean; setShowLogo: (v: boolean) => void }
+const Ctx = createContext<ThemeCtx>({ theme: THEMES[0], setTheme: () => {}, showLogo: true, setShowLogo: () => {} })
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(() => {
+  const [showLogo, setShowLogoState] = useState<boolean>(() => {
+    try { return localStorage.getItem("bolt-show-logo") !== "false" } catch { return true }
+  })
+  const setShowLogo = (v: boolean) => {
+    setShowLogoState(v)
+    try { localStorage.setItem("bolt-show-logo", String(v)) } catch {}
+  }
+    const [theme, setThemeState] = useState<Theme>(() => {
     try {
       const saved = localStorage.getItem('bolt-theme')
       if (saved) {
@@ -37,7 +44,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     r.setProperty('--border',     theme.border)
   }, [theme])
 
-  return <Ctx.Provider value={{ theme, setTheme }}>{children}</Ctx.Provider>
+  return <Ctx.Provider value={{ theme, setTheme, showLogo, setShowLogo }}>{children}</Ctx.Provider>
 }
 
 export const useTheme = () => useContext(Ctx)
+
