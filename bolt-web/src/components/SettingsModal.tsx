@@ -7,7 +7,7 @@ interface Props {
 }
 
 export function SettingsModal({ onClose }: Props) {
-  const { theme, setTheme } = useTheme()
+  const { theme, setTheme, showLogo, setShowLogo } = useTheme()
   const [audioDevices, setAudioDevices] = useState<{inputs: {id:string,name:string}[], outputs: {id:string,name:string}[]}>({inputs:[],outputs:[]})
   const [inputDevice, setInputDevice] = useState<string>("")
   const [outputDevice, setOutputDevice] = useState<string>("")
@@ -84,6 +84,13 @@ export function SettingsModal({ onClose }: Props) {
         </div>
 
         {/* Waterfall palet */}
+        {/* Logo */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-data)", letterSpacing: 2, minWidth: 80 }}>LOGO</span>
+          <button onClick={() => setShowLogo(!showLogo)} style={{ fontSize: 10, padding: "2px 10px", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-data)", background: showLogo ? "var(--accent)" : "var(--bg-control)", border: "1px solid var(--border)", color: showLogo ? "var(--bg)" : "var(--text-dim)" }}>
+            {showLogo ? "ON" : "OFF"}
+          </button>
+        </div>
         <div style={row}>
           <span style={lbl}>WATERFALL</span>
           <div style={{ display: 'flex', gap: 6 }}>
@@ -174,6 +181,9 @@ export function SettingsModal({ onClose }: Props) {
     </div>
   )
 }
+
+
+
 
 
 

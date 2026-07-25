@@ -56,7 +56,14 @@ public static class BoltEndpoints
             return Results.Ok();
         });
 
-        // TX Monitor
+        // TX Tune Drive
+        app.MapPost("/api/radio/tune-drive", (TuneDriveRequest req, RadioService radio) =>
+        {
+            radio.SetTuneDrive(Math.Clamp(req.Pct, 0, 100));
+            return Results.Ok();
+        });
+
+                // TX Monitor
         app.MapPost("/api/radio/tx-monitor", (TxMonitorRequest req, RadioService radio) =>
         {
             radio.SetTxMonitor(new Zeus.Contracts.TxMonitorSetRequest(req.Enabled));
@@ -252,6 +259,7 @@ public static class BoltEndpoints
 record AudioDeviceRequest(string? DeviceId);
 record DriveRequest(int Pct);
 record MicGainRequest(int Db);
+record TuneDriveRequest(int Pct);
 record TxMonitorRequest(bool Enabled);
 record TuneRequest(bool On);
 record DisplayRateRequest(double Hz);
@@ -276,6 +284,8 @@ record ExtraIpRequest(string Ip, bool Remove = false);
 record DirectDiscoverRequest(string Ip);
 record AutoConnectRequest(bool Enabled, string? PreferredMac);
 record ConnectRequest(string Ip, int SampleRate = 192000);
+
+
 
 
 
