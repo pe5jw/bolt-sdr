@@ -114,7 +114,8 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
             lock (_deviceSync)
             {
                 if (_shutdown || _input != null) return;
-                OpenInputLocked(ConfiguredInputDeviceId);
+_log.LogInformation("mic.startup configuredDevice={Dev}", ConfiguredInputDeviceId ?? "null");
+                                OpenInputLocked(ConfiguredInputDeviceId);
             }
         })
         {
@@ -451,4 +452,5 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
         return SanitizeCapturedSample(sum * inverseChannels);
     }
 }
+
 
