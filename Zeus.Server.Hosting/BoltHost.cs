@@ -201,6 +201,7 @@ public static class BoltHost
         // TX
         builder.Services.AddSingleton<TxMetersService>();
         builder.Services.AddSingleton<TxTuneDriver>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<TxTuneDriver>());
         builder.Services.AddSingleton<ExternalPttService>();
         builder.Services.AddSingleton<SignalJammerTxSource>();
 
@@ -371,6 +372,7 @@ public sealed class BoltHostOptions
     public int HttpPort { get; init; } = 6060;
     public bool BindAllInterfaces { get; init; }
 }
+
 
 
 
