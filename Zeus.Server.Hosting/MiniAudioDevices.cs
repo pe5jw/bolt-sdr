@@ -57,6 +57,8 @@ internal static class MiniAudioDevices
         for (uint i = 0; i < count; i++)
         {
             string id = Marshal.PtrToStringUTF8(idFn(snapshot, i)) ?? "";
+                // Trim null padding from fixed-size Windows device ID buffer (hex-encoded \0\0)
+                id = System.Text.RegularExpressions.Regex.Replace(id, "(00)+$", "");
             if (string.IsNullOrWhiteSpace(id)) continue;
             string name = Marshal.PtrToStringUTF8(nameFn(snapshot, i)) ?? "";
             if (string.IsNullOrWhiteSpace(name)) name = $"Audio device {i + 1}";
@@ -65,3 +67,5 @@ internal static class MiniAudioDevices
         return devices;
     }
 }
+
+

@@ -91,7 +91,9 @@ public sealed class AudioDeviceSettingsStore : IDisposable
 
     private static string? Normalize(string? value)
     {
-        var trimmed = value?.Trim();
+        if (value is null) return null;
+        // Remove null bytes that MiniAudio appends to device IDs
+        var trimmed = value.Replace("\0", "").Trim();
         return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
 }
@@ -103,3 +105,5 @@ public sealed class AudioDeviceSettingsEntry
     public string? OutputDeviceId { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }
+
+

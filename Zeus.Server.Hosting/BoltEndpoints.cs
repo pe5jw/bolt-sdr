@@ -235,7 +235,13 @@ public static class BoltEndpoints
                 // Audio device settings
         app.MapGet("/api/audio/device-settings", (AudioDeviceSettingsStore store) =>
             Results.Ok(store.Get()));
-        app.MapPost("/api/audio/input-device", async (AudioDeviceRequest req, AudioDeviceSettingsStore store, NativeMicCapture mic, HttpContext ctx) =>
+        app.MapPost("/api/audio/output-device", (AudioDeviceRequest req, AudioDeviceSettingsStore store) =>
+        {
+            store.SetOutputDeviceId(req.DeviceId);
+            return Results.Ok();
+        });
+
+                app.MapPost("/api/audio/input-device", async (AudioDeviceRequest req, AudioDeviceSettingsStore store, NativeMicCapture mic, HttpContext ctx) =>
         {
             store.SetInputDeviceId(req.DeviceId);
             await mic.SetInputDeviceAsync(req.DeviceId, ctx.RequestAborted);
@@ -247,8 +253,8 @@ public static class BoltEndpoints
         {
             var snap = Zeus.Server.MiniAudioDevices.Enumerate();
             return Results.Ok(new {
-                inputs = snap.Inputs.Select(d => new { d.Id, d.Name }),
-                outputs = snap.Outputs.Select(d => new { d.Id, d.Name })
+                inputs = snap.Inputs.Select(d => new { Id = d.Id.TrimEnd((char)0), d.Name }),
+                outputs = snap.Outputs.Select(d => new { Id = d.Id.TrimEnd((char)0), d.Name })
             });
         });
 
@@ -294,6 +300,8 @@ record ExtraIpRequest(string Ip, bool Remove = false);
 record DirectDiscoverRequest(string Ip);
 record AutoConnectRequest(bool Enabled, string? PreferredMac);
 record ConnectRequest(string Ip, int SampleRate = 192000);
+
+
 
 
 
