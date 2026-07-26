@@ -14,7 +14,7 @@ interface Props {
 }
 
 export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter }: Props) {
-  const { theme, showLogo } = useTheme()
+  const { theme, showLogo, logoBrightness } = useTheme()
   const [zoom, setZoom] = useState(1)
   const [dbMax, setDbMax] = useState(-40)
   const [dbMin, setDbMin] = useState(-140)
@@ -287,7 +287,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
         <button onClick={() => setDbMin(d => Math.max(-220, d - 10))} style={sBtn}>−</button>
       </div>
       <div style={{ position: "relative" }}>
-        {showLogo && <img src="/bolt-logo.svg" alt="" style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", width: "40%", maxWidth: 280, opacity: 0.1, pointerEvents: "none", zIndex: 1, userSelect: "none" }} />}
+        {showLogo && <img src="/bolt-logo.svg" alt="" style={{ position: "absolute", top: "10%", right: "2%", width: "15%", maxWidth: 110, opacity: logoBrightness, pointerEvents: "none", zIndex: 1, userSelect: "none" }} />}
       <canvas ref={canvasRef} style={{ width: '100%', display: 'block', cursor: 'crosshair' }}
         onClick={onClick} onWheel={onWheel}
         onMouseDown={onMouseDown} onMouseMove={onMouseMove}
@@ -301,6 +301,10 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
     </div>
   )
 }
+
+
+
+
 
 
 
