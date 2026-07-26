@@ -117,8 +117,6 @@ export function SettingsModal({ onClose }: Props) {
           </div>
         </div>
 
-        {/* Display rate */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
         {/* Audio devices */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
           <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 80 }}>MIC IN</span>
@@ -138,6 +136,8 @@ export function SettingsModal({ onClose }: Props) {
             {audioDevices.outputs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
         </div>
+        {/* Display rate */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
           <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 80 }}>DISP RATE</span>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flex: 1 }}>
             {[10, 15, 20, 25, 30, 60].map(hz => (

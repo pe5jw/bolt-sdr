@@ -171,9 +171,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
       ctx.fillRect(px, 0, 1, 1)
     }
 
-    ctx.strokeStyle = t.accent + '80'; ctx.lineWidth = 1; ctx.setLineDash([4, 4])
-    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke()
-    ctx.setLineDash([])
+    // VFO line in waterfall removed
   }, [display])
 
   useEffect(() => {
@@ -301,6 +299,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
     </div>
   )
 }
+
 
 
 

@@ -95,8 +95,11 @@ public static class BoltEndpoints
                 // MOX
         app.MapPost("/api/radio/mox", (MoxRequest req, TxService tx) =>
         {
-            if (req.On) tx.TrySetMox(true, Zeus.Contracts.MoxSource.UI, out _);
-            else tx.TrySetMox(false, Zeus.Contracts.MoxSource.UI, out _);
+            string? moxErr;
+            bool moxOk = req.On
+                ? tx.TrySetMox(true, Zeus.Contracts.MoxSource.UI, out moxErr)
+                : tx.TrySetMox(false, Zeus.Contracts.MoxSource.UI, out moxErr);
+            if (!moxOk) return Results.BadRequest(new { error = moxErr });
             return Results.Ok();
         });
         app.MapGet("/api/radio/discover", async (Zeus.Protocol1.Discovery.IRadioDiscovery discovery, AutoConnectSettingsStore acStore, HttpContext ctx) =>
@@ -249,7 +252,13 @@ public static class BoltEndpoints
             });
         });
 
-                // Health check
+                // TX Guard ignore (test)
+        app.MapPost("/api/radio/tx-guard-ignore", (TxGuardRequest req, BandPlanService bandPlan) =>
+        {
+            bandPlan.SetTxGuardIgnore(req.Ignore);
+            return Results.Ok();
+        });
+
         app.MapGet("/api/health", () => Results.Ok(new { status = "ok", app = "bolt-sdr" }));
 
         return app;
@@ -260,6 +269,7 @@ record AudioDeviceRequest(string? DeviceId);
 record DriveRequest(int Pct);
 record MicGainRequest(int Db);
 record TuneDriveRequest(int Pct);
+record TxGuardRequest(bool Ignore);
 record TxMonitorRequest(bool Enabled);
 record TuneRequest(bool On);
 record DisplayRateRequest(double Hz);
@@ -284,6 +294,11 @@ record ExtraIpRequest(string Ip, bool Remove = false);
 record DirectDiscoverRequest(string Ip);
 record AutoConnectRequest(bool Enabled, string? PreferredMac);
 record ConnectRequest(string Ip, int SampleRate = 192000);
+
+
+
+
+
 
 
 
