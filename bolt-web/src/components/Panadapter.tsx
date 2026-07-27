@@ -131,9 +131,9 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
     ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center'
     const lw = ctx.measureText(vfoLabel).width
     ctx.fillStyle = 'rgba(0,0,0,0.75)'
-    ctx.fillRect(W / 2 - lw / 2 - 6, H - 20, lw + 12, 16)
+    ctx.fillRect(W / 2 - lw / 2 - 6, 14, lw + 12, 16)
     ctx.fillStyle = t.accent
-    ctx.fillText(vfoLabel, W / 2, H - 8)
+    ctx.fillText(vfoLabel, W / 2, 26)
   }, [display, centerHz])
 
   const drawWf = useCallback(() => {
@@ -299,6 +299,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
     </div>
   )
 }
+
 
 
 
