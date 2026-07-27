@@ -123,15 +123,39 @@ export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws') {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const nextPlayTimeRef = useRef(0)
+  const moxActiveRef = useRef(false)
   const audioEnabledRef = useRef(false)
+
+  const bufferTargetRef = useRef(0.14)
+  const pendingSourcesRef = useRef(new Set<AudioBufferSourceNode>())
 
   const scheduleAudio = useCallback((samples: Float32Array, sampleRate: number, channels: number) => {
     if (!audioEnabledRef.current) return
+
+    // Skip silent frames (TX suppression)
+    const maxSample = samples.reduce((m, s) => Math.max(m, Math.abs(s)), 0)
+    if (maxSample < 0.0001) {
+      nextPlayTimeRef.current = 0
+      return
+    }
+
     if (!audioCtxRef.current) {
-      audioCtxRef.current = new AudioContext({ sampleRate })
+      audioCtxRef.current = new AudioContext({ sampleRate, latencyHint: "playback" })
     }
     const ctx = audioCtxRef.current
-    if (ctx.state === 'suspended') ctx.resume()
+    if (ctx.state === "suspended") ctx.resume()
+
+    const now = ctx.currentTime
+    const target = bufferTargetRef.current
+
+    // Re-anchor if behind or too far ahead
+    if (nextPlayTimeRef.current < now + 0.02) {
+      nextPlayTimeRef.current = now + target
+    }
+    // Drop frames too far ahead
+    if (nextPlayTimeRef.current > now + 0.6) {
+      nextPlayTimeRef.current = now + target
+    }
 
     const frameCount = samples.length / channels
     const buf = ctx.createBuffer(channels, frameCount, sampleRate)
@@ -142,19 +166,24 @@ export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws') {
       }
     }
 
-    const now = ctx.currentTime
-    if (nextPlayTimeRef.current < now + 0.05) {
-      nextPlayTimeRef.current = now + 0.05
-    }
-
     const src = ctx.createBufferSource()
     src.buffer = buf
     src.connect(ctx.destination)
     src.start(nextPlayTimeRef.current)
+    src.onended = () => pendingSourcesRef.current.delete(src)
+    pendingSourcesRef.current.add(src)
     nextPlayTimeRef.current += buf.duration
   }, [])
 
-  const setAudioEnabled = useCallback((enabled: boolean) => {
+  const flushAudioBuffer = useCallback(() => {
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close()
+      audioCtxRef.current = null
+      nextPlayTimeRef.current = 0
+    }
+  }, [])
+
+    const setAudioEnabled = useCallback((enabled: boolean) => {
     audioEnabledRef.current = enabled
     setAudioEnabledState(enabled)
     const ws = wsRef.current
@@ -207,6 +236,7 @@ export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws') {
           const frame = parseDisplayFrame(buf)
           if (frame) setDisplay(frame)
         } else if (msgType === MSG_AUDIO_PCM) {
+        if (moxActiveRef.current) return // suppress RX audio during TX
           const audio = parseAudioFrame(buf)
           if (audio) scheduleAudio(audio.samples, audio.sampleRate, audio.channels)
         } else if (msgType === MSG_RX_METER && buf.byteLength >= 5) {
@@ -240,14 +270,32 @@ export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws') {
     }
   }, [connect])
 
-  const send = useCallback((cmd: RadioCommand) => {
+  const setMoxActive = useCallback((active: boolean) => {
+    moxActiveRef.current = active
+    if (!active) {
+      // Flush audio buffer on TX->RX
+      nextPlayTimeRef.current = 0
+    }
+  }, [])
+
+    const send = useCallback((cmd: RadioCommand) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(cmd))
     }
   }, [])
 
-  return { status, radioState, setRadioState, meters, display, send, audioEnabled, setAudioEnabled, wsRef }
+  return { status, radioState, setRadioState, meters, display, send, audioEnabled, setAudioEnabled, wsRef, flushAudioBuffer, setMoxActive }
 }
+
+
+
+
+
+
+
+
+
+
 
 
 
