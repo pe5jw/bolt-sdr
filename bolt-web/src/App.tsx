@@ -2,19 +2,19 @@ import { useState, useEffect } from 'react'
 import { useRadioSocket } from './ws/useRadioSocket'
 import { VfoDisplay } from './components/VfoDisplay'
 import { ModeFilter } from './components/ModeFilter'
+import { BandSelector } from './components/BandSelector'
 import { Panadapter } from './components/Panadapter'
 import { TxPanel } from './components/TxPanel'
-import { BandSelector } from './components/BandSelector'
-import { RxControls } from './components/RxControls'
 import { StatusBar } from './components/StatusBar'
+import { RxControls } from './components/RxControls'
 import './App.css'
 
 export default function App() {
   const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled } = useRadioSocket()
   const [tuneStep, setTuneStep] = useState(1000)
   const [connectedIp, setConnectedIp] = useState("")
-    const [txMonitor, setTxMonitor] = useState(false)
-    const [_mox, setMox] = useState(false)
+  const [txMonitor, setTxMonitor] = useState(false)
+  const [_mox, setMox] = useState(false)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -49,12 +49,21 @@ export default function App() {
 
   return (
     <div className="bolt-app">
-      <StatusBar status={status} radioName={radioState.radioName} connectedIp={connectedIp} onConnect={(ip) => { setConnectedIp(ip);
-              fetch('/api/radio/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip }) })
-                .then(r => r.json())
-                .then(state => { if (state.vfoHz) setRadioState(s => ({ ...s, ...state })) })
-                .catch(() => {})
-            }} onDisconnect={() => {}} audioEnabled={audioEnabled} onAudio={setAudioEnabled} />
+      <StatusBar
+        status={status}
+        radioName={radioState.radioName}
+        connectedIp={connectedIp}
+        onConnect={(ip) => {
+          setConnectedIp(ip)
+          fetch('/api/radio/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip }) })
+            .then(r => r.json())
+            .then(state => { if (state.vfoHz) setRadioState(s => ({ ...s, ...state })) })
+            .catch(() => {})
+        }}
+        onDisconnect={() => {}}
+        audioEnabled={audioEnabled}
+        onAudio={setAudioEnabled}
+      />
       <main className="bolt-main">
         <section className="bolt-pan">
           <Panadapter
@@ -79,20 +88,21 @@ export default function App() {
             onStepChange={setTuneStep}
             dbm={meters.sMeter}
           />
-          <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
-          <BandSelector hz={radioState.vfoHz} onBand={sendVfo} />
-                    <ModeFilter
-            mode={radioState.mode}
-            filterLow={radioState.filterLow}
-            filterHigh={radioState.filterHigh}
-            onFilter={(low, high) => {
-              setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
-              fetch('/api/radio/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ low, high }) })
-            }}
-            onMode={sendMode}
-          />
+          <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+            <BandSelector hz={radioState.vfoHz} onBand={sendVfo} />
+            <ModeFilter
+              mode={radioState.mode}
+              filterLow={radioState.filterLow}
+              filterHigh={radioState.filterHigh}
+              onMode={sendMode}
+              onFilter={(low, high) => {
+                setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
+                send({ type: 'set_filter', low, high })
+                fetch('/api/radio/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ low, high }) })
+              }}
+            />
           </div>
-                    <RxControls
+          <RxControls
             squelchEnabled={radioState.squelchEnabled}
             squelchLevel={radioState.squelchLevel}
             rxAfGainDb={radioState.rxAfGainDb}
@@ -111,7 +121,7 @@ export default function App() {
               fetch('/api/radio/agc-top', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
             }}
             onAtten={db => {
-              setRadioState(s => ({ ...s, attenDb: db }))
+              setRadioState(s => ({ ...s, attDb: db }))
               fetch('/api/radio/atten', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
             }}
           />
@@ -120,22 +130,14 @@ export default function App() {
           <TxPanel
             mox={radioState.mox}
             tune={radioState.tune}
+            monitor={txMonitor}
             driveDb={radioState.driveDb}
+            tunePct={radioState.tunePct}
             micGainDb={radioState.micGainDb}
             alc={meters.alc}
             swr={meters.swr}
             power={meters.power}
-            monitor={txMonitor}
-            onMonitor={on => {
-              setTxMonitor(on)
-              fetch('/api/radio/tx-monitor', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: on }) })
-            }}
-                        tunePct={radioState.tunePct}
-            onTuneDrive={pct => {
-              setRadioState(s => ({ ...s, tunePct: pct }))
-              fetch('/api/radio/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pct }) })
-            }}
-                        onMox={on => {
+            onMox={on => {
               setRadioState(s => ({ ...s, mox: on }))
               fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
             }}
@@ -143,9 +145,17 @@ export default function App() {
               setRadioState(s => ({ ...s, tune: on }))
               fetch('/api/radio/tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
             }}
+            onMonitor={on => {
+              setTxMonitor(on)
+              fetch('/api/radio/tx-monitor', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: on }) })
+            }}
             onDrive={db => {
               setRadioState(s => ({ ...s, driveDb: db }))
-              fetch('/api/radio/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
+              fetch('/api/radio/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pct: db }) })
+            }}
+            onTuneDrive={pct => {
+              setRadioState(s => ({ ...s, tunePct: pct }))
+              fetch('/api/radio/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pct }) })
             }}
             onMicGain={db => {
               setRadioState(s => ({ ...s, micGainDb: db }))
@@ -157,17 +167,5 @@ export default function App() {
     </div>
   )
 }
-
-
-
-
-
-
-
-
-
-
-
-
 
 
