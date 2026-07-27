@@ -10,7 +10,7 @@ import { RxControls } from './components/RxControls'
 import './App.css'
 
 export default function App() {
-  const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled } = useRadioSocket()
+  const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive } = useRadioSocket()
   const [tuneStep, setTuneStep] = useState(1000)
   const [connectedIp, setConnectedIp] = useState("")
   const [txMonitor, setTxMonitor] = useState(false)
@@ -23,9 +23,11 @@ export default function App() {
         e.preventDefault()
         if (e.type === 'keydown' && !e.repeat) {
           setMox(true)
+          setMoxActive(true)
           fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: true }) })
         } else if (e.type === 'keyup') {
           setMox(false)
+          setMoxActive(false)
           fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: false }) })
         }
       }
@@ -167,5 +169,9 @@ export default function App() {
     </div>
   )
 }
+
+
+
+
 
 
