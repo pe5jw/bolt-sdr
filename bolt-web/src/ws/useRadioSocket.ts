@@ -246,7 +246,8 @@ export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws') {
     }
   }, [])
 
-  return { status, radioState, setRadioState, meters, display, send, audioEnabled, setAudioEnabled }
+  return { status, radioState, setRadioState, meters, display, send, audioEnabled, setAudioEnabled, wsRef }
 }
+
 
 
