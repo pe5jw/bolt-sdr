@@ -241,6 +241,12 @@ public static class BoltEndpoints
             return Results.Ok();
         });
 
+                app.MapDelete("/api/audio/device-settings", (AudioDeviceSettingsStore store) =>
+        {
+            store.Set(null, null);
+            return Results.Ok();
+        });
+
                 app.MapPost("/api/audio/input-device", async (AudioDeviceRequest req, AudioDeviceSettingsStore store, NativeMicCapture mic, HttpContext ctx) =>
         {
             store.SetInputDeviceId(req.DeviceId);
@@ -300,6 +306,7 @@ record ExtraIpRequest(string Ip, bool Remove = false);
 record DirectDiscoverRequest(string Ip);
 record AutoConnectRequest(bool Enabled, string? PreferredMac);
 record ConnectRequest(string Ip, int SampleRate = 192000);
+
 
 
 
