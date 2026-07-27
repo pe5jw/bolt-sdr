@@ -1,7 +1,6 @@
 interface Props {
   mox: boolean
   tune: boolean
-  monitor: boolean
   driveDb: number
   tunePct: number
   micGainDb: number
@@ -10,12 +9,11 @@ interface Props {
   power: number
   onMox: (on: boolean) => void
   onTune: (on: boolean) => void
-  onMonitor: (on: boolean) => void
   onDrive: (db: number) => void
   onTuneDrive: (pct: number) => void
   onMicGain: (db: number) => void
 }
-export function TxPanel({ mox, tune, monitor, driveDb, tunePct, micGainDb, alc, swr, power, onMox, onTune, onMonitor, onDrive, onTuneDrive, onMicGain }: Props) {
+export function TxPanel({ mox, tune, driveDb, tunePct, micGainDb, alc, swr, power, onMox, onTune, onDrive, onTuneDrive, onMicGain }: Props) {
   return (
     <div className="tx-wrap">
       <button className={`tx-btn mox-btn ${mox ? 'active' : ''}`} onClick={() => onMox(!mox)}>
@@ -23,10 +21,6 @@ export function TxPanel({ mox, tune, monitor, driveDb, tunePct, micGainDb, alc, 
       </button>
       <button className={`tx-btn tune-btn ${tune ? 'active' : ''}`} onClick={() => onTune(!tune)}>
         TUNE
-      </button>
-      <button className={`tx-btn ${monitor ? 'active' : ''}`} onClick={() => onMonitor(!monitor)}
-        style={{ background: monitor ? '#ff8800' : undefined, borderColor: monitor ? '#ff8800' : undefined }}>
-        MON
       </button>
       <div className="tx-slider-group">
         <div className="tx-slider-label">
@@ -68,3 +62,4 @@ export function TxPanel({ mox, tune, monitor, driveDb, tunePct, micGainDb, alc, 
     </div>
   )
 }
+
