@@ -187,6 +187,8 @@ public static class BoltHost
         // Bolt SDR: not a service
         // Bolt SDR: not a service
         builder.Services.AddSingleton<NativeAudioSink>();
+        builder.Services.AddSingleton<IRxAudioSink>(sp => sp.GetRequiredService<NativeAudioSink>());
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<NativeAudioSink>());
         builder.Services.AddSingleton<RadioSpeakerAudioSink>();
         builder.Services.AddSingleton<IRxAudioSink, WebSocketAudioSink>();
         builder.Services.AddSingleton<NativeMicCapture>();
@@ -373,6 +375,7 @@ public sealed class BoltHostOptions
     public int HttpPort { get; init; } = 6060;
     public bool BindAllInterfaces { get; init; }
 }
+
 
 
 

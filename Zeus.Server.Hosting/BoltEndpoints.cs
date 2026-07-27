@@ -284,6 +284,7 @@ record TuneDriveRequest(int Pct);
 record TxGuardRequest(bool Ignore);
 record TxMonitorRequest(bool Enabled);
 record TuneRequest(bool On);
+record NativeAudioRequest(bool Enabled);
 record DisplayRateRequest(double Hz);
 record FreqCalRequest(double Factor);
 record RxAfGainRequest(double Db);
@@ -306,6 +307,8 @@ record ExtraIpRequest(string Ip, bool Remove = false);
 record DirectDiscoverRequest(string Ip);
 record AutoConnectRequest(bool Enabled, string? PreferredMac);
 record ConnectRequest(string Ip, int SampleRate = 192000);
+
+
 
 
 
