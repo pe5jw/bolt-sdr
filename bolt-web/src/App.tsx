@@ -13,7 +13,6 @@ export default function App() {
   const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive } = useRadioSocket()
   const [tuneStep, setTuneStep] = useState(1000)
   const [connectedIp, setConnectedIp] = useState("")
-  const [txMonitor, setTxMonitor] = useState(false)
   const [_mox, setMox] = useState(false)
 
   useEffect(() => {
@@ -132,7 +131,6 @@ export default function App() {
           <TxPanel
             mox={radioState.mox}
             tune={radioState.tune}
-            monitor={txMonitor}
             driveDb={radioState.driveDb}
             tunePct={radioState.tunePct}
             micGainDb={radioState.micGainDb}
@@ -145,14 +143,8 @@ export default function App() {
             }}
             onTune={on => {
               setRadioState(s => ({ ...s, tune: on }))
-              fetch('/api/radio/tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
-            }}
-            onMonitor={on => {
-              setTxMonitor(on)
-              fetch('/api/radio/tx-monitor', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: on }) })
             }}
             onDrive={db => {
-              setRadioState(s => ({ ...s, driveDb: db }))
               fetch('/api/radio/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pct: db }) })
             }}
             onTuneDrive={pct => {
@@ -169,6 +161,9 @@ export default function App() {
     </div>
   )
 }
+
+
+
 
 
 
