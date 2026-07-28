@@ -8,9 +8,11 @@ import { TxPanel } from './components/TxPanel'
 import { StatusBar } from './components/StatusBar'
 import { RxControls } from './components/RxControls'
 import './App.css'
+import { useMidi } from './hooks/useMidi'
 
 export default function App() {
-  const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive } = useRadioSocket()
+  const { onLearnFrame } = useMidi()
+  const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive } = useRadioSocket('ws://localhost:6060/ws', onLearnFrame)
   const [tuneStep, setTuneStep] = useState(1000)
   const [connectedIp, setConnectedIp] = useState("")
   const [_mox, setMox] = useState(false)
