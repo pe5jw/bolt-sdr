@@ -357,6 +357,8 @@ public sealed class MidiService : IHostedService, IDisposable
 
         MidiMappingDto map;
         var local = _midiMap;
+        _log.LogInformation("midi.dispatch.try dev={Dev} id={Id} mapCount={N}", msg.DeviceName, msg.ControlId, local.Count);
+        _log.LogInformation("midi.dispatch.try dev={Dev} id={Id} mapCount={N}", msg.DeviceName, msg.ControlId, local.Count);
         if (!local.TryGetValue((msg.DeviceName, msg.ControlId), out map!)) return;
 
         switch (map.ControlType)
@@ -383,6 +385,7 @@ public sealed class MidiService : IHostedService, IDisposable
 
             case MidiControlType.Wheel:
                 if (msg.Delta == 0) return;
+                _log.LogInformation("midi.wheel.try delta={D} value={V} cmd={C}", msg.Delta, msg.Value, map.Command);
                 if (MidiCommandCatalog.IsTxKeying(map.Command)) return;
                 _dispatcher.Dispatch(map.Command, value: 0, delta: msg.Delta);
                 break;

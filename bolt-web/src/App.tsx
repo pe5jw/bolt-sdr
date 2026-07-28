@@ -8,10 +8,10 @@ import { TxPanel } from './components/TxPanel'
 import { StatusBar } from './components/StatusBar'
 import { RxControls } from './components/RxControls'
 import './App.css'
-import { useMidi } from './hooks/useMidi'
+import { useMidi } from './MidiContext'
 
 export default function App() {
-  const { onLearnFrame } = useMidi()
+  const { onLearnFrame, learnFrame, midiEnabled } = useMidi()
   const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive } = useRadioSocket('ws://localhost:6060/ws', onLearnFrame)
   const [tuneStep, setTuneStep] = useState(1000)
   const [connectedIp, setConnectedIp] = useState("")
@@ -38,6 +38,17 @@ export default function App() {
     return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKey) }
   }, [])
 
+  // Poll radio state voor MIDI VFO sync
+  useEffect(() => {
+    if (!midiEnabled) return
+    const poll = setInterval(() => {
+      fetch('/api/radio/state').then(r => r.json()).then(state => {
+        if (state.vfoHz) setRadioState(s => ({ ...s, vfoHz: state.vfoHz }))
+      }).catch(() => {})
+    }, 100)
+    return () => clearInterval(poll)
+  }, [midiEnabled, setRadioState])
+
   const sendVfo = (hz: number) => {
     const snapped = Math.round(hz / tuneStep) * tuneStep
     setRadioState(s => ({ ...s, vfoHz: snapped }))
@@ -52,7 +63,7 @@ export default function App() {
 
   return (
     <div className="bolt-app">
-      <StatusBar
+      <StatusBar learnFrame={learnFrame}
         status={status}
         radioName={radioState.radioName}
         connectedIp={connectedIp}

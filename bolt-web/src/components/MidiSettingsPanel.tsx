@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import type { MidiCommandInfo, MidiMappingDto, MidiLearnFrame } from '../midi'
+import type { MidiCommandInfo, MidiMappingDto } from '../midi'
 import { useMidi } from '../hooks/useMidi'
 
 const F: React.CSSProperties = { fontFamily: 'var(--font-data)', fontSize: 10 }
@@ -28,12 +28,8 @@ const btn = (active: boolean, danger = false): React.CSSProperties => ({
   color: active ? 'var(--bg)' : 'var(--text-dim)',
 })
 
-interface Props {
-  learnFrame: MidiLearnFrame | null
-}
-
-export function MidiSettingsPanel({ learnFrame }: Props) {
-  const { status, config, commands, saveConfig, startLearn, stopLearn } = useMidi()
+export function MidiSettingsPanel() {
+  const { status, config, commands, saveConfig, startLearn, stopLearn, learnFrame } = useMidi()
   const [cat, setCat] = useState<Category>('TX')
   const [pendingCmd, setPendingCmd] = useState<MidiCommandInfo | null>(null)
   const [search, setSearch] = useState('')

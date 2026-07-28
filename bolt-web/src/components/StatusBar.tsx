@@ -17,6 +17,7 @@ interface AutoConnectPrefs {
 }
 
 interface Props {
+  learnFrame?: import('../midi').MidiLearnFrame | null
   status: ConnectionStatus
   radioName: string
   connectedIp?: string
@@ -26,7 +27,7 @@ interface Props {
   onAudio: (enabled: boolean) => void
 }
 
-export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconnect, audioEnabled, onAudio }: Props) {
+export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconnect, audioEnabled, onAudio, learnFrame }: Props) {
   const [radios, setRadios] = useState<DiscoveredRadio[]>([])
   const [showPicker, setShowPicker] = useState(false)
   const [scanning, setScanning] = useState(false)
@@ -137,7 +138,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
 
       <button onClick={() => setShowSettings(true)} style={sBtn()}>⚙ SETTINGS</button>
 
-      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} learnFrame={learnFrame ?? null} />}
 
       {showPicker && (
         <div style={{ position: 'absolute', top: '100%', left: 0, background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 4, zIndex: 100, minWidth: 340, padding: 8 }}>
