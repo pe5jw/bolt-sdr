@@ -143,6 +143,7 @@ export default function App() {
             }}
             onTune={on => {
               setRadioState(s => ({ ...s, tune: on }))
+              fetch('/api/radio/tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
             }}
             onDrive={db => {
               fetch('/api/radio/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pct: db }) })
@@ -161,6 +162,7 @@ export default function App() {
     </div>
   )
 }
+
 
 
 
