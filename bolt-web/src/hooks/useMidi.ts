@@ -44,6 +44,7 @@ export function useMidi() {
 
   // Wordt aangeroepen vanuit useRadioSocket bij MsgType 0x3B
   const onLearnFrame = useCallback((frame: MidiLearnFrame) => {
+    console.log('[useMidi] Learn frame received:', frame)
     setLearnFrame(frame)
   }, [])
 

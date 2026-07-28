@@ -40,6 +40,8 @@ export function MidiSettingsPanel({ learnFrame }: Props) {
 
   const learning = status?.learning ?? false
 
+  console.log('[MidiSettingsPanel] learning:', learning, 'learnFrame:', learnFrame)
+
   const mappingFor = useCallback((cmd: number): MidiMappingDto | undefined =>
     config.bindings.mappings.find(m => m.command === cmd)
   , [config])
