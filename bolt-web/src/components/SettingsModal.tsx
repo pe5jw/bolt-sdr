@@ -1,17 +1,16 @@
 import { useState, useEffect } from 'react'
 import { MidiSettingsPanel } from './MidiSettingsPanel'
-import { useMidi } from '../hooks/useMidi'
 import { THEMES, SPECTRUM_COLORS } from '../themes'
 import { useTheme } from '../ThemeContext'
 
 interface Props {
   onClose: () => void
+  learnFrame?: import('../midi').MidiLearnFrame | null
 }
 
 export function SettingsModal({ onClose }: Props) {
   const { theme, setTheme, showLogo, setShowLogo, logoBrightness, setLogoBrightness } = useTheme()
   const [tab, setTab] = useState<'general' | 'midi'>('general')
-  const { learnFrame } = useMidi()
   const [displayRate, setDisplayRate] = useState(30)
   useEffect(() => {
     fetch("/api/display/settings").then(r => r.json()).then(d => {
@@ -56,7 +55,7 @@ export function SettingsModal({ onClose }: Props) {
         </div>
 
         {/* MIDI tab */}
-        {tab === 'midi' && <MidiSettingsPanel learnFrame={learnFrame} />}
+        {tab === 'midi' && <MidiSettingsPanel />}
 
         {/* General tab */}
         {tab === 'general' && <>
