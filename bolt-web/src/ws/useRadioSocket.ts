@@ -246,8 +246,12 @@ export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws', onMidiLearn
         } else if (msgType === MSG_MIDI_LEARN) {
           try {
             const json = new TextDecoder().decode(new Uint8Array(buf, 1))
-            onMidiLearn?.(JSON.parse(json))
-          } catch { }
+            const frame = JSON.parse(json)
+            console.log('[useRadioSocket] MIDI learn frame parsed:', frame)
+            onMidiLearn?.(frame)
+          } catch (e) {
+            console.error('[useRadioSocket] Failed to parse MIDI learn frame:', e)
+          }
         }
         return
       }
