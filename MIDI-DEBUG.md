@@ -1,4 +1,4 @@
-# MIDI Debug Guide
+# MIDI Debug Guide - Bolt SDR
 
 Als MIDI learn mode het device wel detecteert maar geen control events ontvangt, volg deze stappen:
 
@@ -33,7 +33,7 @@ dotnet test --filter "FullyQualifiedName~MidiDiagnostics.ListenForMidiEvents"
 
 ## Stap 3: Test met volledige server + verbose logging
 
-Start de server met MIDI debug logging:
+Start de Bolt SDR server met MIDI debug logging:
 
 ```powershell
 # Windows
@@ -44,6 +44,8 @@ $env:LOGGING__LOGLEVEL__ZEUS_MIDI = "Debug"
 $env:LOGGING__LOGLEVEL__ZEUS_SERVER_MIDI = "Debug"
 dotnet run --project OpenhpsdrZeus
 ```
+
+*(Opmerking: Bolt SDR is gebouwd op de Zeus library, daarom heten de namespaces nog Zeus)*
 
 Open http://localhost:5173, ga naar Settings → MIDI tab, klik "START LEARN".
 
@@ -114,6 +116,8 @@ Controller staat in verkeerde mode. Veel DJ controllers hebben:
 
 Check de manual van je controller voor de mode-switch.
 
+**Welke controller gebruik je?** Dat helpt om specifieke instructies te geven.
+
 ### Learn timeout na 120 sec
 
 De frontend stuurt elke 30s een keepalive (`/api/midi/learn/keepalive`). Check de Network tab of die slaagt.
@@ -142,4 +146,4 @@ Als jouw controller niet in deze lijst staat, draai eerst Stap 1 om te bevestige
 Windows: https://www.midiox.com/
 macOS: Built-in "Audio MIDI Setup" → Window → Show MIDI Studio
 
-Dit toont de raw MIDI bytes. Als MIDI Monitor events ziet maar Zeus niet, is het een Zeus bug.
+Dit toont de raw MIDI bytes. Als MIDI Monitor events ziet maar Bolt SDR niet, is het een Bolt SDR bug (meld dan een issue op GitHub).
