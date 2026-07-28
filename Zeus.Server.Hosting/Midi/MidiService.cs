@@ -188,8 +188,9 @@ public sealed class MidiService : IHostedService, IDisposable
             RefreshLearnDeadlineLocked();
             _learning = true;
             if (_started && !_enabled) StartEnginesLocked();
+            _log.LogInformation("midi.learn.start enabled={Enabled} started={Started} learning={Learning} expires={Expires}",
+                _enabled, _started, _learning, Volatile.Read(ref _learnExpiresAtTimestamp));
         }
-        _log.LogInformation("midi.learn.start");
         return GetStatus();
     }
 
@@ -341,8 +342,13 @@ public sealed class MidiService : IHostedService, IDisposable
 
     private void OnMidiMessage(MidiInputMessage msg)
     {
+        _log.LogDebug("midi.message.received device={Device} id={Id} type={Type} val={Val} delta={Delta}",
+            msg.DeviceName, msg.ControlId, msg.ControlType, msg.Value, msg.Delta);
+
         if (IsLearningEffectiveForEvent())
         {
+            _log.LogInformation("midi.learn.frame device={Device} id={Id} type={Type} val={Val} delta={Delta}",
+                msg.DeviceName, msg.ControlId, msg.ControlType, msg.Value, msg.Delta);
             PublishLearnFrame(new MidiLearnFrame(
                 msg.DeviceName, msg.ControlId, msg.ControlType, msg.Value, msg.Delta));
             return;
