@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Quick MIDI test console app
+// Bolt SDR - Quick MIDI test console app
 
 using Microsoft.Extensions.Logging;
 using Zeus.Midi;
 
-Console.WriteLine("=== MIDI Quick Test ===\n");
+Console.WriteLine("=== Bolt SDR - MIDI Quick Test ===\n");
 
 var logFactory = LoggerFactory.Create(builder =>
 {

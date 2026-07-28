@@ -1,7 +1,7 @@
-# MIDI Debug Script — start server met verbose logging
+# MIDI Debug Script — start Bolt SDR server met verbose logging
 # Run met: .\midi-debug.ps1
 
-Write-Host "=== MIDI Debug Mode ===" -ForegroundColor Cyan
+Write-Host "=== Bolt SDR - MIDI Debug Mode ===" -ForegroundColor Cyan
 Write-Host "Starting server with verbose MIDI logging..." -ForegroundColor Yellow
 Write-Host ""
 
