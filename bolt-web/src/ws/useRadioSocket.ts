@@ -78,6 +78,7 @@ const MSG_AUDIO_PCM            = 0x02
 const MSG_RX_METER             = 0x14
 const MSG_AUDIO_STREAM_REQUEST = 0x21
 const MSG_DISPLAY_STREAM_REQUEST = 0x22
+const MSG_MIDI_LEARN = 0x3B
 const HEADER_SIZE = 16
 
 function parseDisplayFrame(buf: ArrayBuffer): DisplayFrame | null {
@@ -112,7 +113,7 @@ function parseAudioFrame(buf: ArrayBuffer): { samples: Float32Array; sampleRate:
   } catch { return null }
 }
 
-export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws') {
+export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws', onMidiLearn?: (frame: import('../midi').MidiLearnFrame) => void) {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected')
   const [radioState, setRadioState] = useState<RadioState>(DEFAULT_STATE)
   const [meters, setMeters] = useState<MeterFrame>({ sMeter: -120, alc: 0, swr: 1, power: 0 })
@@ -242,6 +243,11 @@ export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws') {
         } else if (msgType === MSG_RX_METER && buf.byteLength >= 5) {
           const dbm = view.getFloat32(1, true)
           setMeters(m => ({ ...m, sMeter: dbm }))
+        } else if (msgType === MSG_MIDI_LEARN) {
+          try {
+            const json = new TextDecoder().decode(new Uint8Array(buf, 1))
+            onMidiLearn?.(JSON.parse(json))
+          } catch { }
         }
         return
       }

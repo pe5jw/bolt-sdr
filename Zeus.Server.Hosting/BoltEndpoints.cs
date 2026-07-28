@@ -273,6 +273,28 @@ public static class BoltEndpoints
 
         app.MapGet("/api/health", () => Results.Ok(new { status = "ok", app = "bolt-sdr" }));
 
+        // ---- MIDI -----------------------------------------------------------
+        app.MapGet("/api/midi/commands", () =>
+            Results.Ok(Zeus.Server.Midi.MidiCommandCatalog.All));
+
+        app.MapGet("/api/midi/status", (Zeus.Server.Midi.MidiService midi) =>
+            Results.Ok(midi.GetStatus()));
+
+        app.MapGet("/api/midi/config", (Zeus.Server.Midi.MidiService midi) =>
+            Results.Ok(midi.GetConfig()));
+
+        app.MapPut("/api/midi/config", (Zeus.Contracts.MidiConfigDto dto, Zeus.Server.Midi.MidiService midi) =>
+            Results.Ok(midi.SetConfig(dto)));
+
+        app.MapPost("/api/midi/learn/start", (Zeus.Server.Midi.MidiService midi) =>
+            Results.Ok(midi.StartLearn()));
+
+        app.MapPost("/api/midi/learn/stop", (Zeus.Server.Midi.MidiService midi) =>
+            Results.Ok(midi.StopLearn()));
+
+        app.MapPost("/api/midi/learn/keepalive", (Zeus.Server.Midi.MidiService midi) =>
+            Results.Ok(midi.KeepLearnAlive()));
+
         return app;
     }
 }
