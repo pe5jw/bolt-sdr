@@ -46,15 +46,19 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
   const openPicker = async () => {
     setShowPicker(true)
     try {
-      // autoconnect niet beschikbaar in station-engine
       setPrefs({ enabled: false, preferredMac: null, extraIps: [] })
-      // Haal actieve verbinding op
       const state = await fetch('/api/state').then(r => r.json()).catch(() => null)
-      if (state?.status === 'Connected' && state?.endpoint) {
-        setActiveEndpoint(state.endpoint)
-        setRadios([{ ip: state.endpoint, mac: '', board: 'HermesLite 2', firmware: '', busy: false }])
+      const radiosRes = await fetch('/api/radios').then(r => r.json()).catch(() => [])
+      const mapped = radiosRes.map((r: any) => ({ ip: r.ipAddress ?? r.ip, mac: r.macAddress ?? r.mac, board: r.boardId ?? r.board, firmware: r.firmwareVersion ?? r.firmware, busy: r.busy ?? false }))
+      const lastIp = localStorage.getItem('bolt-sdr-last-ip') ?? ''
+      if (state?.status === 'Connected') {
+        const active = mapped.find((r: any) => r.ip === lastIp) ?? { ip: lastIp, mac: '', board: 'HermesLite 2', firmware: '', busy: false }
+        const rest = mapped.filter((r: any) => r.ip !== lastIp)
+        setActiveEndpoint(lastIp)
+        setRadios([active, ...rest])
       } else {
         setActiveEndpoint(null)
+        setRadios(mapped)
       }
     } catch {}
   }
@@ -63,14 +67,17 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
     setScanning(true)
     try {
       const radiosRes = await fetch('/api/radios').then(r => r.json())
-      setRadios(radiosRes)
-    } catch {
-      setRadios([])
-    }
+      const mapped = radiosRes.map((r: any) => ({ ip: r.ipAddress ?? r.ip, mac: r.macAddress ?? r.mac, board: r.boardId ?? r.board, firmware: r.firmwareVersion ?? r.firmware, busy: r.busy ?? false }))
+      const lastIp = localStorage.getItem('bolt-sdr-last-ip') ?? ''
+      const active = activeEndpoint ? mapped.find((r: any) => r.ip === activeEndpoint) ?? { ip: lastIp, mac: '', board: 'HermesLite 2', firmware: '', busy: false } : null
+      const rest = mapped.filter((r: any) => r.ip !== activeEndpoint)
+      setRadios(active ? [active, ...rest] : rest)
+    } catch {}
     setScanning(false)
   }
 
-  const toggleAutoConnect = async (enabled: boolean) => {
+
+    const toggleAutoConnect = async (enabled: boolean) => {
     setPrefs(p => ({ ...p, enabled }))
     // autoconnect niet beschikbaar in station-engine
   }
