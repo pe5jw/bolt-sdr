@@ -40,7 +40,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
   const setZoomLevel = async (level: number) => {
     const clamped = Math.max(1, Math.min(32, level))
     setZoom(clamped)
-    await fetch('/api/radio/zoom', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: clamped }) })
+    await fetch('/api/rx/zoom', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: clamped }) })
   }
 
   const draw = useCallback(() => {

@@ -25,11 +25,11 @@ export default function App() {
         if (e.type === 'keydown' && !e.repeat) {
           setMox(true)
           setMoxActive(true)
-          fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: true }) })
+          fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: true }) })
         } else if (e.type === 'keyup') {
           setMox(false)
           setMoxActive(false)
-          fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: false }) })
+          fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: false }) })
         }
       }
     }
@@ -42,7 +42,7 @@ export default function App() {
   useEffect(() => {
     if (!midiEnabled) return
     const poll = setInterval(() => {
-      fetch('/api/radio/state').then(r => r.json()).then(state => {
+      fetch('/api/state').then(r => r.json()).then(state => {
         if (state.vfoHz) setRadioState(s => ({ ...s, vfoHz: state.vfoHz }))
       }).catch(() => {})
     }, 100)
@@ -52,13 +52,13 @@ export default function App() {
   const sendVfo = (hz: number) => {
     const snapped = Math.round(hz / tuneStep) * tuneStep
     setRadioState(s => ({ ...s, vfoHz: snapped }))
-    fetch('/api/radio/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: snapped }) })
+    fetch('/api/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: snapped }) })
   }
 
   const sendMode = (mode: string) => {
     setRadioState(s => ({ ...s, mode }))
     send({ type: 'set_mode', mode })
-    fetch('/api/radio/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) })
+    fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) })
   }
 
   return (
@@ -69,7 +69,7 @@ export default function App() {
         connectedIp={connectedIp}
         onConnect={(ip) => {
           setConnectedIp(ip)
-          fetch('/api/radio/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip }) })
+          fetch('/api/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip }) })
             .then(r => r.json())
             .then(state => { if (state.vfoHz) setRadioState(s => ({ ...s, ...state })) })
             .catch(() => {})
@@ -89,7 +89,7 @@ export default function App() {
             filterHigh={radioState.filterHigh}
             onFilter={(low, high) => {
               setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
-              fetch('/api/radio/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ low, high }) })
+              fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ low, high }) })
             }}
           />
         </section>
@@ -112,7 +112,7 @@ export default function App() {
               onFilter={(low, high) => {
                 setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
                 send({ type: 'set_filter', low, high })
-                fetch('/api/radio/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ low, high }) })
+                fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ low, high }) })
               }}
             />
           </div>
@@ -124,19 +124,19 @@ export default function App() {
             attenDb={radioState.attDb}
             onSquelch={(enabled, level) => {
               setRadioState(s => ({ ...s, squelchEnabled: enabled, squelchLevel: level }))
-              fetch('/api/radio/squelch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, level }) })
+              fetch('/api/rx/squelch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, level }) })
             }}
             onRxAfGain={db => {
               setRadioState(s => ({ ...s, rxAfGainDb: db }))
-              fetch('/api/radio/rx-af-gain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
+              fetch('/api/rx/afGain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
             }}
             onAgcTop={db => {
               setRadioState(s => ({ ...s, agcTopDb: db }))
-              fetch('/api/radio/agc-top', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
+              fetch('/api/agcGain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
             }}
             onAtten={db => {
               setRadioState(s => ({ ...s, attDb: db }))
-              fetch('/api/radio/atten', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
+              fetch('/api/attenuator', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
             }}
           />
         </section>
@@ -152,22 +152,22 @@ export default function App() {
             power={meters.power}
             onMox={on => {
               setRadioState(s => ({ ...s, mox: on }))
-              fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
+              fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
             }}
             onTune={on => {
               setRadioState(s => ({ ...s, tune: on }))
-              fetch('/api/radio/tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
+              fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
             }}
             onDrive={db => {
-              fetch('/api/radio/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pct: db }) })
+              fetch('/api/tx/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pct: db }) })
             }}
             onTuneDrive={pct => {
               setRadioState(s => ({ ...s, tunePct: pct }))
-              fetch('/api/radio/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pct }) })
+              fetch('/api/tx/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pct }) })
             }}
             onMicGain={db => {
               setRadioState(s => ({ ...s, micGainDb: db }))
-              fetch('/api/radio/mic-gain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
+              fetch('/api/mic-gain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
             }}
           />
         </section>
