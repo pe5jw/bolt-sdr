@@ -21,6 +21,7 @@ export default function App() {
       if (state.status !== 'Connected') {
         const lastIp = localStorage.getItem('bolt-sdr-last-ip')
         if (lastIp) {
+          setConnectedIp(lastIp)
           fetch('/api/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: lastIp }) }).catch(() => {})
         }
       }
