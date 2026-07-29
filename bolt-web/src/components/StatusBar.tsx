@@ -53,6 +53,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
       extraIps.forEach(function(ip: string) { if (!radiosRes.find(function(r: any) { return (r.ipAddress || r.ip) === ip })) radiosRes.push({ ipAddress: ip, macAddress: '', boardId: 'HermesLite 2', firmwareVersion: '', busy: false }) })
       const mapped = radiosRes.map((r: any) => ({ ip: r.ipAddress ?? r.ip, mac: r.macAddress ?? r.mac, board: r.boardId ?? r.board, firmware: r.firmwareVersion ?? r.firmware, busy: r.busy ?? false }))
       const lastIp = connectedIp || localStorage.getItem('bolt-sdr-last-ip') || ''
+      console.log('[radio] connectedIp=', connectedIp, 'lastIp=', lastIp)
       if (state?.status === 'Connected') {
         const saved = JSON.parse(localStorage.getItem('bolt-sdr-radio-details') ?? '[]')
         const active = mapped.find((r: any) => r.ip === lastIp) ?? saved.find((r: any) => r.ip === lastIp) ?? { ip: lastIp, mac: '', board: 'HermesLite 2', firmware: '', busy: false }
@@ -75,6 +76,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
       extraIps.forEach(function(ip: string) { if (!radiosRes.find(function(r: any) { return (r.ipAddress || r.ip) === ip })) radiosRes.push({ ipAddress: ip, macAddress: '', boardId: 'HermesLite 2', firmwareVersion: '', busy: false }) })
       const mapped = radiosRes.map((r: any) => ({ ip: r.ipAddress ?? r.ip, mac: r.macAddress ?? r.mac, board: r.boardId ?? r.board, firmware: r.firmwareVersion ?? r.firmware, busy: r.busy ?? false }))
       const lastIp = connectedIp || localStorage.getItem('bolt-sdr-last-ip') || ''
+      console.log('[radio] connectedIp=', connectedIp, 'lastIp=', lastIp)
       const active = activeEndpoint ? mapped.find((r: any) => r.ip === activeEndpoint) ?? { ip: lastIp, mac: '', board: 'HermesLite 2', firmware: '', busy: false } : null
       const rest = mapped.filter((r: any) => r.ip !== activeEndpoint)
       // Sla details op in localStorage voor later gebruik
