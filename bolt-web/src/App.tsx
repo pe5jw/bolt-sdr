@@ -12,7 +12,7 @@ import { useMidi } from './MidiContext'
 
 export default function App() {
   const { onLearnFrame, learnFrame, midiEnabled } = useMidi()
-  const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive } = useRadioSocket('ws://localhost:6060/ws', onLearnFrame)
+  const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive } = useRadioSocket(undefined, onLearnFrame)
   const [tuneStep, setTuneStep] = useState(1000)
   const [connectedIp, setConnectedIp] = useState("")
   const [_mox, setMox] = useState(false)
@@ -45,7 +45,7 @@ export default function App() {
       fetch('/api/state').then(r => r.json()).then(state => {
         if (state.vfoHz) setRadioState(s => ({ ...s, vfoHz: state.vfoHz }))
       }).catch(() => {})
-    }, 100)
+    }, 1000)
     return () => clearInterval(poll)
   }, [midiEnabled, setRadioState])
 
@@ -69,7 +69,7 @@ export default function App() {
         connectedIp={connectedIp}
         onConnect={(ip) => {
           setConnectedIp(ip)
-          fetch('/api/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip }) })
+          fetch('/api/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: ip }) })
             .then(r => r.json())
             .then(state => { if (state.vfoHz) setRadioState(s => ({ ...s, ...state })) })
             .catch(() => {})

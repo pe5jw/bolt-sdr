@@ -33,6 +33,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
   const [scanning, setScanning] = useState(false)
   const [prefs, setPrefs] = useState<AutoConnectPrefs>({ enabled: true, preferredMac: null, extraIps: [] })
   const [manualIp, setManualIp] = useState('')
+  const [activeEndpoint, setActiveEndpoint] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState(false)
 
   const labels: Record<ConnectionStatus, string> = {
@@ -44,10 +45,17 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
 
   const openPicker = async () => {
     setShowPicker(true)
-    // Laad prefs maar scan NIET automatisch
     try {
       // autoconnect niet beschikbaar in station-engine
       setPrefs({ enabled: false, preferredMac: null, extraIps: [] })
+      // Haal actieve verbinding op
+      const state = await fetch('/api/state').then(r => r.json()).catch(() => null)
+      if (state?.status === 'Connected' && state?.endpoint) {
+        setActiveEndpoint(state.endpoint)
+        setRadios([{ ip: state.endpoint, mac: '', board: 'HermesLite 2', firmware: '', busy: false }])
+      } else {
+        setActiveEndpoint(null)
+      }
     } catch {}
   }
 
@@ -155,7 +163,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
           )}
 
           {radios.map(r => {
-            const isConnected = r.ip === connectedIp && status === 'connected'
+            const isConnected = (r.ip === connectedIp || r.ip === activeEndpoint) && status === 'connected'
             return (
               <div key={r.ip} style={{ marginBottom: 4 }}>
                 <div
