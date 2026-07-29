@@ -13,8 +13,10 @@ import { useMidi } from './MidiContext'
 export default function App() {
   const { onLearnFrame, learnFrame, midiEnabled } = useMidi()
 
-  // Auto-reconnect bij startup
+  // Auto-reconnect bij startup — alleen als niet bewust disconnect
   useEffect(() => {
+    const autoReconnect = localStorage.getItem('bolt-sdr-auto-reconnect') !== 'false'
+    if (!autoReconnect) return
     fetch('/api/state').then(r => r.json()).then(state => {
       if (state.status !== 'Connected') {
         const lastIp = localStorage.getItem('bolt-sdr-last-ip')
