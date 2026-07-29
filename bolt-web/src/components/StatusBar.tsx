@@ -52,12 +52,13 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
       const extraIps = JSON.parse(localStorage.getItem('bolt-sdr-extra-ips') || '[]')
       extraIps.forEach(function(ip: string) { if (!radiosRes.find(function(r: any) { return (r.ipAddress || r.ip) === ip })) radiosRes.push({ ipAddress: ip, macAddress: '', boardId: 'HermesLite 2', firmwareVersion: '', busy: false }) })
       const mapped = radiosRes.map((r: any) => ({ ip: r.ipAddress ?? r.ip, mac: r.macAddress ?? r.mac, board: r.boardId ?? r.board, firmware: r.firmwareVersion ?? r.firmware, busy: r.busy ?? false }))
-      const lastIp = localStorage.getItem('bolt-sdr-last-ip') ?? ''
+      const lastIp = connectedIp || localStorage.getItem('bolt-sdr-last-ip') || ''
       if (state?.status === 'Connected') {
         const saved = JSON.parse(localStorage.getItem('bolt-sdr-radio-details') ?? '[]')
         const active = mapped.find((r: any) => r.ip === lastIp) ?? saved.find((r: any) => r.ip === lastIp) ?? { ip: lastIp, mac: '', board: 'HermesLite 2', firmware: '', busy: false }
         const rest = mapped.filter((r: any) => r.ip !== lastIp)
         setActiveEndpoint(lastIp)
+        console.log('[radio] active=', active, 'rest=', rest, 'mapped=', mapped)
         setRadios([active, ...rest])
       } else {
         setActiveEndpoint(null)
@@ -73,7 +74,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
       const extraIps = JSON.parse(localStorage.getItem('bolt-sdr-extra-ips') || '[]')
       extraIps.forEach(function(ip: string) { if (!radiosRes.find(function(r: any) { return (r.ipAddress || r.ip) === ip })) radiosRes.push({ ipAddress: ip, macAddress: '', boardId: 'HermesLite 2', firmwareVersion: '', busy: false }) })
       const mapped = radiosRes.map((r: any) => ({ ip: r.ipAddress ?? r.ip, mac: r.macAddress ?? r.mac, board: r.boardId ?? r.board, firmware: r.firmwareVersion ?? r.firmware, busy: r.busy ?? false }))
-      const lastIp = localStorage.getItem('bolt-sdr-last-ip') ?? ''
+      const lastIp = connectedIp || localStorage.getItem('bolt-sdr-last-ip') || ''
       const active = activeEndpoint ? mapped.find((r: any) => r.ip === activeEndpoint) ?? { ip: lastIp, mac: '', board: 'HermesLite 2', firmware: '', busy: false } : null
       const rest = mapped.filter((r: any) => r.ip !== activeEndpoint)
       // Sla details op in localStorage voor later gebruik
