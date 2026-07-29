@@ -199,7 +199,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
                     <div style={{ fontFamily: 'var(--font-data)', color: isConnected ? 'var(--green)' : 'var(--accent)', fontSize: 12 }}>
                       {r.board} {isConnected ? '● CONNECTED' : r.busy ? '(busy)' : ''}
                     </div>
-                    <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{r.ip} — {r.mac} — fw {r.firmware}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{r.ip}{r.mac && r.mac !== '—' ? ' — ' + r.mac : ''}{r.firmware && r.firmware !== '—' ? ' — fw ' + r.firmware : ''}</div>
                   </div>
                   <div style={{ display: 'flex', gap: 4 }}>
                     <button onClick={e => { e.stopPropagation(); setPreferred(prefs.preferredMac === r.mac ? null : r.mac) }}
