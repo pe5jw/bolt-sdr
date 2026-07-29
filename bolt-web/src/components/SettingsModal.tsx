@@ -156,11 +156,11 @@ export function SettingsModal({ onClose }: Props) {
                   const meas = parseFloat((document.getElementById('cal-meas') as HTMLInputElement).value)
                   if (!ref || !meas) return
                   const factor = ref / meas
-                  await fetch('/api/radio/freq-cal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ factor }) })
+                  await fetch('/api/radio/frequency-calibration/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ factor }) })
                   setCalFactor(factor)
                 }} style={{ fontSize: 10, padding: '2px 10px', borderRadius: 3, cursor: 'pointer', background: 'var(--accent)', border: 'none', color: 'var(--bg)', fontFamily: 'var(--font-data)' }}>CALIBRATE</button>
                 <button onClick={async () => {
-                  await fetch('/api/radio/freq-cal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ factor: 1.0 }) })
+                  await fetch('/api/radio/frequency-calibration/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ factor: 1.0 }) })
                   setCalFactor(1.0)
                 }} style={{ fontSize: 10, padding: '2px 10px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>RESET</button>
                 <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>factor: {calFactor.toFixed(8)}</span>

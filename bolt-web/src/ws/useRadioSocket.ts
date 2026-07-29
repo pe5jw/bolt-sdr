@@ -113,7 +113,8 @@ function parseAudioFrame(buf: ArrayBuffer): { samples: Float32Array; sampleRate:
   } catch { return null }
 }
 
-export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws', onMidiLearn?: (frame: import('../midi').MidiLearnFrame) => void) {
+const DEFAULT_WS_URL = () => `ws://${window.location.hostname}:${window.location.port || "6061"}/ws`
+export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (frame: import('../midi').MidiLearnFrame) => void) {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected')
   const [radioState, setRadioState] = useState<RadioState>(DEFAULT_STATE)
   const [meters, setMeters] = useState<MeterFrame>({ sMeter: -120, alc: 0, swr: 1, power: 0 })
@@ -211,7 +212,7 @@ export function useRadioSocket(serverUrl = 'ws://localhost:6060/ws', onMidiLearn
       if (audioEnabledRef.current) {
         ws.send(new Uint8Array([MSG_AUDIO_STREAM_REQUEST, 1]))
       }
-      fetch('/api/radio/state').then(r => r.json()).then(state => {
+      fetch('/api/state').then(r => r.json()).then(state => {
         setRadioState(s => ({
           ...s,
           vfoHz: state.vfoHz ?? s.vfoHz,

@@ -33,6 +33,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
   const [scanning, setScanning] = useState(false)
   const [prefs, setPrefs] = useState<AutoConnectPrefs>({ enabled: true, preferredMac: null, extraIps: [] })
   const [manualIp, setManualIp] = useState('')
+  const [activeEndpoint, setActiveEndpoint] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState(false)
 
   const labels: Record<ConnectionStatus, string> = {
@@ -44,17 +45,24 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
 
   const openPicker = async () => {
     setShowPicker(true)
-    // Laad prefs maar scan NIET automatisch
     try {
-      const prefsRes = await fetch('/api/radio/autoconnect').then(r => r.json())
-      setPrefs(prefsRes)
+      // autoconnect niet beschikbaar in station-engine
+      setPrefs({ enabled: false, preferredMac: null, extraIps: [] })
+      // Haal actieve verbinding op
+      const state = await fetch('/api/state').then(r => r.json()).catch(() => null)
+      if (state?.status === 'Connected' && state?.endpoint) {
+        setActiveEndpoint(state.endpoint)
+        setRadios([{ ip: state.endpoint, mac: '', board: 'HermesLite 2', firmware: '', busy: false }])
+      } else {
+        setActiveEndpoint(null)
+      }
     } catch {}
   }
 
   const scan = async () => {
     setScanning(true)
     try {
-      const radiosRes = await fetch('/api/radio/discover').then(r => r.json())
+      const radiosRes = await fetch('/api/radios').then(r => r.json())
       setRadios(radiosRes)
     } catch {
       setRadios([])
@@ -64,34 +72,22 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
 
   const toggleAutoConnect = async (enabled: boolean) => {
     setPrefs(p => ({ ...p, enabled }))
-    await fetch('/api/radio/autoconnect', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled, preferredMac: prefs.preferredMac }),
-    })
+    // autoconnect niet beschikbaar in station-engine
   }
 
   const setPreferred = async (mac: string | null) => {
     setPrefs(p => ({ ...p, preferredMac: mac }))
-    await fetch('/api/radio/autoconnect', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: prefs.enabled, preferredMac: mac }),
-    })
+    // autoconnect niet beschikbaar in station-engine
   }
 
   const addManualIp = async () => {
     if (!manualIp) return
     try {
-      const r = await fetch('/api/radio/discover/direct', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ip: manualIp }),
-      })
+      const r = await fetch('/api/radios')
       if (r.ok) {
         const radio = await r.json()
         setRadios(prev => [...prev.filter(x => x.ip !== radio.ip), radio])
-        await fetch('/api/radio/extraip', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ip: manualIp, remove: false }),
-        })
+        // extraip niet beschikbaar in station-engine
         setPrefs(p => ({ ...p, extraIps: [...p.extraIps.filter(x => x !== manualIp), manualIp] }))
         setManualIp('')
       } else {
@@ -103,16 +99,13 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
   }
 
   const removeExtraIp = async (ip: string) => {
-    await fetch('/api/radio/extraip', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ip, remove: true }),
-    })
+    // extraip niet beschikbaar in station-engine
     setPrefs(p => ({ ...p, extraIps: p.extraIps.filter(x => x !== ip) }))
     setRadios(prev => prev.filter(r => r.ip !== ip))
   }
 
   const disconnect = async () => {
-    await fetch('/api/radio/disconnect', { method: 'POST' })
+    await fetch('/api/disconnect', { method: 'POST' })
     onDisconnect()
   }
 
@@ -170,7 +163,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
           )}
 
           {radios.map(r => {
-            const isConnected = r.ip === connectedIp && status === 'connected'
+            const isConnected = (r.ip === connectedIp || r.ip === activeEndpoint) && status === 'connected'
             return (
               <div key={r.ip} style={{ marginBottom: 4 }}>
                 <div
