@@ -49,6 +49,8 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
       setPrefs({ enabled: false, preferredMac: null, extraIps: [] })
       const state = await fetch('/api/state').then(r => r.json()).catch(() => null)
       const radiosRes = await fetch('/api/radios').then(r => r.json()).catch(() => [])
+      const extraIps = JSON.parse(localStorage.getItem('bolt-sdr-extra-ips') || '[]')
+      extraIps.forEach(function(ip: string) { if (!radiosRes.find(function(r: any) { return (r.ipAddress || r.ip) === ip })) radiosRes.push({ ipAddress: ip, macAddress: '', boardId: 'HermesLite 2', firmwareVersion: '', busy: false }) })
       const mapped = radiosRes.map((r: any) => ({ ip: r.ipAddress ?? r.ip, mac: r.macAddress ?? r.mac, board: r.boardId ?? r.board, firmware: r.firmwareVersion ?? r.firmware, busy: r.busy ?? false }))
       const lastIp = localStorage.getItem('bolt-sdr-last-ip') ?? ''
       if (state?.status === 'Connected') {
@@ -68,6 +70,8 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
     setScanning(true)
     try {
       const radiosRes = await fetch('/api/radios').then(r => r.json())
+      const extraIps = JSON.parse(localStorage.getItem('bolt-sdr-extra-ips') || '[]')
+      extraIps.forEach(function(ip: string) { if (!radiosRes.find(function(r: any) { return (r.ipAddress || r.ip) === ip })) radiosRes.push({ ipAddress: ip, macAddress: '', boardId: 'HermesLite 2', firmwareVersion: '', busy: false }) })
       const mapped = radiosRes.map((r: any) => ({ ip: r.ipAddress ?? r.ip, mac: r.macAddress ?? r.mac, board: r.boardId ?? r.board, firmware: r.firmwareVersion ?? r.firmware, busy: r.busy ?? false }))
       const lastIp = localStorage.getItem('bolt-sdr-last-ip') ?? ''
       const active = activeEndpoint ? mapped.find((r: any) => r.ip === activeEndpoint) ?? { ip: lastIp, mac: '', board: 'HermesLite 2', firmware: '', busy: false } : null
@@ -197,7 +201,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
                   }}>
                   <div>
                     <div style={{ fontFamily: 'var(--font-data)', color: isConnected ? 'var(--green)' : 'var(--accent)', fontSize: 12 }}>
-                      {r.board} {isConnected ? '● CONNECTED' : r.busy ? '(busy)' : ''}
+                      {r.board} - {r.ip} {isConnected ? '● CONNECTED' : r.busy ? '(busy)' : ''}
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{r.ip}{r.mac && r.mac !== '—' ? ' — ' + r.mac : ''}{r.firmware && r.firmware !== '—' ? ' — fw ' + r.firmware : ''}</div>
                   </div>
