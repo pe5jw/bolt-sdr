@@ -74,7 +74,11 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
       const rest = mapped.filter((r: any) => r.ip !== activeEndpoint)
       // Sla details op in localStorage voor later gebruik
       if (mapped.length > 0) localStorage.setItem('bolt-sdr-radio-details', JSON.stringify(mapped))
-      setRadios(active ? [active, ...rest] : rest)
+      if (mapped.length > 0) {
+        if (mapped.length > 0) localStorage.setItem('bolt-sdr-radio-details', JSON.stringify(mapped))
+        setRadios(active ? [active, ...rest] : rest)
+      }
+      // Als scan leeg - laat bestaande lijst staan
     } catch {}
     setScanning(false)
   }
