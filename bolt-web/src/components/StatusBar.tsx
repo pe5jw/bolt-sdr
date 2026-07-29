@@ -59,7 +59,6 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
         const active = mapped.find((r: any) => r.ip === lastIp) ?? saved.find((r: any) => r.ip === lastIp) ?? { ip: lastIp, mac: '', board: 'HermesLite 2', firmware: '', busy: false }
         const rest = mapped.filter((r: any) => r.ip !== lastIp)
         setActiveEndpoint(lastIp)
-        console.log('[radio] active=', active, 'rest=', rest, 'mapped=', mapped)
         setRadios([active, ...rest])
       } else {
         setActiveEndpoint(null)
