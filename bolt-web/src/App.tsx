@@ -12,6 +12,18 @@ import { useMidi } from './MidiContext'
 
 export default function App() {
   const { onLearnFrame, learnFrame, midiEnabled } = useMidi()
+
+  // Auto-reconnect bij startup
+  useEffect(() => {
+    fetch('/api/state').then(r => r.json()).then(state => {
+      if (state.status !== 'Connected') {
+        const lastIp = localStorage.getItem('bolt-sdr-last-ip')
+        if (lastIp) {
+          fetch('/api/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: lastIp }) }).catch(() => {})
+        }
+      }
+    }).catch(() => {})
+  }, [])
   const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive } = useRadioSocket(undefined, onLearnFrame)
   const [tuneStep, setTuneStep] = useState(1000)
   const [connectedIp, setConnectedIp] = useState("")
