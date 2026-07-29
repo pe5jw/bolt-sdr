@@ -16,15 +16,9 @@ export default function App() {
   // Auto-reconnect bij startup — alleen als niet bewust disconnect
   useEffect(() => {
     fetch('/api/state').then(r => r.json()).then(state => {
-      if (state.status === 'Connected') {
-        // Al verbonden - haal IP op via radios
-        fetch('/api/radios').then(r => r.json()).then(radios => {
-          if (radios.length > 0) {
-            const ip = radios[0].ipAddress ?? radios[0].ip
-            setConnectedIp(ip)
-            localStorage.setItem('bolt-sdr-last-ip', ip)
-          }
-        }).catch(() => {})
+      if (state.status === 'Connected' && state.endpoint) {
+        setConnectedIp(state.endpoint)
+        localStorage.setItem('bolt-sdr-last-ip', state.endpoint)
       } else {
         const autoReconnect = localStorage.getItem('bolt-sdr-auto-reconnect') !== 'false'
         if (!autoReconnect) return
