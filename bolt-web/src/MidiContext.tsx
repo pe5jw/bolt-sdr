@@ -61,12 +61,12 @@ export function MidiProvider({ children }: { children: ReactNode }) {
       setConfig(c)
       setMidiEnabled(c.enabled)
     }).catch(() => {})
-    fetch('/api/radio/state').then(r => r.json()).then(s => {
+    fetch('/api/state').then(r => r.json()).then(s => {
       if (s.vfoHz) lastKnownVfoRef.current = s.vfoHz
     }).catch(() => {})
     // Poll VFO state elke 200ms voor UI sync
     const poll = setInterval(() => {
-      fetch('/api/radio/state').then(r => r.json()).then(s => {
+      fetch('/api/state').then(r => r.json()).then(s => {
         if (s.vfoHz) lastKnownVfoRef.current = s.vfoHz
       }).catch(() => {})
     }, 200)
@@ -80,7 +80,7 @@ export function MidiProvider({ children }: { children: ReactNode }) {
     vfoAbortRef.current?.abort()
     const ctrl = new AbortController()
     vfoAbortRef.current = ctrl
-    fetch('/api/radio/vfo', {
+    fetch('/api/vfo', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hz }),
@@ -108,15 +108,15 @@ export function MidiProvider({ children }: { children: ReactNode }) {
       const step = delta * accel
       if (cmd === 'ChangeFreqVfoA') { nudgeVfo(step * 10); return }
       if (cmd === 'ZoomSliderInc') {
-        fetch('/api/radio/zoom', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: step > 0 ? 1 : -1 }) }).catch(() => {})
+        fetch('/api/rx/zoom', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: step > 0 ? 1 : -1 }) }).catch(() => {})
         return
       }
     }
 
     if (mapping.controlType === 'Button') {
       if (value === 0) return
-      if (cmd === 'MoxOnOff') { fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: true }) }).catch(() => {}); return }
-      if (cmd === 'TunOnOff') { fetch('/api/radio/tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: true }) }).catch(() => {}); return }
+      if (cmd === 'MoxOnOff') { fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: true }) }).catch(() => {}); return }
+      if (cmd === 'TunOnOff') { fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: true }) }).catch(() => {}); return }
     }
   }, [nudgeVfo])
 
