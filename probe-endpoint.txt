@@ -1,0 +1,46 @@
+// PE5JW 2026: unicast probe endpoint for cross-subnet discovery
+endpoints.MapGet("/api/radios/probe", async (
+    string ip,
+    IRadioDiscovery discovery,
+    HttpContext ctx) =>
+{
+    if (!System.Net.IPAddress.TryParse(ip, out var addr))
+        return Results.BadRequest(new { error = "Invalid IP address" });
+    
+    // Send unicast discovery packet directly to the IP
+    var timeout = TimeSpan.FromMilliseconds(1500);
+    try
+    {
+        using var udp = new System.Net.Sockets.UdpClient();
+        udp.EnableBroadcast = false;
+        var packet = new byte[] { 0xEF, 0xFE, 0x02, 0x00, 0x00, 0x00 };
+        var endpoint = new System.Net.IPEndPoint(addr, 1024);
+        await udp.SendAsync(packet, packet.Length, endpoint);
+        
+        // Wait for response
+        udp.Client.ReceiveTimeout = 1500;
+        var result = await Task.Run(() => {
+            try {
+                var remote = new System.Net.IPEndPoint(System.Net.IPAddress.Any, 0);
+                var data = udp.Receive(ref remote);
+                if (data.Length >= 60 && data[0] == 0xEF && data[1] == 0xFE && data[2] == 0x02 && data[3] == 0x02) {
+                    return new {
+                        ipAddress = remote.Address.ToString(),
+                        macAddress = BitConverter.ToString(data, 4, 6).Replace("-", ""),
+                        boardId = "HermesLite2",
+                        firmwareVersion = data[9].ToString() + "." + data[10].ToString(),
+                        busy = data[11] == 0x03,
+                    };
+                }
+                return null;
+            } catch { return null; }
+        });
+        
+        if (result != null) return Results.Ok(new[] { result });
+        return Results.Ok(Array.Empty<object>());
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.Message);
+    }
+});
