@@ -33,7 +33,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
   const labels: Record<ConnectionStatus, string> = {
     disconnected: 'Disconnected',
     connecting: 'Connecting...',
-    connected: 'Connected',
+    connected: activeEndpoint ? activeEndpoint : 'Connected',
     error: 'Connection error',
   }
 
