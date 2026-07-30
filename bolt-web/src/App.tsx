@@ -11,7 +11,7 @@ import './App.css'
 import { useMidi } from './MidiContext'
 
 export default function App() {
-  const { onLearnFrame, learnFrame, midiEnabled } = useMidi()
+  const { onLearnFrame, learnFrame } = useMidi()
 
   // Auto-reconnect bij startup — alleen als niet bewust disconnect
   useEffect(() => {
@@ -56,16 +56,7 @@ export default function App() {
     return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKey) }
   }, [])
 
-  // Poll radio state voor MIDI VFO sync
-  useEffect(() => {
-    if (!midiEnabled) return
-    const poll = setInterval(() => {
-      fetch('/api/state').then(r => r.json()).then(state => {
-        if (state.vfoHz) setRadioState(s => ({ ...s, vfoHz: state.vfoHz }))
-      }).catch(() => {})
-    }, 1000)
-    return () => clearInterval(poll)
-  }, [midiEnabled, setRadioState])
+
 
   const sendVfo = (hz: number) => {
     const snapped = Math.round(hz / tuneStep) * tuneStep
