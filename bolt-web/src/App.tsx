@@ -82,7 +82,7 @@ export default function App() {
   return (
     <div className="bolt-app">
       <StatusBar learnFrame={learnFrame}
-        status={status}
+        status={status === 'connected' && radioState.connected ? 'connected' : status === 'connected' ? 'disconnected' : status}
         radioName={radioState.radioName}
         connectedIp={connectedIp}
         onConnect={(ip) => {
