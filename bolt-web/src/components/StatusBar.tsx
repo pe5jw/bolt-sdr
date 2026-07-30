@@ -43,56 +43,55 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
     error: 'Connection error',
   }
 
+  const RKEY = 'bolt-sdr-radios'
+  const loadR = (): DiscoveredRadio[] => { try { return JSON.parse(localStorage.getItem(RKEY) || '[]') } catch { return [] } }
+  const saveR = (l: DiscoveredRadio[]) => localStorage.setItem(RKEY, JSON.stringify(l))
+  const mergeR = (l: DiscoveredRadio[], r: DiscoveredRadio): DiscoveredRadio[] => { const i = l.findIndex(x => x.ip === r.ip); if (i >= 0) { const n = [...l]; n[i] = r; return n } return [...l, r] }
+
   const openPicker = async () => {
     setShowPicker(true)
+    setRadios(loadR())
     try {
-      setPrefs({ enabled: false, preferredMac: null, extraIps: [] })
       const state = await fetch('/api/state').then(r => r.json()).catch(() => null)
-      const radiosRes = await fetch('/api/radios').then(r => r.json()).catch(() => [])
-      const extraIps = JSON.parse(localStorage.getItem('bolt-sdr-extra-ips') || '[]')
-      extraIps.forEach(function(ip: string) { if (!radiosRes.find(function(r: any) { return (r.ipAddress || r.ip) === ip })) radiosRes.push({ ipAddress: ip, macAddress: '', boardId: 'HermesLite 2', firmwareVersion: '', busy: false }) })
-      const mapped = radiosRes.map((r: any) => ({ ip: r.ipAddress ?? r.ip, mac: r.macAddress ?? r.mac, board: r.boardId ?? r.board, firmware: r.firmwareVersion ?? r.firmware, busy: r.busy ?? false }))
-      const lastIp = connectedIp || localStorage.getItem('bolt-sdr-last-ip') || ''
-      console.log('[radio] connectedIp=', connectedIp, 'lastIp=', lastIp)
-      if (state?.status === 'Connected') {
-        const saved = JSON.parse(localStorage.getItem('bolt-sdr-radio-details') ?? '[]')
-        const active = mapped.find((r: any) => r.ip === lastIp) ?? saved.find((r: any) => r.ip === lastIp) ?? { ip: lastIp, mac: '', board: 'HermesLite 2', firmware: '', busy: false }
-        const rest = mapped.filter((r: any) => r.ip !== lastIp)
-        setActiveEndpoint(lastIp)
-        const newList = [active, ...rest]
-        localStorage.setItem('bolt-sdr-radio-list', JSON.stringify(newList))
-        setRadios(newList)
-      } else {
-        setActiveEndpoint(null)
-        setRadios(mapped)
-      }
+      if (state?.endpoint) { setActiveEndpoint(state.endpoint); localStorage.setItem('bolt-sdr-last-ip', state.endpoint) }
+      else if (state?.status !== 'Connected') setActiveEndpoint(null)
     } catch {}
   }
 
   const scan = async () => {
     setScanning(true)
     try {
-      const radiosRes = await fetch('/api/radios').then(r => r.json())
-      const extraIps = JSON.parse(localStorage.getItem('bolt-sdr-extra-ips') || '[]')
-      extraIps.forEach(function(ip: string) { if (!radiosRes.find(function(r: any) { return (r.ipAddress || r.ip) === ip })) radiosRes.push({ ipAddress: ip, macAddress: '', boardId: 'HermesLite 2', firmwareVersion: '', busy: false }) })
-      const mapped = radiosRes.map((r: any) => ({ ip: r.ipAddress ?? r.ip, mac: r.macAddress ?? r.mac, board: r.boardId ?? r.board, firmware: r.firmwareVersion ?? r.firmware, busy: r.busy ?? false }))
-      const lastIp = connectedIp || localStorage.getItem('bolt-sdr-last-ip') || ''
-      console.log('[radio] connectedIp=', connectedIp, 'lastIp=', lastIp)
-      const active = activeEndpoint ? mapped.find((r: any) => r.ip === activeEndpoint) ?? { ip: lastIp, mac: '', board: 'HermesLite 2', firmware: '', busy: false } : null
-      const rest = mapped.filter((r: any) => r.ip !== activeEndpoint)
-      // Sla details op in localStorage voor later gebruik
-      if (mapped.length > 0) localStorage.setItem('bolt-sdr-radio-details', JSON.stringify(mapped))
-      if (mapped.length > 0) {
-        if (mapped.length > 0) localStorage.setItem('bolt-sdr-radio-details', JSON.stringify(mapped))
-        setRadios(active ? [active, ...rest] : rest)
-      }
-      // Als scan leeg - laat bestaande lijst staan
+      const res = await fetch('/api/radios').then(r => r.json())
+      const scanned: DiscoveredRadio[] = res.map((r: any) => ({ ip: r.ipAddress ?? r.ip, mac: r.macAddress ?? r.mac, board: r.boardId ?? r.board, firmware: r.firmwareVersion ?? r.firmware, busy: r.busy ?? false }))
+      let saved = loadR()
+      scanned.forEach(r => { saved = mergeR(saved, r) })
+      saveR(saved)
+      setRadios(saved)
     } catch {}
     setScanning(false)
   }
 
+  const addManualIp = async () => {
+    if (!manualIp) return
+    try {
+      const probeRes = await fetch('/api/radios/probe?ip=' + manualIp)
+      let radio: DiscoveredRadio
+      if (probeRes.ok) {
+        const data = await probeRes.json()
+        radio = { ip: data.ipAddress ?? manualIp, mac: data.macAddress ?? '', board: data.boardId ?? 'HermesLite 2', firmware: data.firmwareVersion ?? '', busy: data.busy ?? false }
+      } else {
+        radio = { ip: manualIp, mac: '', board: 'HermesLite 2', firmware: '', busy: false }
+      }
+      const saved = mergeR(loadR(), radio)
+      saveR(saved)
+      setRadios(saved)
+      setManualIp('')
+    } catch {
+      alert('Could not reach ' + manualIp)
+    }
+  }
 
-    const toggleAutoConnect = async (enabled: boolean) => {
+  const toggleAutoConnect = async (enabled: boolean) => {
     setPrefs(p => ({ ...p, enabled }))
     // autoconnect niet beschikbaar in station-engine
   }
@@ -100,24 +99,6 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
   const setPreferred = async (mac: string | null) => {
     setPrefs(p => ({ ...p, preferredMac: mac }))
     // autoconnect niet beschikbaar in station-engine
-  }
-
-  const addManualIp = async () => {
-    if (!manualIp) return
-    try {
-      const r = await fetch('/api/radios')
-      if (r.ok) {
-        const radio = await r.json()
-        setRadios(prev => [...prev.filter(x => x.ip !== radio.ip), radio])
-        // extraip niet beschikbaar in station-engine
-        setPrefs(p => ({ ...p, extraIps: [...p.extraIps.filter(x => x !== manualIp), manualIp] }))
-        setManualIp('')
-      } else {
-        alert('No response from ' + manualIp)
-      }
-    } catch {
-      alert('Could not reach ' + manualIp)
-    }
   }
 
   const removeExtraIp = async (ip: string) => {
