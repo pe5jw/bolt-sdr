@@ -88,6 +88,12 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
 
 
 
+  const removeRadio = (ip: string) => {
+    const saved = (JSON.parse(localStorage.getItem('bolt-sdr-radios') || '[]') as any[]).filter((r: any) => r.ip !== ip)
+    localStorage.setItem('bolt-sdr-radios', JSON.stringify(saved))
+    setRadios(prev => prev.filter(r => r.ip !== ip))
+  }
+
   const disconnect = async () => {
     await fetch('/api/disconnect', { method: 'POST' })
     onDisconnect()
@@ -166,6 +172,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{r.ip}{r.mac && r.mac !== '—' ? ' — ' + r.mac : ''}{r.firmware && r.firmware !== '—' ? ' — fw ' + r.firmware : ''}</div>
                   </div>
+                  <button onClick={e => { e.stopPropagation(); removeRadio(r.ip) }} style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', fontSize: 14, padding: '0 4px', alignSelf: 'flex-start' }}>✕</button>
                 </div>
               </div>
             )
