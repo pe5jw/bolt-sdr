@@ -140,9 +140,15 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
             return (
               <div key={r.ip} style={{ marginBottom: 4 }}>
                 <div
-                  onClick={() => {
-                    if (r.busy) return
-                    if (isConnected) return
+                  onClick={async () => {
+                    if (r.busy || isConnected) return
+                    if (status === 'connected') {
+                      await fetch('/api/disconnect', { method: 'POST' })
+                      setActiveEndpoint(null)
+                      onDisconnect()
+                      await new Promise(res => setTimeout(res, 1000))
+                    }
+                    setActiveEndpoint(r.ip)
                     onConnect(r.ip)
                     setShowPicker(false)
                   }}
