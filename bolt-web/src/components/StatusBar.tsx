@@ -10,11 +10,6 @@ interface DiscoveredRadio {
   busy: boolean
 }
 
-interface AutoConnectPrefs {
-  enabled: boolean
-  preferredMac: string | null
-  extraIps: string[]
-}
 
 interface Props {
   learnFrame?: import('../midi').MidiLearnFrame | null
@@ -31,7 +26,6 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
   const [radios, setRadios] = useState<DiscoveredRadio[]>([])
   const [showPicker, setShowPicker] = useState(false)
   const [scanning, setScanning] = useState(false)
-  const [prefs, setPrefs] = useState<AutoConnectPrefs>({ enabled: true, preferredMac: null, extraIps: [] })
   const [manualIp, setManualIp] = useState('')
   const [activeEndpoint, setActiveEndpoint] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState(false)
@@ -91,21 +85,8 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
     }
   }
 
-  const toggleAutoConnect = async (enabled: boolean) => {
-    setPrefs(p => ({ ...p, enabled }))
-    // autoconnect niet beschikbaar in station-engine
-  }
 
-  const setPreferred = async (mac: string | null) => {
-    setPrefs(p => ({ ...p, preferredMac: mac }))
-    // autoconnect niet beschikbaar in station-engine
-  }
 
-  const removeExtraIp = async (ip: string) => {
-    // extraip niet beschikbaar in station-engine
-    setPrefs(p => ({ ...p, extraIps: p.extraIps.filter(x => x !== ip) }))
-    setRadios(prev => prev.filter(r => r.ip !== ip))
-  }
 
   const disconnect = async () => {
     await fetch('/api/disconnect', { method: 'POST' })
@@ -148,17 +129,6 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
             </div>
           </div>
 
-          {/* Auto connect toggle */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid var(--border)' }}>
-            <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>AUTO-CONNECT</span>
-            <button onClick={() => toggleAutoConnect(!prefs.enabled)} style={sBtn(prefs.enabled)}>
-              {prefs.enabled ? 'ON' : 'OFF'}
-            </button>
-            <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>
-              {prefs.enabled ? 'verbindt bij opstarten' : 'handmatig verbinden'}
-            </span>
-          </div>
-
           {radios.length === 0 && !scanning && (
             <div style={{ color: 'var(--text-dim)', fontSize: 11, marginBottom: 8, fontStyle: 'italic' }}>
               Klik Scan om radios te zoeken
@@ -189,15 +159,6 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
                       {r.board} - {r.ip} {isConnected ? '● CONNECTED' : r.busy ? '(busy)' : ''}
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{r.ip}{r.mac && r.mac !== '—' ? ' — ' + r.mac : ''}{r.firmware && r.firmware !== '—' ? ' — fw ' + r.firmware : ''}</div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    <button onClick={e => { e.stopPropagation(); setPreferred(prefs.preferredMac === r.mac ? null : r.mac) }}
-                      title={prefs.preferredMac === r.mac ? 'Remove preferred' : 'Set as preferred'}
-                      style={{ fontSize: 14, background: 'none', border: 'none', cursor: 'pointer', color: prefs.preferredMac === r.mac ? 'var(--accent)' : 'var(--text-dim)' }}>★</button>
-                    {prefs.extraIps.includes(r.ip) && (
-                      <button onClick={e => { e.stopPropagation(); removeExtraIp(r.ip) }}
-                        style={{ fontSize: 12, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)' }}>✕</button>
-                    )}
                   </div>
                 </div>
               </div>
