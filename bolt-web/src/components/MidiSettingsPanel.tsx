@@ -21,14 +21,15 @@ interface EditState {
 export function MidiSettingsPanel({ onClose }: { onClose: () => void }) {
   const [mappings, setMappings] = useState<MidiMapping[]>([])
   const [devices, setDevices] = useState<string[]>([])
+  const [midiOk, setMidiOk] = useState(false)
   const [learning, setLearning] = useState(false)
   const [learnTarget, setLearnTarget] = useState<string | null>(null)
   const [edit, setEdit] = useState<EditState | null>(null)
 
   useEffect(() => {
     const refresh = () => { setMappings(midiEngine.getMappings()); setDevices(midiEngine.getDevices()) }
-    midiEngine.init().then(refresh)
     midiEngine.onDeviceChange(refresh)
+    if (midiEngine.getDevices().length > 0) { setMidiOk(true); refresh() }
   }, [])
 
   const refresh = () => setMappings(midiEngine.getMappings())
@@ -95,7 +96,7 @@ export function MidiSettingsPanel({ onClose }: { onClose: () => void }) {
         {/* Apparaten */}
         <div style={{ marginBottom: 12, fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span>APPARATEN: {devices.length > 0 ? devices.join(', ') : 'Geen MIDI apparaten gevonden'}</span>
-          <button onClick={() => midiEngine.init().then(() => setDevices(midiEngine.getDevices()))} style={sBtn()}>SCAN</button>
+          <button onClick={() => midiEngine.init().then(ok => { setMidiOk(ok); setDevices(midiEngine.getDevices()) })} style={sBtn(midiOk)}>{ midiOk ? 'VERBONDEN' : 'VERBIND MIDI' }</button>
         </div>
 
         {/* Learn mode banner */}
