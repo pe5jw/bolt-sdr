@@ -22,6 +22,7 @@ export function MidiSettingsPanel({ onClose }: { onClose: () => void }) {
   const [mappings, setMappings] = useState<MidiMapping[]>([])
   const [devices, setDevices] = useState<string[]>([])
   const [midiOk, setMidiOk] = useState(false)
+  const [monitor, setMonitor] = useState<string[]>([])
   const [learning, setLearning] = useState(false)
   const [learnTarget, setLearnTarget] = useState<string | null>(null)
   const [edit, setEdit] = useState<EditState | null>(null)
@@ -29,6 +30,9 @@ export function MidiSettingsPanel({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     const refresh = () => { setMappings(midiEngine.getMappings()); setDevices(midiEngine.getDevices()) }
     midiEngine.onDeviceChange(refresh)
+    const onMsg = (msg: string) => setMonitor(prev => [msg, ...prev].slice(0, 20))
+    midiEngine.onMonitor(onMsg)
+    return () => midiEngine.offMonitor(onMsg)
     if (midiEngine.getDevices().length > 0) { setMidiOk(true); refresh() }
   }, [])
 
@@ -95,7 +99,7 @@ export function MidiSettingsPanel({ onClose }: { onClose: () => void }) {
 
         {/* Apparaten */}
         <div style={{ marginBottom: 12, fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span>APPARATEN: {devices.length > 0 ? devices.join(', ') : 'Geen MIDI apparaten gevonden'}</span>
+          <span>APPARATEN: {devices.length > 0 ? devices.join(', ') : 'Geen apparaten — klik VERBIND MIDI en sluit USB opnieuw aan'}</span>
           <button onClick={() => midiEngine.init().then(ok => { setMidiOk(ok); setDevices(midiEngine.getDevices()) })} style={sBtn(midiOk)}>{ midiOk ? 'VERBONDEN' : 'VERBIND MIDI' }</button>
         </div>
 
@@ -136,6 +140,16 @@ export function MidiSettingsPanel({ onClose }: { onClose: () => void }) {
               <button onClick={saveEdit} style={sBtn(true)}>OPSLAAN</button>
               <button onClick={() => setEdit(null)} style={sBtn()}>ANNULEER</button>
             </div>
+          </div>
+        )}
+
+        {/* MIDI Monitor */}
+        {learning && monitor.length > 0 && (
+          <div style={{ marginBottom: 12, background: 'var(--bg-control)', borderRadius: 4, padding: 8, fontFamily: 'var(--font-data)', fontSize: 10 }}>
+            <div style={{ color: 'var(--accent)', marginBottom: 4 }}>MIDI MONITOR</div>
+            {monitor.map((m, i) => (
+              <div key={i} style={{ color: 'var(--text-dim)', borderBottom: '1px solid var(--border)', padding: '2px 0' }}>{m}</div>
+            ))}
           </div>
         )}
 
