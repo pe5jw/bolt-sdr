@@ -63,6 +63,9 @@ export function MidiSettingsPanel({ onClose }: { onClose: () => void }) {
 
   const saveEdit = () => {
     if (!edit) return
+    // Verwijder oude mapping als ID veranderd is
+    const oldMapping = mappings.find(m => m.command === edit.command)
+    if (oldMapping && oldMapping.id !== edit.id) midiEngine.removeMapping(oldMapping.id)
     midiEngine.setMapping({
       id: edit.id,
       controlType: edit.controlType,
