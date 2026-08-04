@@ -55,7 +55,7 @@ export function SettingsModal({ onClose }: Props) {
         </div>
 
         {/* MIDI tab */}
-        {tab === 'midi' && <MidiSettingsPanel />}
+        {tab === 'midi' && <MidiSettingsPanel onClose={() => {}} />}
 
         {/* General tab */}
         {tab === 'general' && <>
