@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { decodeAudioFrame } from '../audio/frame'
+import { getAudioClient } from '../audio/audio-client'
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 
@@ -99,6 +101,7 @@ function parseDisplayFrame(buf: ArrayBuffer): DisplayFrame | null {
 }
 
 // Audio body: rxId(1) channels(1) sampleRateHz(4) sampleCount(2) samples(float32[])
+// @ts-ignore
 function parseAudioFrame(buf: ArrayBuffer): { samples: Float32Array; sampleRate: number; channels: number } | null {
   try {
     const view = new DataView(buf)
@@ -238,9 +241,7 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
           const frame = parseDisplayFrame(buf)
           if (frame) setDisplay(frame)
         } else if (msgType === MSG_AUDIO_PCM) {
-        if (moxActiveRef.current) return // suppress RX audio during TX
-          const audio = parseAudioFrame(buf)
-          if (audio) scheduleAudio(audio.samples, audio.sampleRate, audio.channels)
+          try { getAudioClient().push(decodeAudioFrame(buf)) } catch {}
         } else if (msgType === MSG_RX_METER && buf.byteLength >= 5) {
           const dbm = view.getFloat32(1, true)
           setMeters(m => ({ ...m, sMeter: dbm }))
