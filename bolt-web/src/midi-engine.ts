@@ -100,16 +100,30 @@ class MidiEngine {
     return Array.from(this.access.inputs.values()).map(i => i.name || 'Unknown')
   }
 
+  private deviceListeners: (() => void)[] = []
+
+  onDeviceChange(cb: () => void): void {
+    this.deviceListeners.push(cb)
+  }
+
   private setupInputs(): void {
     if (!this.access) return
     for (const input of this.access.inputs.values()) {
       input.onmidimessage = (e) => this.handleMessage(e, input.name || 'Unknown')
     }
+    this.deviceListeners.forEach(cb => cb())
   }
 
   private decodeRelative(value: number): number {
-    if (value >= 1 && value <= 63) return value
-    if (value >= 65 && value <= 127) return value - 128
+    // Standard relative: 1=CW, 127=CCW
+    if (value === 1) return 1
+    if (value === 127) return -1
+    // Extended relative: 65+=CW, 63-=CCW
+    if (value >= 65 && value <= 96) return value - 64
+    if (value >= 32 && value <= 63) return value - 64
+    // Generic: 1-63=CW, 65-127=CCW
+    if (value >= 1 && value <= 63) return 1
+    if (value >= 65 && value <= 127) return -1
     return 0
   }
 

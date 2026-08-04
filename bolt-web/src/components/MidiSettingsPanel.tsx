@@ -26,10 +26,9 @@ export function MidiSettingsPanel({ onClose }: { onClose: () => void }) {
   const [edit, setEdit] = useState<EditState | null>(null)
 
   useEffect(() => {
-    midiEngine.init().then(() => {
-      setMappings(midiEngine.getMappings())
-      setDevices(midiEngine.getDevices())
-    })
+    const refresh = () => { setMappings(midiEngine.getMappings()); setDevices(midiEngine.getDevices()) }
+    midiEngine.init().then(refresh)
+    midiEngine.onDeviceChange(refresh)
   }, [])
 
   const refresh = () => setMappings(midiEngine.getMappings())
