@@ -108,9 +108,9 @@ export function MidiSettingsPanel({ onClose }: { onClose: () => void }) {
         {edit && (
           <div style={{ background: 'var(--bg-control)', border: '1px solid var(--accent)', borderRadius: 4, padding: 12, marginBottom: 12 }}>
             <div style={{ fontSize: 10, fontFamily: 'var(--font-data)', color: 'var(--accent)', marginBottom: 8 }}>BEWERK MAPPING</div>
-            <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>Control: <span style={{ color: 'var(--text)' }}>{edit.id}</span></div>
-            <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>Type: <span style={{ color: 'var(--text)' }}>{edit.controlType}</span></div>
-            <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 8 }}>Apparaat: <span style={{ color: 'var(--text)' }}>{edit.deviceName}</span></div>
+            <div style={{ marginBottom: 6 }}><label style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>CONTROL ID</label><input type="text" value={edit.id} onChange={e => setEdit({ ...edit, id: e.target.value })} style={{ display: 'block', width: '100%', marginTop: 4, fontSize: 11, padding: '3px 6px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 3 }} /></div>
+            <div style={{ marginBottom: 6 }}><label style={{ fontSize: 10, color: 'var(--text-dim)' }}>TYPE</label><select value={edit.controlType} onChange={e => setEdit({ ...edit, controlType: e.target.value as any })} style={{ display: 'block', width: '100%', marginTop: 4, fontSize: 11, padding: '3px 6px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 3 }}><option value="Wheel">Wheel (encoder)</option><option value="Button">Button</option><option value="KnobOrSlider">KnobOrSlider</option></select></div>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 8 }}>Apparaat: {edit.deviceName}</div>
 
             <div style={{ marginBottom: 8 }}>
               <label style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>COMMANDO</label>
