@@ -1,193 +1,172 @@
-import { useState, useCallback } from 'react'
-import type { MidiCommandInfo, MidiMappingDto } from '../midi'
-import { useMidi } from '../hooks/useMidi'
 
-const F: React.CSSProperties = { fontFamily: 'var(--font-data)', fontSize: 10 }
-const lbl: React.CSSProperties = { ...F, color: 'var(--text-dim)', letterSpacing: 2, minWidth: 90 }
-const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }
+import { useState, useEffect } from 'react'
+import { midiEngine, MIDI_COMMANDS, type MidiMapping, type MidiLearnEvent, type MidiControlType } from '../midi-engine'
 
-const CATEGORIES = ['TX', 'VFO', 'MODE', 'FILTER', 'AGC/NR', 'AUDIO', 'DISPLAY', 'OTHER'] as const
-type Category = typeof CATEGORIES[number]
-
-function categorize(c: MidiCommandInfo): Category {
-  if (/MOX|Tune|TUN|Drive|Mic|Compand|Two.?Tone/i.test(c.label)) return 'TX'
-  if (/Vfo|Freq|Band|RIT|XIT|CTUN|Lock|Split/i.test(c.label)) return 'VFO'
-  if (/Mode|LSB|USB|CW|FM|AM|DIG|SAM/i.test(c.label)) return 'MODE'
-  if (/Filter|Bandwid/i.test(c.label)) return 'FILTER'
-  if (/AGC|Noise|Blank|Notch|Squelch|Spectral/i.test(c.label)) return 'AGC/NR'
-  if (/Volume|AF Gain|Mute|MON|Pan|Ratio/i.test(c.label)) return 'AUDIO'
-  if (/Zoom|Display|Waterfall/i.test(c.label)) return 'DISPLAY'
-  return 'OTHER'
-}
-
-const btn = (active: boolean, danger = false): React.CSSProperties => ({
-  fontFamily: 'var(--font-data)', fontSize: 10, padding: '3px 10px',
-  borderRadius: 3, cursor: 'pointer',
-  background: active ? (danger ? '#c0392b' : 'var(--accent)') : 'var(--bg-control)',
-  border: `1px solid ${active ? (danger ? '#c0392b' : 'var(--accent)') : 'var(--border)'}`,
+const sBtn = (active = false, color = 'var(--accent)') => ({
+  fontSize: 10, padding: '3px 10px', borderRadius: 3, cursor: 'pointer',
+  fontFamily: 'var(--font-data)', letterSpacing: 1,
+  background: active ? color : 'var(--bg-control)',
+  border: `1px solid ${active ? color : 'var(--border)'}`,
   color: active ? 'var(--bg)' : 'var(--text-dim)',
 })
 
-export function MidiSettingsPanel() {
-  const { status, config, commands, saveConfig, startLearn, stopLearn, learnFrame } = useMidi()
-  const [cat, setCat] = useState<Category>('TX')
-  const [pendingCmd, setPendingCmd] = useState<MidiCommandInfo | null>(null)
-  const [search, setSearch] = useState('')
+interface EditState {
+  id: string
+  controlType: MidiControlType
+  command: string
+  toggle: boolean
+  deviceName: string
+}
 
-  const learning = status?.learning ?? false
+export function MidiSettingsPanel({ onClose }: { onClose: () => void }) {
+  const [mappings, setMappings] = useState<MidiMapping[]>([])
+  const [devices, setDevices] = useState<string[]>([])
+  const [learning, setLearning] = useState(false)
+  const [learnTarget, setLearnTarget] = useState<string | null>(null)
+  const [edit, setEdit] = useState<EditState | null>(null)
 
-  console.log('[MidiSettingsPanel] learning:', learning, 'learnFrame:', learnFrame)
+  useEffect(() => {
+    setMappings(midiEngine.getMappings())
+    setDevices(midiEngine.getDevices())
+  }, [])
 
-  const mappingFor = useCallback((cmd: number): MidiMappingDto | undefined =>
-    config.bindings.mappings.find(m => m.command === cmd)
-  , [config])
+  const refresh = () => setMappings(midiEngine.getMappings())
 
-  const bindNow = useCallback((cmd: MidiCommandInfo) => {
-    if (!learnFrame) return
-    const rest = config.bindings.mappings.filter(m => m.command !== cmd.command)
-    const newMap: MidiMappingDto = {
-      deviceName: learnFrame.deviceName,
-      controlId: learnFrame.controlId,
-      controlType: learnFrame.controlType,
-      command: cmd.command,
-      min: 0, max: 127,
-      toggle: cmd.isToggle,
-    }
-    saveConfig({ ...config, bindings: { ...config.bindings, mappings: [...rest, newMap] } })
-    setPendingCmd(null)
-  }, [learnFrame, config, saveConfig])
-
-  const removeBinding = useCallback((cmdNum: number) => {
-    saveConfig({
-      ...config,
-      bindings: { ...config.bindings, mappings: config.bindings.mappings.filter(m => m.command !== cmdNum) },
+  const startLearnFor = (command: string) => {
+    setLearnTarget(command)
+    setLearning(true)
+    midiEngine.startLearn((event: MidiLearnEvent) => {
+      midiEngine.stopLearn()
+      // Open edit panel met de gedetecteerde control
+      setEdit({
+        id: event.id,
+        controlType: event.controlType,
+        command,
+        toggle: false,
+        deviceName: event.deviceName,
+      })
+      setLearnTarget(null)
     })
-  }, [config, saveConfig])
+  }
 
-  const visible = commands
-    .filter(c => c.supported)
-    .filter(c => cat === 'OTHER' ? categorize(c) === 'OTHER' : categorize(c) === cat)
-    .filter(c => !search || c.label.toLowerCase().includes(search.toLowerCase()))
+  const cancelLearn = () => {
+    midiEngine.stopLearn()
+    setLearning(false)
+    setLearnTarget(null)
+  }
 
-  if (!status) return <div style={{ ...F, color: 'var(--text-dim)', padding: 8 }}>Laden...</div>
+  const saveEdit = () => {
+    if (!edit) return
+    midiEngine.setMapping({
+      id: edit.id,
+      controlType: edit.controlType,
+      command: edit.command,
+      toggle: edit.toggle,
+      min: 0,
+      max: 127,
+      deviceName: edit.deviceName,
+    })
+    setEdit(null)
+    refresh()
+  }
+
+  const removeMapping = (id: string) => {
+    midiEngine.removeMapping(id)
+    refresh()
+  }
+
+  const getMappingForCommand = (command: string) => mappings.find(m => m.command === command)
 
   return (
-    <div>
-      {/* Enable toggle + engine status */}
-      <div style={row}>
-        <span style={lbl}>MIDI</span>
-        <button style={btn(config.enabled)}
-          onClick={() => saveConfig({ ...config, enabled: !config.enabled })}>
-          {config.enabled ? 'AAN' : 'UIT'}
-        </button>
-        <span style={{ ...F, color: status.midiEngineAvailable ? 'var(--accent)' : '#555' }}>
-          {status.midiEngineAvailable ? '● ENGINE OK' : '○ GEEN HW'}
-        </span>
-      </div>
-
-      {/* Apparaten */}
-      {status.midiDevices.length > 0 && (
-        <div style={{ ...row, flexWrap: 'wrap', gap: 4 }}>
-          <span style={lbl}>DEVICES</span>
-          {status.midiDevices.map(d => (
-            <span key={d.name} style={{
-              ...F, borderRadius: 3, padding: '2px 8px',
-              background: 'var(--bg-control)', border: '1px solid var(--border)',
-              color: d.connected ? 'var(--accent)' : '#555',
-            }}>
-              {d.connected ? '●' : '○'} {d.name}
-            </span>
-          ))}
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+      background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center'
+    }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 6,
+        padding: 20, minWidth: 500, maxWidth: 600, maxHeight: '80vh', overflowY: 'auto'
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <span style={{ fontSize: 12, fontFamily: 'var(--font-data)', letterSpacing: 2, color: 'var(--text)' }}>MIDI INSTELLINGEN</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: 16 }}>✕</button>
         </div>
-      )}
 
-      {/* Learn */}
-      <div style={row}>
-        <span style={lbl}>LEARN</span>
-        {!learning
-          ? <button style={btn(false)} onClick={startLearn}>START LEARN</button>
-          : <>
-              <button style={btn(true, true)} onClick={stopLearn}>STOP LEARN</button>
-              <span style={{ ...F, color: 'var(--accent)' }}>● LUISTEREN...</span>
-            </>
-        }
-      </div>
-
-      {/* Inkomend frame */}
-      {learning && learnFrame && (
-        <div style={{
-          background: 'var(--bg-control)', border: '1px solid var(--accent)',
-          borderRadius: 4, padding: '6px 10px', marginBottom: 10,
-          ...F, color: 'var(--accent)',
-        }}>
-          ▶ {learnFrame.deviceName} · {learnFrame.controlId} · {learnFrame.controlType}
-          {pendingCmd && (
-            <button style={{ ...btn(true), marginLeft: 12 }} onClick={() => bindNow(pendingCmd)}>
-              BIND → {pendingCmd.label}
-            </button>
-          )}
+        {/* Apparaten */}
+        <div style={{ marginBottom: 12, fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>
+          APPARATEN: {devices.length > 0 ? devices.join(', ') : 'Geen MIDI apparaten gevonden'}
         </div>
-      )}
 
-      {/* Categorie tabs + zoek */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        {CATEGORIES.map(c => (
-          <button key={c} style={btn(cat === c)} onClick={() => setCat(c)}>{c}</button>
-        ))}
-        <input placeholder="zoek…" value={search} onChange={e => setSearch(e.target.value)}
-          style={{
-            ...F, marginLeft: 'auto', padding: '2px 8px', width: 90,
-            background: 'var(--bg-input)', border: '1px solid var(--border)',
-            color: 'var(--text)', borderRadius: 3,
-          }} />
-      </div>
-
-      {/* Command lijst */}
-      <div style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 4 }}>
-        {visible.length === 0 && (
-          <div style={{ ...F, color: 'var(--text-dim)', padding: 12, textAlign: 'center' }}>—</div>
+        {/* Learn mode banner */}
+        {learning && (
+          <div style={{ background: 'rgba(255,200,0,0.15)', border: '1px solid var(--accent)', borderRadius: 4, padding: '8px 12px', marginBottom: 12, fontSize: 11, fontFamily: 'var(--font-data)', color: 'var(--accent)' }}>
+            ● LEARN MODE — Beweeg een knop of encoder op je controller...
+            <button onClick={cancelLearn} style={{ ...sBtn(false), marginLeft: 8 }}>ANNULEER</button>
+          </div>
         )}
-        {visible.map(cmd => {
-          const map = mappingFor(cmd.command)
-          const isPending = pendingCmd?.command === cmd.command
+
+        {/* Edit panel */}
+        {edit && (
+          <div style={{ background: 'var(--bg-control)', border: '1px solid var(--accent)', borderRadius: 4, padding: 12, marginBottom: 12 }}>
+            <div style={{ fontSize: 10, fontFamily: 'var(--font-data)', color: 'var(--accent)', marginBottom: 8 }}>BEWERK MAPPING</div>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>Control: <span style={{ color: 'var(--text)' }}>{edit.id}</span></div>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>Type: <span style={{ color: 'var(--text)' }}>{edit.controlType}</span></div>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 8 }}>Apparaat: <span style={{ color: 'var(--text)' }}>{edit.deviceName}</span></div>
+
+            <div style={{ marginBottom: 8 }}>
+              <label style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>COMMANDO</label>
+              <select value={edit.command} onChange={e => setEdit({ ...edit, command: e.target.value })}
+                style={{ display: 'block', width: '100%', marginTop: 4, fontSize: 11, padding: '3px 6px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 3 }}>
+                {MIDI_COMMANDS.map((c: any) => (
+                  <option key={c.command} value={c.command}>{c.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {edit.controlType === 'Button' && (
+              <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input type="checkbox" checked={edit.toggle} onChange={e => setEdit({ ...edit, toggle: e.target.checked })} id="toggle-cb" />
+                <label htmlFor="toggle-cb" style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', cursor: 'pointer' }}>TOGGLE (anders: momentary)</label>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={saveEdit} style={sBtn(true)}>OPSLAAN</button>
+              <button onClick={() => setEdit(null)} style={sBtn()}>ANNULEER</button>
+            </div>
+          </div>
+        )}
+
+        {/* Commando lijst */}
+        <div style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', marginBottom: 8 }}>COMMANDO MAPPINGS</div>
+        {MIDI_COMMANDS.map((c: any) => {
+          const mapping = getMappingForCommand(c.command)
+          const isLearning = learnTarget === c.command
           return (
-            <div key={cmd.command} style={{
-              display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px',
-              borderBottom: '1px solid var(--border)',
-              background: isPending ? 'rgba(255,160,40,0.07)' : 'transparent',
+            <div key={c.command} style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0',
+              borderBottom: '1px solid var(--border)'
             }}>
-              <span style={{ ...F, color: 'var(--text)', flex: 1 }}>{cmd.label}</span>
-              <span style={{ ...F, color: 'var(--text-dim)', width: 44 }}>
-                {cmd.controlType === 'Button' ? 'BTN' : cmd.controlType === 'Wheel' ? 'WHL' : 'KNB'}
-              </span>
-              {map
-                ? <span style={{ ...F, color: 'var(--accent)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                    title={`${map.deviceName} · ${map.controlId}`}>
-                    {map.deviceName.length > 14 ? map.deviceName.slice(0,12)+'…' : map.deviceName} · {map.controlId}
+              <div style={{ flex: 1, fontSize: 11, color: mapping ? 'var(--text)' : 'var(--text-dim)' }}>
+                {c.label}
+                {mapping && (
+                  <span style={{ fontSize: 9, color: 'var(--accent)', marginLeft: 8, fontFamily: 'var(--font-data)' }}>
+                    {mapping.id} {mapping.toggle ? '(toggle)' : ''}
                   </span>
-                : <span style={{ ...F, color: '#444', flex: 1 }}>—</span>
-              }
-              {learning && (
-                <button style={btn(isPending)} onClick={() => {
-                  if (learnFrame) { bindNow(cmd) }
-                  else { setPendingCmd(isPending ? null : cmd) }
-                }}>
-                  {isPending ? 'WACHT…' : 'LEARN'}
-                </button>
-              )}
-              {map && (
-                <button onClick={() => removeBinding(cmd.command)}
-                  style={{ ...F, background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', padding: '0 2px' }}>
-                  ✕
-                </button>
+                )}
+              </div>
+              <button onClick={() => startLearnFor(c.command)} style={sBtn(isLearning, 'var(--accent)')}>
+                {isLearning ? '...' : 'LEARN'}
+              </button>
+              {mapping && (
+                <>
+                  <button onClick={() => setEdit({ id: mapping.id, controlType: mapping.controlType, command: mapping.command, toggle: mapping.toggle, deviceName: mapping.deviceName })}
+                    style={sBtn()}>EDIT</button>
+                  <button onClick={() => removeMapping(mapping.id)} style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', fontSize: 12 }}>✕</button>
+                </>
               )}
             </div>
           )
         })}
-      </div>
-
-      <div style={{ ...F, color: 'var(--text-dim)', marginTop: 8 }}>
-        {config.bindings.mappings.length} binding(s) · {commands.filter(c => c.supported).length} commando's
       </div>
     </div>
   )

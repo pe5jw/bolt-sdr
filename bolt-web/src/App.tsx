@@ -11,7 +11,7 @@ import './App.css'
 import { useMidi } from './MidiContext'
 
 export default function App() {
-  const { onLearnFrame, learnFrame } = useMidi()
+  useMidi()  // init midi engine
 
   // Auto-reconnect bij startup — alleen als niet bewust disconnect
   useEffect(() => {
@@ -30,7 +30,7 @@ export default function App() {
       }
     }).catch(() => {})
   }, [])
-  const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive } = useRadioSocket(undefined, onLearnFrame)
+  const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive } = useRadioSocket(undefined, undefined)
   const [tuneStep, setTuneStep] = useState(1000)
   const [connectedIp, setConnectedIp] = useState("")
   const [_mox, setMox] = useState(false)
@@ -72,7 +72,7 @@ export default function App() {
 
   return (
     <div className="bolt-app">
-      <StatusBar learnFrame={learnFrame}
+      <StatusBar learnFrame={null}
         status={status === 'connected' && radioState.connected ? 'connected' : status === 'connected' ? 'disconnected' : status}
         radioName={radioState.radioName}
         connectedIp={connectedIp}
