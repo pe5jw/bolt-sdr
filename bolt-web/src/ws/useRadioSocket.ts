@@ -135,11 +135,7 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
     if (!audioEnabledRef.current) return
 
     // Skip silent frames (TX suppression)
-    const maxSample = samples.reduce((m, s) => Math.max(m, Math.abs(s)), 0)
-    if (maxSample < 0.0001) {
-      nextPlayTimeRef.current = 0
-      return
-    }
+    // Stille frames niet overslaan - dit veroorzaakt gaten in de audio
 
     if (!audioCtxRef.current) {
       audioCtxRef.current = new AudioContext({ sampleRate, latencyHint: "playback" })
