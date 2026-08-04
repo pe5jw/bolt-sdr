@@ -275,12 +275,12 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
         <button onClick={() => setZoomLevel(Math.min(32, zoom + 1))} style={sBtn}>+</button>
         <div style={sep} />
         <span style={lbl}>TOP</span>
-        <button onClick={() => setDbMax(d => Math.min(-10, d + 10))} style={sBtn}>+</button>
+        <button onClick={() => setDbMax(d => Math.min(-10, d + 5))} style={sBtn}>+</button>
         <span style={val}>{dbMax}</span>
-        <button onClick={() => setDbMax(d => Math.max(dbMin + 20, d - 10))} style={sBtn}>−</button>
+        <button onClick={() => setDbMax(d => Math.max(dbMin + 20, d - 5))} style={sBtn}>−</button>
         <div style={sep} />
         <span style={lbl}>FLOOR</span>
-        <button onClick={() => setDbMin(d => Math.min(dbMax - 20, d + 10))} style={sBtn}>+</button>
+        <button onClick={() => setDbMin(d => Math.min(dbMax - 20, d + 5))} style={sBtn}>+</button>
         <span style={val}>{dbMin}</span>
         <button onClick={() => setDbMin(d => Math.max(-220, d - 10))} style={sBtn}>−</button>
       </div>
