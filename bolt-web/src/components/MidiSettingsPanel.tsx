@@ -26,8 +26,10 @@ export function MidiSettingsPanel({ onClose }: { onClose: () => void }) {
   const [edit, setEdit] = useState<EditState | null>(null)
 
   useEffect(() => {
-    setMappings(midiEngine.getMappings())
-    setDevices(midiEngine.getDevices())
+    midiEngine.init().then(() => {
+      setMappings(midiEngine.getMappings())
+      setDevices(midiEngine.getDevices())
+    })
   }, [])
 
   const refresh = () => setMappings(midiEngine.getMappings())
@@ -92,8 +94,9 @@ export function MidiSettingsPanel({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Apparaten */}
-        <div style={{ marginBottom: 12, fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>
-          APPARATEN: {devices.length > 0 ? devices.join(', ') : 'Geen MIDI apparaten gevonden'}
+        <div style={{ marginBottom: 12, fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>APPARATEN: {devices.length > 0 ? devices.join(', ') : 'Geen MIDI apparaten gevonden'}</span>
+          <button onClick={() => midiEngine.init().then(() => setDevices(midiEngine.getDevices()))} style={sBtn()}>SCAN</button>
         </div>
 
         {/* Learn mode banner */}
