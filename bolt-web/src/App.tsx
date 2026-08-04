@@ -98,7 +98,7 @@ export default function App() {
             filterHigh={radioState.filterHigh}
             onFilter={(low, high) => {
               setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
-              fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ low, high }) })
+              fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
             }}
           />
         </section>
@@ -121,7 +121,7 @@ export default function App() {
               onFilter={(low, high) => {
                 setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
                 send({ type: 'set_filter', low, high })
-                fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ low, high }) })
+                fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
               }}
             />
           </div>
