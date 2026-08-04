@@ -61,16 +61,6 @@ export function MidiProvider({ children }: { children: ReactNode }) {
       setConfig(c)
       setMidiEnabled(c.enabled)
     }).catch(() => {})
-    fetch('/api/state').then(r => r.json()).then(s => {
-      if (s.vfoHz) lastKnownVfoRef.current = s.vfoHz
-    }).catch(() => {})
-    // Poll VFO state elke 200ms voor UI sync
-    const poll = setInterval(() => {
-      fetch('/api/state').then(r => r.json()).then(s => {
-        if (s.vfoHz) lastKnownVfoRef.current = s.vfoHz
-      }).catch(() => {})
-    }, 200)
-    return () => clearInterval(poll)
   }, [])
 
   const flushVfo = useCallback(() => {
