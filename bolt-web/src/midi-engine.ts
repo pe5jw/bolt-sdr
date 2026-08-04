@@ -101,6 +101,11 @@ class MidiEngine {
   }
 
   private deviceListeners: (() => void)[] = []
+  private monitorListeners: ((msg: string) => void)[] = []
+
+  onMonitor(cb: (msg: string) => void): void { this.monitorListeners.push(cb) }
+  offMonitor(cb: (msg: string) => void): void { this.monitorListeners = this.monitorListeners.filter(l => l !== cb) }
+  private monitor(msg: string): void { this.monitorListeners.forEach(cb => cb(msg)) }
 
   onDeviceChange(cb: () => void): void {
     this.deviceListeners.push(cb)
@@ -163,6 +168,7 @@ class MidiEngine {
       return
     }
 
+    this.monitor(id + " v=" + value + (delta !== 0 ? " d=" + delta : "") + " [" + deviceName + "]")
     if (this.learning && this.learnCallback) {
       this.learnCallback({ id, controlType, value, delta, deviceName })
       return
