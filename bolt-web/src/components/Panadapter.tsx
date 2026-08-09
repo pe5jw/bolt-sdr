@@ -11,9 +11,14 @@ interface Props {
   filterLow?: number
   filterHigh?: number
   onFilter?: (low: number, high: number) => void
+  vfoOverlay?: boolean
+  smeterOverlay?: boolean
+  vfoHz?: number
+  mode?: string
+  dbm?: number
 }
 
-export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter }: Props) {
+export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm }: Props) {
   const { theme, showLogo, logoBrightness } = useTheme()
   const [zoom, setZoom] = useState(1)
   const [dbMax, setDbMax] = useState(-40)
@@ -285,12 +290,44 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
         <button onClick={() => setDbMin(d => Math.max(-220, d - 10))} style={sBtn}>−</button>
       </div>
       <div style={{ position: "relative" }}>
+        {vfoOverlay && vfoHz != null && (
+          <div style={{ position: 'absolute', top: 6, left: 8, pointerEvents: 'none', zIndex: 10 }}>
+            <div style={{ fontFamily: 'var(--font-data)', fontSize: 20, color: 'var(--accent)', letterSpacing: 2, textShadow: '0 1px 6px #000' }}>
+              {(vfoHz / 1e6).toFixed(3)} MHz
+            </div>
+            {mode && <div style={{ fontFamily: 'var(--font-data)', fontSize: 10, color: 'var(--text-dim)', letterSpacing: 2 }}>{mode}</div>}
+          </div>
+        )}
+        {smeterOverlay && dbm != null && (
+          <div style={{ position: 'absolute', top: 6, right: 8, pointerEvents: 'none', zIndex: 10 }}>
+            <div style={{ fontFamily: 'var(--font-data)', fontSize: 11, color: 'var(--green)', letterSpacing: 1, textAlign: 'right', textShadow: '0 1px 4px #000' }}>
+              {dbm.toFixed(1)} dBm
+            </div>
+          </div>
+        )}
         {showLogo && <img src="/bolt-logo.svg" alt="" style={{ position: "absolute", top: "10%", right: "2%", width: "15%", maxWidth: 110, opacity: logoBrightness, pointerEvents: "none", zIndex: 1, userSelect: "none" }} />}
       <canvas ref={canvasRef} style={{ width: '100%', display: 'block', cursor: 'crosshair' }}
         onClick={onClick} onWheel={onWheel}
         onMouseDown={onMouseDown} onMouseMove={onMouseMove}
         onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
         onContextMenu={e => e.preventDefault()} />
+      {/* VFO overlay links boven */}
+      {vfoOverlay && vfoHz != null && (
+        <div style={{ position: 'absolute', top: 4, left: 8, pointerEvents: 'none', zIndex: 10 }}>
+          <div style={{ fontFamily: 'var(--font-data)', fontSize: 22, color: 'var(--accent)', letterSpacing: 2, textShadow: '0 0 8px var(--accent)' }}>
+            {(vfoHz / 1e6).toFixed(3)} MHz
+          </div>
+          {mode && <div style={{ fontFamily: 'var(--font-data)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2 }}>{mode}</div>}
+        </div>
+      )}
+      {/* S-meter overlay rechts boven */}
+      {smeterOverlay && dbm != null && (
+        <div style={{ position: 'absolute', top: 4, right: 8, pointerEvents: 'none', zIndex: 10 }}>
+          <div style={{ fontFamily: 'var(--font-data)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 1, textAlign: 'right' }}>
+            {dbm.toFixed(1)} dBm
+          </div>
+        </div>
+      )}
       </div>
       <canvas ref={wfRef} style={{ width: '100%', display: 'block', cursor: 'crosshair' }}
         onClick={onWfClick} onWheel={onWfWheel}

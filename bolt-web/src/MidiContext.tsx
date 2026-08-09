@@ -23,8 +23,7 @@ export function MidiProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  // Update VFO in engine zodat nudge correct werkt
-  midiEngine.setVfoHz(lastKnownVfoRef.current)
+
 
   return (
     <MidiContext.Provider value={{ midiEnabled, devices, lastKnownVfoRef }}>
