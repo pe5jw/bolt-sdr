@@ -61,6 +61,16 @@ export function SettingsModal({ onClose }: Props) {
         {tab === 'general' && <>
 
           <div style={row}>
+            <span style={lbl}>VFO OVERLAY</span>
+            <input type="checkbox" defaultChecked={localStorage.getItem('bolt-vfo-overlay') !== 'false'}
+              onChange={e => { localStorage.setItem('bolt-vfo-overlay', String(e.target.checked)); window.location.reload() }} />
+          </div>
+          <div style={row}>
+            <span style={lbl}>S-METER OVERLAY</span>
+            <input type="checkbox" defaultChecked={localStorage.getItem('bolt-smeter-overlay') !== 'false'}
+              onChange={e => { localStorage.setItem('bolt-smeter-overlay', String(e.target.checked)); window.location.reload() }} />
+          </div>
+          <div style={row}>
             <span style={lbl}>UI THEME</span>
             <div style={{ display: 'flex', gap: 8 }}>
               {THEMES.map(t => (

@@ -9,9 +9,10 @@ import { StatusBar } from './components/StatusBar'
 import { RxControls } from './components/RxControls'
 import './App.css'
 import { useMidi } from './MidiContext'
+import { midiEngine } from './midi-engine'
 
 export default function App() {
-  useMidi()  // init midi engine
+  const { lastKnownVfoRef } = useMidi()
 
   // Auto-reconnect bij startup — alleen als niet bewust disconnect
   useEffect(() => {
@@ -31,7 +32,11 @@ export default function App() {
     }).catch(() => {})
   }, [])
   const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive } = useRadioSocket(undefined, undefined)
+  lastKnownVfoRef.current = radioState.vfoHz
+  midiEngine.setVfoHz(radioState.vfoHz)
   const [tuneStep, setTuneStep] = useState(1000)
+  const [vfoOverlay, _setVfoOverlay] = useState(() => localStorage.getItem('bolt-vfo-overlay') !== 'false')
+  const [smeterOverlay, _setSmeterOverlay] = useState(() => localStorage.getItem('bolt-smeter-overlay') !== 'false')
   const [connectedIp, setConnectedIp] = useState("")
   const [_mox, setMox] = useState(false)
 
@@ -96,6 +101,11 @@ export default function App() {
             tuneStep={tuneStep}
             filterLow={radioState.filterLow}
             filterHigh={radioState.filterHigh}
+            vfoOverlay={vfoOverlay}
+            smeterOverlay={smeterOverlay}
+            vfoHz={radioState.vfoHz}
+            mode={radioState.mode}
+            dbm={meters.sMeter}
             onFilter={(low, high) => {
               setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
               fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })

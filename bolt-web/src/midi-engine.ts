@@ -254,7 +254,8 @@ class MidiEngine {
       const d = this.pendingVfo ?? 0
       this.pendingVfo = null
       if (d === 0) return
-      const newHz = this.lastVfoHz + d
+      console.log("[MIDI VFO] lastVfoHz=" + this.lastVfoHz + " d=" + d + " newHz=" + (this.lastVfoHz + d))
+    const newHz = this.lastVfoHz + d
       fetch('/api/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ hz: newHz }) }).catch(() => {})
     }, 30)
