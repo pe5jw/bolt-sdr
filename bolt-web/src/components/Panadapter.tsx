@@ -295,7 +295,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
         {vfoOverlay && vfoHz != null && (
           <div style={{ position: 'absolute', top: 6, left: 8, pointerEvents: 'none', zIndex: 10,
             background: 'rgba(0,0,0,0.55)', border: '1px solid var(--accent)', borderRadius: 4, padding: '4px 10px' }}>
-            <div style={{ fontFamily: 'var(--font-data)', fontSize: 28, color: 'var(--accent)', letterSpacing: 3, textShadow: '0 0 10px var(--accent)' }}>
+            <div style={{ fontFamily: 'var(--font-data)', fontSize: 28, fontWeight: 700, color: 'var(--accent)', letterSpacing: 3, textShadow: '0 0 10px var(--accent)' }}>
               {(vfoHz / 1e6).toFixed(6)}
             </div>
             {mode && <div style={{ fontFamily: 'var(--font-data)', fontSize: 10, color: 'var(--text-dim)', letterSpacing: 3 }}>{mode}</div>}
