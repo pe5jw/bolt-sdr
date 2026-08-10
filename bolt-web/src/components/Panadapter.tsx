@@ -18,9 +18,17 @@ interface Props {
   dbm?: number
   tuneStepOverlay?: boolean
   onStepChange?: (step: number) => void
+  controlsOverlay?: boolean
+  onBand?: (hz: number) => void
+  onMode?: (mode: string) => void
+  onFilterPreset?: (bw: number) => void
+  filterLowHz?: number
+  filterHighHz?: number
 }
 
-export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange }: Props) {
+export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange, controlsOverlay, onBand, onMode, onFilterPreset, filterLowHz, filterHighHz }: Props) {
+  const [openPanel, setOpenPanel] = useState<'band'|'mode'|'filter'|'step'|null>(null)
+  const togglePanel = (p: 'band'|'mode'|'filter'|'step') => setOpenPanel(prev => prev === p ? null : p)
   const { theme, showLogo, logoBrightness } = useTheme()
   const [zoom, setZoom] = useState(1)
   const [dbMax, setDbMax] = useState(-40)
@@ -343,6 +351,102 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
         onClick={onWfClick} onWheel={onWfWheel}
         onMouseDown={onWfMouseDown} onMouseMove={onWfMouseMove}
         onMouseUp={onWfMouseUp} onMouseLeave={onWfMouseUp} />
+
+        {/* Controls overlay rechtsonder in waterfall */}
+        {controlsOverlay && (
+          <div style={{ position: 'absolute', bottom: 6, right: 8, zIndex: 10, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+
+            {/* Uitklapbare panels */}
+            {openPanel === 'band' && (
+              <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
+                {[[160,1800000],[80,3600000],[60,5300000],[40,7100000],[30,10100000],[20,14200000],[17,18100000],[15,21200000],[12,24900000],[10,28500000]].map(([b,f]) => (
+                  <button key={b} onClick={() => { onBand && onBand(f); setOpenPanel(null) }}
+                    style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                      background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>
+                    {b}m
+                  </button>
+                ))}
+              </div>
+            )}
+            {openPanel === 'mode' && (
+              <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
+                {['LSB','USB','CW','CWL','AM','FM','DIGU','DIGL'].map(m => (
+                  <button key={m} onClick={() => { onMode && onMode(m); setOpenPanel(null) }}
+                    style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                      background: mode === m ? 'var(--accent)' : 'var(--bg-control)',
+                      border: '1px solid ' + (mode === m ? 'var(--accent)' : 'var(--border)'),
+                      color: mode === m ? 'var(--bg)' : 'var(--text-dim)' }}>
+                    {m}
+                  </button>
+                ))}
+              </div>
+            )}
+            {openPanel === 'filter' && (
+              <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
+                {[3000,2600,2200,1900,1600,1200,800].map(bw => (
+                  <button key={bw} onClick={() => { onFilterPreset && onFilterPreset(bw); setOpenPanel(null) }}
+                    style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                      background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>
+                    {bw >= 1000 ? (bw/1000).toFixed(1) + 'k' : bw}
+                  </button>
+                ))}
+              </div>
+            )}
+            {openPanel === 'step' && (
+              <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
+                {[100000,10000,1000,250,100,10,1].map((s,i) => (
+                  <button key={s} onClick={() => { onStepChange && onStepChange(s); setOpenPanel(null) }}
+                    style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                      background: tuneStep === s ? 'var(--accent)' : 'var(--bg-control)',
+                      border: '1px solid ' + (tuneStep === s ? 'var(--accent)' : 'var(--border)'),
+                      color: tuneStep === s ? 'var(--bg)' : 'var(--text-dim)' }}>
+                    {['100k','10k','1k','250','100','10','1'][i]}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Compacte status knoppen */}
+            <div style={{ display: 'flex', gap: 4 }}>
+              {onBand && (
+                <button onClick={() => togglePanel('band')}
+                  style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                    background: openPanel === 'band' ? 'var(--accent)' : 'rgba(0,0,0,0.6)',
+                    border: '1px solid ' + (openPanel === 'band' ? 'var(--accent)' : 'var(--border)'),
+                    color: openPanel === 'band' ? 'var(--bg)' : 'var(--text-dim)' }}>
+                  {vfoHz ? (vfoHz < 4000000 ? '80m' : vfoHz < 8000000 ? '40m' : vfoHz < 15000000 ? '20m' : vfoHz < 22000000 ? '15m' : '10m') : 'BAND'}
+                </button>
+              )}
+              {onMode && (
+                <button onClick={() => togglePanel('mode')}
+                  style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                    background: openPanel === 'mode' ? 'var(--accent)' : 'rgba(0,0,0,0.6)',
+                    border: '1px solid ' + (openPanel === 'mode' ? 'var(--accent)' : 'var(--border)'),
+                    color: openPanel === 'mode' ? 'var(--bg)' : 'var(--text)' }}>
+                  {mode || 'MODE'}
+                </button>
+              )}
+              {onFilterPreset && (
+                <button onClick={() => togglePanel('filter')}
+                  style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                    background: openPanel === 'filter' ? 'var(--accent)' : 'rgba(0,0,0,0.6)',
+                    border: '1px solid ' + (openPanel === 'filter' ? 'var(--accent)' : 'var(--border)'),
+                    color: openPanel === 'filter' ? 'var(--bg)' : 'var(--text-dim)' }}>
+                  {filterHighHz ? Math.abs(filterHighHz - (filterLowHz || 0)) >= 1000 ? (Math.abs(filterHighHz - (filterLowHz || 0))/1000).toFixed(1) + 'k' : Math.abs(filterHighHz - (filterLowHz || 0)) : 'FILT'}
+                </button>
+              )}
+              {onStepChange && (
+                <button onClick={() => togglePanel('step')}
+                  style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                    background: openPanel === 'step' ? 'var(--accent)' : 'rgba(0,0,0,0.6)',
+                    border: '1px solid ' + (openPanel === 'step' ? 'var(--accent)' : 'var(--border)'),
+                    color: openPanel === 'step' ? 'var(--bg)' : 'var(--text-dim)' }}>
+                  {tuneStep >= 1000 ? tuneStep/1000 + 'k' : tuneStep}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
