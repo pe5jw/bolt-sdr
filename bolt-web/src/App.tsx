@@ -113,14 +113,14 @@ export default function App() {
           />
         </section>
         <section className="bolt-controls">
-          <VfoDisplay
+          {!vfoOverlay && <VfoDisplay
             hz={radioState.vfoHz}
             mode={radioState.mode}
             onChange={sendVfo}
             step={tuneStep}
             onStepChange={setTuneStep}
             dbm={meters.sMeter}
-          />
+          />}
           <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
             <BandSelector hz={radioState.vfoHz} onBand={sendVfo} />
             <ModeFilter
