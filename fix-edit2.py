@@ -1,9 +1,0 @@
-import os
-os.chdir("C:/dev/bolt-sdr/bolt-web/src")
-lines = open("components/MidiSettingsPanel.tsx", encoding="utf-8").readlines()
-q = chr(39)
-lines[110] = "            <div style={{ marginBottom: 6 }}><label style={{ fontSize: 10, color: " + q + "var(--text-dim)" + q + ", fontFamily: " + q + "var(--font-data)" + q + " }}>CONTROL ID</label><input type=" + chr(34) + "text" + chr(34) + " value={edit.id} onChange={e => setEdit({ ...edit, id: e.target.value })} style={{ display: " + q + "block" + q + ", width: " + q + "100%" + q + ", marginTop: 4, fontSize: 11, padding: " + q + "3px 6px" + q + ", background: " + q + "var(--bg-input)" + q + ", border: " + q + "1px solid var(--border)" + q + ", color: " + q + "var(--text)" + q + ", borderRadius: 3 }} /></div>" + chr(10)
-lines[111] = "            <div style={{ marginBottom: 6 }}><label style={{ fontSize: 10, color: " + q + "var(--text-dim)" + q + " }}>TYPE</label><select value={edit.controlType} onChange={e => setEdit({ ...edit, controlType: e.target.value as any })} style={{ display: " + q + "block" + q + ", width: " + q + "100%" + q + ", marginTop: 4, fontSize: 11, padding: " + q + "3px 6px" + q + ", background: " + q + "var(--bg-input)" + q + ", border: " + q + "1px solid var(--border)" + q + ", color: " + q + "var(--text)" + q + ", borderRadius: 3 }}><option value=" + chr(34) + "Wheel" + chr(34) + ">Wheel (encoder)</option><option value=" + chr(34) + "Button" + chr(34) + ">Button</option><option value=" + chr(34) + "KnobOrSlider" + chr(34) + ">KnobOrSlider</option></select></div>" + chr(10)
-lines[112] = "            <div style={{ fontSize: 11, color: " + q + "var(--text-dim)" + q + ", marginBottom: 8 }}>Apparaat: {edit.deviceName}</div>" + chr(10)
-open("components/MidiSettingsPanel.tsx", "w", encoding="utf-8").write("".join(lines))
-print("done")
