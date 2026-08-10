@@ -107,3 +107,4 @@ docs/manual/node_modules/
 docs/manual/build/
 *.py
 *.txt
+*.py
