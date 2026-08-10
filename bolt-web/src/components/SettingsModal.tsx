@@ -61,6 +61,11 @@ export function SettingsModal({ onClose }: Props) {
         {tab === 'general' && <>
 
           <div style={row}>
+            <span style={lbl}>CONTROLS OVERLAY</span>
+            <input type="checkbox" defaultChecked={localStorage.getItem('bolt-controls-overlay') === 'true'}
+              onChange={e => { localStorage.setItem('bolt-controls-overlay', String(e.target.checked)); window.location.reload() }} />
+          </div>
+          <div style={row}>
             <span style={lbl}>VFO OVERLAY</span>
             <input type="checkbox" defaultChecked={localStorage.getItem('bolt-vfo-overlay') !== 'false'}
               onChange={e => { localStorage.setItem('bolt-vfo-overlay', String(e.target.checked)); window.location.reload() }} />

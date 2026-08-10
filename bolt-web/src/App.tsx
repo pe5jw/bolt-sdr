@@ -36,6 +36,7 @@ export default function App() {
   midiEngine.setVfoHz(radioState.vfoHz)
   const [tuneStep, setTuneStep] = useState(1000)
   const [vfoOverlay, _setVfoOverlay] = useState(() => localStorage.getItem('bolt-vfo-overlay') !== 'false')
+  const [controlsOverlay, _setControlsOverlay] = useState(() => localStorage.getItem('bolt-controls-overlay') === 'true')
   const [smeterOverlay, _setSmeterOverlay] = useState(() => localStorage.getItem('bolt-smeter-overlay') !== 'false')
   const [connectedIp, setConnectedIp] = useState("")
   const [_mox, setMox] = useState(false)
@@ -106,8 +107,19 @@ export default function App() {
             vfoHz={radioState.vfoHz}
             mode={radioState.mode}
             dbm={meters.sMeter}
-            tuneStepOverlay={vfoOverlay}
+            tuneStepOverlay={!controlsOverlay && vfoOverlay}
             onStepChange={setTuneStep}
+            controlsOverlay={controlsOverlay}
+            onBand={sendVfo}
+            onMode={sendMode}
+            onFilterPreset={(bw) => {
+              const low = radioState.mode === "LSB" || radioState.mode === "CWL" ? -bw : 0
+              const high = radioState.mode === "LSB" || radioState.mode === "CWL" ? 0 : bw
+              setRadioState(s => ({ ...s, filterLow: low === 0 ? 200 : -bw, filterHigh: high === 0 ? bw : -200 }))
+              fetch("/api/filter", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lowHz: low === 0 ? 200 : -bw, highHz: high === 0 ? bw : -200, receiver: 0 }) })
+            }}
+            filterLowHz={radioState.filterLow}
+            filterHighHz={radioState.filterHigh}
             onFilter={(low, high) => {
               setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
               fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
