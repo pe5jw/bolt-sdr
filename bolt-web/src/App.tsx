@@ -106,6 +106,8 @@ export default function App() {
             vfoHz={radioState.vfoHz}
             mode={radioState.mode}
             dbm={meters.sMeter}
+            tuneStepOverlay={vfoOverlay}
+            onStepChange={setTuneStep}
             onFilter={(low, high) => {
               setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
               fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })

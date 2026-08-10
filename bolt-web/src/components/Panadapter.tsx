@@ -16,9 +16,11 @@ interface Props {
   vfoHz?: number
   mode?: string
   dbm?: number
+  tuneStepOverlay?: boolean
+  onStepChange?: (step: number) => void
 }
 
-export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm }: Props) {
+export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange }: Props) {
   const { theme, showLogo, logoBrightness } = useTheme()
   const [zoom, setZoom] = useState(1)
   const [dbMax, setDbMax] = useState(-40)
@@ -322,10 +324,26 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
         onContextMenu={e => e.preventDefault()} />
       {/* VFO overlay links boven */}
       </div>
-      <canvas ref={wfRef} style={{ width: '100%', display: 'block', cursor: 'crosshair' }}
+      <div style={{ position: 'relative' }}>
+        {tuneStepOverlay && onStepChange && (
+          <div style={{ position: 'absolute', bottom: 6, left: 8, zIndex: 10, display: 'flex', gap: 3 }}>
+            {[100000,10000,1000,250,100,10,1].map((s, i) => (
+              <button key={s} onClick={() => onStepChange(s)}
+                style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer',
+                  fontFamily: 'var(--font-data)', letterSpacing: 1,
+                  background: tuneStep === s ? 'var(--accent)' : 'rgba(0,0,0,0.6)',
+                  border: '1px solid ' + (tuneStep === s ? 'var(--accent)' : 'var(--border)'),
+                  color: tuneStep === s ? 'var(--bg)' : 'var(--text-dim)' }}>
+                {['100k','10k','1k','250','100','10','1'][i]}
+              </button>
+            ))}
+          </div>
+        )}
+        <canvas ref={wfRef} style={{ width: '100%', display: 'block', cursor: 'crosshair' }}
         onClick={onWfClick} onWheel={onWfWheel}
         onMouseDown={onWfMouseDown} onMouseMove={onWfMouseMove}
         onMouseUp={onWfMouseUp} onMouseLeave={onWfMouseUp} />
+      </div>
     </div>
   )
 }
