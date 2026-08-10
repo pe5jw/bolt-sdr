@@ -306,7 +306,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
           const s = dbm >= -53 ? 'S9+' + Math.round(dbm + 53) + 'dB' : 'S' + Math.max(0, Math.min(9, Math.round((dbm + 127) / 6)))
           return (
             <div style={{ position: 'absolute', top: 6, right: 8, pointerEvents: 'none', zIndex: 10,
-              background: 'rgba(0,0,0,0.55)', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 10px', minWidth: 120 }}>
+              background: 'rgba(0,0,0,0.55)', border: '1px solid var(--accent)', borderRadius: 4, padding: '4px 10px', minWidth: 120 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-data)', fontSize: 10, color: 'var(--text-dim)', marginBottom: 3 }}>
                 <span>{s}</span><span>{dbm.toFixed(1)} dBm</span>
               </div>
