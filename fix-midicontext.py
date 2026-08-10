@@ -1,4 +1,6 @@
-import { createContext, useContext, useEffect, useRef } from 'react'
+import os
+os.chdir('C:/dev/bolt-sdr/bolt-web/src')
+content = '''import { createContext, useContext, useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { midiEngine } from './midi-engine'
 
@@ -27,3 +29,6 @@ export function useMidi() {
   if (!ctx) throw new Error('useMidi must be used within MidiProvider')
   return ctx
 }
+'''
+open('MidiContext.tsx', 'w', encoding='utf-8').write(content)
+print('done')
