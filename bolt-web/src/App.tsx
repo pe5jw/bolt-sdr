@@ -108,6 +108,7 @@ export default function App() {
   const getBand = (hz: number) => {
     if (hz >= 1800000 && hz <= 2000000) return '160'
     if (hz >= 3500000 && hz <= 4000000) return '80'
+    if (hz >= 5250000 && hz <= 5450000) return '60'
     if (hz >= 7000000 && hz <= 7300000) return '40'
     if (hz >= 10100000 && hz <= 10150000) return '30'
     if (hz >= 14000000 && hz <= 14350000) return '20'
