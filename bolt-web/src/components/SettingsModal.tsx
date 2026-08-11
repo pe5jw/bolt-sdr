@@ -134,20 +134,7 @@ export function SettingsModal({ onClose }: Props) {
             </>)}
           </div>
 
-          <div style={row}>
-            <span style={lbl}>WATERFALL</span>
-            <div style={{ display: 'flex', gap: 6 }}>
-              {(['classic', 'night', 'hot'] as const).map(p => (
-                <button key={p} onClick={() => setTheme({ ...theme, wfPalette: p })} style={{
-                  fontSize: 10, padding: '4px 12px', borderRadius: 4, cursor: 'pointer',
-                  fontFamily: 'var(--font-data)',
-                  background: theme.wfPalette === p ? 'var(--accent)' : 'var(--bg-control)',
-                  border: '1px solid var(--border)',
-                  color: theme.wfPalette === p ? 'var(--bg)' : 'var(--text-dim)'
-                }}>{p}</button>
-              ))}
-            </div>
-          </div>
+          
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
             <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 80 }}>DISP RATE</span>
