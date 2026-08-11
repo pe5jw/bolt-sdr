@@ -325,7 +325,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
             </div>
           )
         })()}
-        {showLogo && <img src="/bolt-logo.svg" alt="" style={{ position: "absolute", top: "10%", right: "2%", width: "15%", maxWidth: 110, opacity: logoBrightness, pointerEvents: "none", zIndex: 1, userSelect: "none" }} />}
+        
       <canvas ref={canvasRef} style={{ width: '100%', display: 'block', cursor: 'crosshair' }}
         onClick={onClick} onWheel={onWheel}
         onMouseDown={onMouseDown} onMouseMove={onMouseMove}
@@ -352,6 +352,8 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
         onClick={onWfClick} onWheel={onWfWheel}
         onMouseDown={onWfMouseDown} onMouseMove={onWfMouseMove}
         onMouseUp={onWfMouseUp} onMouseLeave={onWfMouseUp} />
+        {showLogo && <img src="/bolt-logo.svg" alt="" style={{ position: "absolute", bottom: "10%", right: "2%", width: "10%", maxWidth: 80, opacity: logoBrightness, pointerEvents: "none", zIndex: 1, userSelect: "none" }} />}
+        {showLogo && <img src="/bolt-logo.svg" alt="" style={{ position: "absolute", bottom: "10%", right: "2%", width: "10%", maxWidth: 80, opacity: logoBrightness, pointerEvents: "none", zIndex: 1, userSelect: "none" }} />}
 
         {/* Controls overlay rechtsonder in waterfall */}
         {controlsOverlay && (
