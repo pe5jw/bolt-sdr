@@ -85,14 +85,12 @@ export default function App() {
     fetch('/api/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: snapped }) })
   }
 
+  const MODE_DEFAULTS: Record<string, [number, number]> = { USB: [200, 3200], LSB: [-3200, -200], CW: [-500, 500], CWL: [-500, 500], AM: [-5000, 5000], FM: [-8000, 8000], DIGU: [200, 3000], DIGL: [-3000, -200] }
   const sendMode = (mode: string) => {
-    setRadioState(s => ({ ...s, mode }))
+    const [low, high] = MODE_DEFAULTS[mode] ?? [200, 3200]
+    setRadioState(s => ({ ...s, mode, filterLow: low, filterHigh: high }))
     send({ type: 'set_mode', mode })
     fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) })
-    const isLsb = mode === 'LSB' || mode === 'CWL'
-    const low = isLsb ? -3200 : 200
-    const high = isLsb ? -200 : 3200
-    setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
     fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
   }
 
