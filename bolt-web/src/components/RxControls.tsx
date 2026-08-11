@@ -4,15 +4,13 @@ interface Props {
   squelchEnabled: boolean
   squelchLevel: number
   rxAfGainDb: number
-  agcTopDb: number
   attenDb: number
   onSquelch: (enabled: boolean, level: number) => void
   onRxAfGain: (db: number) => void
-  onAgcTop: (db: number) => void
   onAtten: (db: number) => void
 }
 
-export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, agcTopDb, attenDb, onSquelch, onRxAfGain, onAgcTop, onAtten }: Props) {
+export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, attenDb, onSquelch, onRxAfGain, onAtten }: Props) {
   const [localSql, setLocalSql] = useState(squelchLevel)
 
   const labelStyle = { fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2 } as const
@@ -46,14 +44,6 @@ export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, agcTopDb,
         <span style={valStyle}>{rxAfGainDb} dB</span>
       </div>
 
-      {/* AGC */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={labelStyle}>AGC</span>
-        <input type="range" min={50} max={120} step={1} value={agcTopDb}
-          onChange={e => onAgcTop(parseInt(e.target.value))}
-          style={{ flex: 1, accentColor: 'var(--rx)' }} />
-        <span style={valStyle}>{agcTopDb} dB</span>
-      </div>
 
       {/* Attenuator */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
