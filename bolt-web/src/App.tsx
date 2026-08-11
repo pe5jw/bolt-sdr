@@ -89,6 +89,11 @@ export default function App() {
     setRadioState(s => ({ ...s, mode }))
     send({ type: 'set_mode', mode })
     fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) })
+    const isLsb = mode === 'LSB' || mode === 'CWL'
+    const low = isLsb ? -3200 : 200
+    const high = isLsb ? -200 : 3200
+    setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
+    fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
   }
 
   return (
@@ -128,10 +133,11 @@ export default function App() {
             onBand={sendVfo}
             onMode={sendMode}
             onFilterPreset={(bw) => {
-              const low = radioState.mode === "LSB" || radioState.mode === "CWL" ? -bw : 0
-              const high = radioState.mode === "LSB" || radioState.mode === "CWL" ? 0 : bw
-              setRadioState(s => ({ ...s, filterLow: low === 0 ? 200 : -bw, filterHigh: high === 0 ? bw : -200 }))
-              fetch("/api/filter", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lowHz: low === 0 ? 200 : -bw, highHz: high === 0 ? bw : -200, receiver: 0 }) })
+              const isLsb = radioState.mode === "LSB" || radioState.mode === "CWL"
+              const low = isLsb ? -bw : 200
+              const high = isLsb ? -200 : bw
+              setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
+              fetch("/api/filter", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
             }}
             filterLowHz={radioState.filterLow}
             filterHighHz={radioState.filterHigh}
