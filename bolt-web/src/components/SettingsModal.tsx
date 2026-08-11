@@ -126,7 +126,7 @@ export function SettingsModal({ onClose }: Props) {
               color: showLogo ? "var(--bg)" : "var(--text-dim)"
             }}>{showLogo ? "ON" : "OFF"}</button>
             {showLogo && (<>
-              <input type="range" min={0.05} max={0.5} step={0.05} value={logoBrightness}
+              <input type="range" min={0.1} max={1.0} step={0.1} value={logoBrightness}
                 onChange={e => setLogoBrightness(parseFloat(e.target.value))}
                 style={{ width: 80, accentColor: "var(--accent)" }} />
               <span style={{ fontSize: 9, color: "var(--accent)", fontFamily: "var(--font-data)" }}>{Math.round(logoBrightness*100)}%</span>
