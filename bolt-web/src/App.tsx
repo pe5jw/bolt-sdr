@@ -133,9 +133,8 @@ export default function App() {
             onBand={sendVfo}
             onMode={sendMode}
             onFilterPreset={(bw) => {
-              const isLsb = radioState.mode === "LSB" || radioState.mode === "CWL"
-              const low = isLsb ? -bw : 200
-              const high = isLsb ? -200 : bw
+              const low = (radioState.mode === "LSB" || radioState.mode === "CWL") ? -bw : 200
+              const high = (radioState.mode === "LSB" || radioState.mode === "CWL") ? -200 : bw
               setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
               fetch("/api/filter", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
             }}

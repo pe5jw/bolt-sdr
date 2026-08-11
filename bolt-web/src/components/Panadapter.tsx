@@ -434,7 +434,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
                     background: openPanel === 'band' ? 'var(--accent)' : 'rgba(0,0,0,0.6)',
                     border: '1px solid ' + (openPanel === 'band' ? 'var(--accent)' : 'var(--border)'),
                     color: openPanel === 'band' ? 'var(--bg)' : 'var(--text-dim)' }}>
-                  {vfoHz ? (vfoHz < 4000000 ? '80m' : vfoHz < 8000000 ? '40m' : vfoHz < 15000000 ? '20m' : vfoHz < 22000000 ? '15m' : '10m') : 'BAND'}
+                  {vfoHz ? (vfoHz < 2500000 ? '160m' : vfoHz < 4500000 ? '80m' : vfoHz < 8000000 ? '40m' : vfoHz < 15000000 ? '20m' : vfoHz < 22000000 ? '15m' : '10m') : 'BAND'}
                 </button>
               )}
               {onMode && (
