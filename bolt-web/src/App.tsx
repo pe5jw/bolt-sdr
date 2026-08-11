@@ -50,6 +50,7 @@ export default function App() {
     return () => window.removeEventListener('bolt-overlay-changed', h)
   }, [])
   const [tuneStep, setTuneStep] = useState(1000)
+  const [nrState, setNrState] = useState({ nrMode: 'Off', anfEnabled: false, snbEnabled: false, nbMode: 'Off' })
   const [vfoOverlay, setVfoOverlay] = useState(() => localStorage.getItem('bolt-vfo-overlay') !== 'false')
   const [controlsOverlay, setControlsOverlay] = useState(() => localStorage.getItem('bolt-controls-overlay') === 'true')
   const [smeterOverlay, setSmeterOverlay] = useState(() => localStorage.getItem('bolt-smeter-overlay') !== 'false')
@@ -215,6 +216,14 @@ export default function App() {
             onRxAfGain={db => {
               setRadioState(s => ({ ...s, rxAfGainDb: db }))
               fetch('/api/rx/afGain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
+            }}
+            nrMode={nrState.nrMode}
+            anfEnabled={nrState.anfEnabled}
+            snbEnabled={nrState.snbEnabled}
+            nbMode={nrState.nbMode}
+            onNr={(nr) => {
+              setNrState(nr)
+              fetch('/api/rx/nr', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nr: { ...nr, nbpNotchesEnabled: false, nbThreshold: 20 } }) }).catch(() => {})
             }}
             onAtten={db => {
               setRadioState(s => ({ ...s, attDb: db }))

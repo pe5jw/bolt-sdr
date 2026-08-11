@@ -5,12 +5,17 @@ interface Props {
   squelchLevel: number
   rxAfGainDb: number
   attenDb: number
+  nrMode?: string
+  anfEnabled?: boolean
+  snbEnabled?: boolean
+  nbMode?: string
+  onNr?: (nr: {nrMode: string, anfEnabled: boolean, snbEnabled: boolean, nbMode: string}) => void
   onSquelch: (enabled: boolean, level: number) => void
   onRxAfGain: (db: number) => void
   onAtten: (db: number) => void
 }
 
-export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, attenDb, onSquelch, onRxAfGain, onAtten }: Props) {
+export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, attenDb, onSquelch, onRxAfGain, onAtten, nrMode='Off', anfEnabled=false, snbEnabled=false, nbMode='Off', onNr }: Props) {
   const [localSql, setLocalSql] = useState(squelchLevel)
 
   const labelStyle = { fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2 } as const
@@ -54,6 +59,27 @@ export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, attenDb, 
         <span style={valStyle}>{attenDb} dB</span>
       </div>
 
+    {/* NR */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+        <span style={labelStyle}>NR</span>
+        {['Off','Anr','Emnr','Rnnr'].map(m => (
+          <button key={m} onClick={() => onNr && onNr({nrMode: m, anfEnabled, snbEnabled, nbMode})}
+            style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+              background: nrMode === m ? 'var(--accent)' : 'var(--bg-control)',
+              border: '1px solid var(--border)',
+              color: nrMode === m ? 'var(--bg)' : 'var(--text-dim)' }}>{m}</button>
+        ))}
+        <button onClick={() => onNr && onNr({nrMode, anfEnabled: !anfEnabled, snbEnabled, nbMode})}
+          style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+            background: anfEnabled ? 'var(--accent)' : 'var(--bg-control)',
+            border: '1px solid var(--border)',
+            color: anfEnabled ? 'var(--bg)' : 'var(--text-dim)' }}>ANF</button>
+        <button onClick={() => onNr && onNr({nrMode, anfEnabled, snbEnabled: !snbEnabled, nbMode})}
+          style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+            background: snbEnabled ? 'var(--accent)' : 'var(--bg-control)',
+            border: '1px solid var(--border)',
+            color: snbEnabled ? 'var(--bg)' : 'var(--text-dim)' }}>SNB</button>
+      </div>
     </div>
   )
 }
