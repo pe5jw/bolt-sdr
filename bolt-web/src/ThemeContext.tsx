@@ -5,12 +5,14 @@ interface ThemeCtx {
   theme: Theme; setTheme: (t: Theme) => void
   showLogo: boolean; setShowLogo: (v: boolean) => void
   logoBrightness: number; setLogoBrightness: (v: number) => void
+  wfPalette: 'classic' | 'night' | 'hot'; setWfPalette: (p: 'classic' | 'night' | 'hot') => void
 }
 
 const Ctx = createContext<ThemeCtx>({
   theme: THEMES[0], setTheme: () => {},
   showLogo: true, setShowLogo: () => {},
-  logoBrightness: 0.2, setLogoBrightness: () => {}
+  logoBrightness: 0.2, setLogoBrightness: () => {},
+  wfPalette: 'classic' as const, setWfPalette: () => {}
 })
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -24,6 +26,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [showLogo, setShowLogoState] = useState<boolean>(() => {
     try { return localStorage.getItem("bolt-show-logo") !== "false" } catch { return true }
   })
+  const [wfPalette, setWfPaletteState] = useState<'classic'|'night'|'hot'>(() => (localStorage.getItem('bolt-wf-palette') as any) || 'classic')
+  const setWfPalette = (p: 'classic'|'night'|'hot') => { localStorage.setItem('bolt-wf-palette', p); setWfPaletteState(p) }
   const [logoBrightness, setLogoBrightnessState] = useState<number>(() => {
     try { return parseFloat(localStorage.getItem("bolt-logo-brightness") ?? "0.2") } catch { return 0.2 }
   })
@@ -48,7 +52,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     r.setProperty("--border",     theme.border)
   }, [theme])
 
-  return <Ctx.Provider value={{ theme, setTheme, showLogo, setShowLogo, logoBrightness, setLogoBrightness }}>{children}</Ctx.Provider>
+  return <Ctx.Provider value={{ theme, setTheme, showLogo, setShowLogo, logoBrightness, setLogoBrightness, wfPalette, setWfPalette }}>{children}</Ctx.Provider>
 }
 
 export const useTheme = () => useContext(Ctx)
