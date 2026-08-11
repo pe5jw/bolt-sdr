@@ -119,6 +119,11 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
         {audioEnabled ? '🔊 RX' : '🔇 RX'}
       </button>
 
+      <button onClick={() => {
+        const cur = localStorage.getItem('bolt-controls-overlay') === 'true'
+        localStorage.setItem('bolt-controls-overlay', String(!cur))
+        window.location.reload()
+      }} style={sBtn(localStorage.getItem('bolt-controls-overlay') === 'true')}>⊞ CTRL</button>
       <button onClick={() => setShowSettings(true)} style={sBtn()}>⚙ SETTINGS</button>
 
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} learnFrame={learnFrame ?? null} />}
