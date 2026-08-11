@@ -398,11 +398,11 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
             )}
             {openPanel === 'filter' && (
               <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
-                {[3000,2600,2200,1900,1600,1200,800].map(bw => (
-                  <button key={bw} onClick={() => { onFilterPreset && onFilterPreset(bw); setOpenPanel(null) }}
+                {((): [number,number][] => { const m = mode || 'USB'; const p: Record<string,[number,number][]> = { USB: [[200,3200],[200,2800],[200,2400],[200,2100],[200,1800],[200,1400],[200,1000]], LSB: [[-3200,-200],[-2800,-200],[-2400,-200],[-2100,-200],[-1800,-200],[-1400,-200],[-1000,-200]], CW: [[-500,500],[-400,400],[-250,250],[-150,150],[-100,100],[-50,50]], CWL: [[-500,500],[-400,400],[-250,250],[-150,150],[-100,100],[-50,50]], AM: [[-5000,5000],[-4000,4000],[-3000,3000],[-2000,2000]], FM: [[-8000,8000],[-5000,5000],[-3000,3000]], DIGU: [[200,3000],[200,2400],[200,1800]], DIGL: [[-3000,-200],[-2400,-200],[-1800,-200]] }; return p[m] ?? p.USB })().map(([lo,hi]) => (
+                  <button key={lo + ',' + hi} onClick={() => { onFilter && onFilter(lo, hi); setOpenPanel(null) }}
                     style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
                       background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>
-                    {bw >= 1000 ? (bw/1000).toFixed(1) + 'k' : bw}
+                    {Math.abs(hi - lo) >= 1000 ? (Math.abs(hi - lo)/1000).toFixed(1) + 'k' : Math.abs(hi - lo)}
                   </button>
                 ))}
                 <button onClick={() => setOpenPanel('custom' as any)}
