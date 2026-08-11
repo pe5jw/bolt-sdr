@@ -62,12 +62,12 @@ export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, attenDb, 
     {/* NR */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
         <span style={labelStyle}>NR</span>
-        {['Off','Anr','Emnr','Rnnr'].map(m => (
-          <button key={m} onClick={() => onNr && onNr({nrMode: m, anfEnabled, snbEnabled, nbMode})}
+        {[{v:'Off',l:'Off'},{v:'Anr',l:'NR1'},{v:'Emnr',l:'NR2'},{v:'Sbnr',l:'NR3'},{v:'Rnnr',l:'NR4'}].map(m => (
+          <button key={m.v} onClick={() => onNr && onNr({nrMode: m.v, anfEnabled, snbEnabled, nbMode})}
             style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
-              background: nrMode === m ? 'var(--accent)' : 'var(--bg-control)',
+              background: nrMode === m.v ? 'var(--accent)' : 'var(--bg-control)',
               border: '1px solid var(--border)',
-              color: nrMode === m ? 'var(--bg)' : 'var(--text-dim)' }}>{m}</button>
+              color: nrMode === m.v ? 'var(--bg)' : 'var(--text-dim)' }}>{ m.l}</button>
         ))}
         <button onClick={() => onNr && onNr({nrMode, anfEnabled: !anfEnabled, snbEnabled, nbMode})}
           style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
