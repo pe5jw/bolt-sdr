@@ -77,13 +77,12 @@ export function SettingsModal({ onClose }: Props) {
           </div>
           <div style={row}>
             <span style={lbl}>WATERVAL KLEUR</span>
-            <div style={{ display: 'flex', gap: 4 }}>
-              {(['classic','night','hot'] as const).map(p => (
-                <button key={p} onClick={() => setWfPalette(p)}
-                  style={{ fontSize: 9, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
-                    background: wfPalette === p ? 'var(--accent)' : 'var(--bg-control)',
-                    border: '1px solid var(--border)',
-                    color: wfPalette === p ? 'var(--bg)' : 'var(--text-dim)' }}>{p}</button>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {([{name:'classic',a:'#1e90ff',b:'#00ff88'},{name:'night',a:'#4400aa',b:'#ffffff'},{name:'hot',a:'#ff0000',b:'#ffff00'}] as any[]).map((p: any) => (
+                <button key={p.name} onClick={() => setWfPalette(p.name)} title={p.name}
+                  style={{ width: 32, height: 24, borderRadius: 4, cursor: 'pointer',
+                    background: `linear-gradient(to right, ${p.a}, ${p.b})`,
+                    border: `2px solid ${wfPalette === p.name ? 'white' : 'transparent'}` }} />
               ))}
             </div>
           </div>
