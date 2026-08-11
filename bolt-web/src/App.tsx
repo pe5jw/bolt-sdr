@@ -126,6 +126,7 @@ export default function App() {
             }}
           />
         </section>
+        {!controlsOverlay && (
         <section className="bolt-controls">
           {!vfoOverlay && <VfoDisplay
             hz={radioState.vfoHz}
@@ -173,6 +174,7 @@ export default function App() {
             }}
           />
         </section>
+        )}
         <section className="bolt-tx">
           <TxPanel
             mox={radioState.mox}

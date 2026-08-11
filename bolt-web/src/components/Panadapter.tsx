@@ -28,6 +28,8 @@ interface Props {
 
 export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange, controlsOverlay, onBand, onMode, onFilterPreset, filterLowHz, filterHighHz }: Props) {
   const [openPanel, setOpenPanel] = useState<'band'|'mode'|'filter'|'step'|null>(null)
+  const [customLow, setCustomLow] = useState('-3200')
+  const [customHigh, setCustomHigh] = useState('200')
   const togglePanel = (p: 'band'|'mode'|'filter'|'step') => setOpenPanel(prev => prev === p ? null : p)
   const { theme, showLogo, logoBrightness } = useTheme()
   const [zoom, setZoom] = useState(1)
@@ -354,7 +356,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
 
         {/* Controls overlay rechtsonder in waterfall */}
         {controlsOverlay && (
-          <div style={{ position: 'absolute', bottom: 6, right: 8, zIndex: 10, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+          <div style={{ position: 'absolute', bottom: 6, left: 8, zIndex: 10, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
 
             {/* Uitklapbare panels */}
             {openPanel === 'band' && (
@@ -366,6 +368,24 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
                     {b}m
                   </button>
                 ))}
+              <button onClick={() => setOpenPanel('custom' as any)}
+                  style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                    background: 'var(--bg-control)', border: '1px solid var(--accent)', color: 'var(--accent)' }}>
+                  CUS
+                </button>
+              </div>
+            )}
+            {(openPanel as any) === 'custom' && (
+              <div style={{ display: 'flex', gap: 4, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)', alignItems: 'center' }}>
+                <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>LOW</span>
+                <input type="number" value={customLow} onChange={e => setCustomLow(e.target.value)}
+                  style={{ width: 55, fontSize: 9, padding: '1px 4px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 3, fontFamily: 'var(--font-data)' }} />
+                <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>HIGH</span>
+                <input type="number" value={customHigh} onChange={e => setCustomHigh(e.target.value)}
+                  style={{ width: 55, fontSize: 9, padding: '1px 4px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 3, fontFamily: 'var(--font-data)' }} />
+                <button onClick={() => { onFilter && onFilter(Number(customLow), Number(customHigh)); setOpenPanel(null) }}
+                  style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                    background: 'var(--accent)', border: '1px solid var(--accent)', color: 'var(--bg)' }}>OK</button>
               </div>
             )}
             {openPanel === 'mode' && (
