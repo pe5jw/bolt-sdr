@@ -361,7 +361,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
             {/* Uitklapbare panels */}
             {openPanel === 'band' && (
               <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
-                {[[160,1800000],[80,3600000],[60,5300000],[40,7100000],[30,10100000],[20,14200000],[17,18100000],[15,21200000],[12,24900000],[10,28500000]].map(([b,f]) => (
+                {[[160,1900000],[80,3700000],[60,5357000],[40,7100000],[30,10125000],[20,14200000],[17,18100000],[15,21200000],[12,24940000],[10,28500000]].map(([b,f]) => (
                   <button key={b} onClick={() => { onBand && onBand(f); setOpenPanel(null) }}
                     style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
                       background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>
