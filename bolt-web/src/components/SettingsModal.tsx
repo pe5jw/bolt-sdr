@@ -63,17 +63,17 @@ export function SettingsModal({ onClose }: Props) {
           <div style={row}>
             <span style={lbl}>CONTROLS OVERLAY</span>
             <input type="checkbox" defaultChecked={localStorage.getItem('bolt-controls-overlay') === 'true'}
-              onChange={e => { localStorage.setItem('bolt-controls-overlay', String(e.target.checked)); window.location.reload() }} />
+              onChange={e => { localStorage.setItem('bolt-controls-overlay', String(e.target.checked)); window.dispatchEvent(new Event('bolt-overlay-changed')) }} />
           </div>
           <div style={row}>
             <span style={lbl}>VFO OVERLAY</span>
             <input type="checkbox" defaultChecked={localStorage.getItem('bolt-vfo-overlay') !== 'false'}
-              onChange={e => { localStorage.setItem('bolt-vfo-overlay', String(e.target.checked)); window.location.reload() }} />
+              onChange={e => { localStorage.setItem('bolt-vfo-overlay', String(e.target.checked)); window.dispatchEvent(new Event('bolt-overlay-changed')) }} />
           </div>
           <div style={row}>
             <span style={lbl}>S-METER OVERLAY</span>
             <input type="checkbox" defaultChecked={localStorage.getItem('bolt-smeter-overlay') !== 'false'}
-              onChange={e => { localStorage.setItem('bolt-smeter-overlay', String(e.target.checked)); window.location.reload() }} />
+              onChange={e => { localStorage.setItem('bolt-smeter-overlay', String(e.target.checked)); window.dispatchEvent(new Event('bolt-overlay-changed')) }} />
           </div>
           <div style={row}>
             <span style={lbl}>UI THEME</span>

@@ -40,10 +40,19 @@ export default function App() {
     window.addEventListener('bolt-controls-changed', h)
     return () => window.removeEventListener('bolt-controls-changed', h)
   }, [])
+
+  useEffect(() => {
+    const h = () => {
+      setVfoOverlay(localStorage.getItem('bolt-vfo-overlay') !== 'false')
+      setSmeterOverlay(localStorage.getItem('bolt-smeter-overlay') !== 'false')
+    }
+    window.addEventListener('bolt-overlay-changed', h)
+    return () => window.removeEventListener('bolt-overlay-changed', h)
+  }, [])
   const [tuneStep, setTuneStep] = useState(1000)
-  const [vfoOverlay, _setVfoOverlay] = useState(() => localStorage.getItem('bolt-vfo-overlay') !== 'false')
+  const [vfoOverlay, setVfoOverlay] = useState(() => localStorage.getItem('bolt-vfo-overlay') !== 'false')
   const [controlsOverlay, setControlsOverlay] = useState(() => localStorage.getItem('bolt-controls-overlay') === 'true')
-  const [smeterOverlay, _setSmeterOverlay] = useState(() => localStorage.getItem('bolt-smeter-overlay') !== 'false')
+  const [smeterOverlay, setSmeterOverlay] = useState(() => localStorage.getItem('bolt-smeter-overlay') !== 'false')
   const [connectedIp, setConnectedIp] = useState("")
   const [_mox, setMox] = useState(false)
 
