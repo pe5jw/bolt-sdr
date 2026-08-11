@@ -31,7 +31,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
   const [customLow, setCustomLow] = useState('-3200')
   const [customHigh, setCustomHigh] = useState('200')
   const togglePanel = (p: 'band'|'mode'|'filter'|'step') => setOpenPanel(prev => prev === p ? null : p)
-  const { theme, showLogo, logoBrightness } = useTheme()
+  const { theme, showLogo, logoBrightness, wfPalette } = useTheme()
   const [zoom, setZoom] = useState(1)
   const [dbMax, setDbMax] = useState(-40)
   const [dbMin, setDbMin] = useState(-140)
@@ -164,7 +164,6 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
     const { wfDb } = display
     const len = wfDb.length
     if (len === 0) return
-    const t = themeRef.current
     const dbMax = dbMaxRef.current
     const dbMin = dbMinRef.current
 
@@ -183,7 +182,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
     for (let px = 0; px < W; px++) {
       const db = wfDb[Math.floor(px * step)]
       const tv = Math.max(0, Math.min(1, (db - dbMin) / (dbMax - dbMin)))
-      const [r, g, b] = WF_PALETTES[t.wfPalette](tv)
+      const [r, g, b] = WF_PALETTES[wfPalette](tv)
       ctx.fillStyle = "rgb(" + r + "," + g + "," + b + ")"
       ctx.fillRect(px, 0, 1, 1)
     }

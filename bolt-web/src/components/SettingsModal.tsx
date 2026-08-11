@@ -9,7 +9,7 @@ interface Props {
 }
 
 export function SettingsModal({ onClose }: Props) {
-  const { theme, setTheme, showLogo, setShowLogo, logoBrightness, setLogoBrightness } = useTheme()
+  const { theme, setTheme, showLogo, setShowLogo, logoBrightness, setLogoBrightness, wfPalette, setWfPalette } = useTheme()
   const [tab, setTab] = useState<'general' | 'midi'>('general')
   const [displayRate, setDisplayRate] = useState(30)
   useEffect(() => {
@@ -74,6 +74,18 @@ export function SettingsModal({ onClose }: Props) {
             <span style={lbl}>S-METER OVERLAY</span>
             <input type="checkbox" defaultChecked={localStorage.getItem('bolt-smeter-overlay') !== 'false'}
               onChange={e => { localStorage.setItem('bolt-smeter-overlay', String(e.target.checked)); window.dispatchEvent(new Event('bolt-overlay-changed')) }} />
+          </div>
+          <div style={row}>
+            <span style={lbl}>WATERVAL KLEUR</span>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {(['classic','night','hot'] as const).map(p => (
+                <button key={p} onClick={() => setWfPalette(p)}
+                  style={{ fontSize: 9, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                    background: wfPalette === p ? 'var(--accent)' : 'var(--bg-control)',
+                    border: '1px solid var(--border)',
+                    color: wfPalette === p ? 'var(--bg)' : 'var(--text-dim)' }}>{p}</button>
+              ))}
+            </div>
           </div>
           <div style={row}>
             <span style={lbl}>UI THEME</span>
