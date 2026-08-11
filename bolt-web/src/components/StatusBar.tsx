@@ -122,7 +122,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
       <button onClick={() => {
         const cur = localStorage.getItem('bolt-controls-overlay') === 'true'
         localStorage.setItem('bolt-controls-overlay', String(!cur))
-        window.location.reload()
+        window.dispatchEvent(new Event('bolt-controls-changed'))
       }} style={sBtn(localStorage.getItem('bolt-controls-overlay') === 'true')}>⊞ CTRL</button>
       <button onClick={() => setShowSettings(true)} style={sBtn()}>⚙ SETTINGS</button>
 

@@ -405,6 +405,11 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
                     {bw >= 1000 ? (bw/1000).toFixed(1) + 'k' : bw}
                   </button>
                 ))}
+                <button onClick={() => setOpenPanel('custom' as any)}
+                  style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                    background: 'var(--bg-control)', border: '1px solid var(--accent)', color: 'var(--accent)' }}>
+                  CUS
+                </button>
               </div>
             )}
             {openPanel === 'step' && (
