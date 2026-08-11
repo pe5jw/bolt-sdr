@@ -124,6 +124,7 @@ export default function App() {
     send({ type: 'set_mode', mode })
     fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) })
     fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
+    saveBandState(radioState.vfoHz, mode, low, high)
   }
 
   return (
