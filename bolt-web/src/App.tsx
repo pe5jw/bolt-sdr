@@ -79,12 +79,44 @@ export default function App() {
 
 
 
-  const sendVfo = (hz: number) => {
+  const sendVfo = (hz: number, isBandSwitch = false) => {
     const snapped = Math.round(hz / tuneStep) * tuneStep
+    if (isBandSwitch) {
+      const band = getBand(snapped)
+      const saved = band ? loadBandState(band) : null
+      if (saved) {
+        setRadioState(s => ({ ...s, vfoHz: saved.hz, mode: saved.mode, filterLow: saved.filterLow, filterHigh: saved.filterHigh }))
+        fetch('/api/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: saved.hz }) })
+        fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: saved.mode }) })
+        fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: saved.filterLow, highHz: saved.filterHigh, receiver: 0 }) })
+        return
+      }
+    }
+    saveBandState(snapped, radioState.mode, radioState.filterLow, radioState.filterHigh)
     setRadioState(s => ({ ...s, vfoHz: snapped }))
     fetch('/api/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: snapped }) })
   }
 
+  // Band memory
+  const saveBandState = (hz: number, mode: string, filterLow: number, filterHigh: number) => {
+    const band = getBand(hz)
+    if (band) localStorage.setItem('bolt-band-' + band, JSON.stringify({ hz, mode, filterLow, filterHigh }))
+  }
+  const loadBandState = (band: string) => {
+    try { return JSON.parse(localStorage.getItem('bolt-band-' + band) || 'null') } catch { return null }
+  }
+  const getBand = (hz: number) => {
+    if (hz >= 1800000 && hz <= 2000000) return '160'
+    if (hz >= 3500000 && hz <= 4000000) return '80'
+    if (hz >= 7000000 && hz <= 7300000) return '40'
+    if (hz >= 10100000 && hz <= 10150000) return '30'
+    if (hz >= 14000000 && hz <= 14350000) return '20'
+    if (hz >= 18068000 && hz <= 18168000) return '17'
+    if (hz >= 21000000 && hz <= 21450000) return '15'
+    if (hz >= 24890000 && hz <= 24990000) return '12'
+    if (hz >= 28000000 && hz <= 29700000) return '10'
+    return null
+  }
   const MODE_DEFAULTS: Record<string, [number, number]> = { USB: [200, 3200], LSB: [-3200, -200], CW: [-500, 500], CWL: [-500, 500], AM: [-5000, 5000], FM: [-8000, 8000], DIGU: [200, 3000], DIGL: [-3000, -200] }
   const sendMode = (mode: string) => {
     const [low, high] = MODE_DEFAULTS[mode] ?? [200, 3200]
@@ -128,7 +160,7 @@ export default function App() {
             tuneStepOverlay={!controlsOverlay && vfoOverlay}
             onStepChange={setTuneStep}
             controlsOverlay={controlsOverlay}
-            onBand={sendVfo}
+            onBand={(hz) => sendVfo(hz, true)}
             onMode={sendMode}
             onFilterPreset={(bw) => {
               const low = (radioState.mode === "LSB" || radioState.mode === "CWL") ? -bw : 200
@@ -155,7 +187,7 @@ export default function App() {
             dbm={meters.sMeter}
           />}
           <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-            <BandSelector hz={radioState.vfoHz} onBand={sendVfo} />
+            <BandSelector hz={radioState.vfoHz} onBand={(hz) => sendVfo(hz, true)} />
             <ModeFilter
               mode={radioState.mode}
               filterLow={radioState.filterLow}
