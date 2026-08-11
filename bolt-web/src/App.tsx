@@ -205,7 +205,6 @@ export default function App() {
             squelchEnabled={radioState.squelchEnabled}
             squelchLevel={radioState.squelchLevel}
             rxAfGainDb={radioState.rxAfGainDb}
-            agcTopDb={radioState.agcTopDb}
             attenDb={radioState.attDb}
             onSquelch={(enabled, level) => {
               setRadioState(s => ({ ...s, squelchEnabled: enabled, squelchLevel: level }))
@@ -214,10 +213,6 @@ export default function App() {
             onRxAfGain={db => {
               setRadioState(s => ({ ...s, rxAfGainDb: db }))
               fetch('/api/rx/afGain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
-            }}
-            onAgcTop={db => {
-              setRadioState(s => ({ ...s, agcTopDb: db }))
-              fetch('/api/agcGain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
             }}
             onAtten={db => {
               setRadioState(s => ({ ...s, attDb: db }))
