@@ -34,9 +34,15 @@ export default function App() {
   const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive } = useRadioSocket(undefined, undefined)
   lastKnownVfoRef.current = radioState.vfoHz
   midiEngine.setVfoHz(radioState.vfoHz)
+
+  useEffect(() => {
+    const h = () => setControlsOverlay(localStorage.getItem('bolt-controls-overlay') === 'true')
+    window.addEventListener('bolt-controls-changed', h)
+    return () => window.removeEventListener('bolt-controls-changed', h)
+  }, [])
   const [tuneStep, setTuneStep] = useState(1000)
   const [vfoOverlay, _setVfoOverlay] = useState(() => localStorage.getItem('bolt-vfo-overlay') !== 'false')
-  const [controlsOverlay, _setControlsOverlay] = useState(() => localStorage.getItem('bolt-controls-overlay') === 'true')
+  const [controlsOverlay, setControlsOverlay] = useState(() => localStorage.getItem('bolt-controls-overlay') === 'true')
   const [smeterOverlay, _setSmeterOverlay] = useState(() => localStorage.getItem('bolt-smeter-overlay') !== 'false')
   const [connectedIp, setConnectedIp] = useState("")
   const [_mox, setMox] = useState(false)
