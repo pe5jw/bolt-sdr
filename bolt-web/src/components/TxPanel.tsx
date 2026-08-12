@@ -41,7 +41,7 @@ export function TxPanel({ mox, tune, driveDb, tunePct, micGainDb, alc, swr, powe
           <span>MIC</span>
           <span className="tx-slider-val">{micGainDb > 0 ? '+' : ''}{micGainDb} dB</span>
         </div>
-        <input type="range" min={-40} max={10} value={micGainDb} onChange={e => onMicGain(Number(e.target.value))} />
+        <input type="range" min={-40} max={20} value={micGainDb} onChange={e => onMicGain(Number(e.target.value))} />
       </div>
       <div className="tx-meters">
         <div className="tx-meter-item">
