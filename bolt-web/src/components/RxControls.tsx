@@ -130,20 +130,6 @@ export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, attenDb, 
               <span style={{ fontSize:10, color: 'var(--accent)', fontFamily: 'var(--font-data)', minWidth:28 }}>{nr4Reduction}</span>
             </div>
           )}
-          {nrMode === 'Emnr' && (
-            <div style={{ marginTop: 4 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
-                <span style={labelStyle}>GAIN</span>
-                {[0,1,2,3].map(v => (<button key={v} onClick={() => { setNr2GainMethod(v); fetch('/api/rx/nr2/core', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gainMethod:v,npeMethod:nr2NpeMethod})}).catch(()=>{}) }}
-                  style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, cursor: 'pointer', background: nr2GainMethod===v?'var(--accent)':'var(--bg-control)', border: '1px solid var(--border)', color: nr2GainMethod===v?'var(--bg)':'var(--text-dim)', fontFamily: 'var(--font-data)' }}>{v}</button>))}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={labelStyle}>NPE</span>
-                {[0,1,2].map(v => (<button key={v} onClick={() => { setNr2NpeMethod(v); fetch('/api/rx/nr2/core', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gainMethod:nr2GainMethod,npeMethod:v})}).catch(()=>{}) }}
-                  style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, cursor: 'pointer', background: nr2NpeMethod===v?'var(--accent)':'var(--bg-control)', border: '1px solid var(--border)', color: nr2NpeMethod===v?'var(--bg)':'var(--text-dim)', fontFamily: 'var(--font-data)' }}>{v}</button>))}
-              </div>
-            </div>
-          )}
           {nrMode === 'Rnnr' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
               <span style={labelStyle}>REDUCTIE</span>
