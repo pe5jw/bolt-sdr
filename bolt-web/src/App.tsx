@@ -257,7 +257,7 @@ export default function App() {
               fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
             }}
             onDrive={db => {
-              fetch('/api/tx/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pct: db }) })
+              fetch('/api/tx/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: db }) })
             }}
             onTuneDrive={pct => {
               setRadioState(s => ({ ...s, tunePct: pct }))
