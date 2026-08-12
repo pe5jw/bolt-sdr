@@ -130,13 +130,6 @@ export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, attenDb, 
               <span style={{ fontSize:10, color: 'var(--accent)', fontFamily: 'var(--font-data)', minWidth:28 }}>{nr4Reduction}</span>
             </div>
           )}
-          {nrMode === 'Rnnr' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-              <span style={labelStyle}>REDUCTIE</span>
-              <input type="range" min={0} max={100} step={1} value={nr4Reduction} onChange={e => { const v=parseInt(e.target.value); setNr4Reduction(v); fetch('/api/rx/nr4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reductionAmount:v})}).catch(()=>{}) }} style={{ flex:1, accentColor: 'var(--accent)' }} />
-              <span style={{ fontSize:10, color: 'var(--accent)', fontFamily: 'var(--font-data)', minWidth:28 }}>{nr4Reduction}</span>
-            </div>
-          )}
         </div>
       )}
     </div>
