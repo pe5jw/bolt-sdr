@@ -437,6 +437,17 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
                 ))}
               </div>
             )}
+            {(openPanel as any) === 'nr' && (
+              <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
+                {[{v:'Off',l:'Off'},{v:'Anr',l:'NR1'},{v:'Emnr',l:'NR2'},{v:'Sbnr',l:'NR3'},{v:'Rnnr',l:'NR4'}].map(m => (
+                  <button key={m.v} onClick={() => { onNrMode && onNrMode(m.v); setOpenPanel(null) }}
+                    style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                      background: nrMode === m.v ? 'var(--accent)' : 'var(--bg-control)',
+                      border: '1px solid var(--border)',
+                      color: nrMode === m.v ? 'var(--bg)' : 'var(--text-dim)' }}>{m.l}</button>
+                ))}
+              </div>
+            )}
 
             {/* Compacte status knoppen */}
             <div style={{ display: 'flex', gap: 4 }}>
