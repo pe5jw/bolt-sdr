@@ -287,8 +287,6 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
         {[1,2,4,8,16,32].map(z => (
           <button key={z} onClick={() => setZoomLevel(z)} style={{ ...sBtn, fontSize: 9, background: zoom === z ? "var(--accent)" : "var(--bg-control)", color: zoom === z ? "var(--bg)" : "var(--text-dim)" }}>{z}x</button>
         ))}
-        <button onClick={() => setZoomLevel(Math.max(1, zoom - 1))} style={sBtn}>−</button>
-        <button onClick={() => { const nz = Math.min(32, zoom + 1); localStorage.setItem('bolt-zoom', String(nz)); setZoomLevel(nz) }} style={sBtn}>+</button>
         <div style={sep} />
         <span style={lbl}>TOP</span>
         <button onClick={() => setDbMax(d => { const v = Math.min(-10, d + 5); localStorage.setItem('bolt-top', String(v)); return v })} style={sBtn}>+</button>
