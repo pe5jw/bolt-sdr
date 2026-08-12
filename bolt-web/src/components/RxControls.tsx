@@ -3,7 +3,6 @@ import { useState } from 'react'
 interface Props {
   squelchEnabled: boolean
   squelchLevel: number
-  rxAfGainDb: number
   attenDb: number
   nrMode?: string
   anfEnabled?: boolean
@@ -11,11 +10,10 @@ interface Props {
   nbMode?: string
   onNr?: (nr: {nrMode: string, anfEnabled: boolean, snbEnabled: boolean, nbMode: string, nbThreshold: number}) => void
   onSquelch: (enabled: boolean, level: number) => void
-  onRxAfGain: (db: number) => void
   onAtten: (db: number) => void
 }
 
-export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, attenDb, onSquelch, onRxAfGain, onAtten, nrMode='Off', anfEnabled=false, snbEnabled=false, nbMode='Off', onNr }: Props) {
+export function RxControls({ squelchEnabled, squelchLevel, attenDb, onSquelch, onAtten, nrMode='Off', anfEnabled=false, snbEnabled=false, nbMode='Off', onNr }: Props) {
   const [localSql, setLocalSql] = useState(squelchLevel)
   const [showNrSettings, setShowNrSettings] = useState(false)
   const [nbThreshold, setNbThreshold] = useState(20)
@@ -45,14 +43,6 @@ export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, attenDb, 
         <span style={valStyle}>{squelchLevel}</span>
       </div>
 
-      {/* AF Gain */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={labelStyle}>AF</span>
-        <input type="range" min={-50} max={20} step={1} value={rxAfGainDb}
-          onChange={e => onRxAfGain(parseInt(e.target.value))}
-          style={{ flex: 1, accentColor: 'var(--rx)' }} />
-        <span style={valStyle}>{rxAfGainDb} dB</span>
-      </div>
 
 
       {/* Attenuator */}

@@ -225,15 +225,10 @@ export default function App() {
           <RxControls
             squelchEnabled={radioState.squelchEnabled}
             squelchLevel={radioState.squelchLevel}
-            rxAfGainDb={radioState.rxAfGainDb}
             attenDb={radioState.attDb}
             onSquelch={(enabled, level) => {
               setRadioState(s => ({ ...s, squelchEnabled: enabled, squelchLevel: level }))
               fetch('/api/rx/squelch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, level }) })
-            }}
-            onRxAfGain={db => {
-              setRadioState(s => ({ ...s, rxAfGainDb: db }))
-              fetch('/api/rx/afGain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
             }}
             nrMode={nrState.nrMode}
             anfEnabled={nrState.anfEnabled}
@@ -254,6 +249,7 @@ export default function App() {
           <TxPanel
             mox={radioState.mox}
             tune={radioState.tune}
+            afGainDb={radioState.rxAfGainDb}
             micGainDb={radioState.micGainDb}
             alc={meters.alc}
             swr={meters.swr}
@@ -265,6 +261,10 @@ export default function App() {
             onTune={on => {
               setRadioState(s => ({ ...s, tune: on }))
               fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
+            }}
+            onAfGain={db => {
+              setRadioState(s => ({ ...s, rxAfGainDb: db }))
+              fetch('/api/rx/afGain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
             }}
             onMicGain={db => {
               setRadioState(s => ({ ...s, micGainDb: db }))
