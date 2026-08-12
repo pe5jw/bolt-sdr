@@ -163,6 +163,12 @@ export default function App() {
             tuneStepOverlay={!controlsOverlay && vfoOverlay}
             onStepChange={setTuneStep}
             controlsOverlay={controlsOverlay}
+            nrMode={nrState.nrMode}
+            onNrMode={(mode) => {
+              const newNr = { ...nrState, nrMode: mode }
+              setNrState(newNr)
+              fetch('/api/rx/nr', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nr: { ...newNr, nbpNotchesEnabled: false } }) }).catch(() => {})
+            }}
             onBand={(hz) => sendVfo(hz, true)}
             onMode={sendMode}
             onFilterPreset={(bw) => {
