@@ -210,6 +210,18 @@ export default function App() {
               }}
             />
           </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 12px', background: 'var(--bg-panel)', minWidth: 120 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 36 }}>DRIVE</span>
+              <input type="range" min={0} max={100} value={radioState.driveDb} onChange={e => { const v=Number(e.target.value); setRadioState(s=>({...s,driveDb:v})); fetch('/api/tx/drive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({percent:v})}) }} style={{ flex: 1, accentColor: 'var(--tx)' }} />
+              <span style={{ fontSize: 10, color: 'var(--tx)', fontFamily: 'var(--font-data)', minWidth: 32 }}>{radioState.driveDb}%</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 36 }}>TUNE</span>
+              <input type="range" min={0} max={100} value={radioState.tunePct} onChange={e => { const v=Number(e.target.value); setRadioState(s=>({...s,tunePct:v})); fetch('/api/tx/tune-drive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({percent:v})}) }} style={{ flex: 1, accentColor: 'var(--tx)' }} />
+              <span style={{ fontSize: 10, color: 'var(--tx)', fontFamily: 'var(--font-data)', minWidth: 32 }}>{radioState.tunePct}%</span>
+            </div>
+          </div>
           <RxControls
             squelchEnabled={radioState.squelchEnabled}
             squelchLevel={radioState.squelchLevel}
