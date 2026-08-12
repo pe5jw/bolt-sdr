@@ -32,9 +32,9 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
   const [customHigh, setCustomHigh] = useState('200')
   const togglePanel = (p: 'band'|'mode'|'filter'|'step') => setOpenPanel(prev => prev === p ? null : p)
   const { theme, showLogo, logoBrightness, wfPalette } = useTheme()
-  const [zoom, setZoom] = useState(1)
-  const [dbMax, setDbMax] = useState(-40)
-  const [dbMin, setDbMin] = useState(-140)
+  const [zoom, setZoom] = useState(() => parseInt(localStorage.getItem('bolt-zoom') || '1'))
+  const [dbMax, setDbMax] = useState(() => parseInt(localStorage.getItem('bolt-top') || '-40'))
+  const [dbMin, setDbMin] = useState(() => parseInt(localStorage.getItem('bolt-floor') || '-140'))
   const dbMaxRef = useRef(-40)
   const dbMinRef = useRef(-140)
   const themeRef = useRef(theme)
@@ -288,15 +288,15 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
           <button key={z} onClick={() => setZoomLevel(z)} style={{ ...sBtn, fontSize: 9, background: zoom === z ? "var(--accent)" : "var(--bg-control)", color: zoom === z ? "var(--bg)" : "var(--text-dim)" }}>{z}x</button>
         ))}
         <button onClick={() => setZoomLevel(Math.max(1, zoom - 1))} style={sBtn}>−</button>
-        <button onClick={() => setZoomLevel(Math.min(32, zoom + 1))} style={sBtn}>+</button>
+        <button onClick={() => { const nz = Math.min(32, zoom + 1); localStorage.setItem('bolt-zoom', String(nz)); setZoomLevel(nz) }} style={sBtn}>+</button>
         <div style={sep} />
         <span style={lbl}>TOP</span>
-        <button onClick={() => setDbMax(d => Math.min(-10, d + 5))} style={sBtn}>+</button>
+        <button onClick={() => setDbMax(d => { const v = Math.min(-10, d + 5); localStorage.setItem('bolt-top', String(v)); return v })} style={sBtn}>+</button>
         <span style={val}>{dbMax}</span>
-        <button onClick={() => setDbMax(d => Math.max(dbMin + 20, d - 5))} style={sBtn}>−</button>
+        <button onClick={() => setDbMax(d => { const v = Math.max(dbMin + 20, d - 5); localStorage.setItem('bolt-top', String(v)); return v })} style={sBtn}>−</button>
         <div style={sep} />
         <span style={lbl}>FLOOR</span>
-        <button onClick={() => setDbMin(d => Math.min(dbMax - 20, d + 5))} style={sBtn}>+</button>
+        <button onClick={() => setDbMin(d => { const v = Math.min(dbMax - 20, d + 5); localStorage.setItem('bolt-floor', String(v)); return v })} style={sBtn}>+</button>
         <span style={val}>{dbMin}</span>
         <button onClick={() => setDbMin(d => Math.max(-220, d - 10))} style={sBtn}>−</button>
       </div>
