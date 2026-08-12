@@ -223,7 +223,7 @@ export default function App() {
             nbMode={nrState.nbMode}
             onNr={(nr) => {
               setNrState(nr)
-              fetch('/api/rx/nr', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nr: { ...nr, nbpNotchesEnabled: false, nbThreshold: 20 } }) }).catch(() => {})
+              fetch('/api/rx/nr', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nr: { ...nr, nbpNotchesEnabled: false } }) }).catch(() => {})
             }}
             onAtten={db => {
               setRadioState(s => ({ ...s, attDb: db }))

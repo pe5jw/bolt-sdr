@@ -9,7 +9,7 @@ interface Props {
   anfEnabled?: boolean
   snbEnabled?: boolean
   nbMode?: string
-  onNr?: (nr: {nrMode: string, anfEnabled: boolean, snbEnabled: boolean, nbMode: string}) => void
+  onNr?: (nr: {nrMode: string, anfEnabled: boolean, snbEnabled: boolean, nbMode: string, nbThreshold: number}) => void
   onSquelch: (enabled: boolean, level: number) => void
   onRxAfGain: (db: number) => void
   onAtten: (db: number) => void
@@ -65,18 +65,18 @@ export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, attenDb, 
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
         <span style={labelStyle}>NR</span>
         {[{v:'Off',l:'Off'},{v:'Anr',l:'NR1'},{v:'Emnr',l:'NR2'},{v:'Sbnr',l:'NR3'},{v:'Rnnr',l:'NR4'}].map(m => (
-          <button key={m.v} onClick={() => onNr && onNr({nrMode: m.v, anfEnabled, snbEnabled, nbMode})}
+          <button key={m.v} onClick={() => onNr && onNr({nrMode: m.v, anfEnabled, snbEnabled, nbMode, nbThreshold})}
             style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
               background: nrMode === m.v ? 'var(--accent)' : 'var(--bg-control)',
               border: '1px solid var(--border)',
               color: nrMode === m.v ? 'var(--bg)' : 'var(--text-dim)' }}>{ m.l}</button>
         ))}
-        <button onClick={() => onNr && onNr({nrMode, anfEnabled: !anfEnabled, snbEnabled, nbMode})}
+        <button onClick={() => onNr && onNr({nrMode, anfEnabled: !anfEnabled, snbEnabled, nbMode, nbThreshold})}
           style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
             background: anfEnabled ? 'var(--accent)' : 'var(--bg-control)',
             border: '1px solid var(--border)',
             color: anfEnabled ? 'var(--bg)' : 'var(--text-dim)' }}>ANF</button>
-        <button onClick={() => onNr && onNr({nrMode, anfEnabled, snbEnabled: !snbEnabled, nbMode})}
+        <button onClick={() => onNr && onNr({nrMode, anfEnabled, snbEnabled: !snbEnabled, nbMode, nbThreshold})}
           style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
             background: snbEnabled ? 'var(--accent)' : 'var(--bg-control)',
             border: '1px solid var(--border)',
@@ -92,7 +92,7 @@ export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, attenDb, 
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
             <span style={labelStyle}>NB MODE</span>
             {['Off','Nb1','Nb2'].map(m => (
-              <button key={m} onClick={() => onNr && onNr({nrMode, anfEnabled, snbEnabled, nbMode: m})}
+              <button key={m} onClick={() => onNr && onNr({nrMode, anfEnabled, snbEnabled, nbMode: m, nbThreshold})}
                 style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, cursor: 'pointer',
                   background: nbMode === m ? 'var(--accent)' : 'var(--bg-control)',
                   border: '1px solid var(--border)',
@@ -102,7 +102,7 @@ export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, attenDb, 
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={labelStyle}>NB THR</span>
             <input type="range" min={0} max={100} step={1} value={nbThreshold}
-              onChange={e => { const v = parseInt(e.target.value); setNbThreshold(v); onNr && onNr({nrMode, anfEnabled, snbEnabled, nbMode}) }}
+              onChange={e => { const v = parseInt(e.target.value); setNbThreshold(v); onNr && onNr({nrMode, anfEnabled, snbEnabled, nbMode, nbThreshold: v}) }}
               style={{ flex: 1, accentColor: 'var(--accent)' }} />
             <span style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-data)', minWidth: 28 }}>{nbThreshold}</span>
           </div>
