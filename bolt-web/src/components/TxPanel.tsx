@@ -1,15 +1,17 @@
 interface Props {
   mox: boolean
   tune: boolean
+  afGainDb: number
   micGainDb: number
   alc: number
   swr: number
   power: number
   onMox: (on: boolean) => void
   onTune: (on: boolean) => void
+  onAfGain: (db: number) => void
   onMicGain: (db: number) => void
 }
-export function TxPanel({ mox, tune, micGainDb, alc, swr, power, onMox, onTune, onMicGain }: Props) {
+export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, onMox, onTune, onAfGain, onMicGain }: Props) {
   return (
     <div className="tx-wrap">
       <button className={`tx-btn mox-btn ${mox ? 'active' : ''}`} onClick={() => onMox(!mox)}>
@@ -18,6 +20,13 @@ export function TxPanel({ mox, tune, micGainDb, alc, swr, power, onMox, onTune, 
       <button className={`tx-btn tune-btn ${tune ? 'active' : ''}`} onClick={() => onTune(!tune)}>
         TUNE
       </button>
+      <div className="tx-slider-group">
+        <div className="tx-slider-label">
+          <span>AF</span>
+          <span className="tx-slider-val">{afGainDb} dB</span>
+        </div>
+        <input type="range" min={-50} max={20} step={1} value={afGainDb} onChange={e => onAfGain(Number(e.target.value))} />
+      </div>
       <div className="tx-slider-group">
         <div className="tx-slider-label">
           <span>MIC</span>
