@@ -18,6 +18,8 @@ interface Props {
   dbm?: number
   tuneStepOverlay?: boolean
   onStepChange?: (step: number) => void
+  nrMode?: string
+  onNrMode?: (mode: string) => void
   controlsOverlay?: boolean
   onBand?: (hz: number) => void
   onMode?: (mode: string) => void
@@ -26,7 +28,7 @@ interface Props {
   filterHighHz?: number
 }
 
-export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange, controlsOverlay, onBand, onMode, onFilterPreset, filterLowHz, filterHighHz }: Props) {
+export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange, controlsOverlay, onBand, onMode, onFilterPreset, filterLowHz, filterHighHz, nrMode, onNrMode }: Props) {
   const [openPanel, setOpenPanel] = useState<'band'|'mode'|'filter'|'step'|null>(null)
   const [customLow, setCustomLow] = useState('-3200')
   const [customHigh, setCustomHigh] = useState('200')
@@ -409,6 +411,17 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
                     background: 'var(--bg-control)', border: '1px solid var(--accent)', color: 'var(--accent)' }}>
                   CUS
                 </button>
+              </div>
+            )}
+            {(openPanel as any) === 'nr' && (
+              <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
+                {[{v:'Off',l:'Off'},{v:'Anr',l:'NR1'},{v:'Emnr',l:'NR2'},{v:'Sbnr',l:'NR3'},{v:'Rnnr',l:'NR4'}].map(m => (
+                  <button key={m.v} onClick={() => { onNrMode && onNrMode(m.v); setOpenPanel(null) }}
+                    style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                      background: nrMode === m.v ? 'var(--accent)' : 'var(--bg-control)',
+                      border: '1px solid var(--border)',
+                      color: nrMode === m.v ? 'var(--bg)' : 'var(--text-dim)' }}>{m.l}</button>
+                ))}
               </div>
             )}
             {openPanel === 'step' && (
