@@ -17,6 +17,8 @@ interface Props {
 
 export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, attenDb, onSquelch, onRxAfGain, onAtten, nrMode='Off', anfEnabled=false, snbEnabled=false, nbMode='Off', onNr }: Props) {
   const [localSql, setLocalSql] = useState(squelchLevel)
+  const [showNrSettings, setShowNrSettings] = useState(false)
+  const [nbThreshold, setNbThreshold] = useState(20)
 
   const labelStyle = { fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2 } as const
   const valStyle = { fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-data)', minWidth: 36, textAlign: 'right' as const }
@@ -79,7 +81,33 @@ export function RxControls({ squelchEnabled, squelchLevel, rxAfGainDb, attenDb, 
             background: snbEnabled ? 'var(--accent)' : 'var(--bg-control)',
             border: '1px solid var(--border)',
             color: snbEnabled ? 'var(--bg)' : 'var(--text-dim)' }}>SNB</button>
+        <button onClick={() => setShowNrSettings(!showNrSettings)}
+          style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+            background: showNrSettings ? 'var(--accent)' : 'var(--bg-control)',
+            border: '1px solid var(--border)',
+            color: showNrSettings ? 'var(--bg)' : 'var(--text-dim)' }}>⚙</button>
       </div>
+      {showNrSettings && (
+        <div style={{ background: 'var(--bg-deep)', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 8px', marginTop: 4 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+            <span style={labelStyle}>NB MODE</span>
+            {['Off','Nb1','Nb2'].map(m => (
+              <button key={m} onClick={() => onNr && onNr({nrMode, anfEnabled, snbEnabled, nbMode: m})}
+                style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, cursor: 'pointer',
+                  background: nbMode === m ? 'var(--accent)' : 'var(--bg-control)',
+                  border: '1px solid var(--border)',
+                  color: nbMode === m ? 'var(--bg)' : 'var(--text-dim)' }}>{m}</button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={labelStyle}>NB THR</span>
+            <input type="range" min={0} max={100} step={1} value={nbThreshold}
+              onChange={e => { const v = parseInt(e.target.value); setNbThreshold(v); onNr && onNr({nrMode, anfEnabled, snbEnabled, nbMode}) }}
+              style={{ flex: 1, accentColor: 'var(--accent)' }} />
+            <span style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-data)', minWidth: 28 }}>{nbThreshold}</span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
