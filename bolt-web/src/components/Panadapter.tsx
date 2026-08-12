@@ -29,7 +29,7 @@ interface Props {
 }
 
 export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange, controlsOverlay, onBand, onMode, onFilterPreset, filterLowHz, filterHighHz, nrMode, onNrMode }: Props) {
-  const [openPanel, setOpenPanel] = useState<'band'|'mode'|'filter'|'step'|null>(null)
+  const [openPanel, setOpenPanel] = useState<'band'|'mode'|'filter'|'step'|'nr'|null>(null)
   const [customLow, setCustomLow] = useState('-3200')
   const [customHigh, setCustomHigh] = useState('200')
   const togglePanel = (p: 'band'|'mode'|'filter'|'step') => setOpenPanel(prev => prev === p ? null : p)
