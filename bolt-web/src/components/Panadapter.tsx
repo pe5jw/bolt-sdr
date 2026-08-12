@@ -476,6 +476,15 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
                   {tuneStep >= 1000 ? tuneStep/1000 + 'k' : tuneStep}
                 </button>
               )}
+              {onNrMode && (
+                <button onClick={() => togglePanel('nr' as any)}
+                  style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                    background: (openPanel as any) === 'nr' ? 'var(--accent)' : 'rgba(0,0,0,0.6)',
+                    border: '1px solid ' + ((openPanel as any) === 'nr' ? 'var(--accent)' : 'var(--border)'),
+                    color: (openPanel as any) === 'nr' ? 'var(--bg)' : 'var(--text-dim)' }}>
+                  {nrMode === 'Off' ? 'NR' : nrMode === 'Anr' ? 'NR1' : nrMode === 'Emnr' ? 'NR2' : nrMode === 'Sbnr' ? 'NR3' : nrMode === 'Rnnr' ? 'NR4' : nrMode}
+                </button>
+              )}
             </div>
           </div>
         )}
