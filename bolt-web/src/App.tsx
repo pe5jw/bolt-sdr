@@ -261,7 +261,7 @@ export default function App() {
             }}
             onTuneDrive={pct => {
               setRadioState(s => ({ ...s, tunePct: pct }))
-              fetch('/api/tx/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pct }) })
+              fetch('/api/tx/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: pct }) })
             }}
             onMicGain={db => {
               setRadioState(s => ({ ...s, micGainDb: db }))
