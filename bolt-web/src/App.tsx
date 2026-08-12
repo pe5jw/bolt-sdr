@@ -254,8 +254,6 @@ export default function App() {
           <TxPanel
             mox={radioState.mox}
             tune={radioState.tune}
-            driveDb={radioState.driveDb}
-            tunePct={radioState.tunePct}
             micGainDb={radioState.micGainDb}
             alc={meters.alc}
             swr={meters.swr}
@@ -267,14 +265,6 @@ export default function App() {
             onTune={on => {
               setRadioState(s => ({ ...s, tune: on }))
               fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
-            }}
-            onDrive={db => {
-              setRadioState(s => ({ ...s, driveDb: db }))
-              fetch('/api/tx/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: db }) })
-            }}
-            onTuneDrive={pct => {
-              setRadioState(s => ({ ...s, tunePct: pct }))
-              fetch('/api/tx/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: pct }) })
             }}
             onMicGain={db => {
               setRadioState(s => ({ ...s, micGainDb: db }))
