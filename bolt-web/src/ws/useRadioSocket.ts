@@ -249,7 +249,6 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
           const dbm = view.getFloat32(1, true)
           setMeters(m => ({ ...m, sMeter: dbm }))
         } else if (msgType === MSG_RX_METER_V2 && buf.byteLength >= 29) {
-          const signalPk = view.getFloat32(1, true)
           const signalAv = view.getFloat32(5, true)
           setMeters(m => ({ ...m, sMeter: signalAv }))
         } else if (msgType === MSG_TX_METER && buf.byteLength >= 81) {
