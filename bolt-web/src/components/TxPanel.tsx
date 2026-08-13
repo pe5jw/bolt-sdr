@@ -40,7 +40,7 @@ export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, onMox
           <span className="tx-meter-label">W</span>
         </div>
         <div className="tx-meter-item">
-          <span className="tx-meter-val alc">{alc.toFixed(1)}</span>
+          <span className="tx-meter-val alc">{isFinite(alc) ? alc.toFixed(1) : '0.0'}</span>
           <span className="tx-meter-label">ALC</span>
         </div>
         <div className="tx-meter-item">
