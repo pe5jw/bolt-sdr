@@ -18,6 +18,7 @@ export interface RadioState {
   squelchLevel: number
   micGainDb: number
   driveDb: number
+  driveMaxPct: number
   tunePct: number
   connected: boolean
   radioName: string
@@ -68,6 +69,7 @@ const DEFAULT_STATE: RadioState = {
   squelchLevel: 46,
   micGainDb: 0,
   driveDb: 80,
+  driveMaxPct: 100,
   tunePct: 10,
   connected: false,
   radioName: '',
@@ -220,6 +222,7 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
           squelchEnabled: state.squelch?.enabled ?? s.squelchEnabled,
           squelchLevel: state.squelch?.level ?? s.squelchLevel,
           driveDb: state.drivePct ?? s.driveDb,
+          driveMaxPct: state.driveMaxPct ?? s.driveMaxPct,
           tunePct: state.tunePct ?? s.tunePct,
           filterHigh: state.filterHighHz ?? s.filterHigh,
           connected: true,
