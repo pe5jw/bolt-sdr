@@ -221,6 +221,11 @@ export default function App() {
               <input type="range" min={0} max={100} value={radioState.tunePct} onChange={e => { const v=Number(e.target.value); setRadioState(s=>({...s,tunePct:v})); fetch('/api/tx/tune-drive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({percent:v})}) }} style={{ flex: 1, accentColor: 'var(--tx)' }} />
               <span style={{ fontSize: 10, color: 'var(--tx)', fontFamily: 'var(--font-data)', minWidth: 32 }}>{radioState.tunePct}%</span>
             </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 36 }}>MAX</span>
+              <input type="range" min={0} max={100} value={radioState.driveMaxPct} onChange={e => { const v=Number(e.target.value); setRadioState(s=>({...s,driveMaxPct:v})); fetch('/api/tx/drive-max',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({percent:v})}) }} style={{ flex: 1, accentColor: 'var(--accent)' }} />
+              <span style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-data)', minWidth: 32 }}>{radioState.driveMaxPct}%</span>
+            </div>
           </div>
           <RxControls
             squelchEnabled={radioState.squelchEnabled}
