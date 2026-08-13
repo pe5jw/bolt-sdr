@@ -79,6 +79,7 @@ const MSG_DISPLAY_FRAME        = 0x01
 const MSG_AUDIO_PCM            = 0x02
 const MSG_RX_METER             = 0x14
 const MSG_TX_METER             = 0x16
+const MSG_RX_METER_V2          = 0x19
 const MSG_AUDIO_STREAM_REQUEST = 0x21
 const MSG_DISPLAY_STREAM_REQUEST = 0x22
 const MSG_MIDI_LEARN = 0x3B
@@ -247,6 +248,10 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
         } else if (msgType === MSG_RX_METER && buf.byteLength >= 5) {
           const dbm = view.getFloat32(1, true)
           setMeters(m => ({ ...m, sMeter: dbm }))
+        } else if (msgType === MSG_RX_METER_V2 && buf.byteLength >= 29) {
+          const signalPk = view.getFloat32(1, true)
+          const signalAv = view.getFloat32(5, true)
+          setMeters(m => ({ ...m, sMeter: signalAv }))
         } else if (msgType === MSG_TX_METER && buf.byteLength >= 81) {
           const fwdW = view.getFloat32(1, true)
           const swr = view.getFloat32(9, true)
