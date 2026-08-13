@@ -237,7 +237,6 @@ export default function App() {
               setRadioState(s => ({ ...s, squelchEnabled: enabled, squelchLevel: level }))
               fetch('/api/rx/squelch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, level }) })
             }}
-            mox={radioState.mox}
             nrMode={nrState.nrMode}
             anfEnabled={nrState.anfEnabled}
             snbEnabled={nrState.snbEnabled}

@@ -160,6 +160,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
     const wf = wfRef.current
     if (!wf || !display) return
     if (mox) return  // Pauzeer waterfall tijdens TX
+    if (mox) return  // Pauzeer waterfall tijdens TX
     if (!wfCtxRef.current) wfCtxRef.current = wf.getContext('2d')
     const ctx = wfCtxRef.current
     if (!ctx) return
