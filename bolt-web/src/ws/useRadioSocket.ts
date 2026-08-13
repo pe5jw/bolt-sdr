@@ -78,6 +78,7 @@ const DEFAULT_STATE: RadioState = {
 const MSG_DISPLAY_FRAME        = 0x01
 const MSG_AUDIO_PCM            = 0x02
 const MSG_RX_METER             = 0x14
+const MSG_TX_METER             = 0x11
 const MSG_AUDIO_STREAM_REQUEST = 0x21
 const MSG_DISPLAY_STREAM_REQUEST = 0x22
 const MSG_MIDI_LEARN = 0x3B
@@ -245,6 +246,11 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
         } else if (msgType === MSG_RX_METER && buf.byteLength >= 5) {
           const dbm = view.getFloat32(1, true)
           setMeters(m => ({ ...m, sMeter: dbm }))
+        } else if (msgType === MSG_TX_METER && buf.byteLength >= 37) {
+          const fwdW = view.getFloat32(1, true)
+          const swr = view.getFloat32(9, true)
+          const alcPk = view.getFloat32(29, true)
+          setMeters(m => ({ ...m, power: fwdW, swr, alc: alcPk }))
         } else if (msgType === MSG_MIDI_LEARN) {
           try {
             const json = new TextDecoder().decode(new Uint8Array(buf, 1))
