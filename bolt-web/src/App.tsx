@@ -164,6 +164,7 @@ export default function App() {
             tuneStepOverlay={!controlsOverlay && vfoOverlay}
             onStepChange={setTuneStep}
             controlsOverlay={controlsOverlay}
+            mox={radioState.mox}
             nrMode={nrState.nrMode}
             onNrMode={(mode) => {
               const newNr = { ...nrState, nrMode: mode }
@@ -236,6 +237,7 @@ export default function App() {
               setRadioState(s => ({ ...s, squelchEnabled: enabled, squelchLevel: level }))
               fetch('/api/rx/squelch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, level }) })
             }}
+            mox={radioState.mox}
             nrMode={nrState.nrMode}
             anfEnabled={nrState.anfEnabled}
             snbEnabled={nrState.snbEnabled}
