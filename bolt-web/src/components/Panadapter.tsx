@@ -301,7 +301,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
         <span style={lbl}>FLOOR</span>
         <button onClick={() => setDbMin(d => { const v = Math.min(dbMax - 20, d + 5); localStorage.setItem('bolt-floor', String(v)); return v })} style={sBtn}>+</button>
         <span style={val}>{dbMin}</span>
-        <button onClick={() => setDbMin(d => Math.max(-220, d - 10))} style={sBtn}>−</button>
+        <button onClick={() => setDbMin(d => Math.max(-220, d - 5))} style={sBtn}>−</button>
       </div>
       <div style={{ position: "relative" }}>
         {vfoOverlay && vfoHz != null && (
