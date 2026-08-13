@@ -16,6 +16,7 @@ interface Props {
   vfoHz?: number
   mode?: string
   dbm?: number
+  mox?: boolean
   tuneStepOverlay?: boolean
   onStepChange?: (step: number) => void
   nrMode?: string
@@ -28,7 +29,7 @@ interface Props {
   filterHighHz?: number
 }
 
-export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange, controlsOverlay, onBand, onMode, onFilterPreset, filterLowHz, filterHighHz, nrMode, onNrMode }: Props) {
+export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange, controlsOverlay, onBand, onMode, onFilterPreset, filterLowHz, filterHighHz, nrMode, onNrMode, mox }: Props) {
   const [openPanel, setOpenPanel] = useState<'band'|'mode'|'filter'|'step'|'nr'|null>(null)
   const [customLow, setCustomLow] = useState('-3200')
   const [customHigh, setCustomHigh] = useState('200')
@@ -158,6 +159,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
   const drawWf = useCallback(() => {
     const wf = wfRef.current
     if (!wf || !display) return
+    if (mox) return  // Pauzeer waterfall tijdens TX
     if (!wfCtxRef.current) wfCtxRef.current = wf.getContext('2d')
     const ctx = wfCtxRef.current
     if (!ctx) return
