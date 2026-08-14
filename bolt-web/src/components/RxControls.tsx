@@ -9,11 +9,13 @@ interface Props {
   snbEnabled?: boolean
   nbMode?: string
   onNr?: (nr: {nrMode: string, anfEnabled: boolean, snbEnabled: boolean, nbMode: string, nbThreshold: number}) => void
+  agcMode?: string
+  onAgc?: (mode: string) => void
   onSquelch: (enabled: boolean, level: number) => void
   onAtten: (db: number) => void
 }
 
-export function RxControls({ squelchEnabled, squelchLevel, attenDb, onSquelch, onAtten, nrMode='Off', anfEnabled=false, snbEnabled=false, nbMode='Off', onNr }: Props) {
+export function RxControls({ squelchEnabled, squelchLevel, attenDb, onSquelch, onAtten, nrMode='Off', anfEnabled=false, snbEnabled=false, nbMode='Off', onNr, agcMode='Med', onAgc }: Props) {
   const [localSql, setLocalSql] = useState(squelchLevel)
   const [showNrSettings, setShowNrSettings] = useState(false)
   const [nbThreshold, setNbThreshold] = useState(20)
@@ -44,6 +46,18 @@ export function RxControls({ squelchEnabled, squelchLevel, attenDb, onSquelch, o
       </div>
 
 
+
+      {/* AGC */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span style={labelStyle}>AGC</span>
+        {['Long','Slow','Med','Fast'].map(m => (
+          <button key={m} onClick={() => onAgc && onAgc(m)}
+            style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+              background: agcMode === m ? 'var(--accent)' : 'var(--bg-control)',
+              border: '1px solid var(--border)',
+              color: agcMode === m ? 'var(--bg)' : 'var(--text-dim)' }}>{m}</button>
+        ))}
+      </div>
 
       {/* Attenuator */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

@@ -306,24 +306,30 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
       <div style={{ position: "relative" }}>
         {vfoOverlay && vfoHz != null && (
           <div style={{ position: 'absolute', top: 6, left: 8, pointerEvents: 'none', zIndex: 10,
-            background: 'rgba(0,0,0,0.55)', border: '1px solid var(--accent)', borderRadius: 4, padding: '4px 10px' }}>
+            background: 'rgba(0,0,0,0.65)', border: '1px solid var(--border)', borderRadius: 4, padding: '5px 10px' }}>
             <div style={{ fontFamily: 'var(--font-data)', fontSize: 28, fontWeight: 700, color: 'var(--accent)', letterSpacing: 3, textShadow: '0 0 10px var(--accent)' }}>
               {(vfoHz / 1e6).toFixed(6)}
             </div>
-            {mode && <div style={{ fontFamily: 'var(--font-data)', fontSize: 10, color: 'var(--text-dim)', letterSpacing: 3 }}>{mode}</div>}
+            {mode && <div style={{ fontFamily: 'var(--font-data)', fontSize: 12, fontWeight: 700, color: '#2ecc71', letterSpacing: 3, marginTop: 2 }}>{mode}</div>}
           </div>
         )}
         {smeterOverlay && dbm != null && (() => {
-          const pct = Math.max(0, Math.min(100, (dbm + 127) / 74 * 100))
-          const s = dbm >= -53 ? 'S9+' + Math.round(dbm + 53) + 'dB' : 'S' + Math.max(0, Math.min(9, Math.round((dbm + 127) / 6)))
+          const sNum = dbm >= -53 ? 9 : Math.max(0, Math.min(9, Math.round((dbm + 127) / 6)))
+          const sLabel = dbm >= -53 ? 'S9+' + Math.round(dbm + 53) + 'dB' : 'S' + sNum
+          const labelColor = dbm >= -53 ? '#e74c3c' : sNum >= 7 ? '#f39c12' : '#2ecc71'
           return (
             <div style={{ position: 'absolute', top: 6, right: 8, pointerEvents: 'none', zIndex: 10,
-              background: 'rgba(0,0,0,0.55)', border: '1px solid var(--accent)', borderRadius: 4, padding: '4px 10px', minWidth: 120 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-data)', fontSize: 10, color: 'var(--text-dim)', marginBottom: 3 }}>
-                <span>{s}</span><span>{dbm.toFixed(1)} dBm</span>
+              background: 'rgba(0,0,0,0.65)', border: '1px solid var(--border)', borderRadius: 4, padding: '5px 10px', minWidth: 140 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+                <span style={{ fontFamily: 'var(--font-data)', fontSize: 16, fontWeight: 700, color: labelColor }}>{sLabel}</span>
+                <span style={{ fontFamily: 'var(--font-data)', fontSize: 10, color: 'var(--text-dim)' }}>{dbm.toFixed(1)} dBm</span>
               </div>
-              <div style={{ height: 6, background: 'var(--bg-deep)', borderRadius: 3, overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: pct + '%', background: pct > 90 ? '#e74c3c' : pct > 70 ? '#f39c12' : 'var(--green)', borderRadius: 3, transition: 'width 0.1s' }} />
+              <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 16, marginBottom: 2 }}>
+                {[1,2,3,4,5,6,7,8,9].map(i => (
+                  <div key={i} style={{ width: 10, height: 4 + i * 1.2, borderRadius: 1, transition: 'background 0.1s',
+                    background: sNum >= i ? (i <= 6 ? '#2ecc71' : i <= 8 ? '#f39c12' : '#e74c3c') : 'rgba(255,255,255,0.1)' }} />
+                ))}
+                {dbm >= -53 && <div style={{ width: 10, height: 16, background: '#e74c3c', borderRadius: 1 }} />}
               </div>
             </div>
           )
