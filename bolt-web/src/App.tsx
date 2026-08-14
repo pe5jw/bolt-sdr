@@ -31,7 +31,7 @@ export default function App() {
       }
     }).catch(() => {})
   }, [])
-  const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive } = useRadioSocket(undefined, undefined)
+  const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive, micPeak } = useRadioSocket(undefined, undefined)
   lastKnownVfoRef.current = radioState.vfoHz
   midiEngine.setVfoHz(radioState.vfoHz)
 
@@ -263,6 +263,7 @@ export default function App() {
           <TxPanel
             mox={radioState.mox}
             tune={radioState.tune}
+            micPeak={micPeak}
             afGainDb={radioState.rxAfGainDb}
             micGainDb={radioState.micGainDb}
             alc={meters.alc}

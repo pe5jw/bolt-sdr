@@ -9,11 +9,13 @@ export class MicUplink {
   private node: AudioWorkletNode | null = null
   private ws: WebSocket | null = null
   private active = false
+  private gainNode: GainNode | null = null
+  gain = parseFloat(localStorage.getItem('bolt-mic-gain') ?? '8')
+  onPeak?: (peak: number) => void
 
   async start(ws: WebSocket): Promise<void> {
     if (this.active) return
     this.ws = ws
-
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: false,
@@ -23,13 +25,12 @@ export class MicUplink {
         sampleRate: 48000,
       }
     })
-
     this.ctx = new AudioContext({ sampleRate: 48000, latencyHint: 0.04 })
     if (this.ctx.state === 'suspended') await this.ctx.resume()
-
     await this.ctx.audioWorklet.addModule(WORKLET_URL)
-
     const source = this.ctx.createMediaStreamSource(this.stream)
+    this.gainNode = this.ctx.createGain()
+    this.gainNode.gain.value = this.gain
     this.node = new AudioWorkletNode(this.ctx, 'mic-uplink', {
       numberOfInputs: 1,
       numberOfOutputs: 1,
@@ -38,11 +39,12 @@ export class MicUplink {
       channelCountMode: 'explicit',
       channelInterpretation: 'discrete',
     })
-
     this.node.port.onmessage = (ev: MessageEvent<{ samples?: Float32Array; peak?: number }>) => {
       const samples = ev.data?.samples
+      const peak = ev.data?.peak ?? 0
       if (!(samples instanceof Float32Array)) return
       if (samples.length !== EXPECTED_BLOCK_SAMPLES) return
+      this.onPeak?.(peak)
       if (this.ws?.readyState !== WebSocket.OPEN) return
       const buf = new ArrayBuffer(1 + samples.byteLength)
       const view = new DataView(buf)
@@ -51,18 +53,20 @@ export class MicUplink {
       dst.set(new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength))
       this.ws.send(buf)
     }
-
     const silentSink = this.ctx.createGain()
     silentSink.gain.value = 0
-    source.connect(this.node)
+    source.connect(this.gainNode)
+    this.gainNode.connect(this.node)
     this.node.connect(silentSink)
     silentSink.connect(this.ctx.destination)
     this.active = true
     console.log('[MicUplink] started')
+    window.addEventListener('bolt-mic-gain', ((e: CustomEvent) => { this.gain = e.detail; if (this.gainNode) this.gainNode.gain.value = e.detail }) as EventListener)
   }
 
   stop(): void {
     this.active = false
+    this.gainNode?.disconnect()
     this.node?.disconnect()
     this.stream?.getTracks().forEach(t => t.stop())
     this.ctx?.close()
@@ -70,6 +74,8 @@ export class MicUplink {
     this.stream = null
     this.ctx = null
     this.ws = null
+    this.gainNode = null
+    this.onPeak = undefined
     console.log('[MicUplink] stopped')
   }
 }

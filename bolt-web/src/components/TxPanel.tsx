@@ -6,12 +6,13 @@ interface Props {
   alc: number
   swr: number
   power: number
+  micPeak?: number
   onMox: (on: boolean) => void
   onTune: (on: boolean) => void
   onAfGain: (db: number) => void
   onMicGain: (db: number) => void
 }
-export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, onMox, onTune, onAfGain, onMicGain }: Props) {
+export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, onMox, onTune, onAfGain, onMicGain, micPeak = 0 }: Props) {
   return (
     <div className="tx-wrap">
       <button className={`tx-btn mox-btn ${mox ? 'active' : ''}`} onClick={() => onMox(!mox)}>
@@ -33,6 +34,15 @@ export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, onMox
           <span className="tx-slider-val">{micGainDb > 0 ? '+' : ''}{micGainDb} dB</span>
         </div>
         <input type="range" min={-40} max={20} value={micGainDb} onChange={e => onMicGain(Number(e.target.value))} />
+        <div style={{ height: 4, background: 'var(--bg-input)', borderRadius: 2, overflow: 'hidden', marginTop: 2 }}>
+          <div style={{
+            height: '100%',
+            width: (Math.min(1, micPeak) * 100) + '%',
+            background: micPeak > 0.8 ? '#e74c3c' : micPeak > 0.5 ? '#f39c12' : '#2ecc71',
+            borderRadius: 2,
+            transition: 'width 0.05s'
+          }} />
+        </div>
       </div>
       <div className="tx-meters">
         <div className="tx-meter-item">
@@ -53,4 +63,3 @@ export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, onMox
     </div>
   )
 }
-
