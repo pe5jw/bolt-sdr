@@ -23,6 +23,7 @@ export function SettingsModal({ onClose }: Props) {
     fetch("/api/radio/freq-cal").then(r => r.json()).then(d => setCalFactor(d.factor)).catch(() => {})
   }, [])
   const [bandGuardIgnore, setBandGuardIgnore] = useState(false)
+  const [micGain, setMicGain] = useState(() => parseFloat(localStorage.getItem('bolt-mic-gain') ?? '8'))
   useEffect(() => {
     fetch('/api/bands/current').then(r => r.json()).then(d => setBandGuardIgnore(d.txGuardIgnore)).catch(() => {})
   }, [])
@@ -203,6 +204,13 @@ export function SettingsModal({ onClose }: Props) {
           </div>
 
           <div style={{ marginTop: 8, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>
+          <div style={row}>
+            <span style={lbl}>MIC BOOST</span>
+            <input type="range" min={1} max={20} step={0.5} value={micGain}
+              onChange={e => { const v = parseFloat(e.target.value); setMicGain(v); localStorage.setItem('bolt-mic-gain', String(v)); window.dispatchEvent(new CustomEvent('bolt-mic-gain', { detail: v })) }}
+              style={{ flex: 1, accentColor: 'var(--accent)' }} />
+            <span style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-data)', minWidth: 28 }}>x{micGain}</span>
+          </div>
           <div style={row}>
             <span style={lbl}>BAND GUARD</span>
             <button onClick={async () => {

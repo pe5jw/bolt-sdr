@@ -132,6 +132,7 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
   const nextPlayTimeRef = useRef(0)
   const moxActiveRef = useRef(false)
   const micUplinkRef = useRef<MicUplink>(new MicUplink())
+  const [micPeak, setMicPeak] = useState(0)
   const audioEnabledRef = useRef(false)
 
   const bufferTargetRef = useRef(0.14)
@@ -297,7 +298,7 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
 
   const setMoxActive = useCallback((active: boolean) => {
     moxActiveRef.current = active
-    if (active) { micUplinkRef.current.start(wsRef.current!).catch(console.error) } else { micUplinkRef.current.stop() }
+    if (active) { micUplinkRef.current.onPeak = setMicPeak; micUplinkRef.current.start(wsRef.current!).catch(console.error) } else { micUplinkRef.current.stop(); setMicPeak(0) }
     if (!active) {
       // Flush audio buffer on TX->RX
       nextPlayTimeRef.current = 0
@@ -310,7 +311,7 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
     }
   }, [])
 
-  return { status, radioState, setRadioState, meters, display, send, audioEnabled, setAudioEnabled, wsRef, flushAudioBuffer, setMoxActive }
+  return { status, radioState, setRadioState, meters, display, send, audioEnabled, setAudioEnabled, wsRef, flushAudioBuffer, setMoxActive, micPeak }
 }
 
 
