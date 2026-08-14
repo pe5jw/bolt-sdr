@@ -56,6 +56,7 @@ export default function App() {
   const [smeterOverlay, setSmeterOverlay] = useState(() => localStorage.getItem('bolt-smeter-overlay') !== 'false')
   const [connectedIp, setConnectedIp] = useState("")
   const [_mox, setMox] = useState(false)
+  const [guardMsg, setGuardMsg] = useState<string | null>(null)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -132,6 +133,7 @@ export default function App() {
 
   return (
     <div className="bolt-app">
+      {guardMsg && <div style={{ position: 'fixed', top: 40, left: '50%', transform: 'translateX(-50%)', background: 'var(--tx)', color: 'var(--bg)', padding: '6px 16px', borderRadius: 4, fontSize: 11, fontFamily: 'var(--font-data)', zIndex: 9999 }}>⚠ {guardMsg}</div>}
       <StatusBar learnFrame={null}
         status={status === 'connected' && radioState.connected ? 'connected' : status === 'connected' ? 'disconnected' : status}
         radioName={radioState.radioName}
@@ -264,7 +266,7 @@ export default function App() {
             onMox={on => {
               setRadioState(s => ({ ...s, mox: on }))
               setMoxActive(on)
-              fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
+              fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) }).then(async r => { if (!r.ok && on) { const d = await r.json(); setMoxActive(false); setRadioState(s => ({...s, mox: false})); setGuardMsg(d.error ?? 'TX geblokkeerd'); setTimeout(() => setGuardMsg(null), 4000) } })
             }}
             onTune={on => {
               setRadioState(s => ({ ...s, tune: on }))
