@@ -251,6 +251,11 @@ export default function App() {
               setRadioState(s => ({ ...s, attDb: db }))
               fetch('/api/attenuator', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
             }}
+            agcMode={radioState.agcMode ?? 'Med'}
+            onAgc={mode => {
+              setRadioState(s => ({ ...s, agcMode: mode }))
+              fetch('/api/rx/agc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agc: { mode, slope: null, decayMs: null, hangMs: null, hangThreshold: null, fixedGainDb: null } }) }).catch(() => {})
+            }}
           />
         </section>
         )}
