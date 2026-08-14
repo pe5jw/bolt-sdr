@@ -21,6 +21,10 @@ export function SettingsModal({ onClose }: Props) {
   useEffect(() => {
     fetch("/api/radio/freq-cal").then(r => r.json()).then(d => setCalFactor(d.factor)).catch(() => {})
   }, [])
+  const [bandGuardIgnore, setBandGuardIgnore] = useState(false)
+  useEffect(() => {
+    fetch('/api/bands/current').then(r => r.json()).then(d => setBandGuardIgnore(d.txGuardIgnore)).catch(() => {})
+  }, [])
 
   const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }
   const lbl: React.CSSProperties = { fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 80 }
@@ -182,6 +186,23 @@ export function SettingsModal({ onClose }: Props) {
           </div>
 
           <div style={{ marginTop: 8, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>
+          <div style={row}>
+            <span style={lbl}>BAND GUARD</span>
+            <button onClick={async () => {
+              const next = !bandGuardIgnore
+              await fetch('/api/bands/guard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ignore: next }) })
+              setBandGuardIgnore(next)
+            }} style={{
+              fontSize: 10, padding: '2px 10px', borderRadius: 3, cursor: 'pointer',
+              fontFamily: 'var(--font-data)',
+              background: bandGuardIgnore ? 'var(--accent)' : 'var(--bg-control)',
+              border: '1px solid var(--border)',
+              color: bandGuardIgnore ? 'var(--bg)' : 'var(--text-dim)'
+            }}>{bandGuardIgnore ? 'UIT' : 'AAN'}</button>
+            <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>
+              {bandGuardIgnore ? 'TX overal toegestaan' : 'IARU R1 segmenten actief'}
+            </span>
+          </div>
             Meer instellingen komen hier: audio buffer, CAT, etc.
           </div>
         </>}

@@ -239,7 +239,7 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
         const buf = ev.data as ArrayBuffer
         const view = new DataView(buf)
         const msgType = view.getUint8(0)
-        if (msgType !== 0x02 && msgType !== 0x04) console.log('WS msg:', '0x' + msgType.toString(16), buf.byteLength)
+        // debug logging disabled, buf.byteLength)
         if (msgType === MSG_DISPLAY_FRAME) {
           const frame = parseDisplayFrame(buf)
           if (frame) setDisplay(frame)
