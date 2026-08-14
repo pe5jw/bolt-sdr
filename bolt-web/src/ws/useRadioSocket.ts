@@ -1,3 +1,4 @@
+import { MicUplink } from './MicUplink'
 import { useEffect, useRef, useState, useCallback } from 'react'
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
@@ -117,7 +118,7 @@ function parseAudioFrame(buf: ArrayBuffer): { samples: Float32Array; sampleRate:
   } catch { return null }
 }
 
-const DEFAULT_WS_URL = () => `ws://${window.location.hostname}:${window.location.port || "6061"}/ws`
+const DEFAULT_WS_URL = () => `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port || "6061"}/ws`
 export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (frame: import('../midi').MidiLearnFrame) => void) {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected')
   const [radioState, setRadioState] = useState<RadioState>(DEFAULT_STATE)
@@ -130,6 +131,7 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
   const audioCtxRef = useRef<AudioContext | null>(null)
   const nextPlayTimeRef = useRef(0)
   const moxActiveRef = useRef(false)
+  const micUplinkRef = useRef<MicUplink>(new MicUplink())
   const audioEnabledRef = useRef(false)
 
   const bufferTargetRef = useRef(0.14)
@@ -295,6 +297,7 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
 
   const setMoxActive = useCallback((active: boolean) => {
     moxActiveRef.current = active
+    if (active) { micUplinkRef.current.start(wsRef.current!).catch(console.error) } else { micUplinkRef.current.stop() }
     if (!active) {
       // Flush audio buffer on TX->RX
       nextPlayTimeRef.current = 0
