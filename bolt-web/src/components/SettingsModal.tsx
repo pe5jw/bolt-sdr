@@ -1,3 +1,4 @@
+import pkg from '../../package.json'
 import { useState, useEffect } from 'react'
 import { MidiSettingsPanel } from './MidiSettingsPanel'
 import { THEMES, SPECTRUM_COLORS } from '../themes'
@@ -10,7 +11,7 @@ interface Props {
 
 export function SettingsModal({ onClose }: Props) {
   const { theme, setTheme, showLogo, setShowLogo, logoBrightness, setLogoBrightness, wfPalette, setWfPalette } = useTheme()
-  const [tab, setTab] = useState<'general' | 'midi'>('general')
+  const [tab, setTab] = useState<'general' | 'midi' | 'info'>('general')
   const [displayRate, setDisplayRate] = useState(30)
   useEffect(() => {
     fetch("/api/display/settings").then(r => r.json()).then(d => {
@@ -28,7 +29,7 @@ export function SettingsModal({ onClose }: Props) {
 
   const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }
   const lbl: React.CSSProperties = { fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 80 }
-  const tabBtn = (t: 'general' | 'midi'): React.CSSProperties => ({
+  const tabBtn = (t: 'general' | 'midi' | 'info'): React.CSSProperties => ({
     fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer',
     fontFamily: 'var(--font-data)', letterSpacing: 2,
     background: tab === t ? 'var(--accent)' : 'var(--bg-control)',
@@ -56,8 +57,24 @@ export function SettingsModal({ onClose }: Props) {
         <div style={{ display: 'flex', gap: 4, marginBottom: 16 }}>
           <button style={tabBtn('general')} onClick={() => setTab('general')}>GENERAL</button>
           <button style={tabBtn('midi')} onClick={() => setTab('midi')}>MIDI</button>
+          <button style={tabBtn('info')} onClick={() => setTab('info')}>INFO</button>
         </div>
 
+        {/* Info tab */}
+        {tab === 'info' && (
+          <div style={{ fontFamily: 'var(--font-data)', fontSize: 11, color: 'var(--text-dim)' }}>
+            <div style={{ marginBottom: 8 }}>
+              <span style={{ color: 'var(--text)', fontSize: 13, fontWeight: 700 }}>BOLT SDR</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div><span style={{ color: 'var(--text-dim)' }}>VERSIE</span> <span style={{ color: 'var(--accent)' }}>{pkg.version}</span></div>
+              <div><span style={{ color: 'var(--text-dim)' }}>BRANCH</span> <span style={{ color: 'var(--accent)' }}>bolt-main</span></div>
+              <div><span style={{ color: 'var(--text-dim)' }}>STACK</span> <span style={{ color: 'var(--accent)' }}>station-engine + bolt-web</span></div>
+              <div><span style={{ color: 'var(--text-dim)' }}>RADIO</span> <span style={{ color: 'var(--accent)' }}>HermesLite 2</span></div>
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)', fontSize: 9 }}>GPL v2+ — gebaseerd op Zeus SDR</div>
+            </div>
+          </div>
+        )}
         {/* MIDI tab */}
         {tab === 'midi' && <MidiSettingsPanel onClose={onClose} />}
 
