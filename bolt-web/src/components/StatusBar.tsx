@@ -203,6 +203,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
               <button onClick={addManualIp} style={{ fontSize: 10, padding: '2px 8px', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)' }}>Add</button>
             </div>
           </div>
+
         </div>
       )}
 
@@ -210,5 +211,3 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
     </div>
   )
 }
-
-
