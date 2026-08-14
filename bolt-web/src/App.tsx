@@ -263,6 +263,7 @@ export default function App() {
             power={meters.power}
             onMox={on => {
               setRadioState(s => ({ ...s, mox: on }))
+              setMoxActive(on)
               fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
             }}
             onTune={on => {

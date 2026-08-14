@@ -45,8 +45,10 @@ export class MicUplink {
       if (samples.length !== EXPECTED_BLOCK_SAMPLES) return
       if (this.ws?.readyState !== WebSocket.OPEN) return
       const buf = new ArrayBuffer(1 + samples.byteLength)
-      new Uint8Array(buf)[0] = MIC_PCM_TYPE
-      new Float32Array(buf, 1).set(samples)
+      const view = new DataView(buf)
+      view.setUint8(0, MIC_PCM_TYPE)
+      const dst = new Uint8Array(buf, 1)
+      dst.set(new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength))
       this.ws.send(buf)
     }
 
