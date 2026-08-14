@@ -49,6 +49,10 @@ class MidiEngine {
   private learnCallback: LearnCallback | null = null
   private messageCallback: MessageCallback | null = null
   private learning = false
+  onMox: ((on: boolean) => void) | null = null
+  onTune: ((on: boolean) => void) | null = null
+  private tuneState = false
+  private moxState = false
   
 
   constructor() {
@@ -213,18 +217,26 @@ class MidiEngine {
     }
 
     // Button commando's
+    // Button commando's
     if (mapping.controlType === 'Button') {
       const on = value > 0
       if (cmd === 'MoxOnOff') {
-        
+        const moxOn = mapping.toggle ? (on ? !this.moxState : this.moxState) : on
+        if (mapping.toggle && !on) return
+        this.moxState = moxOn
+        this.onMox?.(moxOn)
         fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ on }) }).catch(() => {})
+          body: JSON.stringify({ on: moxOn }) }).catch(() => {})
         return
       }
       if (!on && !mapping.toggle) return  // momentary: alleen actie bij indrukken
       if (cmd === 'TunOnOff') {
+        if (mapping.toggle && !on) return  // toggle: alleen reageren op indrukken
+        const tuneOn = mapping.toggle ? !this.tuneState : on
+        this.tuneState = tuneOn
+        this.onTune?.(tuneOn)
         fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ on }) }).catch(() => {})
+          body: JSON.stringify({ on: tuneOn }) }).catch(() => {})
         return
       }
       if (cmd === 'MuteOnOff') {

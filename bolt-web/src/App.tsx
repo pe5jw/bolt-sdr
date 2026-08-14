@@ -34,6 +34,15 @@ export default function App() {
   const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive, micPeak } = useRadioSocket(undefined, undefined)
   lastKnownVfoRef.current = radioState.vfoHz
   midiEngine.setVfoHz(radioState.vfoHz)
+  midiEngine.onMox = (on) => {
+    setRadioState(s => ({ ...s, mox: on }))
+    setMoxActive(on)
+    fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) }).catch(() => {})
+  }
+  midiEngine.onTune = (on) => {
+    setRadioState(s => ({ ...s, tune: on }))
+    fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) }).catch(() => {})
+  }
 
   useEffect(() => {
     const h = () => setControlsOverlay(localStorage.getItem('bolt-controls-overlay') === 'true')
