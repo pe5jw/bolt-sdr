@@ -25,7 +25,6 @@ interface EditState {
 export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }) {
   const [mappings, setMappings] = useState<MidiMapping[]>([])
   const [devices, setDevices] = useState<string[]>([])
-  const [midiOk, setMidiOk] = useState(false)
   const [monitor, setMonitor] = useState<string[]>([])
   const [showMonitor, setShowMonitor] = useState(false)
   const [learning, setLearning] = useState(false)
@@ -136,9 +135,6 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
         <span style={{ fontSize: 10, color: devices.length > 0 ? 'var(--green)' : 'var(--tx)', flex: 1 }}>
           {devices.length > 0 ? devices.join(', ') : 'Geen apparaten gevonden'}
         </span>
-        <button onClick={() => midiEngine.init().then(ok => { setMidiOk(ok); setDevices(midiEngine.getDevices()) })} style={sBtn(midiOk)}>
-          {midiOk ? '● VERBONDEN' : 'VERBIND'}
-        </button>
       </div>
 
       {/* Learn banner */}
