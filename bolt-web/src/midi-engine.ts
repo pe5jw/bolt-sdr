@@ -229,7 +229,6 @@ class MidiEngine {
           body: JSON.stringify({ on: moxOn }) }).catch(() => {})
         return
       }
-      if (!on && !mapping.toggle) return  // momentary: alleen actie bij indrukken
       if (cmd === 'TunOnOff') {
         if (mapping.toggle && !on) return  // toggle: alleen reageren op indrukken
         const tuneOn = mapping.toggle ? !this.tuneState : on
@@ -239,6 +238,7 @@ class MidiEngine {
           body: JSON.stringify({ on: tuneOn }) }).catch(() => {})
         return
       }
+      if (!on && !mapping.toggle) return  // momentary: alleen actie bij indrukken
       if (cmd === 'MuteOnOff') {
         fetch('/api/rx/mute', { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ muted: on }) }).catch(() => {})
