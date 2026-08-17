@@ -92,6 +92,7 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
       toggle: edit.toggle,
       min: 0, max: 127,
       deviceName: edit.deviceName,
+      centerValue: edit.centerValue,
     })
     setEdit(null)
     refresh()
@@ -293,8 +294,8 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
                             id: mapping.id, controlType: mapping.controlType,
                             command: mapping.command, toggle: mapping.toggle,
                             deviceName: mapping.deviceName, accel: true,
-                            centerValue: 65, stepHz: 1000, zones: [30, 80, 150]
-                          })} style={sBtn()}>EDIT</button>
+                            deviceName: mapping.deviceName, accel: true,
+                            centerValue: mapping.centerValue ?? 64, stepHz: 1000, zones: [30, 80, 150]
                           <button onClick={() => reLearn(mapping)} style={sBtn(isLearning, 'var(--accent)')}>↺</button>
                           <button onClick={() => removeMapping(mapping.id)} style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', fontSize: 12 }}>✕</button>
                         </>

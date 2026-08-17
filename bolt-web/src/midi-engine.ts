@@ -14,6 +14,7 @@ export interface MidiMapping {
   min: number
   max: number
   deviceName: string
+  centerValue?: number
 }
 
 export interface MidiLearnEvent {
@@ -123,17 +124,9 @@ class MidiEngine {
     this.deviceListeners.forEach(cb => cb())
   }
 
-  private decodeRelative(value: number): number {
-    // Standard relative: 1=CW, 127=CCW
-    if (value === 1) return 1
-    if (value === 127) return -1
-    // Extended relative: 65+=CW, 63-=CCW
-    if (value >= 65 && value <= 96) return value - 64
-    if (value >= 32 && value <= 63) return value - 64
-    // Generic: 1-63=CW, 65-127=CCW
-    if (value >= 1 && value <= 63) return 1
-    if (value >= 65 && value <= 127) return -1
-    return 0
+  private decodeRelative(value: number, center = 64): number {
+    if (value === center) return 0
+    return value - center
   }
 
   private handleMessage(e: MIDIMessageEvent, deviceName: string): void {
@@ -193,11 +186,12 @@ class MidiEngine {
 
     // Wheel commando's
     if (mapping.controlType === 'Wheel') {
-      const d = delta !== 0 ? delta : this.decodeRelative(value)
+      const center = mapping.centerValue ?? 64
+      const d = delta !== 0 ? delta : this.decodeRelative(value, center)
       if (d === 0) return
       if (cmd === 'ChangeFreqVfoA') {
-        this.nudgeVfo(d)
-        return
+        const stepHz = (mapping as any).stepHz ?? 1000
+        this.nudgeVfo(d, stepHz)
       }
       if (cmd === 'ZoomSliderInc') {
         fetch('/api/rx/zoom', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -256,20 +250,19 @@ class MidiEngine {
   private vfoTimer: ReturnType<typeof setTimeout> | null = null
   private lastVfoHz = 0
 
-  setVfoHz(hz: number): void { this.lastVfoHz = hz }
+  setVfoHz(hz: number): void { if (!this.pendingVfo) this.lastVfoHz = hz }
 
-  private nudgeVfo(delta: number): void {
-    const step = 10
-    this.pendingVfo = (this.pendingVfo ?? 0) + delta * step
+  private nudgeVfo(delta: number, stepHz = 1000): void {
+    this.pendingVfo = (this.pendingVfo ?? 0) + delta * stepHz
     if (this.vfoTimer) clearTimeout(this.vfoTimer)
     this.vfoTimer = setTimeout(() => {
       const d = this.pendingVfo ?? 0
       this.pendingVfo = null
       if (d === 0) return
-      console.log("[MIDI VFO] lastVfoHz=" + this.lastVfoHz + " d=" + d + " newHz=" + (this.lastVfoHz + d))
-    const newHz = this.lastVfoHz + d
+      const newHz = Math.round(this.lastVfoHz + d)
+      this.lastVfoHz = newHz
       fetch('/api/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hz: newHz }) }).catch(() => {})
+        body: JSON.stringify({ receiver: 0, hz: newHz }) }).catch(() => {})
     }, 30)
   }
 
