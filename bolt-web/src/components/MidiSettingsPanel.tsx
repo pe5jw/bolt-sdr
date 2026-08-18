@@ -15,12 +15,10 @@ interface EditState {
   command: string
   toggle: boolean
   deviceName: string
-  accel: boolean
   centerValue: number
   stepHz: number
-  zones: [number, number, number]
+  pulsesPerStep: number
 }
-
 
 export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }) {
   const [mappings, setMappings] = useState<MidiMapping[]>([])
@@ -55,23 +53,11 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
         command,
         toggle: false,
         deviceName: event.deviceName,
-        accel: true,
-        centerValue: 65,
+        centerValue: 64,
         stepHz: 1000,
-        zones: [30, 80, 150],
+        pulsesPerStep: 1,
       })
       setLearnTarget(null)
-    })
-  }
-
-  const reLearn = (mapping: MidiMapping) => {
-    setLearning(true)
-    midiEngine.startLearn((event: MidiLearnEvent) => {
-      midiEngine.stopLearn()
-      setLearning(false)
-      midiEngine.removeMapping(mapping.id)
-      midiEngine.setMapping({ ...mapping, id: event.id, deviceName: event.deviceName })
-      refresh()
     })
   }
 
@@ -93,7 +79,9 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
       min: 0, max: 127,
       deviceName: edit.deviceName,
       centerValue: edit.centerValue,
-    })
+      stepHz: edit.stepHz,
+      pulsesPerStep: edit.pulsesPerStep,
+    } as MidiMapping)
     setEdit(null)
     refresh()
   }
@@ -107,7 +95,6 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
   return (
     <div style={{ fontFamily: 'var(--font-data)' }}>
 
-      {/* Header balk */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <span style={{ fontSize: 11, letterSpacing: 2, color: 'var(--text)' }}>MIDI CONFIGURATIE</span>
         <div style={{ display: 'flex', gap: 6 }}>
@@ -118,19 +105,18 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
             a.download = 'bolt-midi.json'; a.click()
           }} style={sBtn()}>EXPORT</button>
           <button onClick={() => {
-            const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json'
-            inp.onchange = async () => {
-              const f = inp.files?.[0]; if (!f) return
+            const inp2 = document.createElement('input'); inp2.type = 'file'; inp2.accept = '.json'
+            inp2.onchange = async () => {
+              const f = inp2.files?.[0]; if (!f) return
               const data = JSON.parse(await f.text())
               const arr = Array.isArray(data) ? data : data.mappings ?? []
               arr.forEach((m: MidiMapping) => midiEngine.setMapping(m))
               refresh()
-            }; inp.click()
+            }; inp2.click()
           }} style={sBtn()}>IMPORT</button>
         </div>
       </div>
 
-      {/* Apparaat */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, padding: '6px 10px', background: 'var(--bg-control)', borderRadius: 4, border: '1px solid var(--border)' }}>
         <span style={lbl}>APPARATEN:</span>
         <span style={{ fontSize: 10, color: devices.length > 0 ? 'var(--green)' : 'var(--tx)', flex: 1 }}>
@@ -138,7 +124,6 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
         </span>
       </div>
 
-      {/* Learn banner */}
       {learning && (
         <div style={{ background: 'rgba(255,200,0,0.12)', border: '1px solid var(--accent)', borderRadius: 4, padding: '8px 12px', marginBottom: 10, fontSize: 10, color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: 10 }}>
           <span>● LEARN MODE — Beweeg een knop of encoder op je controller...</span>
@@ -146,7 +131,6 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
         </div>
       )}
 
-      {/* Monitor */}
       {showMonitor && (
         <div ref={monitorRef} style={{ marginBottom: 10, background: 'var(--bg-deep)', borderRadius: 4, padding: 8, fontFamily: 'var(--font-data)', fontSize: 10, maxHeight: 100, overflowY: 'auto', border: '1px solid var(--border)' }}>
           <div style={{ color: 'var(--accent)', marginBottom: 4, letterSpacing: 1 }}>MIDI MONITOR</div>
@@ -155,7 +139,6 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
         </div>
       )}
 
-      {/* Edit panel */}
       {edit && (
         <div style={{ background: 'var(--bg-control)', border: '1px solid var(--accent)', borderRadius: 4, padding: 12, marginBottom: 12 }}>
           <div style={{ fontSize: 10, color: 'var(--accent)', letterSpacing: 2, marginBottom: 10 }}>
@@ -186,61 +169,35 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
             </div>
           </div>
 
-          {/* Button opties */}
           {edit.controlType === 'Button' && (
             <div style={{ marginBottom: 10, padding: '8px 10px', background: 'var(--bg-deep)', borderRadius: 4 }}>
               <div style={{ ...lbl, marginBottom: 6 }}>MODUS</div>
               <div style={{ display: 'flex', gap: 6 }}>
-                {(['Momentary', 'Toggle', 'Pulse'] as const).map(m => (
-                  <button key={m} onClick={() => setEdit({ ...edit, toggle: m === 'Toggle' })}
-                    style={sBtn(
-                      (m === 'Toggle' && edit.toggle) || (m === 'Momentary' && !edit.toggle)
-                    )}>
-                    {m.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-              <div style={{ fontSize: 9, color: 'var(--text-dim)', marginTop: 6 }}>
-                {edit.toggle ? 'Toggle: eerste druk = aan, tweede druk = uit' : 'Momentary: ingedrukt = aan, losgelaten = uit'}
+                <button onClick={() => setEdit({ ...edit, toggle: false })} style={sBtn(!edit.toggle)}>MOMENTARY</button>
+                <button onClick={() => setEdit({ ...edit, toggle: true })} style={sBtn(edit.toggle)}>TOGGLE</button>
               </div>
             </div>
           )}
 
-          {/* Encoder opties */}
           {edit.controlType === 'Wheel' && (
             <div style={{ marginBottom: 10, padding: '8px 10px', background: 'var(--bg-deep)', borderRadius: 4 }}>
               <div style={{ ...lbl, marginBottom: 8 }}>ENCODER INSTELLINGEN</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
                 <div>
                   <label style={lbl}>CENTER WAARDE</label>
                   <input type="number" style={inp} value={edit.centerValue} onChange={e => setEdit({ ...edit, centerValue: parseInt(e.target.value) })} />
                 </div>
                 <div>
-                  <label style={lbl}>STAP Hz</label>
+                  <label style={lbl}>STEP FACTOR</label>
                   <input type="number" style={inp} value={edit.stepHz} onChange={e => setEdit({ ...edit, stepHz: parseInt(e.target.value) })} />
+                  <div style={{ fontSize: 9, color: 'var(--text-dim)', marginTop: 2 }}>1000 = 1× tune step</div>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                    <input type="checkbox" checked={edit.accel} onChange={e => setEdit({ ...edit, accel: e.target.checked })} />
-                    <span style={{ ...lbl, marginTop: 0 }}>ACCELERATIE</span>
-                  </label>
+                <div>
+                  <label style={lbl}>PULSEN PER STAP</label>
+                  <input type="number" min={1} max={100} style={inp} value={edit.pulsesPerStep} onChange={e => setEdit({ ...edit, pulsesPerStep: parseInt(e.target.value) || 1 })} />
+                  <div style={{ fontSize: 9, color: 'var(--text-dim)', marginTop: 2 }}>1 = elke puls een stap</div>
                 </div>
               </div>
-              {edit.accel && (
-                <div>
-                  <div style={{ ...lbl, marginBottom: 4 }}>ZONES (dt ms → vermenigvuldiger)</div>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 10 }}>
-                    <span style={{ color: 'var(--text-dim)' }}>snel &lt;</span>
-                    <input type="number" style={{ ...inp, width: 50 }} value={edit.zones[0]} onChange={e => setEdit({ ...edit, zones: [parseInt(e.target.value), edit.zones[1], edit.zones[2]] })} />
-                    <span style={{ color: 'var(--accent)' }}>×10</span>
-                    <input type="number" style={{ ...inp, width: 50 }} value={edit.zones[1]} onChange={e => setEdit({ ...edit, zones: [edit.zones[0], parseInt(e.target.value), edit.zones[2]] })} />
-                    <span style={{ color: 'var(--accent)' }}>×4</span>
-                    <input type="number" style={{ ...inp, width: 50 }} value={edit.zones[2]} onChange={e => setEdit({ ...edit, zones: [edit.zones[0], edit.zones[1], parseInt(e.target.value)] })} />
-                    <span style={{ color: 'var(--accent)' }}>×2</span>
-                    <span style={{ color: 'var(--text-dim)' }}>langzaam ×1</span>
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
@@ -259,7 +216,6 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
         </div>
       )}
 
-      {/* Mapping tabel */}
       <div style={{ fontSize: 10, color: 'var(--text-dim)', letterSpacing: 2, marginBottom: 6 }}>COMMANDO MAPPINGS</div>
       <div style={{ border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -293,10 +249,11 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
                           <button onClick={() => setEdit({
                             id: mapping.id, controlType: mapping.controlType,
                             command: mapping.command, toggle: mapping.toggle,
-                            deviceName: mapping.deviceName, accel: true,
-                            deviceName: mapping.deviceName, accel: true,
-                            centerValue: mapping.centerValue ?? 64, stepHz: 1000, zones: [30, 80, 150]
-                          <button onClick={() => reLearn(mapping)} style={sBtn(isLearning, 'var(--accent)')}>↺</button>
+                            deviceName: mapping.deviceName,
+                            centerValue: (mapping as any).centerValue ?? 64,
+                            stepHz: (mapping as any).stepHz ?? 1000,
+                            pulsesPerStep: (mapping as any).pulsesPerStep ?? 1,
+                          })} style={sBtn()}>EDIT</button>
                           <button onClick={() => removeMapping(mapping.id)} style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', fontSize: 12 }}>✕</button>
                         </>
                       ) : (

@@ -52,8 +52,11 @@ class MidiEngine {
   private learning = false
   onMox: ((on: boolean) => void) | null = null
   onTune: ((on: boolean) => void) | null = null
-  private tuneState = false
+  onVfoChange: ((hz: number) => void) | null = null
+  tuneStepHz = 1000
+  private pulseAccum = 0
   private moxState = false
+  private tuneState = false
   
 
   constructor() {
@@ -252,8 +255,13 @@ class MidiEngine {
 
   setVfoHz(hz: number): void { if (!this.pendingVfo) this.lastVfoHz = hz }
 
-  private nudgeVfo(delta: number, stepHz = 1000): void {
-    this.pendingVfo = (this.pendingVfo ?? 0) + delta * stepHz
+  private nudgeVfo(delta: number, stepFactor = 1000, pulsesPerStep = 1): void {
+    this.pulseAccum += delta > 0 ? 1 : -1
+    if (Math.abs(this.pulseAccum) < pulsesPerStep) return
+    const steps = Math.trunc(this.pulseAccum / pulsesPerStep)
+    this.pulseAccum = this.pulseAccum % pulsesPerStep
+    const step = Math.round(this.tuneStepHz * (stepFactor / 1000) * steps)
+    this.pendingVfo = (this.pendingVfo ?? 0) + step
     if (this.vfoTimer) clearTimeout(this.vfoTimer)
     this.vfoTimer = setTimeout(() => {
       const d = this.pendingVfo ?? 0
@@ -261,6 +269,7 @@ class MidiEngine {
       if (d === 0) return
       const newHz = Math.round(this.lastVfoHz + d)
       this.lastVfoHz = newHz
+      this.onVfoChange?.(this.lastVfoHz)
       fetch('/api/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ receiver: 0, hz: newHz }) }).catch(() => {})
     }, 30)
