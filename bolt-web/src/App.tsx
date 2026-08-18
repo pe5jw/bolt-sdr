@@ -39,6 +39,9 @@ export default function App() {
     setMoxActive(on)
     fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) }).catch(() => {})
   }
+  midiEngine.onVfoChange = (hz) => {
+    setRadioState(s => ({ ...s, vfoHz: hz }))
+  }
   midiEngine.onTune = (on) => {
     setRadioState(s => ({ ...s, tune: on }))
     fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) }).catch(() => {})
@@ -59,6 +62,7 @@ export default function App() {
     return () => window.removeEventListener('bolt-overlay-changed', h)
   }, [])
   const [tuneStep, setTuneStep] = useState(1000)
+  midiEngine.tuneStepHz = tuneStep
   const [nrState, setNrState] = useState({ nrMode: 'Off', anfEnabled: false, snbEnabled: false, nbMode: 'Off' })
   const [vfoOverlay, setVfoOverlay] = useState(() => localStorage.getItem('bolt-vfo-overlay') !== 'false')
   const [controlsOverlay, setControlsOverlay] = useState(() => localStorage.getItem('bolt-controls-overlay') === 'true')
