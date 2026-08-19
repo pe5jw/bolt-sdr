@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<title>MIDI VFO Test</title>
+<style>
+  body { background: #0d1117; color: #ccc; font-family: monospace; padding: 20px; }
+  .vfo { font-size: 48px; color: #f0c060; margin: 20px 0; }
+  .log { height: 200px; overflow-y: auto; font-size: 11px; color: #888; border: 1px solid #333; padding: 8px; }
+  label { display: block; margin: 8px 0 4px; font-size: 12px; color: #aaa; }
+  input[type=number] { background: #1a1f2e; border: 1px solid #333; color: #ccc; padding: 4px 8px; width: 80px; }
+  button { background: #1a1f2e; border: 1px solid #444; color: #ccc; padding: 6px 14px; cursor: pointer; margin: 4px; }
+  button:hover { border-color: #f0c060; color: #f0c060; }
+  .row { display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap; margin: 10px 0; }
+  .stat { font-size: 11px; color: #666; margin: 4px 0; }
+</style>
+</head>
+<body>
+<h2 style="color:#f0c060">MIDI VFO Test</h2>
+
+<div class="row">
+  <div>
+    <label>MIDI apparaat</label>
+    <select id="device" style="background:#1a1f2e;border:1px solid #333;color:#ccc;padding:4px 8px;min-width:200px">
+      <option>-- geen MIDI --</option>
+    </select>
+  </div>
+  <div>
+    <label>CC nummer</label>
+    <input type="number" id="ccNum" value="31" min="0" max="127">
+  </div>
+  <div>
+    <label>Center waarde</label>
+    <input type="number" id="center" value="64" min="0" max="127">
+  </div>
+</div>
+
+<div class="row">
+  <div>
+    <label>Tune step Hz</label>
+    <input type="number" id="tuneStep" value="1000" min="1">
+  </div>
+  <div>
+    <label>Pulsen per stap</label>
+    <input type="number" id="pulsesPerStep" value="1" min="1" max="100">
+  </div>
+  <div>
+    <label>Debounce ms (0=uit)</label>
+    <input type="number" id="debounce" value="0" min="0" max="200">
+  </div>
+</div>
+
+<div style="margin:10px 0">
+  <b style="color:#aaa;font-size:12px">ZONES (delta → vermenigvuldiger)</b>
+  <div id="zones" style="margin:6px 0"></div>
+  <button onclick="addZone()">+ Zone</button>
+</div>
+
+<div class="vfo" id="vfoDisplay">7.100.000</div>
+<div class="stat" id="stats">Pulsen: 0 | Stappen: 0 | Last delta: -</div>
+
+<div style="margin:10px 0">
+  <button onclick="connectMidi()">Verbind MIDI</button>
+  <button onclick="clearLog()">Log wissen</button>
+  <span id="status" style="margin-left:10px;font-size:11px;color:#888">niet verbonden</span>
+</div>
+
+<div class="log" id="log"></div>
+
+<script>
+const API = window.location.origin
+
+let vfoHz = 7100000
+let pulseAccum = 0
+let pulseCount = 0
+let stepCount = 0
+let vfoTimer = null
+let midiAccess = null
+let activeInput = null
+
+const zones = [
+  { maxDelta: 12, multiplier: 1 },
+  { maxDelta: 30, multiplier: 4 },
+  { maxDelta: 127, multiplier: 10 }
+]
+
+function renderZones() {
+  const div = document.getElementById('zones')
+  div.innerHTML = zones.map((z, i) => `
+    <div style="display:flex;gap:8px;align-items:center;margin:3px 0;font-size:11px">
+      <span style="color:#666">delta ≤</span>
+      <input type="number" value="${z.maxDelta}" min="1" max="127" style="background:#1a1f2e;border:1px solid #333;color:#ccc;padding:2px 6px;width:60px"
+        onchange="zones[${i}].maxDelta=parseInt(this.value)||1">
+      <span style="color:#666">×</span>
+      <input type="number" value="${z.multiplier}" min="1" style="background:#1a1f2e;border:1px solid #333;color:#ccc;padding:2px 6px;width:60px"
+        onchange="zones[${i}].multiplier=parseInt(this.value)||1">
+      <button onclick="zones.splice(${i},1);renderZones()" style="background:none;border:none;color:#c0392b;cursor:pointer;padding:0 4px">✕</button>
+    </div>
+  `).join('')
+}
+
+function addZone() {
+  zones.push({ maxDelta: 127, multiplier: 1 })
+  renderZones()
+}
+
+function getMultiplier(absD) {
+  const sorted = [...zones].sort((a, b) => a.maxDelta - b.maxDelta)
+  for (const z of sorted) {
+    if (absD <= z.maxDelta) return z.multiplier
+  }
+  return zones[zones.length - 1]?.multiplier ?? 1
+}
+
+function log(msg) {
+  const el = document.getElementById('log')
+  el.innerHTML = `<div>${new Date().toLocaleTimeString('nl')} ${msg}</div>` + el.innerHTML
+}
+
+function clearLog() { document.getElementById('log').innerHTML = '' }
+
+function fmtHz(hz) {
+  const s = hz.toString()
+  return s.slice(0, -3) + '.' + s.slice(-3)
+}
+
+function updateStats() {
+  document.getElementById('stats').textContent = `Pulsen: ${pulseCount} | Stappen: ${stepCount}`
+}
+
+function sendVfo() {
+  const hz = vfoHz
+  fetch(API + '/api/vfo', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ receiver: 0, hz })
+  }).then(r => {
+    if (!r.ok) log(`❌ VFO error ${r.status}`)
+  }).catch(e => log(`❌ ${e.message}`))
+}
+
+function onMidiMessage(e) {
+  const [status, cc, value] = e.data
+  const type = status & 0xF0
+  if (type !== 0xB0) return  // alleen CC
+
+  const ccNum = parseInt(document.getElementById('ccNum').value)
+  if (cc !== ccNum) return
+
+  const center = parseInt(document.getElementById('center').value)
+  const delta = value - center
+  if (delta === 0) return
+
+  const absD = Math.abs(delta)
+  const dir = delta > 0 ? 1 : -1
+  const pulsesPerStep = parseInt(document.getElementById('pulsesPerStep').value) || 1
+  const tuneStep = parseInt(document.getElementById('tuneStep').value) || 1000
+  const debounceMs = parseInt(document.getElementById('debounce').value) || 0
+  const multiplier = getMultiplier(absD)
+
+  pulseCount++
+
+  // pulsesPerStep alleen bij langzaamste zone
+  if (multiplier === 1) {
+    pulseAccum += dir
+    if (Math.abs(pulseAccum) < pulsesPerStep) {
+      updateStats()
+      return
+    }
+    pulseAccum = 0
+  }
+
+  const step = Math.round(tuneStep * multiplier * dir)
+  vfoHz = Math.max(100000, vfoHz + step)
+  document.getElementById('vfoDisplay').textContent = fmtHz(vfoHz)
+  stepCount++
+  updateStats()
+
+  if (debounceMs > 0) {
+    if (vfoTimer) clearTimeout(vfoTimer)
+    vfoTimer = setTimeout(sendVfo, debounceMs)
+  } else {
+    sendVfo()
+  }
+}
+
+async function connectMidi() {
+  try {
+    midiAccess = await navigator.requestMIDIAccess()
+    const sel = document.getElementById('device')
+    sel.innerHTML = ''
+    for (const [id, input] of midiAccess.inputs) {
+      const opt = document.createElement('option')
+      opt.value = id
+      opt.textContent = input.name
+      sel.appendChild(opt)
+    }
+    bindMidi()
+    sel.onchange = bindMidi
+    document.getElementById('status').textContent = '● verbonden'
+    document.getElementById('status').style.color = '#2ecc71'
+    log(`MIDI verbonden: ${midiAccess.inputs.size} apparaten`)
+
+    // Haal huidige VFO op
+    fetch(API + '/api/state').then(r => r.json()).then(s => {
+      if (s.vfoHz) { vfoHz = s.vfoHz; document.getElementById('vfoDisplay').textContent = fmtHz(vfoHz) }
+    }).catch(() => {})
+
+  } catch (e) {
+    log(`❌ MIDI fout: ${e.message}`)
+  }
+}
+
+function bindMidi() {
+  if (activeInput) activeInput.onmidimessage = null
+  const sel = document.getElementById('device')
+  activeInput = midiAccess?.inputs.get(sel.value)
+  if (activeInput) {
+    activeInput.onmidimessage = onMidiMessage
+    log(`Luistert op: ${activeInput.name}`)
+  }
+}
+
+renderZones()
+// Auto verbind bij laden
+connectMidi()
+</script>
+</body>
+</html>
