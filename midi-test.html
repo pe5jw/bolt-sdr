@@ -4,32 +4,47 @@
 <meta charset="UTF-8">
 <title>MIDI VFO Test</title>
 <style>
-  body { background: #0d1117; color: #ccc; font-family: monospace; padding: 20px; }
-  .vfo { font-size: 48px; color: #f0c060; margin: 20px 0; }
-  .log { height: 200px; overflow-y: auto; font-size: 11px; color: #888; border: 1px solid #333; padding: 8px; }
-  label { display: block; margin: 8px 0 4px; font-size: 12px; color: #aaa; }
-  input[type=number] { background: #1a1f2e; border: 1px solid #333; color: #ccc; padding: 4px 8px; width: 80px; }
-  button { background: #1a1f2e; border: 1px solid #444; color: #ccc; padding: 6px 14px; cursor: pointer; margin: 4px; }
-  button:hover { border-color: #f0c060; color: #f0c060; }
-  .row { display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap; margin: 10px 0; }
-  .stat { font-size: 11px; color: #666; margin: 4px 0; }
+body { background:#0d1117; color:#ccc; font-family:monospace; padding:20px; max-width:700px; }
+h2 { color:#f0c060; margin:0 0 16px; }
+label { display:block; margin:6px 0 3px; font-size:11px; color:#aaa; }
+input[type=number],select { background:#1a1f2e; border:1px solid #333; color:#ccc; padding:4px 8px; }
+input[type=number] { width:80px; }
+select { min-width:200px; }
+button { background:#1a1f2e; border:1px solid #444; color:#ccc; padding:5px 12px; cursor:pointer; margin:2px; }
+button:hover { border-color:#f0c060; color:#f0c060; }
+.row { display:flex; gap:16px; flex-wrap:wrap; margin:10px 0; align-items:flex-end; }
+.vfo { font-size:52px; color:#f0c060; margin:16px 0 4px; }
+.stat { font-size:11px; color:#666; margin-bottom:12px; }
+.log { height:180px; overflow-y:auto; font-size:11px; color:#888; border:1px solid #333; padding:8px; margin-top:10px; }
+.zone-row { display:flex; gap:8px; align-items:center; margin:3px 0; font-size:11px; }
+.tag { display:inline-block; background:#1a3a1a; color:#2ecc71; padding:1px 6px; border-radius:3px; font-size:10px; margin-left:6px; }
+.tag.warn { background:#3a2a1a; color:#f0c060; }
 </style>
 </head>
 <body>
-<h2 style="color:#f0c060">MIDI VFO Test</h2>
+<h2>MIDI VFO Test</h2>
 
 <div class="row">
   <div>
     <label>MIDI apparaat</label>
-    <select id="device" style="background:#1a1f2e;border:1px solid #333;color:#ccc;padding:4px 8px;min-width:200px">
-      <option>-- geen MIDI --</option>
-    </select>
+    <select id="device"><option>-- geen MIDI --</option></select>
   </div>
   <div>
     <label>CC nummer</label>
     <input type="number" id="ccNum" value="31" min="0" max="127">
   </div>
+</div>
+
+<div class="row">
   <div>
+    <label>Encoder type</label>
+    <select id="encType" style="min-width:180px" onchange="onTypeChange()">
+      <option value="absolute">Absolute (delta zones)</option>
+      <option value="relative">Richting (1=R, 127=L)</option>
+    </select>
+    <span id="typeHint" class="tag">center instellen</span>
+  </div>
+  <div id="centerWrap">
     <label>Center waarde</label>
     <input type="number" id="center" value="64" min="0" max="127">
   </div>
@@ -48,20 +63,27 @@
     <label>Debounce ms (0=uit)</label>
     <input type="number" id="debounce" value="0" min="0" max="200">
   </div>
+  <div style="display:flex;align-items:center;gap:6px;padding-bottom:4px">
+    <input type="checkbox" id="reverse">
+    <label style="margin:0;cursor:pointer" for="reverse">Richting omkeren</label>
+  </div>
 </div>
 
-<div style="margin:10px 0">
-  <b style="color:#aaa;font-size:12px">ZONES (delta → vermenigvuldiger)</b>
+<div id="zonesSection">
+  <b style="font-size:12px;color:#aaa">ZONES (delta → vermenigvuldiger)</b>
   <div id="zones" style="margin:6px 0"></div>
   <button onclick="addZone()">+ Zone</button>
 </div>
 
 <div class="vfo" id="vfoDisplay">7.100.000</div>
-<div class="stat" id="stats">Pulsen: 0 | Stappen: 0 | Last delta: -</div>
+<div class="stat" id="stats">Pulsen: 0 | Stappen: 0</div>
 
-<div style="margin:10px 0">
+<div>
   <button onclick="connectMidi()">Verbind MIDI</button>
   <button onclick="clearLog()">Log wissen</button>
+  <label style="display:inline-flex;align-items:center;gap:6px;margin-left:10px;cursor:pointer">
+    <input type="checkbox" id="monAll" checked> Monitor alle CC
+  </label>
   <span id="status" style="margin-left:10px;font-size:11px;color:#888">niet verbonden</span>
 </div>
 
@@ -69,14 +91,12 @@
 
 <script>
 const API = window.location.origin
-
 let vfoHz = 7100000
 let pulseAccum = 0
 let pulseCount = 0
 let stepCount = 0
 let vfoTimer = null
 let midiAccess = null
-let activeInput = null
 
 const zones = [
   { maxDelta: 12, multiplier: 1 },
@@ -84,93 +104,110 @@ const zones = [
   { maxDelta: 127, multiplier: 10 }
 ]
 
-function renderZones() {
-  const div = document.getElementById('zones')
-  div.innerHTML = zones.map((z, i) => `
-    <div style="display:flex;gap:8px;align-items:center;margin:3px 0;font-size:11px">
-      <span style="color:#666">delta ≤</span>
-      <input type="number" value="${z.maxDelta}" min="1" max="127" style="background:#1a1f2e;border:1px solid #333;color:#ccc;padding:2px 6px;width:60px"
-        onchange="zones[${i}].maxDelta=parseInt(this.value)||1">
-      <span style="color:#666">×</span>
-      <input type="number" value="${z.multiplier}" min="1" style="background:#1a1f2e;border:1px solid #333;color:#ccc;padding:2px 6px;width:60px"
-        onchange="zones[${i}].multiplier=parseInt(this.value)||1">
-      <button onclick="zones.splice(${i},1);renderZones()" style="background:none;border:none;color:#c0392b;cursor:pointer;padding:0 4px">✕</button>
-    </div>
-  `).join('')
+function onTypeChange() {
+  const t = document.getElementById('encType').value
+  const hint = document.getElementById('typeHint')
+  const zonesSection = document.getElementById('zonesSection')
+  const centerWrap = document.getElementById('centerWrap')
+  if (t === 'relative') {
+    hint.textContent = 'geen center nodig'
+    hint.className = 'tag warn'
+    zonesSection.style.display = 'none'
+    centerWrap.style.opacity = '0.3'
+  } else {
+    hint.textContent = 'center instellen'
+    hint.className = 'tag'
+    zonesSection.style.display = 'block'
+    centerWrap.style.opacity = '1'
+  }
 }
 
-function addZone() {
-  zones.push({ maxDelta: 127, multiplier: 1 })
-  renderZones()
+function renderZones() {
+  document.getElementById('zones').innerHTML = zones.map((z, i) => `
+    <div class="zone-row">
+      <span style="color:#666">delta ≤</span>
+      <input type="number" value="${z.maxDelta}" min="1" max="127" style="width:60px"
+        onchange="zones[${i}].maxDelta=parseInt(this.value)||1">
+      <span style="color:#666">×</span>
+      <input type="number" value="${z.multiplier}" min="1" style="width:60px"
+        onchange="zones[${i}].multiplier=parseInt(this.value)||1">
+      <button onclick="zones.splice(${i},1);renderZones()" style="padding:1px 6px;color:#c0392b">✕</button>
+    </div>`).join('')
 }
+
+function addZone() { zones.push({ maxDelta: 127, multiplier: 1 }); renderZones() }
 
 function getMultiplier(absD) {
   const sorted = [...zones].sort((a, b) => a.maxDelta - b.maxDelta)
-  for (const z of sorted) {
-    if (absD <= z.maxDelta) return z.multiplier
-  }
-  return zones[zones.length - 1]?.multiplier ?? 1
+  for (const z of sorted) { if (absD <= z.maxDelta) return z.multiplier }
+  return zones[zones.length-1]?.multiplier ?? 1
 }
 
 function log(msg) {
   const el = document.getElementById('log')
   el.innerHTML = `<div>${new Date().toLocaleTimeString('nl')} ${msg}</div>` + el.innerHTML
 }
-
 function clearLog() { document.getElementById('log').innerHTML = '' }
-
-function fmtHz(hz) {
-  const s = hz.toString()
-  return s.slice(0, -3) + '.' + s.slice(-3)
-}
+function fmtHz(hz) { const s = String(hz); return s.slice(0,-3)+'.'+s.slice(-3) }
 
 function updateStats() {
   document.getElementById('stats').textContent = `Pulsen: ${pulseCount} | Stappen: ${stepCount}`
 }
 
 function sendVfo() {
-  const hz = vfoHz
-  fetch(API + '/api/vfo', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ receiver: 0, hz })
-  }).then(r => {
-    if (!r.ok) log(`❌ VFO error ${r.status}`)
-  }).catch(e => log(`❌ ${e.message}`))
+  fetch(API+'/api/vfo', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ receiver: 0, hz: vfoHz })
+  }).catch(e => log('❌ '+e.message))
 }
 
 function onMidiMessage(e) {
   const [status, cc, value] = e.data
   const type = status & 0xF0
-  if (type !== 0xB0) return  // alleen CC
+  const ch = (status & 0x0F) + 1
 
+  // Monitor alle berichten
+  if (document.getElementById('monAll').checked) {
+    const typeNames = {0x80:'NoteOff',0x90:'NoteOn',0xB0:'CC',0xE0:'Pitch'}
+    log(`${typeNames[type]||'0x'+type.toString(16)} ch${ch} #${cc} val:${value}`)
+  }
+
+  if (type !== 0xB0) return
   const ccNum = parseInt(document.getElementById('ccNum').value)
   if (cc !== ccNum) return
 
-  const center = parseInt(document.getElementById('center').value)
-  const delta = value - center
-  if (delta === 0) return
-
-  const absD = Math.abs(delta)
-  const dir = delta > 0 ? 1 : -1
-  const pulsesPerStep = parseInt(document.getElementById('pulsesPerStep').value) || 1
+  const encType = document.getElementById('encType').value
   const tuneStep = parseInt(document.getElementById('tuneStep').value) || 1000
   const debounceMs = parseInt(document.getElementById('debounce').value) || 0
-  const multiplier = getMultiplier(absD)
+  const pulsesPerStep = parseInt(document.getElementById('pulsesPerStep').value) || 1
 
+  let dir, multiplier
   pulseCount++
 
-  // pulsesPerStep alleen bij langzaamste zone
-  if (multiplier === 1) {
+  if (encType === 'relative') {
+    // 1=rechts, 127=links
+    dir = value <= 63 ? 1 : -1
+    multiplier = 1
     pulseAccum += dir
-    if (Math.abs(pulseAccum) < pulsesPerStep) {
-      updateStats()
-      return
-    }
+    if (Math.abs(pulseAccum) < pulsesPerStep) { updateStats(); return }
     pulseAccum = 0
+  } else {
+    // Absolute: delta van center
+    const center = parseInt(document.getElementById('center').value)
+    const delta = value - center
+    if (delta === 0) return
+    const absD = Math.abs(delta)
+    dir = delta > 0 ? 1 : -1
+    multiplier = getMultiplier(absD)
+    if (multiplier === 1) {
+      pulseAccum += dir
+      if (Math.abs(pulseAccum) < pulsesPerStep) { updateStats(); return }
+      pulseAccum = 0
+    }
   }
 
-  const step = Math.round(tuneStep * multiplier * dir)
+  const reverse = document.getElementById('reverse').checked ? -1 : 1
+  const step = Math.round(tuneStep * multiplier * dir * reverse)
   vfoHz = Math.max(100000, vfoHz + step)
   document.getElementById('vfoDisplay').textContent = fmtHz(vfoHz)
   stepCount++
@@ -191,38 +228,59 @@ async function connectMidi() {
     sel.innerHTML = ''
     for (const [id, input] of midiAccess.inputs) {
       const opt = document.createElement('option')
-      opt.value = id
-      opt.textContent = input.name
+      opt.value = id; opt.textContent = input.name
       sel.appendChild(opt)
     }
-    bindMidi()
     sel.onchange = bindMidi
+    midiAccess.onstatechange = (e) => { log('Apparaat: ' + e.port.name + ' ' + e.port.state); bindMidi() }
+    bindMidi()
     document.getElementById('status').textContent = '● verbonden'
     document.getElementById('status').style.color = '#2ecc71'
-    log(`MIDI verbonden: ${midiAccess.inputs.size} apparaten`)
-
-    // Haal huidige VFO op
-    fetch(API + '/api/state').then(r => r.json()).then(s => {
-      if (s.vfoHz) { vfoHz = s.vfoHz; document.getElementById('vfoDisplay').textContent = fmtHz(vfoHz) }
-    }).catch(() => {})
-
-  } catch (e) {
-    log(`❌ MIDI fout: ${e.message}`)
-  }
+    log('MIDI verbonden: '+midiAccess.inputs.size+' apparaten')
+    fetch(API+'/api/state').then(r=>r.json()).then(s=>{
+      if(s.vfoHz){vfoHz=s.vfoHz;document.getElementById('vfoDisplay').textContent=fmtHz(vfoHz)}
+    }).catch(()=>{})
+  } catch(e) { log('❌ MIDI fout: '+e.message) }
 }
 
 function bindMidi() {
-  if (activeInput) activeInput.onmidimessage = null
+  if (!midiAccess) return
+  for (const input of midiAccess.inputs.values()) input.onmidimessage = null
   const sel = document.getElementById('device')
-  activeInput = midiAccess?.inputs.get(sel.value)
-  if (activeInput) {
-    activeInput.onmidimessage = onMidiMessage
-    log(`Luistert op: ${activeInput.name}`)
-  }
+  const input = midiAccess.inputs.get(sel.value)
+  if (input) { input.onmidimessage = onMidiMessage; log('Luistert op: '+input.name) }
 }
 
+// Herstel opgeslagen instellingen
+const saved = JSON.parse(localStorage.getItem('midi-vfo-settings') || '{}')
+if (saved.ccNum) document.getElementById('ccNum').value = saved.ccNum
+if (saved.center) document.getElementById('center').value = saved.center
+if (saved.encType) document.getElementById('encType').value = saved.encType
+if (saved.tuneStep) document.getElementById('tuneStep').value = saved.tuneStep
+if (saved.pulsesPerStep) document.getElementById('pulsesPerStep').value = saved.pulsesPerStep
+if (saved.debounce) document.getElementById('debounce').value = saved.debounce
+if (saved.reverse) document.getElementById('reverse').checked = saved.reverse
+
+// Sla op bij elke wijziging
+function saveSettings() {
+  localStorage.setItem('midi-vfo-settings', JSON.stringify({
+    ccNum: document.getElementById('ccNum').value,
+    center: document.getElementById('center').value,
+    encType: document.getElementById('encType').value,
+    tuneStep: document.getElementById('tuneStep').value,
+    pulsesPerStep: document.getElementById('pulsesPerStep').value,
+    debounce: document.getElementById('debounce').value,
+    reverse: document.getElementById('reverse').checked
+  }))
+}
+['ccNum','center','encType','tuneStep','pulsesPerStep','debounce','reverse'].forEach(id => {
+  const el = document.getElementById(id)
+  el.addEventListener('change', saveSettings)
+  el.addEventListener('input', saveSettings)
+})
+
 renderZones()
-// Auto verbind bij laden
+onTypeChange()
 connectMidi()
 </script>
 </body>
