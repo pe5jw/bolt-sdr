@@ -255,12 +255,37 @@ class MidiEngine {
 
   setVfoHz(hz: number): void { if (!this.pendingVfo) this.lastVfoHz = hz }
 
-  private nudgeVfo(delta: number, stepFactor = 1000, pulsesPerStep = 1): void {
-    this.pulseAccum += delta > 0 ? 1 : -1
-    if (Math.abs(this.pulseAccum) < pulsesPerStep) return
-    const steps = Math.trunc(this.pulseAccum / pulsesPerStep)
-    this.pulseAccum = this.pulseAccum % pulsesPerStep
-    const step = Math.round(this.tuneStepHz * (stepFactor / 1000) * steps)
+  private nudgeVfo(delta: number, mapping: MidiMapping): void {
+    const stepFactor = (mapping as any).stepHz ?? 1000
+    const pulsesPerStep = (mapping as any).pulsesPerStep ?? 1
+    const encType = (mapping as any).encType ?? 'absolute'
+    const reverse = (mapping as any).reverse ? -1 : 1
+    const zones: { maxDelta: number; multiplier: number }[] = (mapping as any).zones ?? []
+    let dir: number, multiplier: number
+    if (encType === 'relative') {
+      dir = delta <= 0 ? 1 : -1
+      multiplier = 1
+      this.pulseAccum += dir
+      if (Math.abs(this.pulseAccum) < pulsesPerStep) return
+      this.pulseAccum = 0
+    } else {
+      const center = (mapping as any).centerValue ?? 64
+      const d = delta - center + 64
+      if (d === 0) return
+      const absD = Math.abs(d)
+      dir = d > 0 ? 1 : -1
+      if (zones.length > 0) {
+        const sorted = [...zones].sort((a, b) => a.maxDelta - b.maxDelta)
+        multiplier = sorted[sorted.length-1].multiplier
+        for (const z of sorted) { if (absD <= z.maxDelta) { multiplier = z.multiplier; break } }
+      } else { multiplier = 1 }
+      if (multiplier === 1) {
+        this.pulseAccum += dir
+        if (Math.abs(this.pulseAccum) < pulsesPerStep) return
+        this.pulseAccum = 0
+      }
+    }
+    const step = Math.round(this.tuneStepHz * (stepFactor / 1000) * multiplier * dir * reverse)
     this.pendingVfo = (this.pendingVfo ?? 0) + step
     if (this.vfoTimer) clearTimeout(this.vfoTimer)
     this.vfoTimer = setTimeout(() => {

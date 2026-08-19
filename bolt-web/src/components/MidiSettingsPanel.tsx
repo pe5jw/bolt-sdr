@@ -18,6 +18,9 @@ interface EditState {
   centerValue: number
   stepHz: number
   pulsesPerStep: number
+  encType: 'absolute' | 'relative'
+  reverse: boolean
+  zones: { maxDelta: number; multiplier: number }[]
 }
 
 export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }) {
@@ -56,6 +59,9 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
         centerValue: 64,
         stepHz: 1000,
         pulsesPerStep: 1,
+        encType: 'absolute',
+        reverse: false,
+        zones: [{ maxDelta: 12, multiplier: 1 }, { maxDelta: 30, multiplier: 4 }, { maxDelta: 127, multiplier: 10 }],
       })
       setLearnTarget(null)
     })
@@ -81,6 +87,9 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
       centerValue: edit.centerValue,
       stepHz: edit.stepHz,
       pulsesPerStep: edit.pulsesPerStep,
+      encType: edit.encType,
+      reverse: edit.reverse,
+      zones: edit.zones,
     } as MidiMapping)
     setEdit(null)
     refresh()
@@ -198,6 +207,39 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
                   <div style={{ fontSize: 9, color: 'var(--text-dim)', marginTop: 2 }}>1 = elke puls een stap</div>
                 </div>
               </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
+                <div>
+                  <label style={lbl}>ENCODER TYPE</label>
+                  <select style={inp} value={edit.encType} onChange={e => setEdit({ ...edit, encType: e.target.value as 'absolute' | 'relative' })}>
+                    <option value="absolute">Absolute (delta zones)</option>
+                    <option value="relative">Richting (1=R, 127=L)</option>
+                  </select>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: 4 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={edit.reverse} onChange={e => setEdit({ ...edit, reverse: e.target.checked })} />
+                    <span style={{ ...lbl, marginTop: 0 }}>RICHTING OMKEREN</span>
+                  </label>
+                </div>
+              </div>
+              {edit.encType === 'absolute' && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ ...lbl, marginBottom: 6 }}>ZONES (delta → vermenigvuldiger)</div>
+                  {edit.zones.map((z, i) => (
+                    <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 10, marginBottom: 4 }}>
+                      <span style={{ color: 'var(--text-dim)', minWidth: 50 }}>delta ≤</span>
+                      <input type="number" style={{ ...inp, width: 60 }} value={z.maxDelta}
+                        onChange={e => { const nz = [...edit.zones]; nz[i] = { ...nz[i], maxDelta: parseInt(e.target.value) || 1 }; setEdit({ ...edit, zones: nz }) }} />
+                      <span style={{ color: 'var(--text-dim)' }}>×</span>
+                      <input type="number" style={{ ...inp, width: 60 }} value={z.multiplier}
+                        onChange={e => { const nz = [...edit.zones]; nz[i] = { ...nz[i], multiplier: parseInt(e.target.value) || 1 }; setEdit({ ...edit, zones: nz }) }} />
+                      <button onClick={() => { const nz = edit.zones.filter((_,j) => j !== i); setEdit({ ...edit, zones: nz }) }}
+                        style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer' }}>✕</button>
+                    </div>
+                  ))}
+                  <button onClick={() => setEdit({ ...edit, zones: [...edit.zones, { maxDelta: 127, multiplier: 1 }] })} style={sBtn()}>+ ZONE</button>
+                </div>
+              )}
             </div>
           )}
 
@@ -253,6 +295,9 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
                             centerValue: (mapping as any).centerValue ?? 64,
                             stepHz: (mapping as any).stepHz ?? 1000,
                             pulsesPerStep: (mapping as any).pulsesPerStep ?? 1,
+            encType: (mapping as any).encType ?? 'absolute',
+            reverse: (mapping as any).reverse ?? false,
+            zones: (mapping as any).zones ?? [{ maxDelta: 12, multiplier: 1 }, { maxDelta: 30, multiplier: 4 }, { maxDelta: 127, multiplier: 10 }],
                           })} style={sBtn()}>EDIT</button>
                           <button onClick={() => removeMapping(mapping.id)} style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', fontSize: 12 }}>✕</button>
                         </>
