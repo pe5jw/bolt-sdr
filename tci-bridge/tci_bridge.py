@@ -3,7 +3,7 @@ Bolt SDR TCI Bridge - PE5JW
 N1MM+ <-> TCI Server brug met DVK
 
 CAT server op TCP 4532 (Kenwood TS-2000 emulatie)
-DVK bestanden: %LOCALAPPDATA%\Bolt\dvk\mem1.wav .. mem8.wav
+DVK bestanden: %LOCALAPPDATA%\\Bolt\\dvk\\mem1.wav .. mem8.wav
 
 N1MM+ configuratie:
   Config -> Hardware -> Network / Kenwood TS-2000 / 127.0.0.1:4532
