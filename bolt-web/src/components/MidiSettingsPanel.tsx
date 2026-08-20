@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+﻿import { useState, useEffect, useRef } from 'react'
 import { midiEngine, MIDI_COMMANDS, type MidiMapping, type MidiLearnEvent, type MidiControlType } from '../midi-engine'
 
 const sBtn = (active = false, color = 'var(--accent)') => ({
@@ -18,6 +18,7 @@ interface EditState {
   centerValue: number
   stepHz: number
   pulsesPerStep: number
+  throttleMs: number
   encType: 'absolute' | 'relative'
   reverse: boolean
   zones: { maxDelta: number; multiplier: number }[]
@@ -60,6 +61,7 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
         stepHz: 1000,
         pulsesPerStep: 1,
         encType: 'absolute',
+        throttleMs: 20,
         reverse: false,
         zones: [{ maxDelta: 12, multiplier: 1 }, { maxDelta: 30, multiplier: 4 }, { maxDelta: 127, multiplier: 10 }],
       })
@@ -135,7 +137,7 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
 
       {learning && (
         <div style={{ background: 'rgba(255,200,0,0.12)', border: '1px solid var(--accent)', borderRadius: 4, padding: '8px 12px', marginBottom: 10, fontSize: 10, color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span>● LEARN MODE — Beweeg een knop of encoder op je controller...</span>
+          <span>â— LEARN MODE â€” Beweeg een knop of encoder op je controller...</span>
           <button onClick={cancelLearn} style={{ ...sBtn(), marginLeft: 'auto' }}>ANNULEER</button>
         </div>
       )}
@@ -151,7 +153,7 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
       {edit && (
         <div style={{ background: 'var(--bg-control)', border: '1px solid var(--accent)', borderRadius: 4, padding: 12, marginBottom: 12 }}>
           <div style={{ fontSize: 10, color: 'var(--accent)', letterSpacing: 2, marginBottom: 10 }}>
-            BEWERK — {MIDI_COMMANDS.find(c => c.command === edit.command)?.label ?? edit.command}
+            BEWERK â€” {MIDI_COMMANDS.find(c => c.command === edit.command)?.label ?? edit.command}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
             <div>
@@ -199,12 +201,19 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
                 <div>
                   <label style={lbl}>STEP FACTOR</label>
                   <input type="number" style={inp} value={edit.stepHz} onChange={e => setEdit({ ...edit, stepHz: parseInt(e.target.value) })} />
-                  <div style={{ fontSize: 9, color: 'var(--text-dim)', marginTop: 2 }}>1000 = 1× tune step</div>
+                  <div style={{ fontSize: 9, color: 'var(--text-dim)', marginTop: 2 }}>1000 = 1Ã— tune step</div>
                 </div>
                 <div>
                   <label style={lbl}>PULSEN PER STAP</label>
                   <input type="number" min={1} max={100} style={inp} value={edit.pulsesPerStep} onChange={e => setEdit({ ...edit, pulsesPerStep: parseInt(e.target.value) || 1 })} />
                   <div style={{ fontSize: 9, color: 'var(--text-dim)', marginTop: 2 }}>1 = elke puls een stap</div>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
+                <div>
+                  <label style={lbl}>THROTTLE Ms</label>
+                  <input type="number" min={5} max={200} style={inp} value={edit.throttleMs} onChange={e => setEdit({ ...edit, throttleMs: parseInt(e.target.value) || 20 })} />
+                  <div style={{ fontSize: 9, color: 'var(--text-dim)', marginTop: 2 }}>20 = vloeiend, 50 = rustiger</div>
                 </div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
@@ -224,17 +233,17 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
               </div>
               {edit.encType === 'absolute' && (
                 <div style={{ marginTop: 8 }}>
-                  <div style={{ ...lbl, marginBottom: 6 }}>ZONES (delta → vermenigvuldiger)</div>
+                  <div style={{ ...lbl, marginBottom: 6 }}>ZONES (input delta â†’ stap delta)</div>
                   {edit.zones.map((z, i) => (
                     <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 10, marginBottom: 4 }}>
-                      <span style={{ color: 'var(--text-dim)', minWidth: 50 }}>delta ≤</span>
+                      <span style={{ color: 'var(--text-dim)', minWidth: 50 }}>delta â‰¤</span>
                       <input type="number" style={{ ...inp, width: 60 }} value={z.maxDelta}
                         onChange={e => { const nz = [...edit.zones]; nz[i] = { ...nz[i], maxDelta: parseInt(e.target.value) || 1 }; setEdit({ ...edit, zones: nz }) }} />
-                      <span style={{ color: 'var(--text-dim)' }}>×</span>
+                      <span style={{ color: 'var(--text-dim)' }}>Ã—</span>
                       <input type="number" style={{ ...inp, width: 60 }} value={z.multiplier}
                         onChange={e => { const nz = [...edit.zones]; nz[i] = { ...nz[i], multiplier: parseInt(e.target.value) || 1 }; setEdit({ ...edit, zones: nz }) }} />
                       <button onClick={() => { const nz = edit.zones.filter((_,j) => j !== i); setEdit({ ...edit, zones: nz }) }}
-                        style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer' }}>✕</button>
+                        style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer' }}>âœ•</button>
                     </div>
                   ))}
                   <button onClick={() => setEdit({ ...edit, zones: [...edit.zones, { maxDelta: 127, multiplier: 1 }] })} style={sBtn()}>+ ZONE</button>
@@ -253,7 +262,7 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
                 setLearning(false)
                 setEdit(prev => prev ? { ...prev, id: event.id, deviceName: event.deviceName } : null)
               })
-            }} style={{ ...sBtn(), marginLeft: 'auto' }}>↺ RE-LEARN</button>
+            }} style={{ ...sBtn(), marginLeft: 'auto' }}>â†º RE-LEARN</button>
           </div>
         </div>
       )}
@@ -279,10 +288,10 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
                     {c.label}
                   </td>
                   <td style={{ padding: '6px 10px', fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-data)' }}>
-                    {mapping?.id ?? '—'}
+                    {mapping?.id ?? 'â€”'}
                   </td>
                   <td style={{ padding: '6px 10px', fontSize: 10, color: 'var(--text-dim)' }}>
-                    {mapping ? (mapping.toggle ? 'Toggle' : 'Momentary') : '—'}
+                    {mapping ? (mapping.toggle ? 'Toggle' : 'Momentary') : 'â€”'}
                   </td>
                   <td style={{ padding: '6px 10px', textAlign: 'right' }}>
                     <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
@@ -295,11 +304,12 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
                             centerValue: (mapping as any).centerValue ?? 64,
                             stepHz: (mapping as any).stepHz ?? 1000,
                             pulsesPerStep: (mapping as any).pulsesPerStep ?? 1,
+                            throttleMs: (mapping as any).throttleMs ?? 20,
             encType: (mapping as any).encType ?? 'absolute',
             reverse: (mapping as any).reverse ?? false,
             zones: (mapping as any).zones ?? [{ maxDelta: 12, multiplier: 1 }, { maxDelta: 30, multiplier: 4 }, { maxDelta: 127, multiplier: 10 }],
                           })} style={sBtn()}>EDIT</button>
-                          <button onClick={() => removeMapping(mapping.id)} style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', fontSize: 12 }}>✕</button>
+                          <button onClick={() => removeMapping(mapping.id)} style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', fontSize: 12 }}>âœ•</button>
                         </>
                       ) : (
                         <button onClick={() => startLearnFor(c.command)} style={sBtn(isLearning, 'var(--accent)')}>

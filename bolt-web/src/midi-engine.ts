@@ -1,5 +1,5 @@
 
-// Bolt SDR MIDI Engine — browser-side Web MIDI API
+// Bolt SDR MIDI Engine â€” browser-side Web MIDI API
 // Copyright (C) 2026 Joeri Visser (PE5JW), GPL-2.0-or-later
 
 const STORAGE_KEY = 'bolt-sdr-midi-mappings'
@@ -53,6 +53,7 @@ class MidiEngine {
   onMox: ((on: boolean) => void) | null = null
   onTune: ((on: boolean) => void) | null = null
   onVfoChange: ((hz: number) => void) | null = null
+  wsRef: { current: WebSocket | null } | null = null
   tuneStepHz = 1000
   private pulseAccum = 0
   private moxState = false
@@ -193,8 +194,8 @@ class MidiEngine {
       const d = delta !== 0 ? delta : this.decodeRelative(value, center)
       if (d === 0) return
       if (cmd === 'ChangeFreqVfoA') {
-        const stepHz = (mapping as any).stepHz ?? 1000
-        this.nudgeVfo(d, stepHz)
+        this.nudgeVfo(d, mapping)
+        return
       }
       if (cmd === 'ZoomSliderInc') {
         fetch('/api/rx/zoom', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -269,10 +270,10 @@ class MidiEngine {
       if (Math.abs(this.pulseAccum) < pulsesPerStep) return
       this.pulseAccum = 0
     } else {
-      const center = (mapping as any).centerValue ?? 64
-      const d = delta - center + 64
+      // delta is al center-gecorrigeerde waarde vanuit execute
+      const d = delta
       if (d === 0) return
-      const absD = Math.abs(d)
+      const absD = Math.abs(delta)
       dir = d > 0 ? 1 : -1
       if (zones.length > 0) {
         const sorted = [...zones].sort((a, b) => a.maxDelta - b.maxDelta)
@@ -286,6 +287,7 @@ class MidiEngine {
       }
     }
     const step = Math.round(this.tuneStepHz * (stepFactor / 1000) * multiplier * dir * reverse)
+    console.log('[nudgeVfo] value=' + delta + ' center=' + ((mapping as any).centerValue??64) + ' d=' + (delta-((mapping as any).centerValue??64)) + ' dir=' + dir + ' step=' + step)
     this.pendingVfo = (this.pendingVfo ?? 0) + step
     if (this.vfoTimer) clearTimeout(this.vfoTimer)
     this.vfoTimer = setTimeout(() => {
