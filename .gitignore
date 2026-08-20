@@ -110,3 +110,6 @@ docs/manual/build/
 *.py
 *.py
 *.py
+
+# Bolt tci-bridge Python bestanden uitzondering
+!tci-bridge/*.py
