@@ -1,5 +1,5 @@
-import pkg from '../../package.json'
 import { useState, useEffect } from 'react'
+import pkg from '../../package.json'
 import { MidiSettingsPanel } from './MidiSettingsPanel'
 import { THEMES, SPECTRUM_COLORS } from '../themes'
 import { useTheme } from '../ThemeContext'
@@ -11,7 +11,23 @@ interface Props {
 
 export function SettingsModal({ onClose }: Props) {
   const { theme, setTheme, showLogo, setShowLogo, logoBrightness, setLogoBrightness, wfPalette, setWfPalette } = useTheme()
-  const [tab, setTab] = useState<'general' | 'midi' | 'info'>('general')
+  const [catEnabled, setCatEnabled] = useState(false)
+  const [catPort, setCatPort] = useState(19090)
+  const [catBind, setCatBind] = useState('0.0.0.0')
+  const [catStatus, setCatStatus] = useState<string>('')
+  useEffect(() => {
+    fetch('/api/cat/status').then(r=>r.json()).then(s => {
+      setCatEnabled(s.currentlyEnabled)
+      setCatPort(s.currentPort)
+      setCatBind(s.currentBindAddress)
+    }).catch(()=>{})
+  }, [])
+  const saveCat = () => {
+    fetch('/api/cat/config', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ enabled: catEnabled, bindAddress: catBind, port: catPort, autoReport: true })
+    }).then(r=>r.json()).then(s => setCatStatus(s.error ?? (s.currentlyEnabled ? 'Actief op poort '+s.currentPort : 'Uitgeschakeld'))).catch(()=>{})
+  }
+  const [tab, setTab] = useState<'general' | 'midi' | 'cat' | 'info'>('general')
   const [displayRate, setDisplayRate] = useState(30)
   useEffect(() => {
     fetch("/api/display/settings").then(r => r.json()).then(d => {
@@ -30,7 +46,7 @@ export function SettingsModal({ onClose }: Props) {
 
   const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }
   const lbl: React.CSSProperties = { fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 80 }
-  const tabBtn = (t: 'general' | 'midi' | 'info'): React.CSSProperties => ({
+  const tabBtn = (t: 'general' | 'midi' | 'cat' | 'info'): React.CSSProperties => ({
     fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer',
     fontFamily: 'var(--font-data)', letterSpacing: 2,
     background: tab === t ? 'var(--accent)' : 'var(--bg-control)',
@@ -58,6 +74,7 @@ export function SettingsModal({ onClose }: Props) {
         <div style={{ display: 'flex', gap: 4, marginBottom: 16 }}>
           <button style={tabBtn('general')} onClick={() => setTab('general')}>GENERAL</button>
           <button style={tabBtn('midi')} onClick={() => setTab('midi')}>MIDI</button>
+          <button style={tabBtn('cat')} onClick={() => setTab('cat')}>CAT</button>
           <button style={tabBtn('info')} onClick={() => setTab('info')}>INFO</button>
         </div>
 
@@ -74,6 +91,30 @@ export function SettingsModal({ onClose }: Props) {
               <div><span style={{ color: 'var(--text-dim)' }}>RADIO</span> <span style={{ color: 'var(--accent)' }}>HermesLite 2</span></div>
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)', fontSize: 9 }}>GPL v2+ — gebaseerd op Zeus SDR</div>
             </div>
+          </div>
+        )}
+        {/* CAT tab */}
+        {tab === 'cat' && (
+          <div style={{ fontFamily: 'var(--font-data)', fontSize: 11 }}>
+            <div style={row}>
+              <span style={lbl}>CAT ENABLED</span>
+              <input type="checkbox" checked={catEnabled} onChange={e => setCatEnabled(e.target.checked)} />
+            </div>
+            <div style={row}>
+              <span style={lbl}>BIND ADDRESS</span>
+              <input style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '2px 6px', fontSize: 11, width: 120 }}
+                value={catBind} onChange={e => setCatBind(e.target.value)} />
+            </div>
+            <div style={row}>
+              <span style={lbl}>POORT</span>
+              <input type="number" style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '2px 6px', fontSize: 11, width: 80 }}
+                value={catPort} onChange={e => setCatPort(parseInt(e.target.value))} />
+            </div>
+            <div style={row}>
+              <button onClick={saveCat} style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: 'var(--accent)', border: 'none', color: 'var(--bg)' }}>OPSLAAN</button>
+              {catStatus && <span style={{ fontSize: 10, color: 'var(--green)', marginLeft: 8 }}>{catStatus}</span>}
+            </div>
+            <div style={{ fontSize: 9, color: 'var(--text-dim)', marginTop: 8 }}>TS-2000 dialect — verbind via TCP op ingestelde poort</div>
           </div>
         )}
         {/* MIDI tab */}
