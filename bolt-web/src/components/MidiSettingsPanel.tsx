@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { midiEngine, MIDI_COMMANDS, type MidiMapping, type MidiLearnEvent, type MidiControlType } from '../midi-engine'
 
 const sBtn = (active = false, color = 'var(--accent)') => ({
@@ -241,7 +241,7 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
                         onChange={e => { const nz = [...edit.zones]; nz[i] = { ...nz[i], maxDelta: parseInt(e.target.value) || 1 }; setEdit({ ...edit, zones: nz }) }} />
                       <span style={{ color: 'var(--text-dim)' }}>Ã—</span>
                       <input type="number" style={{ ...inp, width: 60 }} value={z.multiplier}
-                        onChange={e => { const nz = [...edit.zones]; nz[i] = { ...nz[i], multiplier: parseInt(e.target.value) || 1 }; setEdit({ ...edit, zones: nz }) }} />
+                        onChange={e => { const nz = [...edit.zones]; nz[i] = { ...nz[i], multiplier: parseInt(e.target.value) || 0 }; setEdit({ ...edit, zones: nz }) }} />
                       <button onClick={() => { const nz = edit.zones.filter((_,j) => j !== i); setEdit({ ...edit, zones: nz }) }}
                         style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer' }}>âœ•</button>
                     </div>
