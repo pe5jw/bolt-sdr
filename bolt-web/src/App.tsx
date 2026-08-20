@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+﻿import { useState, useEffect } from 'react'
 import { useRadioSocket } from './ws/useRadioSocket'
 import { VfoDisplay } from './components/VfoDisplay'
 import { ModeFilter } from './components/ModeFilter'
@@ -14,7 +14,7 @@ import { midiEngine } from './midi-engine'
 export default function App() {
   const { lastKnownVfoRef } = useMidi()
 
-  // Auto-reconnect bij startup — alleen als niet bewust disconnect
+  // Auto-reconnect bij startup â€” alleen als niet bewust disconnect
   useEffect(() => {
     fetch('/api/state').then(r => r.json()).then(state => {
       if (state.status === 'Connected' && state.endpoint) {
@@ -31,9 +31,10 @@ export default function App() {
       }
     }).catch(() => {})
   }, [])
-  const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive, micPeak } = useRadioSocket(undefined, undefined)
+  const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive, micPeak, wsRef } = useRadioSocket(undefined, undefined)
   lastKnownVfoRef.current = radioState.vfoHz
   midiEngine.setVfoHz(radioState.vfoHz)
+  midiEngine.wsRef = wsRef
   midiEngine.onMox = (on) => {
     setRadioState(s => ({ ...s, mox: on }))
     setMoxActive(on)
@@ -146,7 +147,7 @@ export default function App() {
 
   return (
     <div className="bolt-app">
-      {guardMsg && <div style={{ position: 'fixed', top: 40, left: '50%', transform: 'translateX(-50%)', background: 'var(--tx)', color: 'var(--bg)', padding: '6px 16px', borderRadius: 4, fontSize: 11, fontFamily: 'var(--font-data)', zIndex: 9999 }}>⚠ {guardMsg}</div>}
+      {guardMsg && <div style={{ position: 'fixed', top: 40, left: '50%', transform: 'translateX(-50%)', background: 'var(--tx)', color: 'var(--bg)', padding: '6px 16px', borderRadius: 4, fontSize: 11, fontFamily: 'var(--font-data)', zIndex: 9999 }}>âš  {guardMsg}</div>}
       <StatusBar learnFrame={null}
         status={status === 'connected' && radioState.connected ? 'connected' : status === 'connected' ? 'disconnected' : status}
         radioName={radioState.radioName}
