@@ -12,7 +12,7 @@ So it probably works on other radios as well, didn't test that tho !
 - Connects to OpenHPSDR hardware (Protocol 1 and Protocol 2)
 - Minimal React/TypeScript web UI for transceiver operation  
 - TCI server for external apps (FT8, CW decoders, FreeDV, logging)
-- 2x CAT control (Kenwood TS-2000 dialect0
+- 2x CAT control (Kenwood TS-2000 dialect)
   - 1e in the bolt engine
   - 2e in de dvk to control voicekeyer and get freq, n1mm)
 - MIDI controller mapping (testen with CMD pl-01 and diy interfce)
