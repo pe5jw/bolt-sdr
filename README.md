@@ -1,8 +1,8 @@
 # Bolt SDR
 
 Bolt SDR is a web SDR frontend i build for my HermesLite 2, built on top of
-station-engine (a fork of OpenHPSDR Zeus).
-So it probably works on other radios as well, didnt test that tho !
+station-engine (a split from OpenHPSDR Zeus into ZeusSdr and Station-Engine).
+So it probably works on other radios as well, didn't test that tho !
 
 ## What is Bolt SDR?
 
