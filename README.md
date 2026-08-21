@@ -38,7 +38,7 @@ Open http://localhost:6443 in your browser.
 ## Hardware support
 
 - HermesLite 2 - OpenHPSDR Protocol 1
-- ANAN G2 / G2 MkII - OpenHPSDR Protocol 2
+- ANAN G2 / G2 MkII - OpenHPSDR Protocol 2- ( not tested )
 
 ## License
 
