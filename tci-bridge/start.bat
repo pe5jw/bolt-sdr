@@ -24,7 +24,7 @@ if exist "C:\msys64\usr\bin\pacman.exe" (
 
 echo.
 echo === Bolt SDR TCI Bridge ===
-echo CAT poort : 4532  (N1MM+: Kenwood TS-2000 / 127.0.0.1:4532)
+echo CAT poort : 4532  (N1MM+: Kenwood TS-2000 / 0.0.0.0:4532)
 echo DVK map   : %LOCALAPPDATA%\Bolt\dvk\
 echo Stoppen   : Ctrl+C
 echo.
