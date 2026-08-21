@@ -1,3 +1,6 @@
+<img width="1349" height="964" alt="BoltSDR1" src="https://github.com/user-attachments/assets/5372acd4-90d6-451c-ac87-d50e459f667b" />
+<img width="1321" height="964" alt="BoltSDR2" src="https://github.com/user-attachments/assets/9a3fa18e-bada-4ffe-a31e-99f884fc7ed5" />
+
 # Bolt SDR
 
 Bolt SDR is a web SDR frontend i build for my HermesLite 2, built on top of
