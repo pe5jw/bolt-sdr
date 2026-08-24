@@ -41,7 +41,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
   const [dbMin, setDbMin] = useState(() => parseInt(localStorage.getItem('bolt-floor') || '-140'))
   const [autoScale, setAutoScale] = useState(false)
   const autoScaleRef = useRef(false)
-  autoScaleRef.current = autoScale
+  // autoScaleRef wordt alleen via knop en reset gezet
   const [txDisplayOffset, setTxDisplayOffset] = useState(() => parseInt(localStorage.getItem('bolt-tx-offset') || '40'))
   const dbMaxRef = useRef(-40)
   const dbMinRef = useRef(-140)
@@ -90,12 +90,14 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
       if (valid.length > 0) {
         const mx = Math.max(...Array.from(valid))
         const sorted = Array.from(valid).sort((a: number, b: number) => a - b)
-        const mn = sorted[Math.floor(sorted.length * 0.05)]
+        const mn = sorted[Math.floor(sorted.length * 0.02)]
         const newMax = Math.ceil(mx / 5) * 5 + 10
-        const newMin = Math.floor(mn / 5) * 5 - 5
+        const newMin = Math.floor(mn / 5) * 5 - 30
         if (newMax !== dbMaxRef.current) { dbMaxRef.current = newMax; setDbMax(newMax) }
         if (newMin !== dbMinRef.current) { dbMinRef.current = newMin; setDbMin(newMin) }
       }
+      autoScaleRef.current = false
+      setAutoScale(false)
     }
     const dbMax = dbMaxRef.current
     const dbMin = dbMinRef.current
@@ -312,8 +314,8 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
         ))}
         <div style={sep} />
         <span style={lbl}>TOP</span>
-        <button onClick={() => setDbMax(d => { const v = Math.min(-10, d + 5); localStorage.setItem('bolt-top', String(v)); return v })} style={sBtn}>+</button>
-          <button onClick={() => setAutoScale(a => !a)} style={{ ...sBtn, background: autoScale ? 'var(--accent)' : undefined, color: autoScale ? 'var(--bg)' : undefined, marginLeft: 8 }}>AUTO SET</button>
+        <button onClick={() => setDbMax(d => { const v = Math.min(-10, d + 1); localStorage.setItem('bolt-top', String(v)); return v })} style={sBtn}>+</button>
+
         <span style={val}>{dbMax}</span>
           {mox && <>
             <span style={{ fontSize: 10, color: 'var(--tx)', marginLeft: 8, fontFamily: 'var(--font-data)' }}>TX OFF</span>
@@ -321,12 +323,13 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
             <span style={{ fontSize: 10, color: 'var(--tx)', fontFamily: 'var(--font-data)', minWidth: 24, textAlign: 'center' }}>{txDisplayOffset}</span>
             <button onClick={() => setTxDisplayOffset(d => { const v = Math.min(100, d + 10); localStorage.setItem('bolt-tx-offset', String(v)); return v })} style={sBtn}>+</button>
           </> }
-        <button onClick={() => setDbMax(d => { const v = Math.max(dbMin + 20, d - 5); localStorage.setItem('bolt-top', String(v)); return v })} style={sBtn}>−</button>
+        <button onClick={() => setDbMax(d => { const v = Math.max(dbMin + 20, d - 1); localStorage.setItem('bolt-top', String(v)); return v })} style={sBtn}>−</button>
         <div style={sep} />
         <span style={lbl}>FLOOR</span>
-        <button onClick={() => setDbMin(d => { const v = Math.min(dbMax - 20, d + 5); localStorage.setItem('bolt-floor', String(v)); return v })} style={sBtn}>+</button>
+        <button onClick={() => setDbMin(d => { const v = Math.min(dbMax - 20, d + 1); localStorage.setItem('bolt-floor', String(v)); return v })} style={sBtn}>+</button>
         <span style={val}>{dbMin}</span>
-        <button onClick={() => setDbMin(d => Math.max(-220, d - 5))} style={sBtn}>−</button>
+        <button onClick={() => setDbMin(d => Math.max(-220, d - 1))} style={sBtn}>−</button>
+        <button onClick={() => { autoScaleRef.current = true; setAutoScale(true) }} style={{ ...sBtn, marginLeft: 8, background: autoScale ? 'var(--accent)' : undefined, color: autoScale ? 'var(--bg)' : undefined }}>AUTO SET</button>
       </div>
       <div style={{ position: "relative" }}>
         {vfoOverlay && vfoHz != null && (

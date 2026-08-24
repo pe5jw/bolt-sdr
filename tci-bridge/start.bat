@@ -30,4 +30,3 @@ echo Stoppen   : Ctrl+C
 echo.
 
 "%PYTHON%" tci_bridge.py
-pause
