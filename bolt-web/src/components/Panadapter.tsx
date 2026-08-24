@@ -35,7 +35,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
   const [customHigh, setCustomHigh] = useState('200')
   const togglePanel = (p: 'band'|'mode'|'filter'|'step') => setOpenPanel(prev => prev === p ? null : p)
   const { theme, showLogo, logoBrightness, wfPalette } = useTheme()
-  const [zoom, setZoom] = useState(() => { const v = localStorage.getItem('bolt-zoom'); return v ? parseInt(v) : 1 })
+  const [zoom, setZoom] = useState(() => { const v = localStorage.getItem('bolt-zoom'); return v ? parseInt(v) : (window.innerWidth <= 700 ? 4 : 1) })
   const [dbMax, setDbMax] = useState(() => parseInt(localStorage.getItem('bolt-top') || '-40'))
   const [dbMin, setDbMin] = useState(() => parseInt(localStorage.getItem('bolt-floor') || '-140'))
   const [txDisplayOffset, setTxDisplayOffset] = useState(() => parseInt(localStorage.getItem('bolt-tx-offset') || '40'))
