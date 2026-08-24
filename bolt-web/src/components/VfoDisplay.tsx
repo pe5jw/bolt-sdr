@@ -17,14 +17,18 @@ function formatFreq(hz: number): string {
   return mhz.toFixed(6).replace(/(\d)(?=(\d{3})+\.)/g, ',')
 }
 
+const getSMeterOffset = () => parseInt(localStorage.getItem('bolt-smeter-offset') || '0')
+
 function dbmToS(dbm: number): string {
-  if (dbm >= -53) return `S9+${Math.round(dbm + 53)}`
-  const s = Math.round((dbm + 127) / 6)
+  const d = dbm + getSMeterOffset()
+  if (d >= -53) return `S9+${Math.round(d + 53)}`
+  const s = Math.round((d + 127) / 6)
   return `S${Math.max(0, Math.min(9, s))}`
 }
 
 function dbmToPercent(dbm: number): number {
-  return Math.max(0, Math.min(110, ((dbm + 127) / 74) * 100))
+  const d = dbm + getSMeterOffset()
+  return Math.max(0, Math.min(110, ((d + 127) / 74) * 100))
 }
 
 export function VfoDisplay({ hz, onChange, step, onStepChange, dbm }: Props) {
