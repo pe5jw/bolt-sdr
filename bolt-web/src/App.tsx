@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRadioSocket } from './ws/useRadioSocket'
 import { VfoDisplay } from './components/VfoDisplay'
 import { ModeFilter } from './components/ModeFilter'
@@ -7,6 +7,7 @@ import { Panadapter } from './components/Panadapter'
 import { TxPanel } from './components/TxPanel'
 import { StatusBar } from './components/StatusBar'
 import { RxControls } from './components/RxControls'
+import { MobileTuneBar } from './components/MobileTuneBar'
 import './App.css'
 import { useMidi } from './MidiContext'
 import { midiEngine } from './midi-engine'
@@ -94,6 +95,9 @@ export default function App() {
   }, [])
 
 
+
+  const vfoRef = useRef(radioState.vfoHz)
+  vfoRef.current = radioState.vfoHz
 
   const sendVfo = (hz: number, isBandSwitch = false) => {
     const snapped = Math.round(hz / tuneStep) * tuneStep
@@ -204,7 +208,8 @@ export default function App() {
             }}
           />
         </section>
-        {!controlsOverlay && (
+        <MobileTuneBar vfoHz={radioState.vfoHz} tuneStep={tuneStep} onTune={sendVfo} />
+        {!controlsOverlay && (<>
         <section className="bolt-controls">
           {!vfoOverlay && <VfoDisplay
             hz={radioState.vfoHz}
@@ -272,7 +277,7 @@ export default function App() {
             }}
           />
         </section>
-        )}
+        </>)}
         <section className="bolt-tx">
           <TxPanel
             mox={radioState.mox}

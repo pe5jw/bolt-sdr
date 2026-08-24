@@ -333,3 +333,55 @@ html, body, #root {
   letter-spacing: 2px;
 }
 
+
+/* ===== MOBILE LAYOUT ===== */
+.bolt-mobile-tune {
+  display: none;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  align-items: center;
+}
+.bolt-mobile-tune-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: var(--font-data);
+  letter-spacing: 1px;
+  flex: 1;
+}
+.bolt-mobile-tune-btn {
+  background: var(--bg-control);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  padding: 10px 0;
+  border-radius: 4px;
+  font-size: 16px;
+  cursor: pointer;
+  flex: 1;
+  font-family: var(--font-data);
+}
+.bolt-mobile-tune-btn:active {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+@media (max-width: 700px) {
+  .bolt-mobile-tune {
+    display: flex;
+  }
+  .bolt-layout {
+    flex-direction: column;
+  }
+  .bolt-controls {
+    flex-wrap: wrap;
+    overflow-x: auto;
+  }
+  .vfo-wrap {
+    min-width: 0;
+    width: 100%;
+  }
+  .bolt-pan {
+    min-height: 120px;
+  }
+}
