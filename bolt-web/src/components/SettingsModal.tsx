@@ -249,7 +249,15 @@ export function SettingsModal({ onClose }: Props) {
 
           <div style={{ marginTop: 8, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>
           <div style={row}>
-            <span style={lbl}>MIC BOOST</span>
+            <span style={lbl}>S-METER OFFSET dB</span>
+          <input type="range" min={-100} max={100} defaultValue={parseInt(localStorage.getItem('bolt-smeter-offset') || '0')}
+            onChange={e => localStorage.setItem('bolt-smeter-offset', e.target.value)}
+            style={{ flex: 1, accentColor: 'var(--accent)' }} />
+          <span style={{ fontSize: 10, color: 'var(--text-dim)', minWidth: 30 }}>
+            {localStorage.getItem('bolt-smeter-offset') || '0'} dB
+          </span>
+          <div style={{ height: 8 }} />
+          <span style={lbl}>MIC BOOST</span>
             <input type="range" min={1} max={20} step={0.5} value={micGain}
               onChange={e => { const v = parseFloat(e.target.value); setMicGain(v); localStorage.setItem('bolt-mic-gain', String(v)); window.dispatchEvent(new CustomEvent('bolt-mic-gain', { detail: v })) }}
               style={{ flex: 1, accentColor: 'var(--accent)' }} />

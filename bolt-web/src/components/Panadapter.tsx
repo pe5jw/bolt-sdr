@@ -38,12 +38,13 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
   const [zoom, setZoom] = useState(() => { const v = localStorage.getItem('bolt-zoom'); return v ? parseInt(v) : 1 })
   const [dbMax, setDbMax] = useState(() => parseInt(localStorage.getItem('bolt-top') || '-40'))
   const [dbMin, setDbMin] = useState(() => parseInt(localStorage.getItem('bolt-floor') || '-140'))
+  const [txDisplayOffset, setTxDisplayOffset] = useState(() => parseInt(localStorage.getItem('bolt-tx-offset') || '40'))
   const dbMaxRef = useRef(-40)
   const dbMinRef = useRef(-140)
   const themeRef = useRef(theme)
   const filterLowRef = useRef(filterLow)
   const filterHighRef = useRef(filterHigh)
-  dbMaxRef.current = dbMax
+  dbMaxRef.current = mox ? dbMax + txDisplayOffset : dbMax
   dbMinRef.current = dbMin
   themeRef.current = theme
   filterLowRef.current = filterLow
@@ -296,6 +297,12 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
         <span style={lbl}>TOP</span>
         <button onClick={() => setDbMax(d => { const v = Math.min(-10, d + 5); localStorage.setItem('bolt-top', String(v)); return v })} style={sBtn}>+</button>
         <span style={val}>{dbMax}</span>
+          {mox && <>
+            <span style={{ fontSize: 10, color: 'var(--tx)', marginLeft: 8, fontFamily: 'var(--font-data)' }}>TX OFF</span>
+            <button onClick={() => setTxDisplayOffset(d => { const v = Math.max(0, d - 10); localStorage.setItem('bolt-tx-offset', String(v)); return v })} style={sBtn}>−</button>
+            <span style={{ fontSize: 10, color: 'var(--tx)', fontFamily: 'var(--font-data)', minWidth: 24, textAlign: 'center' }}>{txDisplayOffset}</span>
+            <button onClick={() => setTxDisplayOffset(d => { const v = Math.min(100, d + 10); localStorage.setItem('bolt-tx-offset', String(v)); return v })} style={sBtn}>+</button>
+          </> }
         <button onClick={() => setDbMax(d => { const v = Math.max(dbMin + 20, d - 5); localStorage.setItem('bolt-top', String(v)); return v })} style={sBtn}>−</button>
         <div style={sep} />
         <span style={lbl}>FLOOR</span>
