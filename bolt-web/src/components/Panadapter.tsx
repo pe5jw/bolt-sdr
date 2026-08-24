@@ -5,6 +5,7 @@ import type { DisplayFrame } from '../ws/useRadioSocket'
 
 interface Props {
   display: DisplayFrame | null
+  autoSetTrigger?: number
   centerHz: number
   onTune: (hz: number) => void
   tuneStep?: number
@@ -29,7 +30,7 @@ interface Props {
   filterHighHz?: number
 }
 
-export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange, controlsOverlay, onBand, onMode, onFilterPreset, filterLowHz, filterHighHz, nrMode, onNrMode, mox }: Props) {
+export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange, controlsOverlay, onBand, onMode, onFilterPreset, filterLowHz, filterHighHz, nrMode, onNrMode, mox }: Props) {
   const [openPanel, setOpenPanel] = useState<'band'|'mode'|'filter'|'step'|'nr'|null>(null)
   const [customLow, setCustomLow] = useState('-3200')
   const [customHigh, setCustomHigh] = useState('200')
@@ -312,7 +313,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
         <div style={sep} />
         <span style={lbl}>TOP</span>
         <button onClick={() => setDbMax(d => { const v = Math.min(-10, d + 5); localStorage.setItem('bolt-top', String(v)); return v })} style={sBtn}>+</button>
-          <button onClick={() => setAutoScale(a => !a)} style={{ ...sBtn, background: autoScale ? 'var(--accent)' : undefined, color: autoScale ? 'var(--bg)' : undefined, marginLeft: 8 }}>AUTO</button>
+          <button onClick={() => setAutoScale(a => !a)} style={{ ...sBtn, background: autoScale ? 'var(--accent)' : undefined, color: autoScale ? 'var(--bg)' : undefined, marginLeft: 8 }}>AUTO SET</button>
         <span style={val}>{dbMax}</span>
           {mox && <>
             <span style={{ fontSize: 10, color: 'var(--tx)', marginLeft: 8, fontFamily: 'var(--font-data)' }}>TX OFF</span>

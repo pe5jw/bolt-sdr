@@ -63,6 +63,7 @@ export default function App() {
     window.addEventListener('bolt-overlay-changed', h)
     return () => window.removeEventListener('bolt-overlay-changed', h)
   }, [])
+  const [autoSetTrigger, setAutoSetTrigger] = useState(0)  // eslint-disable-line
   const [tuneStep, setTuneStep] = useState(1000)
   midiEngine.tuneStepHz = tuneStep
   const [nrState, setNrState] = useState({ nrMode: 'Off', anfEnabled: false, snbEnabled: false, nbMode: 'Off' })
@@ -102,6 +103,7 @@ export default function App() {
   const sendVfo = (hz: number, isBandSwitch = false) => {
     const snapped = Math.round(hz / tuneStep) * tuneStep
     if (isBandSwitch) {
+      setAutoSetTrigger(t => t + 1)
       const band = getBand(snapped)
       const saved = band ? loadBandState(band) : null
       if (saved) {
@@ -171,6 +173,7 @@ export default function App() {
         <section className="bolt-pan">
           <Panadapter
             display={display}
+            autoSetTrigger={autoSetTrigger}
             centerHz={radioState.vfoHz}
             onTune={sendVfo}
             tuneStep={tuneStep}
