@@ -56,7 +56,7 @@ curl -s -X POST http://localhost:6061/api/tci/config ^
 
 echo.
 echo Starting tci-bridge (DVK + CAT voor N1MM+)...
-start "TCI Bridge" /min "%SCRIPT_DIR%tci-bridge\start.bat"
+start "TCI Bridge" "%SCRIPT_DIR%tci-bridge\start.bat"
 echo ================================
 echo Station engine HTTP  : http://192.168.8.141:6061
 echo Station engine HTTPS : https://192.168.8.141:6443
