@@ -38,6 +38,9 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
   const [zoom, setZoom] = useState(() => { const v = localStorage.getItem('bolt-zoom'); return v ? parseInt(v) : (window.innerWidth <= 700 ? 4 : 1) })
   const [dbMax, setDbMax] = useState(() => parseInt(localStorage.getItem('bolt-top') || '-40'))
   const [dbMin, setDbMin] = useState(() => parseInt(localStorage.getItem('bolt-floor') || '-140'))
+  const [autoScale, setAutoScale] = useState(false)
+  const autoScaleRef = useRef(false)
+  autoScaleRef.current = autoScale
   const [txDisplayOffset, setTxDisplayOffset] = useState(() => parseInt(localStorage.getItem('bolt-tx-offset') || '40'))
   const dbMaxRef = useRef(-40)
   const dbMinRef = useRef(-140)
@@ -80,6 +83,19 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
     const { panDb, hzPerPixel } = display
     const hzPerPixelCanvas = hzPerPixel * display.width / W
     const len = panDb.length
+    // Auto-scale
+    if (autoScaleRef.current && panDb.length > 0) {
+      const valid = (panDb as Float32Array).filter((v: number) => v > -200 && v < 0)
+      if (valid.length > 0) {
+        const mx = Math.max(...Array.from(valid))
+        const sorted = Array.from(valid).sort((a: number, b: number) => a - b)
+        const mn = sorted[Math.floor(sorted.length * 0.05)]
+        const newMax = Math.ceil(mx / 5) * 5 + 10
+        const newMin = Math.floor(mn / 5) * 5 - 5
+        if (newMax !== dbMaxRef.current) { dbMaxRef.current = newMax; setDbMax(newMax) }
+        if (newMin !== dbMinRef.current) { dbMinRef.current = newMin; setDbMin(newMin) }
+      }
+    }
     const dbMax = dbMaxRef.current
     const dbMin = dbMinRef.current
     const freqStart = centerHz - (W / 2) * hzPerPixelCanvas
@@ -296,6 +312,7 @@ export function Panadapter({ display, centerHz, onTune, tuneStep = 1000, filterL
         <div style={sep} />
         <span style={lbl}>TOP</span>
         <button onClick={() => setDbMax(d => { const v = Math.min(-10, d + 5); localStorage.setItem('bolt-top', String(v)); return v })} style={sBtn}>+</button>
+          <button onClick={() => setAutoScale(a => !a)} style={{ ...sBtn, background: autoScale ? 'var(--accent)' : undefined, color: autoScale ? 'var(--bg)' : undefined, marginLeft: 8 }}>AUTO</button>
         <span style={val}>{dbMax}</span>
           {mox && <>
             <span style={{ fontSize: 10, color: 'var(--tx)', marginLeft: 8, fontFamily: 'var(--font-data)' }}>TX OFF</span>
