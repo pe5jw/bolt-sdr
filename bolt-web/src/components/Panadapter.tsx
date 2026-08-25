@@ -40,6 +40,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
   const [dbMax, setDbMax] = useState(() => parseInt(localStorage.getItem('bolt-top') || '-40'))
   const [dbMin, setDbMin] = useState(() => parseInt(localStorage.getItem('bolt-floor') || '-140'))
   const [autoScale, setAutoScale] = useState(false)
+  const [autoSetDone, setAutoSetDone] = useState(false)
   const autoScaleRef = useRef(false)
   // autoScaleRef wordt alleen via knop en reset gezet
   const [txDisplayOffset, setTxDisplayOffset] = useState(() => parseInt(localStorage.getItem('bolt-tx-offset') || '40'))
@@ -86,18 +87,24 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
     const len = panDb.length
     // Auto-scale
     if (autoScaleRef.current && panDb.length > 0) {
-      const valid = (panDb as Float32Array).filter((v: number) => v > -200 && v < 0)
-      if (valid.length > 0) {
-        const mx = Math.max(...Array.from(valid))
-        const sorted = Array.from(valid).sort((a: number, b: number) => a - b)
-        const mn = sorted[Math.floor(sorted.length * 0.02)]
-        const newMax = Math.ceil(mx / 5) * 5 + 10
-        const newMin = Math.floor(mn / 5) * 5 - 30
-        if (newMax !== dbMaxRef.current) { dbMaxRef.current = newMax; setDbMax(newMax) }
-        if (newMin !== dbMinRef.current) { dbMinRef.current = newMin; setDbMin(newMin) }
+      const arr = Array.from(panDb as Float32Array).filter((v: number) => isFinite(v))
+      if (arr.length > 0) {
+        // FLOOR = mediaan = noise floor
+        const sorted = [...arr].sort((a: number, b: number) => a - b)
+        const floor = sorted[Math.floor(sorted.length * 0.5)]
+        // TOP zodat sterkste signaal op 80% staat
+        const peak = sorted[sorted.length - 1]
+        const top = peak
+        const newMin = Math.floor(floor)
+        const newMax = Math.ceil(top)
+        dbMaxRef.current = newMax; setDbMax(newMax)
+        dbMinRef.current = newMin; setDbMin(newMin)
+        localStorage.setItem('bolt-top', String(newMax))
+        localStorage.setItem('bolt-floor', String(newMin))
       }
       autoScaleRef.current = false
       setAutoScale(false)
+      setAutoSetDone(true)
     }
     const dbMax = dbMaxRef.current
     const dbMin = dbMinRef.current
@@ -237,6 +244,18 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
   useEffect(() => { draw() }, [draw])
   useEffect(() => { drawWf() }, [drawWf])
 
+  // Auto SET bij bandwissel
+  const prevBandRef = useRef<string>('')
+  useEffect(() => {
+    if (!vfoHz) return
+    const band = vfoHz < 2500000 ? '160m' : vfoHz < 4500000 ? '80m' : vfoHz < 8000000 ? '40m' :
+      vfoHz < 15000000 ? '20m' : vfoHz < 22000000 ? '15m' : '10m'
+    if (prevBandRef.current && band !== prevBandRef.current) {
+      setTimeout(() => { autoScaleRef.current = true }, 3500)
+    }
+    prevBandRef.current = band
+  }, [vfoHz])
+
   // Pan handlers
   const onMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (e.button === 2) {
@@ -329,11 +348,11 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
         <button onClick={() => setDbMin(d => { const v = Math.min(dbMax - 20, d + 1); localStorage.setItem('bolt-floor', String(v)); return v })} style={sBtn}>+</button>
         <span style={val}>{dbMin}</span>
         <button onClick={() => setDbMin(d => Math.max(-220, d - 1))} style={sBtn}>−</button>
-        <button onClick={() => { autoScaleRef.current = true; setAutoScale(true) }} style={{ ...sBtn, marginLeft: 8, background: autoScale ? 'var(--accent)' : undefined, color: autoScale ? 'var(--bg)' : undefined }}>AUTO SET</button>
+        <button onClick={() => { autoScaleRef.current = true; setAutoScale(true); setAutoSetDone(false) }} style={{ ...sBtn, marginLeft: 8, background: autoScale ? 'var(--accent)' : autoSetDone ? '#2ecc71' : undefined, color: autoScale ? 'var(--bg)' : autoSetDone ? '#000' : undefined }}>AUTO SET</button>
       </div>
       <div style={{ position: "relative" }}>
         {vfoOverlay && vfoHz != null && (
-          <div style={{ position: 'absolute', top: 6, left: 8, pointerEvents: 'none', zIndex: 10,
+          <div style={{ position: 'absolute', top: 16, left: 8, pointerEvents: 'none', zIndex: 10,
             background: 'rgba(0,0,0,0.65)', border: '1px solid var(--border)', borderRadius: 4, padding: '5px 10px' }}>
             <div style={{ fontFamily: 'var(--font-data)', fontSize: 28, fontWeight: 700, color: 'var(--accent)', letterSpacing: 3, textShadow: '0 0 10px var(--accent)' }}>
               {(vfoHz / 1e6).toFixed(6)}
@@ -346,7 +365,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
           const sLabel = dbm >= -53 ? 'S9+' + Math.round(dbm + 53) + 'dB' : 'S' + sNum
           const labelColor = dbm >= -53 ? '#e74c3c' : sNum >= 7 ? '#f39c12' : '#2ecc71'
           return (
-            <div style={{ position: 'absolute', top: 6, right: 8, pointerEvents: 'none', zIndex: 10,
+            <div style={{ position: 'absolute', top: 16, right: 8, pointerEvents: 'none', zIndex: 10,
               background: 'rgba(0,0,0,0.65)', border: '1px solid var(--border)', borderRadius: 4, padding: '5px 10px', minWidth: 140 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
                 <span style={{ fontFamily: 'var(--font-data)', fontSize: 16, fontWeight: 700, color: labelColor }}>{sLabel}</span>

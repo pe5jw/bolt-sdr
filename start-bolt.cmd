@@ -62,4 +62,8 @@ echo Station engine HTTP  : http://192.168.8.141:6061
 echo Station engine HTTPS : https://192.168.8.141:6443
 echo TCI                  : port 40001
 echo Open browser op: https://192.168.8.141:6443
-pause
+
+Start-Sleep -Seconds 20
+echo sleep
+exit
+echo exit

@@ -224,6 +224,7 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
           rxAfGainDb: state.rxAfGainDb ?? s.rxAfGainDb,
           agcTopDb: state.agcTopDb ?? s.agcTopDb,
           attDb: state.attenDb ?? s.attDb,
+          preamp: state.preampOn ?? s.preamp,
           squelchEnabled: state.squelch?.enabled ?? s.squelchEnabled,
           squelchLevel: state.squelch?.level ?? s.squelchLevel,
           driveDb: state.drivePct ?? s.driveDb,
