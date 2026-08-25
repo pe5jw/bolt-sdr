@@ -12,12 +12,9 @@ interface Props {
   agcMode?: string
   onAgc?: (mode: string) => void
   onSquelch: (enabled: boolean, level: number) => void
-  onAtten: (db: number) => void
-  preampOn?: boolean
-  onPreamp?: (on: boolean) => void
-}
+  onAtten: (db: number) => void}
 
-export function RxControls({ squelchEnabled, squelchLevel, attenDb, onSquelch, onAtten, nrMode='Off', anfEnabled=false, snbEnabled=false, nbMode='Off', onNr, agcMode='Med', onAgc, preampOn=false, onPreamp }: Props) {
+export function RxControls({ squelchEnabled, squelchLevel, attenDb, onSquelch, onAtten, nrMode='Off', anfEnabled=false, snbEnabled=false, nbMode='Off', onNr, agcMode='Med', onAgc }: Props) {
   const [localSql, setLocalSql] = useState(squelchLevel)
   const [showNrSettings, setShowNrSettings] = useState(false)
   const [nbThreshold, setNbThreshold] = useState(20)
@@ -30,18 +27,6 @@ export function RxControls({ squelchEnabled, squelchLevel, attenDb, onSquelch, o
 
   return (
     <div style={{ background: 'var(--bg-panel)', padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 6, minWidth: 180 }}>
-
-      {/* Preamp */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={labelStyle}>PRE</span>
-        <button onClick={() => onPreamp && onPreamp(!preampOn)}
-          style={{ fontSize: 9, padding: '1px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
-            background: preampOn ? '#2ecc71' : 'var(--bg-control)',
-            border: '1px solid var(--border)',
-            color: preampOn ? '#000' : 'var(--text-dim)' }}>
-          {preampOn ? 'ON' : 'OFF'}
-        </button>
-      </div>
 
       {/* Squelch */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -73,13 +58,13 @@ export function RxControls({ squelchEnabled, squelchLevel, attenDb, onSquelch, o
         ))}
       </div>
 
-      {/* Attenuator */}
+      {/* RF Gain */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={labelStyle}>ATT</span>
-        <input type="range" min={0} max={31} step={1} value={attenDb}
-          onChange={e => onAtten(parseInt(e.target.value))}
+        <span style={labelStyle}>RF</span>
+        <input type="range" min={-12} max={48} step={1} value={48 - attenDb}
+          onChange={e => onAtten(48 - parseInt(e.target.value))}
           style={{ flex: 1, accentColor: 'var(--text-dim)' }} />
-        <span style={valStyle}>{attenDb} dB</span>
+        <span style={valStyle}>{48 - attenDb} dB</span>
       </div>
 
     {/* NR */}

@@ -245,13 +245,13 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
   useEffect(() => { drawWf() }, [drawWf])
 
   // Auto SET bij bandwissel
-  const prevBandRef = useRef<string>('')
+  const prevBandRef = useRef<string>(vfoHz ? (vfoHz < 2500000 ? '160m' : vfoHz < 4500000 ? '80m' : vfoHz < 8000000 ? '40m' : vfoHz < 15000000 ? '20m' : vfoHz < 22000000 ? '15m' : '10m') : '')
   useEffect(() => {
     if (!vfoHz) return
     const band = vfoHz < 2500000 ? '160m' : vfoHz < 4500000 ? '80m' : vfoHz < 8000000 ? '40m' :
       vfoHz < 15000000 ? '20m' : vfoHz < 22000000 ? '15m' : '10m'
     if (prevBandRef.current && band !== prevBandRef.current) {
-      setTimeout(() => { autoScaleRef.current = true }, 3500)
+      setTimeout(() => { autoScaleRef.current = true }, 200)
     }
     prevBandRef.current = band
   }, [vfoHz])

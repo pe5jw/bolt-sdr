@@ -277,13 +277,7 @@ export default function App() {
             onAgc={mode => {
               setRadioState(s => ({ ...s, agcMode: mode }))
               fetch('/api/rx/agc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agc: { mode, slope: null, decayMs: null, hangMs: null, hangThreshold: null, fixedGainDb: null } }) }).catch(() => {})
-            }}
-            preampOn={radioState.preamp}
-            onPreamp={on => {
-              setRadioState(s => ({ ...s, preamp: on }))
-              fetch('/api/preamp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).catch(() => {})
-            }}
-          />
+            }}          />
         </section>
         </>)}
         <section className="bolt-tx">
