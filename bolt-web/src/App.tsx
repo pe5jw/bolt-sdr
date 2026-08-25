@@ -39,14 +39,14 @@ export default function App() {
   midiEngine.onMox = (on) => {
     setRadioState(s => ({ ...s, mox: on }))
     setMoxActive(on)
-    fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) }).catch(() => {})
+    fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).catch(() => {})
   }
   midiEngine.onVfoChange = (hz) => {
     setRadioState(s => ({ ...s, vfoHz: hz }))
   }
   midiEngine.onTune = (on) => {
     setRadioState(s => ({ ...s, tune: on }))
-    fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) }).catch(() => {})
+    fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).catch(() => {})
   }
 
   useEffect(() => {
@@ -278,6 +278,11 @@ export default function App() {
               setRadioState(s => ({ ...s, agcMode: mode }))
               fetch('/api/rx/agc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agc: { mode, slope: null, decayMs: null, hangMs: null, hangThreshold: null, fixedGainDb: null } }) }).catch(() => {})
             }}
+            preampOn={radioState.preamp}
+            onPreamp={on => {
+              setRadioState(s => ({ ...s, preamp: on }))
+              fetch('/api/preamp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).catch(() => {})
+            }}
           />
         </section>
         </>)}
@@ -294,11 +299,11 @@ export default function App() {
             onMox={on => {
               setRadioState(s => ({ ...s, mox: on }))
               setMoxActive(on)
-              fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) }).then(async r => { if (!r.ok && on) { const d = await r.json(); setMoxActive(false); setRadioState(s => ({...s, mox: false})); setGuardMsg(d.error ?? 'TX geblokkeerd'); setTimeout(() => setGuardMsg(null), 4000) } })
+              fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).then(async r => { if (!r.ok && on) { const d = await r.json(); setMoxActive(false); setRadioState(s => ({...s, mox: false})); setGuardMsg(d.error ?? 'TX geblokkeerd'); setTimeout(() => setGuardMsg(null), 4000) } })
             }}
             onTune={on => {
               setRadioState(s => ({ ...s, tune: on }))
-              fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })
+              fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).then(r => r.json()).then(d => { if (d.tunOn !== undefined) setRadioState(s => ({ ...s, tune: d.tunOn })) }).catch(() => setRadioState(s => ({ ...s, tune: false })))
             }}
             onAfGain={db => {
               setRadioState(s => ({ ...s, rxAfGainDb: db }))

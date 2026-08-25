@@ -33,3 +33,4 @@ echo.
 echo Deploy klaar - Bolt SDR starten...
 timeout /t 1 /nobreak > nul
 call "C:\bolt-sdr\start-bolt.cmd"
+exit
