@@ -10,8 +10,6 @@ interface Props {
   learnFrame?: import('../midi').MidiLearnFrame | null
 }
 
-const CFC_FREQS = [50, 100, 200, 500, 1000, 1500, 2000, 2500, 3000, 5000]
-
 export function SettingsModal({ onClose }: Props) {
   const { theme, setTheme, showLogo, setShowLogo, logoBrightness, setLogoBrightness, wfPalette, setWfPalette } = useTheme()
   const [catEnabled, setCatEnabled] = useState(false)
@@ -30,7 +28,7 @@ export function SettingsModal({ onClose }: Props) {
       body: JSON.stringify({ enabled: catEnabled, bindAddress: catBind, port: catPort, autoReport: true })
     }).then(r=>r.json()).then(s => setCatStatus(s.error ?? (s.currentlyEnabled ? 'Actief op poort '+s.currentPort : 'Uitgeschakeld'))).catch(()=>{})
   }
-  const [tab, setTab] = useState<'general' | 'midi' | 'cat' | 'dvk' | 'cfc' | 'info'>('general')
+  const [tab, setTab] = useState<'general' | 'midi' | 'cat' | 'dvk' | 'info'>('general')
   const [displayRate, setDisplayRate] = useState(30)
   useEffect(() => {
     fetch("/api/display/settings").then(r => r.json()).then(d => {
@@ -47,28 +45,9 @@ export function SettingsModal({ onClose }: Props) {
     fetch('/api/bands/current').then(r => r.json()).then(d => setBandGuardIgnore(d.txGuardIgnore)).catch(() => {})
   }, [])
 
-
-  // CFC state
-  const [cfcEnabled, setCfcEnabled] = useState(false)
-  const [cfcPostEq, setCfcPostEq] = useState(false)
-  const [cfcPreComp, setCfcPreComp] = useState(0)
-  const [cfcPrePeq, setCfcPrePeq] = useState(0)
-  const [cfcStatus, setCfcStatus] = useState('')
-    const [cfcBands, setCfcBands] = useState(CFC_FREQS.map(f => ({ freqHz: f, compLevelDb: 0, postGainDb: 0 })))
-  useEffect(() => {
-    fetch('/api/state').then(r => r.json()).then(s => {
-      if (s.cfc) {
-        setCfcEnabled(s.cfc.enabled ?? false)
-        setCfcPostEq(s.cfc.postEqEnabled ?? false)
-        setCfcPreComp(s.cfc.preCompDb ?? 0)
-        setCfcPrePeq(s.cfc.prePeqDb ?? 0)
-        if (s.cfc.bands?.length === 10) setCfcBands(s.cfc.bands)
-      }
-    }).catch(() => {})
-  }, [])
   const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }
   const lbl: React.CSSProperties = { fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 80 }
-  const tabBtn = (t: 'general' | 'midi' | 'cat' | 'dvk' | 'cfc' | 'info'): React.CSSProperties => ({
+  const tabBtn = (t: 'general' | 'midi' | 'cat' | 'dvk' | 'info'): React.CSSProperties => ({
     fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer',
     fontFamily: 'var(--font-data)', letterSpacing: 2,
     background: tab === t ? 'var(--accent)' : 'var(--bg-control)',
@@ -79,11 +58,11 @@ export function SettingsModal({ onClose }: Props) {
   return (
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000,
-      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16
+      display: 'flex', alignItems: 'center', justifyContent: 'center'
     }} onClick={onClose}>
       <div style={{
         background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 6,
-        padding: 20, width: '100%', maxWidth: 580, maxHeight: '90vh', display: 'flex', flexDirection: 'column'
+        padding: 24, minWidth: 360, maxWidth: 520
       }} onClick={e => e.stopPropagation()}>
 
         {/* Header */}
@@ -95,14 +74,12 @@ export function SettingsModal({ onClose }: Props) {
         {/* Tabs */}
         <div style={{ display: 'flex', gap: 4, marginBottom: 16 }}>
           <button style={tabBtn('general')} onClick={() => setTab('general')}>GENERAL</button>
-          <button style={tabBtn('cfc')} onClick={() => setTab('cfc')}>TX EQ</button>
           <button style={tabBtn('midi')} onClick={() => setTab('midi')}>MIDI</button>
           <button style={tabBtn('cat')} onClick={() => setTab('cat')}>CAT</button>
           <button style={tabBtn('dvk')} onClick={() => setTab('dvk')}>DVK</button>
           <button style={tabBtn('info')} onClick={() => setTab('info')}>INFO</button>
         </div>
 
-        <div style={{ overflowY: 'auto', flex: 1 }}>
         {/* Info tab */}
         {tab === 'info' && (
           <div style={{ fontFamily: 'var(--font-data)', fontSize: 11, color: 'var(--text-dim)' }}>
@@ -116,56 +93,6 @@ export function SettingsModal({ onClose }: Props) {
               <div><span style={{ color: 'var(--text-dim)' }}>RADIO</span> <span style={{ color: 'var(--accent)' }}>HermesLite 2</span></div>
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)', fontSize: 9 }}>GPL v2+ — gebaseerd op Zeus SDR</div>
             </div>
-          </div>
-        )}
-        {/* CFC TX EQ tab */}
-        {tab === 'cfc' && (
-          <div style={{ fontFamily: 'var(--font-data)', fontSize: 11 }}>
-            <div style={{ display: 'flex', gap: 16, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={lbl}>CFC</span>
-                <button onClick={() => setCfcEnabled(!cfcEnabled)} style={{ fontSize: 10, padding: '2px 10px', borderRadius: 3, cursor: 'pointer', background: cfcEnabled ? 'var(--tx)' : 'var(--bg-control)', border: '1px solid var(--border)', color: cfcEnabled ? '#fff' : 'var(--text-dim)' }}>{cfcEnabled ? 'AAN' : 'UIT'}</button>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={lbl}>POST EQ</span>
-                <button onClick={() => setCfcPostEq(!cfcPostEq)} style={{ fontSize: 10, padding: '2px 10px', borderRadius: 3, cursor: 'pointer', background: cfcPostEq ? 'var(--accent)' : 'var(--bg-control)', border: '1px solid var(--border)', color: cfcPostEq ? 'var(--bg)' : 'var(--text-dim)' }}>{cfcPostEq ? 'AAN' : 'UIT'}</button>
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 9, color: 'var(--text-dim)' }}>PRE COMP</span>
-                <input type="range" min={-20} max={20} step={0.5} value={cfcPreComp} onChange={e => setCfcPreComp(parseFloat(e.target.value))} style={{ width: 80, accentColor: 'var(--tx)' }} />
-                <span style={{ fontSize: 9, color: 'var(--accent)', minWidth: 32 }}>{cfcPreComp} dB</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 9, color: 'var(--text-dim)' }}>PRE PEQ</span>
-                <input type="range" min={-20} max={20} step={0.5} value={cfcPrePeq} onChange={e => setCfcPrePeq(parseFloat(e.target.value))} style={{ width: 80, accentColor: 'var(--accent)' }} />
-                <span style={{ fontSize: 9, color: 'var(--accent)', minWidth: 32 }}>{cfcPrePeq} dB</span>
-              </div>
-            </div>
-            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, marginBottom: 8 }}>
-              <div style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
-                <span style={{ fontSize: 9, color: 'var(--text-dim)', minWidth: 40 }}>Hz</span>
-                <span style={{ fontSize: 9, color: 'var(--text-dim)', flex: 1, textAlign: 'center' }}>COMP dB</span>
-                <span style={{ fontSize: 9, color: 'var(--text-dim)', minWidth: 30, textAlign: 'right' }}></span>
-                <span style={{ fontSize: 9, color: 'var(--text-dim)', flex: 1, textAlign: 'center' }}>GAIN dB</span>
-                <span style={{ fontSize: 9, color: 'var(--text-dim)', minWidth: 30, textAlign: 'right' }}></span>
-              </div>
-              {cfcBands.map((band, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                  <span style={{ fontSize: 9, color: 'var(--accent)', minWidth: 40 }}>{band.freqHz}</span>
-                  <input type="range" min={-20} max={20} step={0.5} value={band.compLevelDb} onChange={e => { const b = [...cfcBands]; b[i] = { ...b[i], compLevelDb: parseFloat(e.target.value) }; setCfcBands(b) }} style={{ flex: 1, accentColor: 'var(--tx)' }} />
-                  <span style={{ fontSize: 9, color: 'var(--tx)', minWidth: 30, textAlign: 'right' }}>{band.compLevelDb}</span>
-                  <input type="range" min={-20} max={20} step={0.5} value={band.postGainDb} onChange={e => { const b = [...cfcBands]; b[i] = { ...b[i], postGainDb: parseFloat(e.target.value) }; setCfcBands(b) }} style={{ flex: 1, accentColor: 'var(--accent)' }} />
-                  <span style={{ fontSize: 9, color: 'var(--accent)', minWidth: 30, textAlign: 'right' }}>{band.postGainDb}</span>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => { fetch('/api/tx/cfc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ config: { enabled: cfcEnabled, postEqEnabled: cfcPostEq, preCompDb: cfcPreComp, prePeqDb: cfcPrePeq, bands: cfcBands } }) }).then(() => { setCfcStatus('ok'); setTimeout(() => setCfcStatus(''), 2000) }).catch(() => setCfcStatus('err')) }} style={{ fontSize: 10, padding: '3px 16px', borderRadius: 3, cursor: 'pointer', background: cfcStatus === 'ok' ? '#2ecc71' : cfcStatus === 'err' ? '#e74c3c' : 'var(--accent)', border: 'none', color: cfcStatus ? '#000' : 'var(--bg)' }}>{cfcStatus === 'ok' ? 'OPGESLAGEN ✓' : cfcStatus === 'err' ? 'FOUT ✗' : 'OPSLAAN'}</button>
-              <button onClick={() => { setCfcBands(CFC_FREQS.map(f => ({ freqHz: f, compLevelDb: 0, postGainDb: 0 }))); setCfcPreComp(0); setCfcPrePeq(0) }} style={{ fontSize: 10, padding: '3px 16px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>RESET</button>
-            </div>
-            <div style={{ fontSize: 9, color: 'var(--text-dim)', marginTop: 8 }}>CFC = Continuous Frequency Compressor (WDSP)</div>
           </div>
         )}
         {/* CAT tab */}
@@ -356,7 +283,6 @@ export function SettingsModal({ onClose }: Props) {
             Meer instellingen komen hier: audio buffer, CAT, etc.
           </div>
         </>}
-        </div>
 
       </div>
     </div>
