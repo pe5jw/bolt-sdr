@@ -2464,7 +2464,10 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
             // width would silence the on-air signal. The monitor mirror below
             // routes through SetFilter -> ApplyBandpassForMode, which floors on
             // its own.
-            var (txLow, txHigh) = FloorPassbandWidth(lowHz, highHz);
+            // DC blocking: clamp zodat 0 Hz nooit door het TX filter passeert
+            int dcLow = lowHz >= 0 ? Math.Max(lowHz, 20) : Math.Min(lowHz, -20);
+            int dcHigh = highHz <= 0 ? Math.Min(highHz, -20) : Math.Max(highHz, 20);
+            var (txLow, txHigh) = FloorPassbandWidth(dcLow, dcHigh);
             NativeMethods.SetTXABandpassFreqs(txa, txLow, txHigh);
         }
         // Mirror the filter onto the monitor channel so the preview stays at
