@@ -61,6 +61,9 @@ public static class BoltHost
     public static WebApplication Build(string[] args, BoltHostOptions options)
     {
         var webRoot = Environment.GetEnvironmentVariable("BOLT_WEBROOT");
+        // Lees --webroot argument
+        var wrIdx = Array.IndexOf(args, "--webroot");
+        if (wrIdx >= 0 && wrIdx + 1 < args.Length) webRoot = args[wrIdx + 1];
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             Args = args,
