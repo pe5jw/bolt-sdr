@@ -1,0 +1,33 @@
+{
+  "name": "bolt-client",
+  "version": "1.0.0",
+  "description": "Bolt SDR client app",
+  "main": "main.js",
+  "author": "PE5JW",
+  "license": "GPL-2.0-or-later",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "build": {
+    "appId": "nl.pe5jw.bolt-sdr",
+    "productName": "Bolt SDR",
+    "win": {
+      "target": "portable",
+      "icon": "icon.ico"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "icon.png"
+    },
+    "files": [
+      "main.js",
+      "index.html",
+      "package.json"
+    ]
+  },
+  "devDependencies": {
+    "electron": "^36.4.0",
+    "electron-builder": "^26.0.0"
+  }
+}

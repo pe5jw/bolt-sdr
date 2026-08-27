@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Bolt SDR</title>
+  <style>
+    body { font-family: monospace; background: #111; color: #ccc; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+    h1 { color: #f0a500; letter-spacing: 4px; font-size: 20px; margin-bottom: 24px; }
+    input { background: #222; border: 1px solid #444; color: #fff; padding: 8px 12px; font-size: 14px; border-radius: 4px; width: 200px; }
+    button { background: #f0a500; border: none; color: #111; padding: 8px 24px; font-size: 14px; border-radius: 4px; cursor: pointer; margin-top: 16px; font-weight: bold; letter-spacing: 2px; }
+    button:hover { background: #ffb800; }
+    .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+    label { min-width: 60px; font-size: 12px; color: #888; }
+  </style>
+</head>
+<body>
+  <h1>BOLT SDR</h1>
+  <div class="row"><label>HOST</label><input id="host" value="192.168.8.141" /></div>
+  <div class="row"><label>PORT</label><input id="port" value="6443" /></div>
+  <button onclick="connect()">VERBINDEN</button>
+  <script>
+    const { ipcRenderer } = require('electron')
+    ipcRenderer.on('config', (e, cfg) => {
+      document.getElementById('host').value = cfg.host
+      document.getElementById('port').value = cfg.port
+    })
+    function connect() {
+      const host = document.getElementById('host').value
+      const port = parseInt(document.getElementById('port').value)
+      ipcRenderer.send('connect', { host, port })
+    }
+    document.addEventListener('keydown', e => { if (e.key === 'Enter') connect() })
+  </script>
+</body>
+</html>
