@@ -8,7 +8,7 @@ echo.
 echo Stoppen van lopende processen...
 taskkill /F /IM python.exe /T > nul 2>&1
 taskkill /F /IM python3.exe /T > nul 2>&1
-taskkill /F /IM StationEngine.exe /T > nul 2>&1
+taskkill /F /IM bolt-sdr.exe /T > nul 2>&1
 taskkill /F /IM python.exe /T > nul 2>&1
 taskkill /F /IM python3.exe /T > nul 2>&1
 timeout /t 2 /nobreak > nul

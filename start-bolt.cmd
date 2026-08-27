@@ -35,11 +35,11 @@ if %HTTPS_EXISTS%==1 (
 echo Stopping any running processes...
 taskkill /F /IM python.exe /T > nul 2>&1
 echo Stopping any running station-engine...
-taskkill /F /IM StationEngine.exe > nul 2>&1
+taskkill /F /IM bolt-sdr.exe > nul 2>&1
 timeout /t 2 /nobreak > nul
 
 echo Starting station-engine...
-start "Station Engine" "%SCRIPT_DIR%StationEngine.exe" ^
+start "Station Engine" "%SCRIPT_DIR%bolt-sdr.exe" ^
     --port 6061 ^
     --bind lan ^
     --lan-https-port 6443 ^

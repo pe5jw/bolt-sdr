@@ -143,6 +143,19 @@ public static class BoltHost
             }
         });
 
+        // HTTPS LAN cert
+        if (options.UseHttps && options.HttpsPort > 0)
+        {
+            builder.WebHost.ConfigureKestrel(k =>
+            {
+                var cert = LanCertificate.GetOrCreate();
+                if (options.BindAllInterfaces)
+                    k.ListenAnyIP(options.HttpsPort, o => o.UseHttps(cert));
+                else
+                    k.Listen(IPAddress.Loopback, options.HttpsPort, o => o.UseHttps(cert));
+            });
+        }
+
         builder.Services.AddSignalR();
         builder.Services.AddCors();
 
@@ -370,8 +383,10 @@ public static class BoltHost
 
 public sealed class BoltHostOptions
 {
-    public int HttpPort { get; init; } = 6060;
-    public bool BindAllInterfaces { get; init; }
+    public int HttpPort { get; init; } = 6061;
+    public int HttpsPort { get; init; } = 6443;
+    public bool BindAllInterfaces { get; init; } = true;
+    public bool UseHttps { get; init; } = true;
 }
 
 
