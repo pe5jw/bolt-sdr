@@ -30,7 +30,6 @@ echo Stopping any running processes...
 taskkill /F /IM python.exe /T > nul 2>&1
 echo Stopping any running station-engine...
 taskkill /F /IM StationEngine.exe > nul 2>&1
-taskkill /F /IM ngrok.exe > nul 2>&1
 timeout /t 2 /nobreak > nul
 echo Starting station-engine...
 start "Station Engine" "%SCRIPT_DIR%StationEngine.exe" ^
@@ -48,8 +47,6 @@ curl -s -X POST http://localhost:6061/api/tci/config ^
 echo.
 echo Starting tci-bridge (DVK + CAT voor N1MM+)...
 start "TCI Bridge" "%SCRIPT_DIR%tci-bridge\start.bat"
-echo Starting ngrok tunnel...
-start "ngrok" "%SCRIPT_DIR%ngrok.exe" http 6061
 echo ================================
 echo Station engine HTTP  : http://192.168.8.141:6061
 echo Station engine HTTPS : https://192.168.8.141:6443
