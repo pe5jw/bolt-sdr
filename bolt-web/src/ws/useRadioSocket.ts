@@ -118,7 +118,7 @@ function parseAudioFrame(buf: ArrayBuffer): { samples: Float32Array; sampleRate:
   } catch { return null }
 }
 
-const DEFAULT_WS_URL = () => `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port || "6061"}/ws`
+const DEFAULT_WS_URL = () => `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${(window.location.port || (window.location.protocol === "https:" ? "443" : "6061"))}/ws`
 export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (frame: import('../midi').MidiLearnFrame) => void) {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected')
   const [radioState, setRadioState] = useState<RadioState>(DEFAULT_STATE)

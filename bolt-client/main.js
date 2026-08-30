@@ -32,7 +32,7 @@ function createConnectWindow() {
 
 ipcMain.on('connect', (event, config) => {
   saveConfig(config)
-  const url = `https://${config.host}:${config.port}`
+  const url = (config.host.includes('ngrok') || config.host.includes('trycloudflare')) ? ('https://' + config.host) : ('https://' + config.host + ':' + config.port)
   mainWindow.loadURL(url)
   mainWindow.setResizable(true)
   mainWindow.maximize()
@@ -41,6 +41,7 @@ ipcMain.on('connect', (event, config) => {
 
 app.whenReady().then(createConnectWindow)
 app.on('window-all-closed', () => app.quit())
+
 
 
 
