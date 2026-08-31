@@ -16,9 +16,20 @@ netsh advfirewall firewall add rule name="Bolt SDR TCI 40001" dir=in action=allo
 echo Firewall klaar.
 
 echo.
-echo Certificaat aanmaken - Bolt even starten...
+echo Bolt SDR initialiseren (certificaat + wisdom berekening)...
+echo Dit kan enkele minuten duren - venster NIET sluiten!
+echo.
 start /B "" "%~dp0StationEngine.exe" --port 6061 --bind lan --lan-https-port 6443 --webroot "%~dp0web"
+
+echo Wachten op wisdom berekening...
+:WAIT_WISDOM
 timeout /t 5 /nobreak > nul
+tasklist /FI "IMAGENAME eq StationEngine.exe" | find "StationEngine.exe" > nul
+if errorlevel 1 goto WISDOM_DONE
+findstr /M "wdsp.wisdom ready" "%LOCALAPPDATA%\BoltSDR\logs\*" > nul 2>&1
+if not errorlevel 1 goto WISDOM_DONE
+goto WAIT_WISDOM
+:WISDOM_DONE
 
 echo Certificaat installeren...
 powershell -Command "$pfx = Get-ChildItem '%LOCALAPPDATA%\BoltSDR\certs\*.pfx' | Select-Object -First 1; if ($pfx) { $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pfx.FullName, ''); $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', 'LocalMachine'); $store.Open('ReadWrite'); $store.Add($cert); $store.Close(); Write-Host 'Certificaat geinstalleerd' } else { Write-Host 'Certificaat niet gevonden' }"
