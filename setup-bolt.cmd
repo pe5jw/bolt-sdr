@@ -16,5 +16,14 @@ netsh advfirewall firewall add rule name="Bolt SDR TCI 40001" dir=in action=allo
 echo Firewall klaar.
 
 echo.
+echo ================================================
+echo BELANGRIJK: Eerste keer openen in Chrome
+echo ================================================
+echo.
+echo 1. Open Chrome en ga naar https://192.168.8.141:6443
+echo 2. Klik op "Geavanceerd"
+echo 3. Klik op "Doorgaan naar 192.168.8.141"
+echo 4. Dit is eenmalig - Chrome onthoudt het certificaat
+echo.
 echo Setup voltooid! Start Bolt SDR met start-bolt.cmd
 pause
