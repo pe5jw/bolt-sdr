@@ -16,14 +16,21 @@ netsh advfirewall firewall add rule name="Bolt SDR TCI 40001" dir=in action=allo
 echo Firewall klaar.
 
 echo.
-echo ================================================
-echo BELANGRIJK: Eerste keer openen in Chrome
-echo ================================================
+echo Certificaat aanmaken - Bolt even starten...
+start /B "" "%~dp0StationEngine.exe" --port 6061 --bind lan --lan-https-port 6443 --webroot "%~dp0web"
+timeout /t 5 /nobreak > nul
+
+echo Certificaat installeren...
+powershell -Command "$pfx = Get-ChildItem '%LOCALAPPDATA%\BoltSDR\certs\*.pfx' | Select-Object -First 1; if ($pfx) { $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pfx.FullName, ''); $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', 'LocalMachine'); $store.Open('ReadWrite'); $store.Add($cert); $store.Close(); Write-Host 'Certificaat geinstalleerd' } else { Write-Host 'Certificaat niet gevonden' }"
+
+echo Bolt stoppen...
+taskkill /F /IM StationEngine.exe > nul 2>&1
+timeout /t 2 /nobreak > nul
+
 echo.
-echo 1. Open Chrome en ga naar https://192.168.8.141:6443
-echo 2. Klik op "Geavanceerd"
-echo 3. Klik op "Doorgaan naar 192.168.8.141"
-echo 4. Dit is eenmalig - Chrome onthoudt het certificaat
-echo.
-echo Setup voltooid! Start Bolt SDR met start-bolt.cmd
+echo ================================================
+echo Setup voltooid!
+echo Start Bolt SDR met start-bolt.cmd
+echo Open daarna Chrome op https://%COMPUTERNAME%:6443
+echo ================================================
 pause
