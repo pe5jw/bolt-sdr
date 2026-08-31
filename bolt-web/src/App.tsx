@@ -67,6 +67,16 @@ export default function App() {
   const [tuneStep, setTuneStep] = useState(1000)
   midiEngine.tuneStepHz = tuneStep
   const [nrState, setNrState] = useState({ nrMode: 'Off', anfEnabled: false, snbEnabled: false, nbMode: 'Off' })
+  useEffect(() => {
+    if (!radioState.connected) return
+    fetch('/api/state').then(r => r.json()).then(state => {
+      if (state.nr) setNrState({ nrMode: state.nr.nrMode ?? 'Off', anfEnabled: state.nr.anfEnabled ?? false, snbEnabled: state.nr.snbEnabled ?? false, nbMode: state.nr.nbMode ?? 'Off' })
+      if (state.agc?.mode) setRadioState(s => ({ ...s, agcMode: state.agc.mode }))
+      const savedZoom = parseInt(localStorage.getItem('bolt-zoom') || '1')
+      if (savedZoom > 1) fetch('/api/rx/zoom', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: savedZoom }) })
+    }).catch(() => {})
+  }, [radioState.connected])
+
   const [vfoOverlay, setVfoOverlay] = useState(() => localStorage.getItem('bolt-vfo-overlay') !== 'false')
   const [controlsOverlay, setControlsOverlay] = useState(() => localStorage.getItem('bolt-controls-overlay') === 'true')
   const [smeterOverlay, setSmeterOverlay] = useState(() => localStorage.getItem('bolt-smeter-overlay') !== 'false')
@@ -188,7 +198,7 @@ export default function App() {
             onStepChange={setTuneStep}
             controlsOverlay={controlsOverlay}
             mox={radioState.mox}
-            nrMode={nrState.nrMode}
+            nrMode={radioState.nrMode}
             onNrMode={(mode) => {
               const newNr = { ...nrState, nrMode: mode }
               setNrState(newNr)
@@ -261,12 +271,12 @@ export default function App() {
               setRadioState(s => ({ ...s, squelchEnabled: enabled, squelchLevel: level }))
               fetch('/api/rx/squelch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, level }) })
             }}
-            nrMode={nrState.nrMode}
-            anfEnabled={nrState.anfEnabled}
-            snbEnabled={nrState.snbEnabled}
-            nbMode={nrState.nbMode}
+            nrMode={radioState.nrMode}
+            anfEnabled={radioState.anfEnabled}
+            snbEnabled={radioState.snbEnabled}
+            nbMode={'Off'}
             onNr={(nr) => {
-              setNrState(nr)
+              setRadioState(s => ({ ...s, nrMode: nr.nrMode, anfEnabled: nr.anfEnabled, snbEnabled: nr.snbEnabled }))
               fetch('/api/rx/nr', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nr: { ...nr, nbpNotchesEnabled: false } }) }).catch(() => {})
             }}
             onAtten={db => {

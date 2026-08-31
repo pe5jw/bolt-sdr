@@ -10,3 +10,4 @@ echo DVK map   : %LOCALAPPDATA%\Bolt\dvk\
 echo Stoppen   : Ctrl+C
 echo.
 "%PYTHON%" tci_bridge.py
+exit

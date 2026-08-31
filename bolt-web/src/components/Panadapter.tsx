@@ -64,6 +64,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
   const filterDragRef = useRef<{ side: 'low' | 'high' } | null>(null)
 
   const setZoomLevel = async (level: number) => {
+    localStorage.setItem('bolt-zoom', String(Math.max(1, Math.min(32, level))))
     const clamped = Math.max(1, Math.min(32, level))
     setZoom(clamped)
     await fetch('/api/rx/zoom', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: clamped }) })

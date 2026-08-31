@@ -23,6 +23,9 @@ export interface RadioState {
   tunePct: number
   connected: boolean
   radioName: string
+  nrMode: string
+  anfEnabled: boolean
+  snbEnabled: boolean
 }
 
 export interface MeterFrame {
@@ -73,6 +76,9 @@ const DEFAULT_STATE: RadioState = {
   driveMaxPct: 100,
   tunePct: 10,
   connected: false,
+  nrMode: 'Off',
+  anfEnabled: false,
+  snbEnabled: false,
   radioName: '',
 }
 
@@ -231,6 +237,10 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
           driveMaxPct: state.driveMaxPct ?? s.driveMaxPct,
           tunePct: state.tunePct ?? s.tunePct,
           filterHigh: state.filterHighHz ?? s.filterHigh,
+          agcMode: state.agc?.mode ?? s.agcMode,
+          nrMode: state.nr?.nrMode ?? s.nrMode,
+          anfEnabled: state.nr?.anfEnabled ?? s.anfEnabled,
+          snbEnabled: state.nr?.snbEnabled ?? s.snbEnabled,
           connected: true,
         }))
       }).catch(() => {})
