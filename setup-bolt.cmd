@@ -19,7 +19,7 @@ echo.
 echo Bolt SDR initialiseren (certificaat + wisdom berekening)...
 echo Dit kan 2-5 minuten duren - venster NIET sluiten!
 echo.
-start /B "" "%~dp0StationEngine.exe" --port 6061 --bind lan --lan-https-port 6443 --webroot "%~dp0web"
+start /B "" "%~dp0StationEngine.exe" --port 6061 --bind lan --lan-https-port 6443 --product-lan-https-port 6444 --webroot "%~dp0web"
 
 set COUNT=0
 echo Berekening bezig [
@@ -51,3 +51,4 @@ echo Start Bolt SDR met start-bolt.cmd
 echo Open daarna Chrome op https://%COMPUTERNAME%:6443
 echo ================================================
 pause
+
