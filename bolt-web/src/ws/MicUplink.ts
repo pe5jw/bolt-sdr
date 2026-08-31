@@ -16,6 +16,7 @@ export class MicUplink {
   async start(ws: WebSocket): Promise<void> {
     if (this.active) return
     this.ws = ws
+    const deviceId = localStorage.getItem('bolt-tx-device')
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: false,
@@ -23,6 +24,7 @@ export class MicUplink {
         autoGainControl: false,
         channelCount: 1,
         sampleRate: 48000,
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {})
       }
     })
     this.ctx = new AudioContext({ sampleRate: 48000, latencyHint: 0.04 })

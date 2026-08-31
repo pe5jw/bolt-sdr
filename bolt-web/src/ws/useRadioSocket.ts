@@ -151,7 +151,11 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
     // Stille frames niet overslaan - dit veroorzaakt gaten in de audio
 
     if (!audioCtxRef.current) {
-      audioCtxRef.current = new AudioContext({ sampleRate, latencyHint: "playback" })
+      audioCtxRef.current = new AudioContext({ sampleRate, latencyHint: 'playback' })
+      const rxDevice = localStorage.getItem('bolt-rx-device')
+      if (rxDevice && (audioCtxRef.current as any).setSinkId) {
+        (audioCtxRef.current as any).setSinkId(rxDevice).catch(() => {})
+      }
     }
     const ctx = audioCtxRef.current
     if (ctx.state === "suspended") ctx.resume()
