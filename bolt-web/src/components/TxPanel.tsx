@@ -6,13 +6,14 @@ interface Props {
   alc: number
   swr: number
   power: number
+  adcAv?: number
   micPeak?: number
   onMox: (on: boolean) => void
   onTune: (on: boolean) => void
   onAfGain: (db: number) => void
   onMicGain: (db: number) => void
 }
-export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, onMox, onTune, onAfGain, onMicGain, micPeak = 0 }: Props) {
+export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, adcAv, onMox, onTune, onAfGain, onMicGain, micPeak = 0 }: Props) {
   return (
     <div className="tx-wrap">
       <button className={`tx-btn mox-btn ${mox ? 'active' : ''}`} onClick={() => onMox(!mox)}>
@@ -45,11 +46,17 @@ export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, onMox
         </div>
       </div>
       <div className="tx-meters">
+      <div className="tx-meters">
+        <div className="tx-meter-item">
+          {adcAv !== undefined && <>
+            <span className="tx-meter-val" style={{ color: adcAv > -6 ? "var(--tx)" : adcAv > -12 ? "#f39c12" : "var(--text)" }}>{adcAv.toFixed(1)}</span>
+            <span className="tx-meter-label">ADC</span>
+          </>}
+        </div>
         <div className="tx-meter-item">
           <span className="tx-meter-val power">{power.toFixed(0)}</span>
           <span className="tx-meter-label">W</span>
         </div>
-        <div className="tx-meter-item">
           <span className="tx-meter-val alc">{isFinite(alc) ? alc.toFixed(1) : '0.0'}</span>
           <span className="tx-meter-label">ALC</span>
         </div>
@@ -58,6 +65,7 @@ export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, onMox
             {swr.toFixed(1)}
           </span>
           <span className="tx-meter-label">SWR</span>
+
         </div>
       </div>
     </div>

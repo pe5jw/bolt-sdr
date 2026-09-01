@@ -300,6 +300,7 @@ export default function App() {
             alc={meters.alc}
             swr={meters.swr}
             power={meters.power}
+            adcAv={meters.adcAv}
             onMox={on => {
               setRadioState(s => ({ ...s, mox: on }))
               setMoxActive(on)

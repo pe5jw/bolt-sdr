@@ -2,11 +2,12 @@ import { useCallback, useRef, useEffect } from 'react'
 
 interface Props {
   hz: number
-  mode: string
   onChange: (hz: number) => void
   step: number
   onStepChange: (step: number) => void
   dbm: number
+  adcAv?: number
+  mode?: string
 }
 
 const STEPS = [100000, 10000, 1000, 250, 100, 10, 1]
@@ -31,7 +32,7 @@ function dbmToPercent(dbm: number): number {
   return Math.max(0, Math.min(110, ((d + 127) / 74) * 100))
 }
 
-export function VfoDisplay({ hz, onChange, step, onStepChange, dbm }: Props) {
+export function VfoDisplay({ hz, onChange, step, onStepChange, dbm, adcAv }: Props) {
   const stepIdx = STEPS.indexOf(step) === -1 ? 2 : STEPS.indexOf(step)
   const vfoRef = useRef<HTMLDivElement>(null)
   const pct = dbmToPercent(dbm)
@@ -72,10 +73,10 @@ export function VfoDisplay({ hz, onChange, step, onStepChange, dbm }: Props) {
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2 }}>
           <span style={{ fontFamily: 'var(--font-data)', fontSize: 11, color: 'var(--text)' }}>{dbm.toFixed(1)} dBm</span>
-          <span style={{ fontFamily: 'var(--font-data)', fontSize: 11, color: 'var(--accent)' }}>{dbmToS(dbm)}</span>
+          <span style={{ fontFamily: "var(--font-data)", fontSize: 11, color: "var(--accent)" }}>{dbmToS(dbm)}</span>
+          {adcAv !== undefined && <span title={"ADC: " + adcAv.toFixed(1) + " dBFS"} style={{ fontFamily: "var(--font-data)", fontSize: 9, padding: "2px 4px", borderRadius: 3, background: adcAv > -6 ? "#e74c3c" : adcAv > -12 ? "#f39c12" : "#27ae60", color: "#fff", marginLeft: 4 }}>ADC</span>}
         </div>
       </div>
-
       <div className="vfo-step-row">
         {STEP_LABELS.map((label, i) => (
           <button key={label} className={`vfo-step ${i === stepIdx ? 'active' : ''}`}

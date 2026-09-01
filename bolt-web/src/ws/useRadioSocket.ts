@@ -34,6 +34,7 @@ export interface MeterFrame {
   alc: number
   swr: number
   power: number
+  adcAv: number
 }
 
 export interface DisplayFrame {
@@ -130,7 +131,7 @@ const DEFAULT_WS_URL = () => `${window.location.protocol === "https:" ? "wss" : 
 export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (frame: import('../midi').MidiLearnFrame) => void) {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected')
   const [radioState, setRadioState] = useState<RadioState>(DEFAULT_STATE)
-  const [meters, setMeters] = useState<MeterFrame>({ sMeter: -120, alc: 0, swr: 1, power: 0 })
+  const [meters, setMeters] = useState<MeterFrame>({ sMeter: -120, alc: 0, swr: 1, power: 0, adcAv: -100 })
   const [display, setDisplay] = useState<DisplayFrame | null>(null)
   const [audioEnabled, setAudioEnabledState] = useState(false)
 
@@ -270,7 +271,8 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
           setMeters(m => ({ ...m, sMeter: dbm }))
         } else if (msgType === MSG_RX_METER_V2 && buf.byteLength >= 29) {
           const signalAv = view.getFloat32(5, true)
-          setMeters(m => ({ ...m, sMeter: signalAv }))
+          const adcAv = view.getFloat32(13, true)
+          setMeters(m => ({ ...m, sMeter: signalAv, adcAv }))
         } else if (msgType === MSG_TX_METER && buf.byteLength >= 81) {
           const fwdW = view.getFloat32(1, true)
           const swr = view.getFloat32(9, true)
