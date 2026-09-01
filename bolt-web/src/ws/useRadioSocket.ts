@@ -26,6 +26,7 @@ export interface RadioState {
   nrMode: string
   anfEnabled: boolean
   snbEnabled: boolean
+  nbMode: string
 }
 
 export interface MeterFrame {
@@ -79,6 +80,7 @@ const DEFAULT_STATE: RadioState = {
   nrMode: 'Off',
   anfEnabled: false,
   snbEnabled: false,
+  nbMode: 'Off',
   radioName: '',
 }
 

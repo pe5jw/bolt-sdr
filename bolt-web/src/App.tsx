@@ -274,9 +274,9 @@ export default function App() {
             nrMode={radioState.nrMode}
             anfEnabled={radioState.anfEnabled}
             snbEnabled={radioState.snbEnabled}
-            nbMode={'Off'}
+            nbMode={radioState.nbMode ?? 'Off'}
             onNr={(nr) => {
-              setRadioState(s => ({ ...s, nrMode: nr.nrMode, anfEnabled: nr.anfEnabled, snbEnabled: nr.snbEnabled }))
+              setRadioState(s => ({ ...s, nrMode: nr.nrMode, anfEnabled: nr.anfEnabled, snbEnabled: nr.snbEnabled, nbMode: nr.nbMode }))
               fetch('/api/rx/nr', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nr: { ...nr, nbpNotchesEnabled: false } }) }).catch(() => {})
             }}
             onAtten={db => {

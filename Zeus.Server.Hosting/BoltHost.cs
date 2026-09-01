@@ -346,8 +346,8 @@ public static class BoltHost
         });
         app.UseRouting();
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
-        app.MapFallbackToFile("index.html");
         app.MapBoltEndpoints();
+        app.MapFallbackToFile("index.html");
 
         return app;
     }

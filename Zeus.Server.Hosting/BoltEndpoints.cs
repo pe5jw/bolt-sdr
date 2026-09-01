@@ -295,10 +295,13 @@ public static class BoltEndpoints
         app.MapPost("/api/midi/learn/keepalive", (Zeus.Server.Midi.MidiService midi) =>
             Results.Ok(midi.KeepLearnAlive()));
 
+        // Diagnostics
+        app.MapGet("/bolt-api/diagnostics", (StreamingHub hub) =>
+            Results.Ok(hub.DiagnosticsSnapshot()));
+
         return app;
     }
 }
-
 record AudioDeviceRequest(string? DeviceId);
 record DriveRequest(int Pct);
 record MicGainRequest(int Db);

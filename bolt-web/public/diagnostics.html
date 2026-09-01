@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Bolt SDR Diagnostics</title>
+  <style>
+    body { font-family: monospace; background: #111; color: #ccc; padding: 20px; }
+    h1 { color: #f0a500; letter-spacing: 3px; font-size: 16px; }
+    h2 { color: #888; font-size: 10px; letter-spacing: 2px; margin-top: 20px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+    table { border-collapse: collapse; width: 100%; max-width: 500px; margin-bottom: 10px; }
+    td { padding: 3px 12px; font-size: 11px; }
+    td:first-child { color: #888; width: 200px; }
+    .val { color: #2ecc71; }
+    .warn { color: #e74c3c; }
+    .ts { font-size: 9px; color: #555; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1>BOLT SDR DIAGNOSTICS</h1>
+  <div id="data">Laden...</div>
+  <div class="ts" id="ts"></div>
+  <script>
+    async function load() {
+      try {
+        const r = await fetch('/api/diagnostics/streaming')
+        const d = await r.json()
+        let h = ''
+        h += '<h2>CLIENTS</h2><table>'
+        h += '<tr><td>Verbonden</td><td class="val">' + d.connectedClients + '</td></tr>'
+        h += '<tr><td>Audio streams</td><td class="val">' + d.audioSubscribers + '</td></tr>'
+        h += '<tr><td>Display streams</td><td class="val">' + d.displaySubscribers + '</td></tr>'
+        h += '<tr><td>Preferred display</td><td class="val">' + d.preferredDisplaySubscribers + '</td></tr>'
+        h += '</table>'
+        h += '<h2>FRAME DROPS</h2><table>'
+        h += '<tr><td>Audio</td><td class="' + (d.drops.audio > 0 ? 'warn' : 'val') + '">' + d.drops.audio + '</td></tr>'
+        h += '<tr><td>Display</td><td class="' + (d.drops.display > 0 ? 'warn' : 'val') + '">' + d.drops.display + '</td></tr>'
+        h += '<tr><td>Meter</td><td class="' + (d.drops.meter > 0 ? 'warn' : 'val') + '">' + d.drops.meter + '</td></tr>'
+        h += '<tr><td>Overig</td><td class="' + (d.drops.other > 0 ? 'warn' : 'val') + '">' + d.drops.other + '</td></tr>'
+        h += '<tr><td>Display coalesced</td><td class="val">' + (d.coalesces ? d.coalesces.display : 0) + '</td></tr>'
+        h += '</table>'
+        if (d.micUplink) {
+          const m = d.micUplink
+          h += '<h2>MIC UPLINK (TX)</h2><table>'
+          h += '<tr><td>Frames</td><td class="val">' + (m.totalFrames || 0) + '</td></tr>'
+          h += '<tr><td>Bytes</td><td class="val">' + (((m.totalBytes || 0) / 1024).toFixed(1)) + ' KB</td></tr>'
+          h += '<tr><td>Ongeldige frames</td><td class="' + ((m.invalidFrames || 0) > 0 ? 'warn' : 'val') + '">' + (m.invalidFrames || 0) + '</td></tr>'
+          h += '</table>'
+        }
+        document.getElementById('data').innerHTML = h
+        document.getElementById('ts').textContent = 'Bijgewerkt: ' + new Date().toLocaleTimeString()
+      } catch(e) {
+        document.getElementById('data').innerHTML = '<span class="warn">Fout: ' + e.message + '</span>'
+      }
+    }
+    load()
+    setInterval(load, 2000)
+  </script>
+</body>
+</html>
