@@ -13,9 +13,9 @@ cd C:\
 if exist "C:\bolt-sdr\" rmdir /S /Q "C:\bolt-sdr"
 
 echo Verwijderen data...
-if exist "C:\Users\pe5jw\AppData\Local\BoltSDR\" rmdir /S /Q "C:\Users\pe5jw\AppData\Local\BoltSDR"
-if exist "C:\Users\pe5jw\AppData\Local\Bolt\" rmdir /S /Q "C:\Users\pe5jw\AppData\Local\Bolt"
-if exist "C:\Users\pe5jw\AppData\Local\Zeus\" rmdir /S /Q "C:\Users\pe5jw\AppData\Local\Zeus"
+if exist "C:\Users\%USERNAME%\AppData\Local\BoltSDR\" rmdir /S /Q "C:\Users\%USERNAME%\AppData\Local\BoltSDR"
+if exist "C:\Users\%USERNAME%\AppData\Local\Bolt\" rmdir /S /Q "C:\Users\%USERNAME%\AppData\Local\Bolt"
+if exist "C:\Users\%USERNAME%\AppData\Local\Zeus\" rmdir /S /Q "C:\Users\%USERNAME%\AppData\Local\Zeus"
 
 echo.
 echo === Cleanup klaar ===
