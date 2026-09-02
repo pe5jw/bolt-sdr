@@ -13,11 +13,10 @@ cd C:\
 if exist "C:\bolt-sdr\" rmdir /S /Q "C:\bolt-sdr"
 
 echo Verwijderen data...
-if exist "%LOCALAPPDATA%\BoltSDR\" rmdir /S /Q "%LOCALAPPDATA%\BoltSDR"
-if exist "%LOCALAPPDATA%\Bolt\" rmdir /S /Q "%LOCALAPPDATA%\Bolt"
-if exist "%LOCALAPPDATA%\Zeus\" rmdir /S /Q "%LOCALAPPDATA%\Zeus"
+if exist "C:\Users\pe5jw\AppData\Local\BoltSDR\" rmdir /S /Q "C:\Users\pe5jw\AppData\Local\BoltSDR"
+if exist "C:\Users\pe5jw\AppData\Local\Bolt\" rmdir /S /Q "C:\Users\pe5jw\AppData\Local\Bolt"
+if exist "C:\Users\pe5jw\AppData\Local\Zeus\" rmdir /S /Q "C:\Users\pe5jw\AppData\Local\Zeus"
 
 echo.
 echo === Cleanup klaar ===
-echo Installeer nu handmatig via deploy-server.cmd
 pause
