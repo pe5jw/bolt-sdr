@@ -12,9 +12,11 @@ interface Props {
   agcMode?: string
   onAgc?: (mode: string) => void
   onSquelch: (enabled: boolean, level: number) => void
-  onAtten: (db: number) => void}
+  onAtten: (db: number) => void
+  autoRfGain?: boolean
+  onAutoRfGain?: (enabled: boolean) => void}
 
-export function RxControls({ squelchEnabled, squelchLevel, attenDb, onSquelch, onAtten, nrMode='Off', anfEnabled=false, snbEnabled=false, nbMode='Off', onNr, agcMode='Med', onAgc }: Props) {
+export function RxControls({ squelchEnabled, squelchLevel, attenDb, onSquelch, onAtten, nrMode='Off', anfEnabled=false, snbEnabled=false, nbMode='Off', onNr, agcMode='Med', onAgc, autoRfGain=false, onAutoRfGain }: Props) {
   const [localSql, setLocalSql] = useState(squelchLevel)
   const [showNrSettings, setShowNrSettings] = useState(false)
   const [nbThreshold, setNbThreshold] = useState(20)
@@ -49,7 +51,7 @@ export function RxControls({ squelchEnabled, squelchLevel, attenDb, onSquelch, o
       {/* AGC */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <span style={labelStyle}>AGC</span>
-        {['Long','Slow','Med','Fast'].map(m => (
+        {['Long','Slow','Med','Fast','Hang'].map(m => (
           <button key={m} onClick={() => onAgc && onAgc(m)}
             style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
               background: agcMode === m ? 'var(--accent)' : 'var(--bg-control)',
@@ -65,6 +67,7 @@ export function RxControls({ squelchEnabled, squelchLevel, attenDb, onSquelch, o
           onChange={e => onAtten(48 - parseInt(e.target.value))}
           style={{ flex: 1, accentColor: 'var(--text-dim)' }} />
         <span style={valStyle}>{48 - attenDb} dB</span>
+        {onAutoRfGain && <button onClick={() => onAutoRfGain(!autoRfGain)} style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, cursor: 'pointer', background: autoRfGain ? 'var(--accent)' : 'var(--bg-control)', border: '1px solid var(--border)', color: autoRfGain ? 'var(--bg)' : 'var(--text-dim)', fontFamily: 'var(--font-data)', marginLeft: 4 }}>AUTO</button>}
       </div>
 
     {/* NR */}

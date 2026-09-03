@@ -32,7 +32,7 @@ export default function App() {
       }
     }).catch(() => {})
   }, [])
-  const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive, micPeak, wsRef } = useRadioSocket(undefined, undefined)
+  const { status, radioState, meters, display, send, setRadioState, audioEnabled, setAudioEnabled, setMoxActive, micPeak, wsRef, flushAudioBuffer } = useRadioSocket(undefined, undefined)
   lastKnownVfoRef.current = radioState.vfoHz
   midiEngine.setVfoHz(radioState.vfoHz)
   midiEngine.wsRef = wsRef
@@ -66,6 +66,31 @@ export default function App() {
   const [autoSetTrigger, setAutoSetTrigger] = useState(0)  // eslint-disable-line
   const [tuneStep, setTuneStep] = useState(1000)
   midiEngine.tuneStepHz = tuneStep
+  const [autoRfGain, setAutoRfGain] = useState(false)
+
+  const autoRfGainAdcRef = useRef(-100)
+  const autoRfGainAttRef = useRef(0)
+  autoRfGainAdcRef.current = meters.adcAv ?? -100
+  autoRfGainAttRef.current = radioState.attDb
+
+  useEffect(() => {
+    if (!autoRfGain || !radioState.connected) return
+    const interval = setInterval(() => {
+      const adcAv = autoRfGainAdcRef.current
+      if (adcAv <= -100) return
+      const currentAttDb = autoRfGainAttRef.current
+      if (adcAv > -50 && currentAttDb < 48) {
+        const newAtt = Math.min(48, currentAttDb + 1)
+        setRadioState(s => ({ ...s, attDb: newAtt }))
+        fetch('/api/attenuator', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db: newAtt }) })
+      } else if (adcAv < -75 && currentAttDb > 0) {
+        const newAtt = Math.max(0, currentAttDb - 1)
+        setRadioState(s => ({ ...s, attDb: newAtt }))
+        fetch('/api/attenuator', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db: newAtt }) })
+      }
+    }, 500)
+    return () => clearInterval(interval)
+  }, [autoRfGain, radioState.connected])
   const [nrState, setNrState] = useState({ nrMode: 'Off', anfEnabled: false, snbEnabled: false, nbMode: 'Off' })
   useEffect(() => {
     if (!radioState.connected) return
@@ -178,6 +203,7 @@ export default function App() {
         onDisconnect={() => {}}
         audioEnabled={audioEnabled}
         onAudio={setAudioEnabled}
+        onFlush={flushAudioBuffer}
       />
       <main className="bolt-main">
         <section className="bolt-pan">
@@ -279,6 +305,8 @@ export default function App() {
               setRadioState(s => ({ ...s, nrMode: nr.nrMode, anfEnabled: nr.anfEnabled, snbEnabled: nr.snbEnabled, nbMode: nr.nbMode }))
               fetch('/api/rx/nr', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nr: { ...nr, nbpNotchesEnabled: false } }) }).catch(() => {})
             }}
+            autoRfGain={autoRfGain}
+            onAutoRfGain={setAutoRfGain}
             onAtten={db => {
               setRadioState(s => ({ ...s, attDb: db }))
               fetch('/api/attenuator', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
@@ -286,7 +314,7 @@ export default function App() {
             agcMode={radioState.agcMode ?? 'Med'}
             onAgc={mode => {
               setRadioState(s => ({ ...s, agcMode: mode }))
-              fetch('/api/rx/agc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agc: { mode, slope: null, decayMs: null, hangMs: null, hangThreshold: null, fixedGainDb: null } }) }).catch(() => {})
+              fetch('/api/rx/agc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agc: { mode: mode === 'Hang' ? 'Slow' : mode, slope: null, decayMs: null, hangMs: mode === 'Hang' ? 2000 : null, hangThreshold: mode === 'Hang' ? -130 : null, fixedGainDb: null } }) }).catch(() => {})
             }}          />
         </section>
         </>)}

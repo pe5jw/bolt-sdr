@@ -87,7 +87,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
     const hzPerPixelCanvas = hzPerPixel * display.width / W
     const len = panDb.length
     // Auto-scale
-    if (autoScaleRef.current && panDb.length > 0) {
+    if (false && autoScaleRef.current && panDb.length > 0) {
       const arr = Array.from(panDb as Float32Array).filter((v: number) => isFinite(v))
       if (arr.length > 0) {
         // FLOOR = mediaan = noise floor
@@ -252,7 +252,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
     const band = vfoHz < 2500000 ? '160m' : vfoHz < 4500000 ? '80m' : vfoHz < 8000000 ? '40m' :
       vfoHz < 15000000 ? '20m' : vfoHz < 22000000 ? '15m' : '10m'
     if (prevBandRef.current && band !== prevBandRef.current) {
-      setTimeout(() => { autoScaleRef.current = true }, 200)
+      // autoScaleRef.current = true // bandwissel auto SET uitgeschakeld
     }
     prevBandRef.current = band
   }, [vfoHz])

@@ -20,9 +20,10 @@ interface Props {
   onDisconnect: () => void
   audioEnabled: boolean
   onAudio: (enabled: boolean) => void
+  onFlush?: () => void
 }
 
-export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconnect, audioEnabled, onAudio, learnFrame }: Props) {
+export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconnect, audioEnabled, onAudio, learnFrame, onFlush }: Props) {
   const [radios, setRadios] = useState<DiscoveredRadio[]>([])
   const [showPicker, setShowPicker] = useState(false)
   const [scanning, setScanning] = useState(false)
@@ -118,6 +119,8 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
       <button onClick={() => onAudio(!audioEnabled)} style={sBtn(audioEnabled, 'var(--rx)')}>
         {audioEnabled ? '🔊 RX' : '🔇 RX'}
       </button>
+      {onFlush && <button onClick={onFlush} title="Audio buffer legen" style={{ ...sBtn(false, "var(--rx)"), fontSize: 9, padding: "2px 6px" }}>&#x27F3;</button>}
+
 
       <button onClick={() => {
         const cur = localStorage.getItem('bolt-controls-overlay') === 'true'

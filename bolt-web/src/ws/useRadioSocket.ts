@@ -144,14 +144,11 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
   const [micPeak, setMicPeak] = useState(0)
   const audioEnabledRef = useRef(false)
 
-  const bufferTargetRef = useRef(0.14)
-  const pendingSourcesRef = useRef(new Set<AudioBufferSourceNode>())
+  const rxWorkletRef = useRef<AudioWorkletNode | null>(null)
+  const rxWorkletReadyRef = useRef(false)
 
   const scheduleAudio = useCallback((samples: Float32Array, sampleRate: number, channels: number) => {
     if (!audioEnabledRef.current) return
-
-    // Skip silent frames (TX suppression)
-    // Stille frames niet overslaan - dit veroorzaakt gaten in de audio
 
     if (!audioCtxRef.current) {
       audioCtxRef.current = new AudioContext({ sampleRate, latencyHint: 'playback' })
@@ -159,38 +156,32 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
       if (rxDevice && (audioCtxRef.current as any).setSinkId) {
         (audioCtxRef.current as any).setSinkId(rxDevice).catch(() => {})
       }
+      audioCtxRef.current.audioWorklet.addModule('/rx-processor.js').then(() => {
+        if (!audioCtxRef.current) return
+        const node = new AudioWorkletNode(audioCtxRef.current, 'rx-processor', {
+          numberOfInputs: 0,
+          numberOfOutputs: 1,
+          outputChannelCount: [1],
+        })
+        node.connect(audioCtxRef.current.destination)
+        rxWorkletRef.current = node
+        rxWorkletReadyRef.current = true
+      }).catch(e => console.error('rx-processor laden mislukt', e))
     }
     const ctx = audioCtxRef.current
-    if (ctx.state === "suspended") ctx.resume()
+    if (ctx.state === 'suspended') ctx.resume()
 
-    const now = ctx.currentTime
-    const target = bufferTargetRef.current
-
-    // Re-anchor if behind or too far ahead
-    if (nextPlayTimeRef.current < now + 0.02) {
-      nextPlayTimeRef.current = now + target
-    }
-    // Drop frames too far ahead
-    if (nextPlayTimeRef.current > now + 0.6) {
-      nextPlayTimeRef.current = now + target
-    }
-
-    const frameCount = samples.length / channels
-    const buf = ctx.createBuffer(channels, frameCount, sampleRate)
-    for (let ch = 0; ch < channels; ch++) {
-      const chData = buf.getChannelData(ch)
-      for (let i = 0; i < frameCount; i++) {
-        chData[i] = samples[i * channels + ch]
+    if (rxWorkletReadyRef.current && rxWorkletRef.current) {
+      let mono: Float32Array
+      if (channels === 1) {
+        mono = samples
+      } else {
+        const frameCount = samples.length / channels
+        mono = new Float32Array(frameCount)
+        for (let i = 0; i < frameCount; i++) mono[i] = samples[i * channels]
       }
+      rxWorkletRef.current.port.postMessage(mono)
     }
-
-    const src = ctx.createBufferSource()
-    src.buffer = buf
-    src.connect(ctx.destination)
-    src.start(nextPlayTimeRef.current)
-    src.onended = () => pendingSourcesRef.current.delete(src)
-    pendingSourcesRef.current.add(src)
-    nextPlayTimeRef.current += buf.duration
   }, [])
 
   const flushAudioBuffer = useCallback(() => {
