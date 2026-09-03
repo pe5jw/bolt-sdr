@@ -164,6 +164,9 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
           outputChannelCount: [1],
         })
         node.connect(audioCtxRef.current.destination)
+        // Stuur buffer threshold config
+        const thresholdMs = parseInt(localStorage.getItem('bolt-rx-buffer-ms') || '140')
+        node.port.postMessage({ config: true, thresholdMs })
         rxWorkletRef.current = node
         rxWorkletReadyRef.current = true
       }).catch(e => console.error('rx-processor laden mislukt', e))
