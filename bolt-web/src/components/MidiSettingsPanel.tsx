@@ -32,6 +32,8 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
   const [learning, setLearning] = useState(false)
   const [learnTarget, setLearnTarget] = useState<string | null>(null)
   const [edit, setEdit] = useState<EditState | null>(null)
+  const [profiles, setProfiles] = useState<string[]>(midiEngine.getProfiles())
+  const [activeProfile, setActiveProfile] = useState<string>(midiEngine.getActiveProfile())
   const monitorRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -126,6 +128,33 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
             }; inp2.click()
           }} style={sBtn()}>IMPORT</button>
         </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12, padding: '6px 10px', background: 'var(--bg-control)', borderRadius: 4, border: '1px solid var(--border)' }}>
+        <span style={lbl}>PROFIEL:</span>
+        <select value={activeProfile} onChange={e => {
+          const name = e.target.value
+          midiEngine.loadProfile(name)
+          setActiveProfile(name)
+          refresh()
+        }} style={{ fontSize: 10, background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '2px 6px', borderRadius: 3, flex: 1 }}>
+          {profiles.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <button onClick={() => {
+          const name = prompt('Naam voor nieuw profiel:')
+          if (name) { midiEngine.saveProfile(name); setProfiles(midiEngine.getProfiles()); setActiveProfile(name) }
+        }} style={sBtn()}>NIEUW</button>
+        <button onClick={() => {
+          midiEngine.saveProfile(activeProfile)
+        }} style={sBtn()}>OPSLAAN</button>
+        <button onClick={() => {
+          if (activeProfile !== 'Standaard' && confirm('Profiel ' + activeProfile + ' verwijderen?')) {
+            midiEngine.deleteProfile(activeProfile)
+            setProfiles(midiEngine.getProfiles())
+            setActiveProfile(midiEngine.getActiveProfile())
+            refresh()
+          }
+        }} style={sBtn()}>WIS</button>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, padding: '6px 10px', background: 'var(--bg-control)', borderRadius: 4, border: '1px solid var(--border)' }}>

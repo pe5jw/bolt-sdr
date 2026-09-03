@@ -3,6 +3,8 @@
 // Copyright (C) 2026 Joeri Visser (PE5JW), GPL-2.0-or-later
 
 const STORAGE_KEY = 'bolt-sdr-midi-mappings'
+const PROFILES_KEY = 'bolt-sdr-midi-profiles'
+const ACTIVE_PROFILE_KEY = 'bolt-sdr-midi-active-profile'
 
 export type MidiControlType = 'Button' | 'Wheel' | 'KnobOrSlider'
 
@@ -53,6 +55,7 @@ class MidiEngine {
   onMox: ((on: boolean) => void) | null = null
   onTune: ((on: boolean) => void) | null = null
   onVfoChange: ((hz: number) => void) | null = null
+  onCommand: ((cmd: string, value: number, delta: number) => void) | null = null
   wsRef: { current: WebSocket | null } | null = null
   tuneStepHz = 1000
   private pulseAccum = 0
@@ -78,6 +81,42 @@ class MidiEngine {
 
   getMappings(): MidiMapping[] {
     return this.mappings
+  }
+
+  getProfiles(): string[] {
+    try { return JSON.parse(localStorage.getItem(PROFILES_KEY) || '["Standaard"]') } catch { return ['Standaard'] }
+  }
+
+  getActiveProfile(): string {
+    return localStorage.getItem(ACTIVE_PROFILE_KEY) || 'Standaard'
+  }
+
+  saveProfile(name: string): void {
+    const profiles = this.getProfiles()
+    if (!profiles.includes(name)) {
+      profiles.push(name)
+      localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles))
+    }
+    localStorage.setItem('bolt-sdr-midi-profile-' + name, JSON.stringify(this.mappings))
+    localStorage.setItem(ACTIVE_PROFILE_KEY, name)
+  }
+
+  loadProfile(name: string): void {
+    try {
+      this.mappings = JSON.parse(localStorage.getItem('bolt-sdr-midi-profile-' + name) || '[]')
+    } catch {
+      this.mappings = []
+    }
+    localStorage.setItem(ACTIVE_PROFILE_KEY, name)
+    this.saveMappings()
+  }
+
+  deleteProfile(name: string): void {
+    if (name === 'Standaard') return
+    const profiles = this.getProfiles().filter(p => p !== name)
+    localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles))
+    localStorage.removeItem('bolt-sdr-midi-profile-' + name)
+    if (this.getActiveProfile() === name) this.loadProfile('Standaard')
   }
 
   setMapping(mapping: MidiMapping): void {
@@ -247,6 +286,11 @@ class MidiEngine {
       if (cmd === 'ModeCW')  { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'CW' }) }).catch(() => {}); return }
       if (cmd === 'BandUp')   { fetch('/api/band/up',   { method: 'POST' }).catch(() => {}); return }
       if (cmd === 'BandDown') { fetch('/api/band/down', { method: 'POST' }).catch(() => {}); return }
+      if (cmd === 'ModeCWL')  { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'CWL' }) }).catch(() => {}); return }
+      if (cmd === 'ModeAM')   { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'AM' }) }).catch(() => {}); return }
+      if (cmd === 'ModeFM')   { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'FM' }) }).catch(() => {}); return }
+      if (cmd === 'ModeDIGU') { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'DIGU' }) }).catch(() => {}); return }
+      if (cmd === 'ModeDIGL') { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'DIGL' }) }).catch(() => {}); return }
     }
   }
 

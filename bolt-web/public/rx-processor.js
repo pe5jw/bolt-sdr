@@ -12,7 +12,7 @@ class RxProcessor extends AudioWorkletProcessor {
     this.readPos = 0
     this.available = 0
     // Target buffer vulling voor start (140ms bij 48kHz)
-    this.startThreshold = 6720  // default 140ms bij 48kHz
+    this.startThreshold = 3840  // default 80ms bij 48kHz
     this.started = false
 
     this.port.onmessage = (e) => {

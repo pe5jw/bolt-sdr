@@ -43,6 +43,7 @@ export function SettingsModal({ onClose }: Props) {
   }, [])
   const [bandGuardIgnore, setBandGuardIgnore] = useState(false)
   const [micGain, setMicGain] = useState(() => parseFloat(localStorage.getItem('bolt-mic-gain') ?? '8'))
+  const [rxBufferMs, setRxBufferMs] = useState(() => parseInt(localStorage.getItem('bolt-rx-buffer-ms') ?? '140'))
   useEffect(() => {
     fetch('/api/bands/current').then(r => r.json()).then(d => setBandGuardIgnore(d.txGuardIgnore)).catch(() => {})
   }, [])
@@ -215,6 +216,17 @@ export function SettingsModal({ onClose }: Props) {
               onChange={e => { localStorage.setItem('bolt-smeter-overlay', String(e.target.checked)); window.dispatchEvent(new Event('bolt-overlay-changed')) }} />
           </div>
           <div style={row}>
+          <div style={row}>
+            <span style={lbl}>RX BUFFER (latency)</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="range" min={40} max={300} step={20} value={rxBufferMs} onChange={e => {
+                const v = parseInt(e.target.value)
+                setRxBufferMs(v)
+                localStorage.setItem('bolt-rx-buffer-ms', String(v))
+              }} style={{ width: 100, accentColor: 'var(--accent)' }} />
+              <span style={{ fontSize: 10, color: 'var(--accent)', minWidth: 45 }}>{rxBufferMs} ms</span>
+            </div>
+          </div>
             <span style={lbl}>WATERVAL KLEUR</span>
             <div style={{ display: 'flex', gap: 6 }}>
               {([{name:'classic',a:'#1e90ff',b:'#00ff88'},{name:'night',a:'#4400aa',b:'#ffffff'},{name:'hot',a:'#ff0000',b:'#ffff00'}] as any[]).map((p: any) => (
