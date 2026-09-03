@@ -69,6 +69,8 @@ export default function App() {
   const [autoRfGain, setAutoRfGain] = useState(false)
 
   const autoRfGainAdcRef = useRef(-100)
+  const adcPkRef = useRef(-100)
+  adcPkRef.current = meters.adcPk ?? -100
   const autoRfGainAttRef = useRef(0)
   autoRfGainAdcRef.current = meters.adcAv ?? -100
   autoRfGainAttRef.current = radioState.attDb
@@ -329,6 +331,7 @@ export default function App() {
             swr={meters.swr}
             power={meters.power}
             adcAv={meters.adcAv}
+            adcPk={meters.adcPk}
             onMox={on => {
               setRadioState(s => ({ ...s, mox: on }))
               setMoxActive(on)

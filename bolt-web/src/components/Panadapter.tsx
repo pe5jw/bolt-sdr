@@ -87,7 +87,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
     const hzPerPixelCanvas = hzPerPixel * display.width / W
     const len = panDb.length
     // Auto-scale
-    if (false && autoScaleRef.current && panDb.length > 0) {
+    if (autoScaleRef.current && panDb.length > 0) {
       const arr = Array.from(panDb as Float32Array).filter((v: number) => isFinite(v))
       if (arr.length > 0) {
         // FLOOR = mediaan = noise floor
@@ -106,6 +106,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
       autoScaleRef.current = false
       setAutoScale(false)
       setAutoSetDone(true)
+      setTimeout(() => setAutoSetDone(false), 1500)
     }
     const dbMax = dbMaxRef.current
     const dbMin = dbMinRef.current
