@@ -38,6 +38,18 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
   const { theme, showLogo, logoBrightness, wfPalette } = useTheme()
   const [zoom, setZoom] = useState(() => { const v = localStorage.getItem('bolt-zoom'); return v ? parseInt(v) : (window.innerWidth <= 700 ? 4 : 1) })
   const [dbMax, setDbMax] = useState(() => parseInt(localStorage.getItem('bolt-top') || '-40'))
+  useEffect(() => {
+    const h = () => { const v = localStorage.getItem('bolt-zoom'); if (v) setZoom(parseInt(v)) }
+    window.addEventListener('bolt-zoom-changed', h)
+    window.addEventListener('bolt-zoom-changed', h)
+    return () => window.removeEventListener('bolt-zoom-changed', h)
+  }, [])
+
+  useEffect(() => {
+    const h = () => { autoScaleRef.current = true; setAutoScale(true); setAutoSetDone(false) }
+    window.addEventListener('bolt-autoset-trigger', h)
+    return () => window.removeEventListener('bolt-autoset-trigger', h)
+  }, [])
   const [dbMin, setDbMin] = useState(() => parseInt(localStorage.getItem('bolt-floor') || '-140'))
   const [autoScale, setAutoScale] = useState(false)
   const [autoSetDone, setAutoSetDone] = useState(false)

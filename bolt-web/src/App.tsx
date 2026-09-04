@@ -38,6 +38,7 @@ export default function App() {
   midiEngine.wsRef = wsRef
   const stateRef = useRef(radioState); stateRef.current = radioState
   const mutedRef = useRef(false)
+  const zoomRef = useRef(parseInt(localStorage.getItem('bolt-zoom') || '1'))
   midiEngine.onMox = (on) => {
     setRadioState(s => ({ ...s, mox: on }))
     setMoxActive(on)
@@ -74,7 +75,13 @@ export default function App() {
       case 'BandUp': { const bands = [1800000,3500000,7000000,10100000,14000000,18068000,21000000,24890000,28000000]; const next = bands.find(b => b > st.vfoHz + 100000) ?? bands[0]; sendVfo(next, true); break }
       case 'AgcNext': { const modes = ['Long','Slow','Med','Fast']; const cur = modes.indexOf(st.agcMode ?? 'Med'); const nx = modes[(cur + 1) % modes.length]; setRadioState(s => ({ ...s, agcMode: nx })); post('/api/rx/agc', { agc: { mode: nx, slope: null, decayMs: null, hangMs: null, hangThreshold: null, fixedGainDb: null } }); break }
       case 'NrToggle': { const nm = st.nrMode === 'Off' ? 'Emnr' : 'Off'; setRadioState(s => ({ ...s, nrMode: nm })); post('/api/rx/nr', { nr: { nrMode: nm, anfEnabled: st.anfEnabled, snbEnabled: st.snbEnabled, nbMode: 'Off', nbThreshold: 20, nbpNotchesEnabled: false } }); break }
+      case 'AutoSet': { window.dispatchEvent(new Event('bolt-autoset-trigger')); break }
       case 'AnfToggle': { const a = !st.anfEnabled; setRadioState(s => ({ ...s, anfEnabled: a })); post('/api/rx/nr', { nr: { nrMode: st.nrMode, anfEnabled: a, snbEnabled: st.snbEnabled, nbMode: 'Off', nbThreshold: 20, nbpNotchesEnabled: false } }); break }
+      case 'AutoSet': { window.dispatchEvent(new Event('bolt-autoset-trigger')); break }
+      case 'AnfToggle': { const a = !st.anfEnabled; setRadioState(s => ({ ...s, anfEnabled: a })); post('/api/rx/nr', { nr: { nrMode: st.nrMode, anfEnabled: a, snbEnabled: st.snbEnabled, nbMode: 'Off', nbThreshold: 20, nbpNotchesEnabled: false } }); break }
+      case 'ZoomIn': { const zl = [1,2,4,8,16,32]; const cur = zl.indexOf(zoomRef.current); const nx = zl[Math.min(zl.length-1, cur+1)]; zoomRef.current = nx; localStorage.setItem('bolt-zoom', String(nx)); post('/api/rx/zoom', { level: nx }); window.dispatchEvent(new Event('bolt-zoom-changed')); break }
+      case 'ZoomOut': { const zl = [1,2,4,8,16,32]; const cur = zl.indexOf(zoomRef.current); const nx = zl[Math.max(0, cur-1)]; zoomRef.current = nx; localStorage.setItem('bolt-zoom', String(nx)); post('/api/rx/zoom', { level: nx }); window.dispatchEvent(new Event('bolt-zoom-changed')); break }
+      case 'ZoomSliderInc': { const zl = [1,2,4,8,16,32]; const idx = Math.min(zl.length-1, Math.floor((value/127) * zl.length)); const nx = zl[idx]; zoomRef.current = nx; localStorage.setItem('bolt-zoom', String(nx)); post('/api/rx/zoom', { level: nx }); window.dispatchEvent(new Event('bolt-zoom-changed')); break }
     }
   }
 

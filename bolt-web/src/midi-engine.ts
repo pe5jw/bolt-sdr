@@ -55,6 +55,7 @@ class MidiEngine {
   onTune: ((on: boolean) => void) | null = null
   onVfoChange: ((hz: number) => void) | null = null
   onCommand: ((cmd: string, value: number, delta: number) => void) | null = null
+  private encValues: Record<string, number> = {}
   wsRef: { current: WebSocket | null } | null = null
   tuneStepHz = 1000
   private pulseAccum = 0
@@ -228,13 +229,19 @@ class MidiEngine {
 
 
     // Commando's die de app afhandelt via onCommand (behalve VFO/MOX/Tune met eigen callbacks)
-    const appCommands = ['ModeUSB','ModeLSB','ModeCW','ModeCWL','ModeAM','ModeFM','ModeDIGU','ModeDIGL','SetAfGain','DriveLevel','RfGain','MicGain','SquelchLevel','BandUp','MuteOnOff','AgcNext','NrToggle','AnfToggle','ZoomSliderInc','ZoomIn','ZoomOut']
+    const appCommands = ['ModeUSB','ModeLSB','ModeCW','ModeCWL','ModeAM','ModeFM','ModeDIGU','ModeDIGL','SetAfGain','DriveLevel','RfGain','MicGain','SquelchLevel','BandUp','MuteOnOff','AgcNext','NrToggle','AnfToggle','ZoomSliderInc','ZoomIn','ZoomOut','AutoSet']
     if (appCommands.includes(cmd)) {
       if (mapping.controlType === 'Wheel') {
         const center = mapping.centerValue ?? 64
         const d = delta !== 0 ? delta : this.decodeRelative(value, center)
         if (d === 0) return
-        this.onCommand?.(cmd, value, d)
+        const reverse = (mapping as any).reverse ? -1 : 1
+        const dir = (d > 0 ? 1 : -1) * reverse
+        const step = (mapping as any).encStep ?? 4
+        const prev = this.encValues[cmd] ?? 64
+        const nv = Math.max(0, Math.min(127, prev + dir * step))
+        this.encValues[cmd] = nv
+        this.onCommand?.(cmd, nv, d)
       } else if (mapping.controlType === 'Button') {
         const on = value > 0
         if (!on && !mapping.toggle) return
@@ -244,7 +251,6 @@ class MidiEngine {
       }
       return
     }
-    // Wheel commando's
     if (mapping.controlType === 'Wheel') {
       const center = mapping.centerValue ?? 64
       const d = delta !== 0 ? delta : this.decodeRelative(value, center)

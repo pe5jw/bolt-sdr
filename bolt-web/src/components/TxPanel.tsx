@@ -28,7 +28,7 @@ export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, adcAv
           <span>AF</span>
           <span className="tx-slider-val">{afGainDb} dB</span>
         </div>
-        <input type="range" min={-50} max={20} step={1} value={afGainDb} onChange={e => onAfGain(Number(e.target.value))} />
+        <input type="range" min={-50} max={20} step={1} value={afGainDb} onChange={e => onAfGain(Number(e.target.value))} style={{ accentColor: 'var(--green)' }} />
       </div>
       <div className="tx-slider-group">
         <div className="tx-slider-label">
