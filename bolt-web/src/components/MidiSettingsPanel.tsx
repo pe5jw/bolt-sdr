@@ -166,7 +166,7 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
 
       {learning && (
         <div style={{ background: 'rgba(255,200,0,0.12)', border: '1px solid var(--accent)', borderRadius: 4, padding: '8px 12px', marginBottom: 10, fontSize: 10, color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span>â— LEARN MODE â€” Beweeg een knop of encoder op je controller...</span>
+          <span>* LEARN MODE - Beweeg een knop of encoder op je controller...</span>
           <button onClick={cancelLearn} style={{ ...sBtn(), marginLeft: 'auto' }}>ANNULEER</button>
         </div>
       )}
@@ -182,7 +182,7 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
       {edit && (
         <div style={{ background: 'var(--bg-control)', border: '1px solid var(--accent)', borderRadius: 4, padding: 12, marginBottom: 12 }}>
           <div style={{ fontSize: 10, color: 'var(--accent)', letterSpacing: 2, marginBottom: 10 }}>
-            BEWERK â€” {MIDI_COMMANDS.find(c => c.command === edit.command)?.label ?? edit.command}
+            BEWERK - {MIDI_COMMANDS.find(c => c.command === edit.command)?.label ?? edit.command}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
             <div>
@@ -230,7 +230,7 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
                 <div>
                   <label style={lbl}>STEP FACTOR</label>
                   <input type="number" style={inp} value={edit.stepHz} onChange={e => setEdit({ ...edit, stepHz: parseInt(e.target.value) })} />
-                  <div style={{ fontSize: 9, color: 'var(--text-dim)', marginTop: 2 }}>1000 = 1Ã— tune step</div>
+                  <div style={{ fontSize: 9, color: 'var(--text-dim)', marginTop: 2 }}>1000 = 1x tune step</div>
                 </div>
                 <div>
                   <label style={lbl}>PULSEN PER STAP</label>
@@ -262,17 +262,17 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
               </div>
               {edit.encType === 'absolute' && (
                 <div style={{ marginTop: 8 }}>
-                  <div style={{ ...lbl, marginBottom: 6 }}>ZONES (input delta â†’ stap delta)</div>
+                  <div style={{ ...lbl, marginBottom: 6 }}>ZONES (input delta naar stap delta)</div>
                   {edit.zones.map((z, i) => (
                     <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 10, marginBottom: 4 }}>
-                      <span style={{ color: 'var(--text-dim)', minWidth: 50 }}>delta â‰¤</span>
+                      <span style={{ color: 'var(--text-dim)', minWidth: 50 }}>delta {"<="}</span>
                       <input type="number" style={{ ...inp, width: 60 }} value={z.maxDelta}
                         onChange={e => { const nz = [...edit.zones]; nz[i] = { ...nz[i], maxDelta: parseInt(e.target.value) || 1 }; setEdit({ ...edit, zones: nz }) }} />
-                      <span style={{ color: 'var(--text-dim)' }}>Ã—</span>
+                      <span style={{ color: 'var(--text-dim)' }}>x</span>
                       <input type="number" style={{ ...inp, width: 60 }} value={z.multiplier}
                         onChange={e => { const nz = [...edit.zones]; nz[i] = { ...nz[i], multiplier: parseInt(e.target.value) || 0 }; setEdit({ ...edit, zones: nz }) }} />
                       <button onClick={() => { const nz = edit.zones.filter((_,j) => j !== i); setEdit({ ...edit, zones: nz }) }}
-                        style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer' }}>âœ•</button>
+                        style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer' }}>X</button>
                     </div>
                   ))}
                   <button onClick={() => setEdit({ ...edit, zones: [...edit.zones, { maxDelta: 127, multiplier: 1 }] })} style={sBtn()}>+ ZONE</button>
@@ -291,7 +291,7 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
                 setLearning(false)
                 setEdit(prev => prev ? { ...prev, id: event.id, deviceName: event.deviceName } : null)
               })
-            }} style={{ ...sBtn(), marginLeft: 'auto' }}>â†º RE-LEARN</button>
+            }} style={{ ...sBtn(), marginLeft: 'auto' }}>RE- RE-LEARN</button>
           </div>
         </div>
       )}
@@ -317,10 +317,10 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
                     {c.label}
                   </td>
                   <td style={{ padding: '6px 10px', fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-data)' }}>
-                    {mapping?.id ?? 'â€”'}
+                    {mapping?.id ?? '-'}
                   </td>
                   <td style={{ padding: '6px 10px', fontSize: 10, color: 'var(--text-dim)' }}>
-                    {mapping ? (mapping.toggle ? 'Toggle' : 'Momentary') : 'â€”'}
+                    {mapping ? (mapping.toggle ? 'Toggle' : 'Momentary') : '-'}
                   </td>
                   <td style={{ padding: '6px 10px', textAlign: 'right' }}>
                     <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
@@ -338,7 +338,7 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
             reverse: (mapping as any).reverse ?? false,
             zones: (mapping as any).zones ?? [{ maxDelta: 12, multiplier: 1 }, { maxDelta: 30, multiplier: 4 }, { maxDelta: 127, multiplier: 10 }],
                           })} style={sBtn()}>EDIT</button>
-                          <button onClick={() => removeMapping(mapping.id)} style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', fontSize: 12 }}>âœ•</button>
+                          <button onClick={() => removeMapping(mapping.id)} style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', fontSize: 12 }}>X</button>
                         </>
                       ) : (
                         <button onClick={() => startLearnFor(c.command)} style={sBtn(isLearning, 'var(--accent)')}>

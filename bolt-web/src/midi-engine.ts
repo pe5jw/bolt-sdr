@@ -42,8 +42,7 @@ export const MIDI_COMMANDS: { command: string; label: string; controlType: MidiC
   { command: 'MuteOnOff',      label: 'Mute',             controlType: 'Button' },
   { command: 'SetAfGain',      label: 'AF Gain',          controlType: 'KnobOrSlider' },
   { command: 'DriveLevel',     label: 'Drive',            controlType: 'KnobOrSlider' },
-  { command: 'BandUp',         label: 'Band omhoog',      controlType: 'Button' },
-  { command: 'BandDown',       label: 'Band omlaag',      controlType: 'Button' },
+  { command: 'BandUp',         label: 'Band cycle',       controlType: 'Button' },
 ]
 
 class MidiEngine {
@@ -227,6 +226,24 @@ class MidiEngine {
   private execute(mapping: MidiMapping, value: number, delta: number): void {
     const cmd = mapping.command
 
+
+    // Commando's die de app afhandelt via onCommand (behalve VFO/MOX/Tune met eigen callbacks)
+    const appCommands = ['ModeUSB','ModeLSB','ModeCW','ModeCWL','ModeAM','ModeFM','ModeDIGU','ModeDIGL','SetAfGain','DriveLevel','RfGain','MicGain','SquelchLevel','BandUp','MuteOnOff','AgcNext','NrToggle','AnfToggle','ZoomSliderInc','ZoomIn','ZoomOut']
+    if (appCommands.includes(cmd)) {
+      if (mapping.controlType === 'Wheel') {
+        const center = mapping.centerValue ?? 64
+        const d = delta !== 0 ? delta : this.decodeRelative(value, center)
+        if (d === 0) return
+        this.onCommand?.(cmd, value, d)
+      } else if (mapping.controlType === 'Button') {
+        const on = value > 0
+        if (!on && !mapping.toggle) return
+        this.onCommand?.(cmd, value, delta)
+      } else {
+        this.onCommand?.(cmd, value, delta)
+      }
+      return
+    }
     // Wheel commando's
     if (mapping.controlType === 'Wheel') {
       const center = mapping.centerValue ?? 64

@@ -36,6 +36,8 @@ export default function App() {
   lastKnownVfoRef.current = radioState.vfoHz
   midiEngine.setVfoHz(radioState.vfoHz)
   midiEngine.wsRef = wsRef
+  const stateRef = useRef(radioState); stateRef.current = radioState
+  const mutedRef = useRef(false)
   midiEngine.onMox = (on) => {
     setRadioState(s => ({ ...s, mox: on }))
     setMoxActive(on)
@@ -47,6 +49,33 @@ export default function App() {
   midiEngine.onTune = (on) => {
     setRadioState(s => ({ ...s, tune: on }))
     fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).catch(() => {})
+  }
+  midiEngine.onCommand = (cmd: string, value: number) => {
+    const post = (url: string, body: any) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {})
+    const mv = (lo: number, hi: number) => Math.round(lo + (value / 127) * (hi - lo))
+    const st = stateRef.current
+    switch (cmd) {
+      case 'ModeUSB': case 'ModeLSB': case 'ModeCW': case 'ModeCWL': case 'ModeAM': case 'ModeFM': case 'ModeDIGU': case 'ModeDIGL': {
+        const m = cmd.replace('Mode', '')
+        const MD: Record<string, [number, number]> = { USB: [200, 3200], LSB: [-3200, -200], CW: [-500, 500], CWL: [-500, 500], AM: [-5000, 5000], FM: [-8000, 8000], DIGU: [200, 3000], DIGL: [-3000, -200] }
+        const [low, high] = MD[m] ?? [200, 3200]
+        setRadioState(s => ({ ...s, mode: m, filterLow: low, filterHigh: high }))
+        send({ type: 'set_mode', mode: m })
+        post('/api/mode', { mode: m })
+        post('/api/filter', { lowHz: low, highHz: high, receiver: 0 })
+        break
+      }
+      case 'SetAfGain': { const db = mv(-20, 20); setRadioState(s => ({ ...s, rxAfGainDb: db })); post('/api/rx/afGain', { db }); break }
+      case 'DriveLevel': { const pct = mv(0, 100); setRadioState(s => ({ ...s, driveDb: pct })); post('/api/tx/drive', { percent: pct }); break }
+      case 'RfGain': { const rfDb = mv(-12, 48); const att = 48 - rfDb; setRadioState(s => ({ ...s, attDb: att })); post('/api/attenuator', { db: att }); break }
+      case 'MicGain': { const db = mv(-20, 20); setRadioState(s => ({ ...s, micGainDb: db })); post('/api/mic-gain', { db }); break }
+      case 'SquelchLevel': { const lvl = mv(0, 100); setRadioState(s => ({ ...s, squelchEnabled: true, squelchLevel: lvl })); post('/api/rx/squelch', { enabled: true, level: lvl }); break }
+      case 'MuteOnOff': { mutedRef.current = !mutedRef.current; post('/api/receivers/0/mute', { muted: mutedRef.current }); break }
+      case 'BandUp': { const bands = [1800000,3500000,7000000,10100000,14000000,18068000,21000000,24890000,28000000]; const next = bands.find(b => b > st.vfoHz + 100000) ?? bands[0]; sendVfo(next, true); break }
+      case 'AgcNext': { const modes = ['Long','Slow','Med','Fast']; const cur = modes.indexOf(st.agcMode ?? 'Med'); const nx = modes[(cur + 1) % modes.length]; setRadioState(s => ({ ...s, agcMode: nx })); post('/api/rx/agc', { agc: { mode: nx, slope: null, decayMs: null, hangMs: null, hangThreshold: null, fixedGainDb: null } }); break }
+      case 'NrToggle': { const nm = st.nrMode === 'Off' ? 'Emnr' : 'Off'; setRadioState(s => ({ ...s, nrMode: nm })); post('/api/rx/nr', { nr: { nrMode: nm, anfEnabled: st.anfEnabled, snbEnabled: st.snbEnabled, nbMode: 'Off', nbThreshold: 20, nbpNotchesEnabled: false } }); break }
+      case 'AnfToggle': { const a = !st.anfEnabled; setRadioState(s => ({ ...s, anfEnabled: a })); post('/api/rx/nr', { nr: { nrMode: st.nrMode, anfEnabled: a, snbEnabled: st.snbEnabled, nbMode: 'Off', nbThreshold: 20, nbpNotchesEnabled: false } }); break }
+    }
   }
 
   useEffect(() => {
