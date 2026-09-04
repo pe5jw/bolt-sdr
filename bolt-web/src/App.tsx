@@ -70,7 +70,7 @@ export default function App() {
       case 'RfGain': { const rfDb = mv(-12, 48); const att = 48 - rfDb; setRadioState(s => ({ ...s, attDb: att })); post('/api/attenuator', { db: att }); break }
       case 'MicGain': { const db = mv(-20, 20); setRadioState(s => ({ ...s, micGainDb: db })); post('/api/mic-gain', { db }); break }
       case 'SquelchLevel': { const lvl = mv(0, 100); setRadioState(s => ({ ...s, squelchEnabled: true, squelchLevel: lvl })); post('/api/rx/squelch', { enabled: true, level: lvl }); break }
-      case 'MuteOnOff': { mutedRef.current = !mutedRef.current; post('/api/receivers/0/mute', { muted: mutedRef.current }); break }
+      case 'MuteOnOff': { const nm = !mutedRef.current; mutedRef.current = nm; setMuted(nm); post('/api/receivers/0/mute', { muted: nm }); break }
       case 'BandUp': { const bands = [1800000,3500000,7000000,10100000,14000000,18068000,21000000,24890000,28000000]; const next = bands.find(b => b > st.vfoHz + 100000) ?? bands[0]; sendVfo(next, true); break }
       case 'AgcNext': { const modes = ['Long','Slow','Med','Fast']; const cur = modes.indexOf(st.agcMode ?? 'Med'); const nx = modes[(cur + 1) % modes.length]; setRadioState(s => ({ ...s, agcMode: nx })); post('/api/rx/agc', { agc: { mode: nx, slope: null, decayMs: null, hangMs: null, hangThreshold: null, fixedGainDb: null } }); break }
       case 'NrToggle': { const nm = st.nrMode === 'Off' ? 'Emnr' : 'Off'; setRadioState(s => ({ ...s, nrMode: nm })); post('/api/rx/nr', { nr: { nrMode: nm, anfEnabled: st.anfEnabled, snbEnabled: st.snbEnabled, nbMode: 'Off', nbThreshold: 20, nbpNotchesEnabled: false } }); break }
@@ -139,6 +139,7 @@ export default function App() {
   const [connectedIp, setConnectedIp] = useState("")
   const [_mox, setMox] = useState(false)
   const [guardMsg, setGuardMsg] = useState<string | null>(null)
+  const [muted, setMuted] = useState(false)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -235,6 +236,7 @@ export default function App() {
         audioEnabled={audioEnabled}
         onAudio={setAudioEnabled}
         onFlush={flushAudioBuffer}
+        muted={muted}
       />
       <main className="bolt-main">
         <section className="bolt-pan">
