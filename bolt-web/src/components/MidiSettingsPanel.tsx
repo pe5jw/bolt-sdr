@@ -34,6 +34,7 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
   const [edit, setEdit] = useState<EditState | null>(null)
   const [profiles, setProfiles] = useState<string[]>(midiEngine.getProfiles())
   const [activeProfile, setActiveProfile] = useState<string>(midiEngine.getActiveProfile())
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
   const monitorRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -308,7 +309,14 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
             </tr>
           </thead>
           <tbody>
-            {MIDI_COMMANDS.map(c => {
+            {[...new Set(MIDI_COMMANDS.map(c => c.group))].map(grp => (
+              <>
+                <tr key={'grp-' + grp} onClick={() => setCollapsedGroups(g => ({ ...g, [grp]: !g[grp] }))} style={{ background: 'var(--bg-control)', cursor: 'pointer', borderTop: '1px solid var(--border)' }}>
+                  <td colSpan={4} style={{ padding: '5px 10px', fontSize: 10, color: 'var(--accent)', letterSpacing: 1, fontWeight: 600 }}>
+                    {collapsedGroups[grp] ? '+' : '-'} {grp}
+                  </td>
+                </tr>
+                {!collapsedGroups[grp] && MIDI_COMMANDS.filter(c => c.group === grp).map(c => {
               const mapping = getMappingForCommand(c.command)
               const isLearning = learnTarget === c.command
               return (
@@ -349,7 +357,9 @@ export function MidiSettingsPanel({ onClose: _onClose }: { onClose: () => void }
                   </td>
                 </tr>
               )
-            })}
+                })}
+              </>
+            ))}
           </tbody>
         </table>
       </div>

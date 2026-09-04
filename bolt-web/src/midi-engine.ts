@@ -31,18 +31,38 @@ type LearnCallback = (event: MidiLearnEvent) => void
 type MessageCallback = (id: string, controlType: MidiControlType, value: number, delta: number) => void
 
 // Available commands with labels
-export const MIDI_COMMANDS: { command: string; label: string; controlType: MidiControlType }[] = [
-  { command: 'ChangeFreqVfoA', label: 'VFO A Afstemmen', controlType: 'Wheel' },
-  { command: 'MoxOnOff',       label: 'PTT / MOX',        controlType: 'Button' },
-  { command: 'TunOnOff',       label: 'Tune',             controlType: 'Button' },
-  { command: 'ZoomSliderInc',  label: 'Zoom',             controlType: 'Wheel' },
-  { command: 'ModeUSB',        label: 'Mode USB',         controlType: 'Button' },
-  { command: 'ModeLSB',        label: 'Mode LSB',         controlType: 'Button' },
-  { command: 'ModeCW',         label: 'Mode CW',          controlType: 'Button' },
-  { command: 'MuteOnOff',      label: 'Mute',             controlType: 'Button' },
-  { command: 'SetAfGain',      label: 'AF Gain',          controlType: 'KnobOrSlider' },
-  { command: 'DriveLevel',     label: 'Drive',            controlType: 'KnobOrSlider' },
-  { command: 'BandUp',         label: 'Band cycle',       controlType: 'Button' },
+export const MIDI_COMMANDS: { command: string; label: string; controlType: MidiControlType; group: string }[] = [
+  // Afstemmen
+  { command: 'ChangeFreqVfoA', label: 'VFO A Afstemmen', controlType: 'Wheel', group: 'Afstemmen' },
+  { command: 'BandUp',         label: 'Band omhoog',      controlType: 'Button', group: 'Afstemmen' },
+  { command: 'BandDown',       label: 'Band omlaag',      controlType: 'Button', group: 'Afstemmen' },
+  { command: 'BandCycle',      label: 'Band cycle',       controlType: 'Button', group: 'Afstemmen' },
+  { command: 'ZoomSliderInc',  label: 'Zoom',             controlType: 'Wheel', group: 'Afstemmen' },
+  { command: 'ZoomIn',         label: 'Zoom in',          controlType: 'Button', group: 'Afstemmen' },
+  { command: 'ZoomOut',        label: 'Zoom uit',         controlType: 'Button', group: 'Afstemmen' },
+  { command: 'AutoSet',        label: 'Auto SET',         controlType: 'Button', group: 'Afstemmen' },
+  // Modes
+  { command: 'ModeUSB',        label: 'Mode USB',         controlType: 'Button', group: 'Mode' },
+  { command: 'ModeLSB',        label: 'Mode LSB',         controlType: 'Button', group: 'Mode' },
+  { command: 'ModeCW',         label: 'Mode CW',          controlType: 'Button', group: 'Mode' },
+  { command: 'ModeCWL',        label: 'Mode CWL',         controlType: 'Button', group: 'Mode' },
+  { command: 'ModeAM',         label: 'Mode AM',          controlType: 'Button', group: 'Mode' },
+  { command: 'ModeFM',         label: 'Mode FM',          controlType: 'Button', group: 'Mode' },
+  { command: 'ModeDIGU',       label: 'Mode DIGU',        controlType: 'Button', group: 'Mode' },
+  { command: 'ModeDIGL',       label: 'Mode DIGL',        controlType: 'Button', group: 'Mode' },
+  // RX
+  { command: 'SetAfGain',      label: 'AF Gain',          controlType: 'KnobOrSlider', group: 'RX' },
+  { command: 'RfGain',         label: 'RF Gain',          controlType: 'KnobOrSlider', group: 'RX' },
+  { command: 'SquelchLevel',   label: 'Squelch niveau',   controlType: 'KnobOrSlider', group: 'RX' },
+  { command: 'AgcNext',        label: 'AGC volgende',     controlType: 'Button', group: 'RX' },
+  { command: 'NrToggle',       label: 'NR aan/uit',       controlType: 'Button', group: 'RX' },
+  { command: 'AnfToggle',      label: 'ANF aan/uit',      controlType: 'Button', group: 'RX' },
+  { command: 'MuteOnOff',      label: 'Mute',             controlType: 'Button', group: 'RX' },
+  // TX
+  { command: 'MoxOnOff',       label: 'PTT / MOX',        controlType: 'Button', group: 'TX' },
+  { command: 'TunOnOff',       label: 'Tune',             controlType: 'Button', group: 'TX' },
+  { command: 'DriveLevel',     label: 'Drive',            controlType: 'KnobOrSlider', group: 'TX' },
+  { command: 'MicGain',        label: 'Mic Gain',         controlType: 'KnobOrSlider', group: 'TX' },
 ]
 
 class MidiEngine {
@@ -229,7 +249,7 @@ class MidiEngine {
 
 
     // Commando's die de app afhandelt via onCommand (behalve VFO/MOX/Tune met eigen callbacks)
-    const appCommands = ['ModeUSB','ModeLSB','ModeCW','ModeCWL','ModeAM','ModeFM','ModeDIGU','ModeDIGL','SetAfGain','DriveLevel','RfGain','MicGain','SquelchLevel','BandUp','MuteOnOff','AgcNext','NrToggle','AnfToggle','ZoomSliderInc','ZoomIn','ZoomOut','AutoSet']
+    const appCommands = ['ModeUSB','ModeLSB','ModeCW','ModeCWL','ModeAM','ModeFM','ModeDIGU','ModeDIGL','SetAfGain','DriveLevel','RfGain','MicGain','SquelchLevel','BandUp','BandDown','BandCycle','MuteOnOff','AgcNext','NrToggle','AnfToggle','ZoomSliderInc','ZoomIn','ZoomOut','AutoSet']
     if (appCommands.includes(cmd)) {
       if (mapping.controlType === 'Wheel') {
         const center = mapping.centerValue ?? 64
