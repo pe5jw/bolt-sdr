@@ -105,6 +105,24 @@ export default function App() {
   const [tuneStep, setTuneStep] = useState(1000)
   midiEngine.tuneStepHz = tuneStep
   const [autoRfGain, setAutoRfGain] = useState(false)
+  const prevMoxRef = useRef(false)
+  const moxPulseRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  if (prevMoxRef.current !== radioState.mox) {
+    prevMoxRef.current = radioState.mox
+    if (radioState.mox) {
+      // TX: verhoog offset eerst zodat spectrum opbouwt
+      window.dispatchEvent(new CustomEvent('bolt-tx-offset-changed', { detail: 80 }))
+      setTimeout(() => window.dispatchEvent(new Event('bolt-autoset-trigger')), 100)
+      moxPulseRef.current = setInterval(() => window.dispatchEvent(new Event('bolt-autoset-trigger')), 500)
+    } else {
+      // RX: stop pulseren, doe één laatste auto SET
+      if (moxPulseRef.current) { clearInterval(moxPulseRef.current); moxPulseRef.current = null }
+      // Meerdere triggers bij RX herstel
+      setTimeout(() => window.dispatchEvent(new Event('bolt-autoset-trigger')), 100)
+      setTimeout(() => window.dispatchEvent(new Event('bolt-autoset-trigger')), 300)
+      setTimeout(() => window.dispatchEvent(new Event('bolt-autoset-trigger')), 600)
+    }
+  }
 
   const autoRfGainAdcRef = useRef(-100)
   const adcPkRef = useRef(-100)
@@ -363,11 +381,11 @@ export default function App() {
         <section className="bolt-tx">
           <TxPanel
             mox={radioState.mox}
+            alc={meters.alc}
             tune={radioState.tune}
             micPeak={micPeak}
             afGainDb={radioState.rxAfGainDb}
             micGainDb={radioState.micGainDb}
-            alc={meters.alc}
             swr={meters.swr}
             power={meters.power}
             adcAv={meters.adcAv}

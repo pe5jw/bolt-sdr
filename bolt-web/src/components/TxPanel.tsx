@@ -47,17 +47,22 @@ export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, adcAv
         </div>
       </div>
       <div className="tx-meters">
-        {adcAv !== undefined && <div className="tx-meter-item">
-          <span className="tx-meter-val" style={{ color: (adcPk ?? adcAv) > -6 ? "var(--tx)" : (adcPk ?? adcAv) > -12 ? "#f39c12" : "var(--text)" }}>{adcAv.toFixed(0)}/{(adcPk ?? adcAv).toFixed(0)}</span>
-          <span className="tx-meter-label">ADC</span>
-        </div>}
+        {adcAv !== undefined && (
+          <div className="tx-meter-item">
+            {mox || adcAv <= -300 ? (
+              <span className="tx-meter-val" style={{ color: "var(--text-dim)" }}>TX</span>
+            ) : (
+              <span className="tx-meter-val" style={{ color: (adcPk ?? adcAv) > -6 ? "var(--tx)" : (adcPk ?? adcAv) > -12 ? "#f39c12" : "var(--text)" }}>{adcAv.toFixed(0)}/{(adcPk ?? adcAv).toFixed(0)}</span>
+            )}
+            <span className="tx-meter-label">ADC</span>
+          </div>
+        )}
         <div className="tx-meter-item">
           <span className="tx-meter-val power">{power.toFixed(0)}</span>
           <span className="tx-meter-label">W</span>
         </div>
         <div className="tx-meter-item">
           <span className="tx-meter-val alc">{isFinite(alc) ? alc.toFixed(1) : '0.0'}</span>
-          <span className="tx-meter-label">ALC</span>
         </div>
         <div className="tx-meter-item">
           <span className="tx-meter-val" style={{ color: swr > 2 ? 'var(--tx)' : 'var(--text)' }}>{swr.toFixed(1)}</span>

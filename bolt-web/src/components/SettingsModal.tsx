@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import pkg from '../../package.json'
 import { MidiSettingsPanel } from './MidiSettingsPanel'
 import { DvkSettingsPanel } from './DvkSettingsPanel'
@@ -14,6 +14,8 @@ const CFC_FREQS = [50, 100, 200, 500, 1000, 1500, 2000, 2500, 3000, 5000]
 
 export function SettingsModal({ onClose }: Props) {
   const { theme, setTheme, showLogo, setShowLogo, logoBrightness, setLogoBrightness, wfPalette, setWfPalette } = useTheme()
+  const [pos, setPos] = useState<{x: number, y: number} | null>(null)
+  const dragRef = useRef<{ dx: number, dy: number } | null>(null)
   const [catEnabled, setCatEnabled] = useState(false)
   const [catPort, setCatPort] = useState(19090)
   const [catBind, setCatBind] = useState('0.0.0.0')
@@ -80,19 +82,29 @@ export function SettingsModal({ onClose }: Props) {
   return (
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000,
-      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16
+      display: 'flex', alignItems: pos ? 'flex-start' : 'center', justifyContent: pos ? 'flex-start' : 'center', padding: 16
     }} onClick={onClose}>
       <div style={{
         background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 6,
-        padding: 20, width: '100%', maxWidth: 580, maxHeight: '90vh', display: 'flex', flexDirection: 'column'
+        padding: 20, width: 580, maxWidth: '95vw', height: '80vh', maxHeight: '90vh',
+        display: 'flex', flexDirection: 'column', resize: 'both', overflow: 'auto',
+        ...(pos ? { position: 'fixed' as const, left: pos.x, top: pos.y } : {})
       }} onClick={e => e.stopPropagation()}>
 
-        {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+        {/* Header - sleepbaar */}
+        <div
+          onMouseDown={e => {
+            const panel = e.currentTarget.parentElement as HTMLElement
+            const rect = panel.getBoundingClientRect()
+            dragRef.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top }
+            const move = (ev: MouseEvent) => { if (dragRef.current) setPos({ x: ev.clientX - dragRef.current.dx, y: ev.clientY - dragRef.current.dy }) }
+            const up = () => { dragRef.current = null; window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+            window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+          }}
+          style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, cursor: 'move', userSelect: 'none' }}>
           <span style={{ fontSize: 12, color: 'var(--text)', fontFamily: 'var(--font-data)', letterSpacing: 3 }}>SETTINGS</span>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: 16 }}>✕</button>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: 16 }}>X</button>
         </div>
-
         {/* Tabs */}
         <div style={{ display: 'flex', gap: 4, marginBottom: 16 }}>
           <button style={tabBtn('general')} onClick={() => setTab('general')}>GENERAL</button>
@@ -228,7 +240,18 @@ export function SettingsModal({ onClose }: Props) {
             </div>
           </div>
             <span style={lbl}>WATERVAL KLEUR</span>
-            <div style={{ display: 'flex', gap: 6 }}>
+          <div style={row}>
+            <span style={lbl}>TX SPECTRUM OFFSET</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="range" min={0} max={100} step={5} defaultValue={parseInt(localStorage.getItem('bolt-tx-offset') || '40')} onChange={e => {
+                const v = parseInt(e.target.value)
+                localStorage.setItem('bolt-tx-offset', String(v))
+                window.dispatchEvent(new CustomEvent('bolt-tx-offset-changed', { detail: v }))
+              }} style={{ width: 100, accentColor: 'var(--tx)' }} />
+              <span style={{ fontSize: 10, color: 'var(--tx)', minWidth: 30 }}>{localStorage.getItem('bolt-tx-offset') || '40'} dB</span>
+            </div>
+          </div>
+          <div style={row}>
               {([{name:'classic',a:'#1e90ff',b:'#00ff88'},{name:'night',a:'#4400aa',b:'#ffffff'},{name:'hot',a:'#ff0000',b:'#ffff00'}] as any[]).map((p: any) => (
                 <button key={p.name} onClick={() => setWfPalette(p.name)} title={p.name}
                   style={{ width: 32, height: 24, borderRadius: 4, cursor: 'pointer',

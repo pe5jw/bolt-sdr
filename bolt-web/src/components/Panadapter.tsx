@@ -41,7 +41,6 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
   useEffect(() => {
     const h = () => { const v = localStorage.getItem('bolt-zoom'); if (v) setZoom(parseInt(v)) }
     window.addEventListener('bolt-zoom-changed', h)
-    window.addEventListener('bolt-zoom-changed', h)
     return () => window.removeEventListener('bolt-zoom-changed', h)
   }, [])
 
@@ -51,6 +50,15 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
     return () => window.removeEventListener('bolt-autoset-trigger', h)
   }, [])
   const [dbMin, setDbMin] = useState(() => parseInt(localStorage.getItem('bolt-floor') || '-140'))
+
+  useEffect(() => {
+    const h = (e: Event) => {
+      const v = (e as CustomEvent).detail as number
+      setTxDisplayOffset(v)
+    }
+    window.addEventListener('bolt-tx-offset-changed', h as EventListener)
+    return () => window.removeEventListener('bolt-tx-offset-changed', h as EventListener)
+  }, [])
   const [autoScale, setAutoScale] = useState(false)
   const [autoSetDone, setAutoSetDone] = useState(false)
   const autoScaleRef = useRef(false)
@@ -61,8 +69,9 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
   const themeRef = useRef(theme)
   const filterLowRef = useRef(filterLow)
   const filterHighRef = useRef(filterHigh)
+  // Adaptieve TX offset: ALC geeft de TX audio sterkte aan (-60 tot 0 dB)
+  // We willen dat de TX piek op ca. 20 dB onder TOP zit
   dbMaxRef.current = mox ? dbMax + txDisplayOffset : dbMax
-  dbMinRef.current = dbMin
   themeRef.current = theme
   filterLowRef.current = filterLow
   filterHighRef.current = filterHigh
@@ -200,9 +209,6 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
   const drawWf = useCallback(() => {
     const wf = wfRef.current
     if (!wf || !display) return
-    if (mox) return  // Pauzeer waterfall tijdens TX
-    if (mox) return  // Pauzeer waterfall tijdens TX
-    if (!wfCtxRef.current) wfCtxRef.current = wf.getContext('2d')
     const ctx = wfCtxRef.current
     if (!ctx) return
     const W = wf.width, H = wf.height
