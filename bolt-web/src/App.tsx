@@ -200,15 +200,17 @@ export default function App() {
       setAutoSetTrigger(t => t + 1)
       const band = getBand(snapped)
       const saved = band ? loadBandState(band) : null
-      if (saved) {
-        setRadioState(s => ({ ...s, vfoHz: saved.hz, mode: saved.mode, filterLow: saved.filterLow, filterHigh: saved.filterHigh }))
-        fetch('/api/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: saved.hz }) })
-        fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: saved.mode }) })
-        fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: saved.filterLow, highHz: saved.filterHigh, receiver: 0 }) })
-        if (saved.driveMaxPct) { fetch('/api/tx/drive-max', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: saved.driveMaxPct }) }); setRadioState(s => ({ ...s, driveMaxPct: saved.driveMaxPct })) }
-        return
+        if (saved) {
+          setRadioState(s => ({ ...s, vfoHz: saved.hz, mode: saved.mode, filterLow: saved.filterLow, filterHigh: saved.filterHigh, driveDb: saved.driveDb ?? s.driveDb, tunePct: saved.tunePct ?? s.tunePct }))
+          fetch('/api/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: saved.hz }) })
+          fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: saved.mode }) })
+          fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: saved.filterLow, highHz: saved.filterHigh, receiver: 0 }) })
+          if (saved.driveMaxPct) { fetch('/api/tx/drive-max', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: saved.driveMaxPct }) }); setRadioState(s => ({ ...s, driveMaxPct: saved.driveMaxPct })) }
+          if (saved.driveDb !== undefined) fetch('/api/tx/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: saved.driveDb }) })
+          if (saved.tunePct !== undefined) fetch('/api/tx/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: saved.tunePct }) })
+          return
+        }
       }
-    }
     saveBandState(snapped, radioState.mode, radioState.filterLow, radioState.filterHigh)
     setRadioState(s => ({ ...s, vfoHz: snapped }))
     fetch('/api/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: snapped }) })
@@ -217,7 +219,7 @@ export default function App() {
   // Band memory
   const saveBandState = (hz: number, mode: string, filterLow: number, filterHigh: number, driveMaxPct?: number) => {
     const band = getBand(hz)
-    if (band) localStorage.setItem('bolt-band-' + band, JSON.stringify({ hz, mode, filterLow, filterHigh, driveMaxPct: driveMaxPct ?? 100 }))
+    if (band) localStorage.setItem('bolt-band-' + band, JSON.stringify({ hz, mode, filterLow, filterHigh, driveMaxPct: driveMaxPct ?? radioState.driveMaxPct, driveDb: radioState.driveDb, tunePct: radioState.tunePct }))
   }
   const loadBandState = (band: string) => {
     try { return JSON.parse(localStorage.getItem('bolt-band-' + band) || 'null') } catch { return null }
@@ -335,12 +337,12 @@ export default function App() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 12px', background: 'var(--bg-panel)', minWidth: 120 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 36 }}>DRIVE</span>
-              <input type="range" min={0} max={100} value={radioState.driveDb} onChange={e => { const v=Number(e.target.value); setRadioState(s=>({...s,driveDb:v})); fetch('/api/tx/drive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({percent:v})}) }} style={{ flex: 1, accentColor: 'var(--tx)' }} />
+              <input type="range" min={0} max={100} value={radioState.driveDb} onChange={e => { const v=Number(e.target.value); setRadioState(s=>({...s,driveDb:v})); fetch('/api/tx/drive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({percent:v})}); saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh) }} style={{ flex: 1, accentColor: 'var(--tx)' }} />
               <span style={{ fontSize: 10, color: 'var(--tx)', fontFamily: 'var(--font-data)', minWidth: 32 }}>{radioState.driveDb}%</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 36 }}>TUNE</span>
-              <input type="range" min={0} max={100} value={radioState.tunePct} onChange={e => { const v=Number(e.target.value); setRadioState(s=>({...s,tunePct:v})); fetch('/api/tx/tune-drive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({percent:v})}) }} style={{ flex: 1, accentColor: 'var(--tx)' }} />
+              <input type="range" min={0} max={100} value={radioState.tunePct} onChange={e => { const v=Number(e.target.value); setRadioState(s=>({...s,tunePct:v})); fetch('/api/tx/tune-drive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({percent:v})}); saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh) }} style={{ flex: 1, accentColor: 'var(--tx)' }} />
               <span style={{ fontSize: 10, color: 'var(--tx)', fontFamily: 'var(--font-data)', minWidth: 32 }}>{radioState.tunePct}%</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
