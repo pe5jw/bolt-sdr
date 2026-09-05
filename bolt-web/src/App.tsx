@@ -66,7 +66,7 @@ export default function App() {
         post('/api/filter', { lowHz: low, highHz: high, receiver: 0 })
         break
       }
-      case 'SetAfGain': { const db = mv(-20, 20); setRadioState(s => ({ ...s, rxAfGainDb: db })); post('/api/rx/afGain', { db }); break }
+      case 'SetAfGain': { const db = mv(-50, 20); setRadioState(s => ({ ...s, rxAfGainDb: db })); post('/api/rx/afGain', { db }); break }
       case 'DriveLevel': { const pct = mv(0, 100); setRadioState(s => ({ ...s, driveDb: pct })); post('/api/tx/drive', { percent: pct }); break }
       case 'RfGain': { const rfDb = mv(-12, 48); const att = 48 - rfDb; setRadioState(s => ({ ...s, attDb: att })); post('/api/attenuator', { db: att }); break }
       case 'MicGain': { const db = mv(-20, 20); setRadioState(s => ({ ...s, micGainDb: db })); post('/api/mic-gain', { db }); break }

@@ -389,6 +389,28 @@ export function SettingsModal({ onClose }: Props) {
             </span>
           </div>
             Meer instellingen komen hier: audio buffer, CAT, etc.
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span style={lbl}>INSTELLINGEN</span>
+            <button onClick={() => {
+              const keys = ['bolt-band-160','bolt-band-80','bolt-band-60','bolt-band-40','bolt-band-30','bolt-band-20','bolt-band-17','bolt-band-15','bolt-band-12','bolt-band-10','bolt-controls-overlay','bolt-floor','bolt-mic-gain','bolt-rx-buffer-ms','bolt-rx-device','bolt-sdr-auto-reconnect','bolt-sdr-last-ip','bolt-smeter-offset','bolt-smeter-overlay','bolt-theme','bolt-top','bolt-tx-device','bolt-tx-offset','bolt-vfo-overlay','bolt-wf-palette','bolt-zoom','bolt-sdr-midi-mappings','bolt-sdr-midi-profiles','bolt-sdr-midi-active-profile']
+              const data: Record<string, string | null> = {}
+              keys.forEach(k => { data[k] = localStorage.getItem(k) })
+              // Voeg band profielen toe
+              Object.keys(localStorage).filter(k => k.startsWith('bolt-sdr-midi-profile-') || k.startsWith('bolt-band-')).forEach(k => { data[k] = localStorage.getItem(k) })
+              const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+              const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
+              a.download = 'bolt-settings.json'; a.click()
+            }} style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: 'var(--accent)', border: 'none', color: 'var(--bg)' }}>EXPORT</button>
+            <button onClick={() => {
+              const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json'
+              inp.onchange = async () => {
+                const f = inp.files?.[0]; if (!f) return
+                const data = JSON.parse(await f.text())
+                Object.entries(data).forEach(([k, v]) => { if (v !== null) localStorage.setItem(k, v as string) })
+                window.location.reload()
+              }; inp.click()
+            }} style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>IMPORT</button>
+          </div>
           </div>
         </>}
         </div>
