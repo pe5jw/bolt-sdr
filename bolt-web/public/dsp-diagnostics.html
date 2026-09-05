@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Bolt SDR DSP Diagnostics</title>
+  <style>
+    body { font-family: monospace; background: #111; color: #ccc; padding: 20px; margin: 0; }
+    h1 { color: #f0a500; letter-spacing: 3px; font-size: 14px; margin-bottom: 4px; }
+    .ts { font-size: 9px; color: #555; margin-bottom: 20px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+    .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px; padding: 12px; }
+    .card-title { font-size: 10px; color: #f0a500; letter-spacing: 2px; margin-bottom: 8px; border-bottom: 1px solid #2a2a2a; padding-bottom: 6px; }
+    table { width: 100%; border-collapse: collapse; }
+    td { padding: 2px 0; font-size: 11px; }
+    td:first-child { color: #888; width: 55%; }
+    .ok { color: #2ecc71; }
+    .warn { color: #f39c12; }
+    .err { color: #e74c3c; }
+    .info { color: #3498db; }
+    .rec { font-size: 10px; color: #888; margin-top: 8px; padding-top: 6px; border-top: 1px solid #222; line-height: 1.4; }
+    .status-ok { background: #1a2a1a; border-color: #2ecc71; }
+    .status-warn { background: #2a2a1a; border-color: #f39c12; }
+    .status-err { background: #2a1a1a; border-color: #e74c3c; }
+    .refresh { font-size: 9px; color: #555; cursor: pointer; text-decoration: underline; }
+    .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 9px; margin-left: 6px; }
+    .badge-ok { background: #2ecc71; color: #000; }
+    .badge-warn { background: #f39c12; color: #000; }
+    .badge-err { background: #e74c3c; color: #fff; }
+  </style>
+</head>
+<body>
+  <h1>BOLT SDR DSP DIAGNOSTICS</h1>
+  <div class="ts" id="ts">Laden... <span class="refresh" onclick="load()">vernieuwen</span></div>
+  <div class="grid" id="grid"></div>
+  <script>
+    function cls(val) {
+      if (val === null || val === undefined) return ''
+      if (typeof val === 'boolean') return val ? 'ok' : 'err'
+      return ''
+    }
+    function tone(t) {
+      if (!t) return ''
+      if (t === 'ok' || t === 'healthy') return 'status-ok'
+      if (t === 'warn' || t === 'verify' || t === 'standby') return 'status-warn'
+      if (t === 'danger' || t === 'error') return 'status-err'
+      return ''
+    }
+    function badge(status) {
+      if (!status) return ''
+      const ok = ['fresh','healthy','ok','wdsp-active','disabled','available']
+      const warn = ['stale','verify','agc-normalizing','weak-signal-boost','weak-signal-assist-active','adc-headroom-limited','board-capability-limited']
+      const err = ['missing','adc-hot','agc-cutting','sentinel','error']
+      if (ok.some(s => status.includes(s))) return `<span class="badge badge-ok">${status}</span>`
+      if (warn.some(s => status.includes(s))) return `<span class="badge badge-warn">${status}</span>`
+      if (err.some(s => status.includes(s))) return `<span class="badge badge-err">${status}</span>`
+      return `<span class="badge" style="background:#333;color:#aaa">${status}</span>`
+    }
+    function row(label, val, cls_) {
+      if (val === null || val === undefined) return ''
+      const c = cls_ || ''
+      return `<tr><td>${label}</td><td class="${c}">${val}</td></tr>`
+    }
+    function card(title, rows, rec, toneClass) {
+      return `<div class="card ${toneClass || ''}">
+        <div class="card-title">${title}</div>
+        <table>${rows}</table>
+        ${rec ? `<div class="rec">${rec}</div>` : ''}
+      </div>`
+    }
+
+    async function load() {
+      try {
+        const r = await fetch('/api/station/dsp-diagnostics')
+        const d = await r.json()
+        document.getElementById('ts').innerHTML = 'Bijgewerkt: ' + new Date().toLocaleTimeString() + ' &nbsp; <span class="refresh" onclick="load()">vernieuwen</span>'
+
+        const cards = []
+
+        // Engine
+        cards.push(card('ENGINE', [
+          row('Engine', d.engine),
+          row('WDSP actief', d.wdspActive ? 'Ja' : 'Nee', d.wdspActive ? 'ok' : 'err'),
+          row('Wisdom fase', d.wdspWisdomPhase),
+          row('Sample rate', d.sampleRateHz ? d.sampleRateHz + ' Hz' : '-'),
+          row('Tick rate', d.tickRateHz ? d.tickRateHz + ' Hz' : '-'),
+          row('Audio output rate', d.audioOutputRateHz ? d.audioOutputRateHz + ' Hz' : '-'),
+        ].join(''), null, ''))
+
+        // RX DSP
+        const rx = d.rxDsp
+        if (rx) cards.push(card('RX DSP ' + badge(rx.status), [
+          row('Mode', rx.mode),
+          row('Filter', rx.filterLowHz + ' / ' + rx.filterHighHz + ' Hz'),
+          row('AGC mode', rx.agcMode),
+          row('AGC top', rx.effectiveAgcTopDb + ' dB'),
+          row('NR mode', rx.effectiveNrMode),
+          row('ANF', rx.anfEnabled ? 'Aan' : 'Uit'),
+          row('SNB', rx.snbEnabled ? 'Aan' : 'Uit'),
+          row('NB mode', rx.nbMode),
+          row('Squelch', rx.squelchEnabled ? 'Aan' : 'Uit'),
+          row('Actieve functies', rx.activeFeatures ? rx.activeFeatures.join(', ') : '-', 'info'),
+        ].join(''), rx.diagnosticRecommendation, ''))
+
+        // RX Meters
+        const m = d.rxMeters
+        if (m) {
+          const headroomCls = m.adcHeadroomDb < 6 ? 'err' : m.adcHeadroomDb < 15 ? 'warn' : 'ok'
+          cards.push(card('RX METERS ' + badge(m.status), [
+            row('Signaal pk/av', (m.signalPkDbm ?? '-') + ' / ' + (m.signalAvDbm ?? '-') + ' dBm'),
+            row('ADC pk/av', (m.adcPkDbfs ?? '-') + ' / ' + (m.adcAvDbfs ?? '-') + ' dBFS'),
+            row('ADC headroom', m.adcHeadroomDb ? m.adcHeadroomDb + ' dB' : '-', headroomCls),
+            row('AGC gain', m.agcGainDb ? m.agcGainDb + ' dB' : '-'),
+            row('AGC env pk/av', (m.agcEnvPkDbm ?? '-') + ' / ' + (m.agcEnvAvDbm ?? '-') + ' dBm'),
+            row('Leeftijd', m.ageMs ? m.ageMs + ' ms' : '-'),
+            row('Vers', m.fresh ? 'Ja' : 'Nee', m.fresh ? 'ok' : 'warn'),
+          ].join(''), m.diagnosticRecommendation, ''))
+        }
+
+        // Dynamic Range
+        const dr = d.rxDynamicRange
+        if (dr) cards.push(card('DYNAMISCH BEREIK ' + badge(dr.status), [
+          row('Attenuatie', dr.attenDb + ' dB handmatig'),
+          row('Auto att offset', dr.attOffsetDb + ' dB'),
+          row('Effectief', dr.effectiveAttenDb + ' dB', 'info'),
+          row('Auto att', dr.autoAttEnabled ? 'Aan' : 'Uit', dr.autoAttEnabled ? 'ok' : ''),
+          row('ADC overload warn', dr.adcOverloadWarning ? 'Ja' : 'Nee', dr.adcOverloadWarning ? 'err' : 'ok'),
+          row('Headroom optimaal', dr.headroomOptimal ? 'Ja' : 'Nee', dr.headroomOptimal ? 'ok' : 'warn'),
+          row('Overload risico', dr.overloadRisk ? 'Ja' : 'Nee', dr.overloadRisk ? 'err' : 'ok'),
+          row('Doel headroom', dr.targetHeadroomMinDb + ' - ' + dr.targetHeadroomMaxDb + ' dB'),
+        ].join(''), dr.diagnosticRecommendation, tone(dr.tone)))
+
+        // Audio
+        const au = d.audio
+        if (au) cards.push(card('AUDIO ' + badge(au.status), [
+          row('Frames broadcast', au.framesBroadcast),
+          row('Sample rate', au.sampleRateHz + ' Hz'),
+          row('RMS', au.rmsDbfs ? au.rmsDbfs + ' dBFS' : '-'),
+          row('Peak', au.peakDbfs ? au.peakDbfs + ' dBFS' : '-'),
+          row('Squelch open', au.squelchOpen ? 'Ja' : 'Nee', au.squelchOpen ? 'ok' : 'warn'),
+          row('Vers', au.fresh ? 'Ja' : 'Nee', au.fresh ? 'ok' : 'warn'),
+        ].join(''), au.diagnosticRecommendation, ''))
+
+        // Squelch
+        const sq = d.squelch
+        if (sq) cards.push(card('SQUELCH ' + badge(sq.status), [
+          row('Actief', sq.enabled ? 'Ja' : 'Nee'),
+          row('Open', sq.open ? 'Ja' : 'Nee', sq.open ? 'ok' : 'warn'),
+          row('Signaal', sq.signalDbm ? sq.signalDbm.toFixed(1) + ' dBm' : '-'),
+          row('Ruisvloer', sq.noiseFloorDbm ? sq.noiseFloorDbm.toFixed(1) + ' dBm' : '-'),
+          row('Signaal/ruis', sq.signalOverFloorDb ? sq.signalOverFloorDb.toFixed(1) + ' dB' : '-'),
+          row('Drempel open', sq.openThresholdDbm ? sq.openThresholdDbm.toFixed(1) + ' dBm' : '-'),
+        ].join(''), sq.diagnosticRecommendation, ''))
+
+        // Display
+        const dp = d.display
+        if (dp) cards.push(card('DISPLAY ' + badge(dp.status), [
+          row('Frames broadcast', dp.framesBroadcast),
+          row('Clients', dp.clientCount),
+          row('Centrum', dp.centerHz ? (dp.centerHz/1000000).toFixed(3) + ' MHz' : '-'),
+          row('Hz/pixel', dp.hzPerPixel ? dp.hzPerPixel.toFixed(2) : '-'),
+          row('Pan', dp.pan ? (dp.pan.minDb + ' / ' + dp.pan.maxDb + ' dBFS') : '-'),
+          row('Dynamisch bereik', dp.pan ? dp.pan.dynamicRangeDb + ' dB' : '-'),
+          row('Vers', dp.fresh ? 'Ja' : 'Nee', dp.fresh ? 'ok' : 'warn'),
+        ].join(''), dp.diagnosticRecommendation, ''))
+
+        // Listenability
+        const li = d.listenability
+        if (li) cards.push(card('VERSTAANBAARHEID ' + badge(li.status), [
+          row('Signaal aanwezig', li.signalPresent ? 'Ja' : 'Nee', li.signalPresent ? 'ok' : ''),
+          row('Audio hersteld', li.audioRecovered ? 'Ja' : 'Nee', li.audioRecovered ? 'ok' : 'warn'),
+          row('Blokkade', li.blocker || '-', li.blocker ? 'warn' : ''),
+        ].join(''), li.recommendation, tone(li.tone)))
+
+        document.getElementById('grid').innerHTML = cards.join('')
+      } catch(e) {
+        document.getElementById('grid').innerHTML = '<div class="card status-err"><div class="card-title">FOUT</div>' + e.message + '</div>'
+      }
+    }
+    load()
+    setInterval(load, 3000)
+  </script>
+</body>
+</html>
