@@ -128,6 +128,9 @@ export function SettingsModal({ onClose }: Props) {
               <div><span style={{ color: 'var(--text-dim)' }}>STACK</span> <span style={{ color: 'var(--accent)' }}>station-engine + bolt-web</span></div>
               <div><span style={{ color: 'var(--text-dim)' }}>RADIO</span> <span style={{ color: 'var(--accent)' }}>HermesLite 2</span></div>
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)', fontSize: 9 }}>GPL v2+ — gebaseerd op Zeus SDR</div>
+              <div style={{ marginTop: 4 }}>
+                <a href="https://github.com/pe5jw/bolt-sdr" target="_blank" rel="noopener" style={{ color: 'var(--accent)', fontSize: 9, textDecoration: 'none' }}>github.com/pe5jw/bolt-sdr</a>
+              </div>
             </div>
           </div>
         )}

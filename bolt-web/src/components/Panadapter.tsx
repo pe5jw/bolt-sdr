@@ -62,6 +62,9 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
   const [autoScale, setAutoScale] = useState(false)
   const [autoSetDone, setAutoSetDone] = useState(false)
   const autoScaleRef = useRef(false)
+  const autoPulseRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [autoPulse, setAutoPulse] = useState(false)
+  const longPressRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // autoScaleRef wordt alleen via knop en reset gezet
   const [txDisplayOffset, setTxDisplayOffset] = useState(() => parseInt(localStorage.getItem('bolt-tx-offset') || '40'))
   const dbMaxRef = useRef(-40)
@@ -368,7 +371,24 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
         <button onClick={() => setDbMin(d => { const v = Math.min(dbMax - 20, d + 1); localStorage.setItem('bolt-floor', String(v)); return v })} style={sBtn}>+</button>
         <span style={val}>{dbMin}</span>
         <button onClick={() => setDbMin(d => Math.max(-220, d - 1))} style={sBtn}>−</button>
-        <button onClick={() => { autoScaleRef.current = true; setAutoScale(true); setAutoSetDone(false) }} style={{ ...sBtn, marginLeft: 8, background: autoScale ? 'var(--accent)' : autoSetDone ? '#2ecc71' : undefined, color: autoScale ? 'var(--bg)' : autoSetDone ? '#000' : undefined }}>AUTO SET</button>
+        <button
+          onMouseDown={() => {
+            longPressRef.current = setTimeout(() => {
+              // Lang indrukken: toggle continue puls
+              if (autoPulseRef.current) {
+                clearInterval(autoPulseRef.current); autoPulseRef.current = null; setAutoPulse(false)
+              } else {
+                setAutoPulse(true)
+                autoPulseRef.current = setInterval(() => { autoScaleRef.current = true; setAutoScale(true); setAutoSetDone(false) }, 500)
+              }
+            }, 600)
+          }}
+          onMouseUp={() => { if (longPressRef.current) clearTimeout(longPressRef.current) }}
+          onMouseLeave={() => { if (longPressRef.current) clearTimeout(longPressRef.current) }}
+          onClick={() => { if (!autoPulseRef.current) { autoScaleRef.current = true; setAutoScale(true); setAutoSetDone(false) } }}
+          style={{ ...sBtn, marginLeft: 8, background: autoPulse ? '#e74c3c' : autoScale ? 'var(--accent)' : autoSetDone ? '#2ecc71' : undefined, color: autoPulse ? '#fff' : autoScale ? 'var(--bg)' : autoSetDone ? '#000' : undefined }}>
+          {autoPulse ? 'AUTO SET ■' : 'AUTO SET'}
+        </button>
       </div>
       <div style={{ position: "relative" }}>
         {vfoOverlay && vfoHz != null && (
