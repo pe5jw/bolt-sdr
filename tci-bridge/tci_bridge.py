@@ -1,4 +1,4 @@
-"""
+﻿"""
 Bolt SDR TCI Bridge - PE5JW
 N1MM+ <-> TCI Server brug met DVK
 
