@@ -47,7 +47,7 @@ Open https://your-server-ip:6443 in your browser.
     cd ..\station-engine
     dotnet run --project StationEngine -- --port 6060 --bind 0.0.0.0 --webroot ..\bolt-web\dist
 
-## N1MM+ DVK Integration
+## N1MM+ DVK Integration + WinKey emulator
 
 1. Configure N1MM+ as Kenwood TS-2000 on server-ip:4532
 2. Upload WAV files via Settings - DVK in the Bolt UI
