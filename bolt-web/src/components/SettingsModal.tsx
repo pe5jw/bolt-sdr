@@ -30,7 +30,7 @@ export function SettingsModal({ onClose }: Props) {
   const saveCat = () => {
     fetch('/api/cat/config', { method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ enabled: catEnabled, bindAddress: catBind, port: catPort, autoReport: true })
-    }).then(r=>r.json()).then(s => setCatStatus(s.error ?? (s.currentlyEnabled ? 'Actief op poort '+s.currentPort : 'Uitgeschakeld'))).catch(()=>{})
+    }).then(r=>r.json()).then(s => setCatStatus(s.error ?? (s.requiresRestart ? 'Opgeslagen — herstart vereist' : s.currentlyEnabled ? 'Actief op poort '+s.currentPort : 'Uitgeschakeld'))).catch(()=>{})
   }
   const [tab, setTab] = useState<'general' | 'midi' | 'cat' | 'dvk' | 'cfc' | 'info'>('general')
   const [displayRate, setDisplayRate] = useState(30)
