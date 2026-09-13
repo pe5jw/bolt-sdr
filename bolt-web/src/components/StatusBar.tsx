@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { SettingsModal } from './SettingsModal'
 import type { ConnectionStatus } from '../ws/useRadioSocket'
 
@@ -26,6 +26,8 @@ interface Props {
 
 export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconnect, audioEnabled, onAudio, learnFrame, onFlush, muted }: Props) {
   const [radios, setRadios] = useState<DiscoveredRadio[]>([])
+  const [fastFlush, setFastFlush] = useState(false)
+  const flushLongRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [showPicker, setShowPicker] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [manualIp, setManualIp] = useState('')
@@ -120,9 +122,13 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
       <button onClick={() => onAudio(!audioEnabled)} style={sBtn(audioEnabled, 'var(--rx)')}>
         {muted ? '🔇 MUTE' : audioEnabled ? '🔊 RX' : '🔇 RX'}
       </button>
-      {onFlush && <button onClick={onFlush} title="Audio buffer legen" style={{ ...sBtn(false, "var(--rx)"), fontSize: 9, padding: "2px 6px" }}>&#x27F3;</button>}
-
-
+      {onFlush && <button
+        onClick={() => { onFlush(); window.dispatchEvent(new CustomEvent('bolt-rx-max-buffer', { detail: fastFlush ? 1 : 2 })) }}
+        onMouseDown={() => { console.log('mousedown fastFlush='+fastFlush); flushLongRef.current = setTimeout(() => { const nf = !fastFlush; console.log('longpress nf='+nf); setFastFlush(nf); window.dispatchEvent(new CustomEvent('bolt-rx-max-buffer', { detail: nf ? 1 : 2 })); onFlush && onFlush() }, 600) }}
+        onMouseUp={() => { if (flushLongRef.current) clearTimeout(flushLongRef.current) }}
+        onMouseLeave={() => { if (flushLongRef.current) clearTimeout(flushLongRef.current) }}
+        title={fastFlush ? "Auto flush: 1s (lang indrukken = terug naar 2s)" : "Auto flush: 2s (lang indrukken = 1s modus)"}
+        style={{ ...sBtn(fastFlush, fastFlush ? '#e74c3c' : 'var(--rx)'), fontSize: 9, padding: '2px 6px' }}>&#x27F3;</button>}
       <button onClick={() => {
         const cur = localStorage.getItem('bolt-controls-overlay') === 'true'
         localStorage.setItem('bolt-controls-overlay', String(!cur))

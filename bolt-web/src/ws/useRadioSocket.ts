@@ -170,6 +170,12 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
         node.port.postMessage({ config: true, thresholdMs })
         rxWorkletRef.current = node
         rxWorkletReadyRef.current = true
+        // Luister naar max buffer events
+        window.addEventListener('bolt-rx-max-buffer', (e: Event) => {
+          const seconds = (e as CustomEvent).detail
+          node.port.postMessage({ setMaxBuffer: true, seconds })
+          setTimeout(() => node.port.postMessage({ setMaxBuffer: true, seconds: 2 }), 3000)
+        })
       }).catch(e => console.error('rx-processor laden mislukt', e))
     }
     const ctx = audioCtxRef.current

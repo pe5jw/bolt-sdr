@@ -21,6 +21,10 @@ class RxProcessor extends AudioWorkletProcessor {
         this.startThreshold = Math.round((e.data.thresholdMs / 1000) * sampleRate)
         return
       }
+      if (e.data && e.data.setMaxBuffer) {
+        this.maxBuffer = Math.round((e.data.seconds ?? 2) * sampleRate)
+        return
+      }
       const samples = e.data
       if (!(samples instanceof Float32Array)) return
       // Schrijf samples in de ring buffer
@@ -41,6 +45,14 @@ class RxProcessor extends AudioWorkletProcessor {
     const output = outputs[0]
     const channel = output[0]
     if (!channel) return true
+
+    // Auto flush als buffer te groot is
+    const maxSamples = this.maxBuffer ?? 96000
+    if (this.available > maxSamples) {
+      this.readPos = this.writePos
+      this.available = 0
+      this.started = false
+    }
 
     // Wacht tot genoeg gebufferd voor start
     if (!this.started) {

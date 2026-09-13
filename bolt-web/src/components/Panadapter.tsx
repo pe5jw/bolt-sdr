@@ -46,8 +46,6 @@ interface Props {
 
 export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange, controlsOverlay, onBand, onMode, onFilterPreset, filterLowHz, filterHighHz, nrMode, onNrMode, mox, onControlPanel, agcMode, onAgc, attenDb, onAtten, autoRfGain, onAutoRfGain, driveDb, onDrive, tunePct, onTune2, driveMaxPct, onDriveMax }: Props) {
   const [openPanel, setOpenPanel] = useState<'band'|'mode'|'filter'|'step'|'nr'|'zoom'|'size'|null>(null)
-  const [customLow, setCustomLow] = useState('-3200')
-  const [customHigh, setCustomHigh] = useState('200')
   const togglePanel = (p: 'band'|'mode'|'filter'|'step') => setOpenPanel(prev => prev === p ? null : p)
   const { theme, showLogo, logoBrightness, wfPalette } = useTheme()
   const [zoom, setZoom] = useState(() => { const v = localStorage.getItem('bolt-zoom'); return v ? parseInt(v) : (window.innerWidth <= 700 ? 4 : 1) })
@@ -473,25 +471,14 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
             {openPanel === 'band' && (
               <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
                 {[[160,1900000],[80,3700000],[60,5357000],[40,7100000],[30,10125000],[20,14200000],[17,18100000],[15,21200000],[12,24940000],[10,28500000]].map(([b,f]) => (
-                  <button key={b} onClick={() => { onBand && onBand(f); setOpenPanel(null) }}
+                  <button key={b} onClick={() => { onBand && onBand(f as number); setOpenPanel(null) }}
                     style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
-                      background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>
+                      background: vfoHz && Math.abs(vfoHz - (f as number)) < 200000 ? 'var(--accent)' : 'var(--bg-control)',
+                      border: '1px solid var(--border)',
+                      color: vfoHz && Math.abs(vfoHz - (f as number)) < 200000 ? 'var(--bg)' : 'var(--text-dim)' }}>
                     {b}m
                   </button>
                 ))}
-              </div>
-            )}
-            {(openPanel as any) === 'custom' && (
-              <div style={{ display: 'flex', gap: 4, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)', alignItems: 'center' }}>
-                <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>LOW</span>
-                <input type="number" value={customLow} onChange={e => setCustomLow(e.target.value)}
-                  style={{ width: 55, fontSize: 9, padding: '1px 4px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 3, fontFamily: 'var(--font-data)' }} />
-                <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>HIGH</span>
-                <input type="number" value={customHigh} onChange={e => setCustomHigh(e.target.value)}
-                  style={{ width: 55, fontSize: 9, padding: '1px 4px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 3, fontFamily: 'var(--font-data)' }} />
-                <button onClick={() => { onFilter && onFilter(Number(customLow), Number(customHigh)); setOpenPanel(null) }}
-                  style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
-                    background: 'var(--accent)', border: '1px solid var(--accent)', color: 'var(--bg)' }}>OK</button>
               </div>
             )}
             {openPanel === 'mode' && (
@@ -512,7 +499,9 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
                 {((): [number,number][] => { const m = mode || 'USB'; const p: Record<string,[number,number][]> = { USB: [[200,3200],[200,2800],[200,2400],[200,2100],[200,1800],[200,1400],[200,1000]], LSB: [[-3200,-200],[-2800,-200],[-2400,-200],[-2100,-200],[-1800,-200],[-1400,-200],[-1000,-200]], CW: [[-500,500],[-400,400],[-250,250],[-150,150],[-100,100],[-50,50]], CWL: [[-500,500],[-400,400],[-250,250],[-150,150],[-100,100],[-50,50]], AM: [[-5000,5000],[-4000,4000],[-3000,3000],[-2000,2000]], FM: [[-8000,8000],[-5000,5000],[-3000,3000]], DIGU: [[200,3000],[200,2400],[200,1800]], DIGL: [[-3000,-200],[-2400,-200],[-1800,-200]] }; return p[m] ?? p.USB })().map(([lo,hi]) => (
                   <button key={lo + ',' + hi} onClick={() => { onFilter && onFilter(lo, hi); setOpenPanel(null) }}
                     style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
-                      background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>
+                      background: filterLowHz === lo && filterHighHz === hi ? 'var(--accent)' : 'var(--bg-control)',
+                      border: '1px solid var(--border)',
+                      color: filterLowHz === lo && filterHighHz === hi ? 'var(--bg)' : 'var(--text-dim)' }}>
                     {Math.abs(hi - lo) >= 1000 ? (Math.abs(hi - lo)/1000).toFixed(1) + 'k' : Math.abs(hi - lo)}
                   </button>
                 ))}
