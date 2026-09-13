@@ -162,6 +162,7 @@ export default function App() {
 
   const [vfoOverlay, setVfoOverlay] = useState(() => localStorage.getItem('bolt-vfo-overlay') !== 'false')
   const [controlsOverlay, setControlsOverlay] = useState(() => localStorage.getItem('bolt-controls-overlay') === 'true')
+  const setControlPanel = useState<null | 'rx' | 'tx'>(null)[1]
   const [smeterOverlay, setSmeterOverlay] = useState(() => localStorage.getItem('bolt-smeter-overlay') !== 'false')
   const [connectedIp, setConnectedIp] = useState("")
   const [_mox, setMox] = useState(false)
@@ -285,6 +286,19 @@ export default function App() {
             tuneStepOverlay={!controlsOverlay && vfoOverlay}
             onStepChange={setTuneStep}
             controlsOverlay={controlsOverlay}
+            onControlPanel={setControlPanel}
+            agcMode={radioState.agcMode ?? 'Med'}
+            onAgc={mode => { setRadioState(s => ({ ...s, agcMode: mode })); fetch('/api/rx/agc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agc: { mode: mode === 'Hang' ? 'Slow' : mode, slope: null, decayMs: null, hangMs: mode === 'Hang' ? 2000 : null, hangThreshold: mode === 'Hang' ? -130 : null, fixedGainDb: null } }) }).catch(() => {}) }}
+            attenDb={radioState.attDb}
+            onAtten={db => { setRadioState(s => ({ ...s, attDb: db })); fetch('/api/attenuator', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) }) }}
+            autoRfGain={autoRfGain}
+            onAutoRfGain={setAutoRfGain}
+            driveDb={radioState.driveDb}
+            onDrive={v => { setRadioState(s => ({ ...s, driveDb: v })); fetch('/api/tx/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: v }) }); saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh) }}
+            tunePct={radioState.tunePct}
+            onTune2={v => { setRadioState(s => ({ ...s, tunePct: v })); fetch('/api/tx/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: v }) }); saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh) }}
+            driveMaxPct={radioState.driveMaxPct}
+            onDriveMax={v => { setRadioState(s => ({ ...s, driveMaxPct: v })); fetch('/api/tx/drive-max', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: v }) }); saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh, v) }}
             mox={radioState.mox}
             nrMode={radioState.nrMode}
             onNrMode={(mode) => {

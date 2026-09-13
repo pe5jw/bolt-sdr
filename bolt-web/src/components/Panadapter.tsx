@@ -28,10 +28,24 @@ interface Props {
   onFilterPreset?: (bw: number) => void
   filterLowHz?: number
   filterHighHz?: number
+  controlPanel?: 'rx' | 'tx' | null
+  onControlPanel?: (p: 'rx' | 'tx' | null) => void
+  agcMode?: string
+  onAgc?: (mode: string) => void
+  attenDb?: number
+  onAtten?: (db: number) => void
+  autoRfGain?: boolean
+  onAutoRfGain?: (v: boolean) => void
+  driveDb?: number
+  onDrive?: (v: number) => void
+  tunePct?: number
+  onTune2?: (v: number) => void
+  driveMaxPct?: number
+  onDriveMax?: (v: number) => void
 }
 
-export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange, controlsOverlay, onBand, onMode, onFilterPreset, filterLowHz, filterHighHz, nrMode, onNrMode, mox }: Props) {
-  const [openPanel, setOpenPanel] = useState<'band'|'mode'|'filter'|'step'|'nr'|null>(null)
+export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange, controlsOverlay, onBand, onMode, onFilterPreset, filterLowHz, filterHighHz, nrMode, onNrMode, mox, onControlPanel, agcMode, onAgc, attenDb, onAtten, autoRfGain, onAutoRfGain, driveDb, onDrive, tunePct, onTune2, driveMaxPct, onDriveMax }: Props) {
+  const [openPanel, setOpenPanel] = useState<'band'|'mode'|'filter'|'step'|'nr'|'zoom'|'size'|null>(null)
   const [customLow, setCustomLow] = useState('-3200')
   const [customHigh, setCustomHigh] = useState('200')
   const togglePanel = (p: 'band'|'mode'|'filter'|'step') => setOpenPanel(prev => prev === p ? null : p)
@@ -349,7 +363,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
   const sep: React.CSSProperties = { width: 1, height: 14, background: "var(--border)", margin: "0 4px" }
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", background: "var(--bg-deep)" }}>
-      <div style={{ display: "flex", gap: 4, padding: "3px 8px", background: "var(--bg-panel)", alignItems: "center", flexWrap: "wrap" }}>
+      {!controlsOverlay && <div style={{ display: "flex", gap: 4, padding: "3px 8px", background: "var(--bg-panel)", alignItems: "center", flexWrap: "wrap" }}>
         <span style={lbl}>ZOOM</span>
         {[1,2,4,8,16,32].map(z => (
           <button key={z} onClick={() => setZoomLevel(z)} style={{ ...sBtn, fontSize: 9, background: zoom === z ? "var(--accent)" : "var(--bg-control)", color: zoom === z ? "var(--bg)" : "var(--text-dim)" }}>{z}x</button>
@@ -389,7 +403,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
           style={{ ...sBtn, marginLeft: 8, background: autoPulse ? '#e74c3c' : autoScale ? 'var(--accent)' : autoSetDone ? '#2ecc71' : undefined, color: autoPulse ? '#fff' : autoScale ? 'var(--bg)' : autoSetDone ? '#000' : undefined }}>
           {autoPulse ? 'AUTO SET ■' : 'AUTO SET'}
         </button>
-      </div>
+      </div>}
       <div style={{ position: "relative" }}>
         {vfoOverlay && vfoHz != null && (
           <div style={{ position: 'absolute', top: 16, left: 8, pointerEvents: 'none', zIndex: 10,
@@ -534,6 +548,65 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
               </div>
             )}
 
+
+            {(openPanel as any) === 'zoom' && (
+              <div style={{ display: 'flex', gap: 4, background: 'rgba(0,0,0,0.85)', padding: '6px 8px', borderRadius: 4, border: '1px solid var(--accent)' }}>
+                {[1,2,4,8,16,32].map(z => (
+                  <button key={z} onClick={() => { setZoomLevel(z); setOpenPanel(null) }}
+                    style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, cursor: 'pointer',
+                      background: zoom === z ? 'var(--accent)' : 'var(--bg-control)',
+                      border: '1px solid var(--border)',
+                      color: zoom === z ? 'var(--bg)' : 'var(--text-dim)' }}>{z}x</button>
+                ))}
+              </div>
+            )}
+            {(openPanel as any) === 'size' && (
+              <div style={{ display: 'flex', gap: 8, background: 'rgba(0,0,0,0.85)', padding: '6px 8px', borderRadius: 4, border: '1px solid var(--accent)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ fontSize: 9, color: 'var(--text-dim)' }}>TOP</span>
+                  <button onClick={() => setDbMax(d => { const v = Math.min(-10, d + 1); localStorage.setItem('bolt-top', String(v)); return v })} style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--accent)' }}>+</button>
+                  <span style={{ fontSize: 9, color: 'var(--accent)', minWidth: 28 }}>{dbMax}</span>
+                  <button onClick={() => setDbMax(d => { const v = Math.max(-160, d - 1); localStorage.setItem('bolt-top', String(v)); return v })} style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--accent)' }}>-</button>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ fontSize: 9, color: 'var(--text-dim)' }}>FLOOR</span>
+                  <button onClick={() => setDbMin(d => { const v = Math.min(-40, d + 1); localStorage.setItem('bolt-floor', String(v)); return v })} style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>+</button>
+                  <span style={{ fontSize: 9, color: 'var(--text-dim)', minWidth: 28 }}>{dbMin}</span>
+                  <button onClick={() => setDbMin(d => { const v = Math.max(-200, d - 1); localStorage.setItem('bolt-floor', String(v)); return v })} style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>-</button>
+                </div>
+              </div>
+            )}
+            {(openPanel as any) === 'rx' && onControlPanel && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: 'rgba(0,0,0,0.9)', padding: '8px', borderRadius: 4, border: '1px solid var(--accent)' }}>
+                <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                  <span style={{ fontSize: 9, color: 'var(--text-dim)', minWidth: 28 }}>AGC</span>
+                  {['Long','Slow','Med','Fast','Hang'].map(m => (
+                    <button key={m} onClick={() => onAgc && onAgc(m)}
+                      style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer',
+                        background: agcMode === m ? 'var(--accent)' : 'var(--bg-control)',
+                        border: '1px solid var(--border)',
+                        color: agcMode === m ? 'var(--bg)' : 'var(--text-dim)' }}>{m}</button>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <span style={{ fontSize: 9, color: 'var(--text-dim)', minWidth: 28 }}>RF</span>
+                  <input type="range" min={-12} max={48} step={1} value={48 - (attenDb ?? 0)} onChange={e => onAtten && onAtten(48 - Number(e.target.value))} style={{ flex: 1, width: 120, accentColor: 'var(--accent)' }} />
+                  <span style={{ fontSize: 9, color: 'var(--accent)', minWidth: 32 }}>{48 - (attenDb ?? 0)} dB</span>
+                  <button onClick={() => onAutoRfGain && onAutoRfGain(!autoRfGain)} style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, cursor: 'pointer', background: autoRfGain ? 'var(--accent)' : 'var(--bg-control)', border: '1px solid var(--border)', color: autoRfGain ? 'var(--bg)' : 'var(--text-dim)' }}>AUTO</button>
+                </div>
+              </div>
+            )}
+            {(openPanel as any) === 'tx' && onControlPanel && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: 'rgba(0,0,0,0.9)', padding: '8px', borderRadius: 4, border: '1px solid var(--tx)', minWidth: 220 }}>
+                {([['DRIVE', driveDb ?? 0, onDrive],['TUNE', tunePct ?? 0, onTune2],['MAX', driveMaxPct ?? 100, onDriveMax]] as [string,number,(v:number)=>void][]).map(([label, val, cb]) => (
+                  <div key={label} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <span style={{ fontSize: 9, color: 'var(--text-dim)', minWidth: 36 }}>{label}</span>
+                    <input type="range" min={0} max={100} value={val} onChange={e => cb?.(Number(e.target.value))} style={{ flex: 1, accentColor: 'var(--tx)' }} />
+                    <span style={{ fontSize: 9, color: 'var(--tx)', minWidth: 28 }}>{val}%</span>
+                  </div>
+                ))}
+              </div>
+            )}
             {/* Compacte status knoppen */}
             <div style={{ display: 'flex', gap: 4 }}>
               {onBand && (
@@ -580,6 +653,23 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
                     color: (openPanel as any) === 'nr' ? 'var(--bg)' : 'var(--text-dim)' }}>
                   {nrMode === 'Off' ? 'NR' : nrMode === 'Anr' ? 'NR1' : nrMode === 'Emnr' ? 'NR2' : nrMode === 'Sbnr' ? 'NR3' : nrMode === 'Rnnr' ? 'NR4' : nrMode}
                 </button>
+              )}
+              {controlsOverlay && onControlPanel && (
+                <>
+                  <button onClick={() => togglePanel('rx' as any)} style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)', background: (openPanel as any) === 'rx' ? 'var(--accent)' : 'rgba(0,0,0,0.6)', border: '1px solid ' + ((openPanel as any) === 'rx' ? 'var(--accent)' : 'var(--border)'), color: (openPanel as any) === 'rx' ? 'var(--bg)' : 'var(--text-dim)' }}>RXm</button>
+                  <button onClick={() => togglePanel('tx' as any)} style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)', background: (openPanel as any) === 'tx' ? 'var(--tx)' : 'rgba(0,0,0,0.6)', border: '1px solid ' + ((openPanel as any) === 'tx' ? 'var(--tx)' : 'var(--border)'), color: (openPanel as any) === 'tx' ? '#fff' : 'var(--text-dim)' }}>TXm</button>
+                  <button onClick={() => togglePanel('zoom' as any)} style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)', background: (openPanel as any) === 'zoom' ? 'var(--accent)' : 'rgba(0,0,0,0.6)', border: '1px solid ' + ((openPanel as any) === 'zoom' ? 'var(--accent)' : 'var(--border)'), color: (openPanel as any) === 'zoom' ? 'var(--bg)' : 'var(--text-dim)' }}>ZOOM</button>
+                  <button onClick={() => togglePanel('size' as any)} style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)', background: (openPanel as any) === 'size' ? 'var(--accent)' : 'rgba(0,0,0,0.6)', border: '1px solid ' + ((openPanel as any) === 'size' ? 'var(--accent)' : 'var(--border)'), color: (openPanel as any) === 'size' ? 'var(--bg)' : 'var(--text-dim)' }}>SIZE</button>
+                  <div style={{ flex: 1 }} />
+                  <button
+                    onMouseDown={() => { longPressRef.current = setTimeout(() => { if (autoPulseRef.current) { clearInterval(autoPulseRef.current); autoPulseRef.current = null; setAutoPulse(false) } else { setAutoPulse(true); autoPulseRef.current = setInterval(() => { autoScaleRef.current = true; setAutoScale(true); setAutoSetDone(false) }, 500) } }, 600) }}
+                    onMouseUp={() => { if (longPressRef.current) clearTimeout(longPressRef.current) }}
+                    onMouseLeave={() => { if (longPressRef.current) clearTimeout(longPressRef.current) }}
+                    onClick={() => { if (!autoPulseRef.current) { autoScaleRef.current = true; setAutoScale(true); setAutoSetDone(false) } }}
+                    style={{ fontSize: 9, padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)', background: autoPulse ? '#e74c3c' : autoSetDone ? '#2ecc71' : 'rgba(0,0,0,0.6)', border: '1px solid var(--border)', color: autoPulse ? '#fff' : autoSetDone ? '#000' : 'var(--text-dim)' }}>
+                    {autoPulse ? 'SET■' : 'SET'}
+                  </button>
+                </>
               )}
             </div>
           </div>
