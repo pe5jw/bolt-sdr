@@ -10,15 +10,20 @@ interface Props {
   adcPk?: number
   micPeak?: number
   onMox: (on: boolean) => void
+  pttMode?: boolean
   onTune: (on: boolean) => void
   onAfGain: (db: number) => void
   onMicGain: (db: number) => void
 }
-export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, adcAv, adcPk, onMox, onTune, onAfGain, onMicGain, micPeak = 0 }: Props) {
+export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, adcAv, adcPk, onMox, onTune, onAfGain, onMicGain, micPeak = 0, pttMode = false }: Props) {
   return (
     <div className="tx-wrap">
-      <button className={`tx-btn mox-btn ${mox ? 'active' : ''}`} onClick={() => onMox(!mox)}>
-        {mox ? '● TX' : 'MOX'}
+      <button className={`tx-btn mox-btn ${mox ? 'active' : ''}`}
+        onClick={pttMode ? undefined : () => onMox(!mox)}
+        onMouseDown={pttMode ? () => onMox(true) : undefined}
+        onMouseUp={pttMode ? () => onMox(false) : undefined}
+        onMouseLeave={pttMode ? () => onMox(false) : undefined}>
+        {mox ? '● TX' : pttMode ? 'PTT' : 'MOX'}
       </button>
       <button className={`tx-btn tune-btn ${tune ? 'active' : ''}`} onClick={() => onTune(!tune)}>
         TUNE

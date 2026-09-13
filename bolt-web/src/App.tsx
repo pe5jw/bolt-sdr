@@ -105,6 +105,12 @@ export default function App() {
   const [tuneStep, setTuneStep] = useState(1000)
   midiEngine.tuneStepHz = tuneStep
   const [autoRfGain, setAutoRfGain] = useState(false)
+  const [pttMode, setPttMode] = useState(() => localStorage.getItem('bolt-ptt-mode') === 'true')
+  useEffect(() => {
+    const h = (e: Event) => setPttMode((e as CustomEvent).detail)
+    window.addEventListener('bolt-ptt-mode-changed', h as EventListener)
+    return () => window.removeEventListener('bolt-ptt-mode-changed', h as EventListener)
+  }, [])
   const prevMoxRef = useRef(false)
   const moxPulseRef = useRef<ReturnType<typeof setInterval> | null>(null)
   if (prevMoxRef.current !== radioState.mox) {
@@ -399,6 +405,7 @@ export default function App() {
             mox={radioState.mox}
             alc={meters.alc}
             tune={radioState.tune}
+            pttMode={pttMode}
             micPeak={micPeak}
             afGainDb={radioState.rxAfGainDb}
             micGainDb={radioState.micGainDb}

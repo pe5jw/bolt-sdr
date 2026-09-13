@@ -375,6 +375,15 @@ export function SettingsModal({ onClose }: Props) {
             <span style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-data)', minWidth: 28 }}>x{micGain}</span>
           </div>
           <div style={row}>
+          <div style={row}>
+            <span style={lbl}>MOX KNOP GEDRAG</span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button onClick={() => { localStorage.setItem('bolt-ptt-mode', 'false'); window.dispatchEvent(new CustomEvent('bolt-ptt-mode-changed', { detail: false })) }}
+                style={{ fontSize: 10, padding: '2px 10px', borderRadius: 3, cursor: 'pointer', background: localStorage.getItem('bolt-ptt-mode') !== 'true' ? 'var(--accent)' : 'var(--bg-control)', border: '1px solid var(--border)', color: localStorage.getItem('bolt-ptt-mode') !== 'true' ? 'var(--bg)' : 'var(--text-dim)' }}>MOX toggle</button>
+              <button onClick={() => { localStorage.setItem('bolt-ptt-mode', 'true'); window.dispatchEvent(new CustomEvent('bolt-ptt-mode-changed', { detail: true })) }}
+                style={{ fontSize: 10, padding: '2px 10px', borderRadius: 3, cursor: 'pointer', background: localStorage.getItem('bolt-ptt-mode') === 'true' ? 'var(--accent)' : 'var(--bg-control)', border: '1px solid var(--border)', color: localStorage.getItem('bolt-ptt-mode') === 'true' ? 'var(--bg)' : 'var(--text-dim)' }}>PTT momentary</button>
+            </div>
+          </div>
             <span style={lbl}>BAND GUARD</span>
             <button onClick={async () => {
               const next = !bandGuardIgnore
