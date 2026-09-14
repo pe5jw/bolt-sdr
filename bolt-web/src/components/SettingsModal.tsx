@@ -32,7 +32,7 @@ export function SettingsModal({ onClose }: Props) {
       body: JSON.stringify({ enabled: catEnabled, bindAddress: catBind, port: catPort, autoReport: true })
     }).then(r=>r.json()).then(s => setCatStatus(s.error ?? (s.requiresRestart ? 'Opgeslagen — herstart vereist' : s.currentlyEnabled ? 'Actief op poort '+s.currentPort : 'Uitgeschakeld'))).catch(()=>{})
   }
-  const [tab, setTab] = useState<'general' | 'midi' | 'cat' | 'dvk' | 'cfc' | 'info'>('general')
+  const [tab, setTab] = useState<'general' | 'midi' | 'cat' | 'dvk' | 'cfc' | 'ps' | 'info'>('general')
   const [displayRate, setDisplayRate] = useState(30)
   useEffect(() => {
     fetch("/api/display/settings").then(r => r.json()).then(d => {
@@ -71,7 +71,7 @@ export function SettingsModal({ onClose }: Props) {
   }, [])
   const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }
   const lbl: React.CSSProperties = { fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 80 }
-  const tabBtn = (t: 'general' | 'midi' | 'cat' | 'dvk' | 'cfc' | 'info'): React.CSSProperties => ({
+  const tabBtn = (t: 'general' | 'midi' | 'cat' | 'dvk' | 'cfc' | 'ps' | 'info'): React.CSSProperties => ({
     fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer',
     fontFamily: 'var(--font-data)', letterSpacing: 2,
     background: tab === t ? 'var(--accent)' : 'var(--bg-control)',
@@ -112,10 +112,70 @@ export function SettingsModal({ onClose }: Props) {
           <button style={tabBtn('midi')} onClick={() => setTab('midi')}>MIDI</button>
           <button style={tabBtn('cat')} onClick={() => setTab('cat')}>CAT</button>
           <button style={tabBtn('dvk')} onClick={() => setTab('dvk')}>DVK</button>
+          <button style={tabBtn('ps')} onClick={() => setTab('ps')}>PURE SIGNAL</button>
           <button style={tabBtn('info')} onClick={() => setTab('info')}>INFO</button>
         </div>
 
         <div style={{ overflowY: 'auto', flex: 1 }}>
+
+        {/* PureSignal tab */}
+        {tab === 'ps' && (
+          <div style={{ fontFamily: 'var(--font-data)', fontSize: 11, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, marginBottom: 4 }}>PURE SIGNAL 3.0</div>
+
+            {/* Master arm */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 10, color: 'var(--text-dim)', minWidth: 80 }}>PS AAN/UIT</span>
+              <button onClick={() => fetch('/api/tx/ps', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ Enabled: true, Auto: true, Single: false }) })}
+                style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: 'var(--accent)', border: 'none', color: 'var(--bg)' }}>AAN (AUTO)</button>
+              <button onClick={() => fetch('/api/tx/ps', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ Enabled: false, Auto: false, Single: false }) })}
+                style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>UIT</button>
+            </div>
+
+            {/* Single calibratie */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 10, color: 'var(--text-dim)', minWidth: 80 }}>KALIBREER</span>
+              <button onClick={() => fetch('/api/tx/ps', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ Enabled: true, Auto: false, Single: true }) })}
+                style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--accent)', color: 'var(--accent)' }}>EENMALIG</button>
+              <button onClick={() => fetch('/api/tx/ps/reset', { method: 'POST' })}
+                style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>RESET</button>
+            </div>
+
+            {/* Monitor */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 10, color: 'var(--text-dim)', minWidth: 80 }}>TX MONITOR</span>
+              <button onClick={() => fetch('/api/tx/ps/monitor', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ Enabled: true }) })}
+                style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--accent)', color: 'var(--accent)' }}>POST-PA</button>
+              <button onClick={() => fetch('/api/tx/ps/monitor', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ Enabled: false }) })}
+                style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>NORMAAL</button>
+              <span style={{ fontSize: 9, color: 'var(--text-dim)' }}>TX spectrum bron</span>
+            </div>
+
+            {/* Feedback attenuatie */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 10, color: 'var(--text-dim)', minWidth: 80 }}>FEEDBACK ATT</span>
+              {[-6,-3,0,3,6,9,12].map(db => (
+                <button key={db} onClick={() => fetch('/api/tx/ps/feedback-attenuation', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ Db: db }) })}
+                  style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>{db}dB</button>
+              ))}
+            </div>
+
+            {/* Save/Restore */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 10, color: 'var(--text-dim)', minWidth: 80 }}>CALIBRATIE</span>
+              <button onClick={() => fetch('/api/tx/ps/save', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ Filename: 'ps-cal.bin' }) })}
+                style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--accent)', color: 'var(--accent)' }}>OPSLAAN</button>
+              <button onClick={() => fetch('/api/tx/ps/restore', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ Filename: 'ps-cal.bin' }) })}
+                style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>HERSTELLEN</button>
+            </div>
+
+            <div style={{ fontSize: 9, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
+              PureSignal 3.0 — PA linearisatie via feedback correctie.<br/>
+              Gebruik AUTO voor continue correctie tijdens TX.<br/>
+              Monitor toont post-PA spectrum voor visuele verificatie.
+            </div>
+          </div>
+        )}
         {/* Info tab */}
         {tab === 'info' && (
           <div style={{ fontFamily: 'var(--font-data)', fontSize: 11, color: 'var(--text-dim)' }}>

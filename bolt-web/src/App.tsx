@@ -310,10 +310,9 @@ export default function App() {
             onNrMode={(mode) => {
               const newNr = { ...nrState, nrMode: mode }
               setNrState(newNr)
+              setRadioState(s => ({ ...s, nrMode: mode }))
               fetch('/api/rx/nr', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nr: { ...newNr, nbpNotchesEnabled: false } }) }).catch(() => {})
             }}
-            onBand={(hz) => sendVfo(hz, true)}
-            onMode={sendMode}
             onFilterPreset={(bw) => {
               const low = (radioState.mode === "LSB" || radioState.mode === "CWL") ? -bw : 200
               const high = (radioState.mode === "LSB" || radioState.mode === "CWL") ? -200 : bw
