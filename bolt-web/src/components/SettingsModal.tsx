@@ -33,6 +33,8 @@ export function SettingsModal({ onClose }: Props) {
     }).then(r=>r.json()).then(s => setCatStatus(s.error ?? (s.requiresRestart ? 'Opgeslagen — herstart vereist' : s.currentlyEnabled ? 'Actief op poort '+s.currentPort : 'Uitgeschakeld'))).catch(()=>{})
   }
   const [tab, setTab] = useState<'general' | 'midi' | 'cat' | 'dvk' | 'cfc' | 'ps' | 'info'>('general')
+  const [psEnabled, setPsEnabled] = useState(false)
+  const [psStatus, setPsStatus] = useState('')
   const [displayRate, setDisplayRate] = useState(30)
   useEffect(() => {
     fetch("/api/display/settings").then(r => r.json()).then(d => {
@@ -126,10 +128,10 @@ export function SettingsModal({ onClose }: Props) {
             {/* Master arm */}
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <span style={{ fontSize: 10, color: 'var(--text-dim)', minWidth: 80 }}>PS AAN/UIT</span>
-              <button onClick={() => fetch('/api/tx/ps', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ Enabled: true, Auto: true, Single: false }) })}
-                style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: 'var(--accent)', border: 'none', color: 'var(--bg)' }}>AAN (AUTO)</button>
-              <button onClick={() => fetch('/api/tx/ps', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ Enabled: false, Auto: false, Single: false }) })}
-                style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>UIT</button>
+              <button onClick={() => { fetch('/api/tx/ps', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ Enabled: true, Auto: true, Single: false }) }).then(() => { setPsEnabled(true); setPsStatus('PS actief - AUTO') }) }}
+                style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: psEnabled ? 'var(--accent)' : 'var(--bg-control)', border: psEnabled ? 'none' : '1px solid var(--accent)', color: psEnabled ? 'var(--bg)' : 'var(--accent)' }}>AAN (AUTO)</button>
+              <button onClick={() => { fetch('/api/tx/ps', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ Enabled: false, Auto: false, Single: false }) }).then(() => { setPsEnabled(false); setPsStatus('PS uit') }) }}
+                style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: !psEnabled ? 'var(--bg-control)' : 'var(--bg-control)', border: '1px solid var(--border)', color: !psEnabled ? 'var(--text)' : 'var(--text-dim)' }}>UIT</button>
             </div>
 
             {/* Single calibratie */}
@@ -169,6 +171,7 @@ export function SettingsModal({ onClose }: Props) {
                 style={{ fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}>HERSTELLEN</button>
             </div>
 
+            {psStatus && <div style={{ fontSize: 10, color: 'var(--green)', marginBottom: 8 }}>{psStatus}</div>}
             <div style={{ fontSize: 9, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
               PureSignal 3.0 — PA linearisatie via feedback correctie.<br/>
               Gebruik AUTO voor continue correctie tijdens TX.<br/>
