@@ -63,7 +63,84 @@ export const MIDI_COMMANDS: { command: string; label: string; controlType: MidiC
   { command: 'TunOnOff',       label: 'Tune',             controlType: 'Button', group: 'TX' },
   { command: 'DriveLevel',     label: 'Drive',            controlType: 'KnobOrSlider', group: 'TX' },
   { command: 'MicGain',        label: 'Mic Gain',         controlType: 'KnobOrSlider', group: 'TX' },
+  // CW
+  { command: 'CwxKey',      label: 'CW Key (momentary)',  controlType: 'Button', group: 'CW' },
+  { command: 'CwxDit',      label: 'CW Paddle Dit',       controlType: 'Button', group: 'CW' },
+  { command: 'CwxDah',      label: 'CW Paddle Dah',       controlType: 'Button', group: 'CW' },
+  { command: 'CwxMacro1',   label: 'CW Macro 1',          controlType: 'Button', group: 'CW' },
+  { command: 'CwxMacro2',   label: 'CW Macro 2',          controlType: 'Button', group: 'CW' },
+  { command: 'CwxMacro3',   label: 'CW Macro 3',          controlType: 'Button', group: 'CW' },
+  { command: 'CwxMacro4',   label: 'CW Macro 4',          controlType: 'Button', group: 'CW' },
+  { command: 'CwxMacro5',   label: 'CW Macro 5',          controlType: 'Button', group: 'CW' },
+  { command: 'CwxMacro6',   label: 'CW Macro 6',          controlType: 'Button', group: 'CW' },
+  { command: 'CwxStop',     label: 'CW Stop',             controlType: 'Button', group: 'CW' },
+  { command: 'CwSpeed',     label: 'CW Snelheid',         controlType: 'KnobOrSlider', group: 'CW' },
 ]
+
+// Iambic paddle keyer — genereert dit/dah timing en stuurt /api/cw/key aan
+class IambicKeyer {
+  private wpm = 22
+  private ditDown = false
+  private dahDown = false
+  private running = false
+  private lastWasDit = false
+  private aborted = false
+
+  setWpm(wpm: number) { this.wpm = Math.max(5, Math.min(50, wpm)) }
+
+  private unitMs() { return 1200 / this.wpm }
+
+  private async key(down: boolean) {
+    await fetch('/api/cw/key', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ down }) }).catch(() => {})
+  }
+
+  private sleep(ms: number) {
+    return new Promise<void>(r => setTimeout(r, ms))
+  }
+
+  ditPress(down: boolean) {
+    this.ditDown = down
+    if (down && !this.running) this.run()
+  }
+
+  dahPress(down: boolean) {
+    this.dahDown = down
+    if (down && !this.running) this.run()
+  }
+
+  private async run() {
+    this.running = true
+    this.aborted = false
+    const u = () => this.unitMs()
+    while ((this.ditDown || this.dahDown) && !this.aborted) {
+      let sendDit: boolean
+      if (this.ditDown && this.dahDown) {
+        sendDit = !this.lastWasDit
+      } else {
+        sendDit = this.ditDown
+      }
+      this.lastWasDit = sendDit
+      const onTime = sendDit ? u() : u() * 3
+      await this.key(true)
+      await this.sleep(onTime)
+      if (this.aborted) { await this.key(false); break }
+      await this.key(false)
+      await this.sleep(u())
+    }
+    if (this.aborted) await this.key(false)
+    this.running = false
+  }
+
+  stop() {
+    this.ditDown = false
+    this.dahDown = false
+    this.aborted = true
+    this.key(false).catch(() => {})
+  }
+}
+
+const iambicKeyer = new IambicKeyer()
 
 class MidiEngine {
   private access: MIDIAccess | null = null
@@ -246,10 +323,9 @@ class MidiEngine {
 
   private execute(mapping: MidiMapping, value: number, delta: number): void {
     const cmd = mapping.command
-
-
+    console.log('MIDI execute:', cmd, 'type:', mapping.controlType, 'value:', value)
     // Commando's die de app afhandelt via onCommand (behalve VFO/MOX/Tune met eigen callbacks)
-    const appCommands = ['ModeUSB','ModeLSB','ModeCW','ModeCWL','ModeAM','ModeFM','ModeDIGU','ModeDIGL','SetAfGain','DriveLevel','RfGain','MicGain','SquelchLevel','BandUp','BandDown','BandCycle','MuteOnOff','AgcNext','NrToggle','AnfToggle','ZoomSliderInc','ZoomIn','ZoomOut','AutoSet']
+    const appCommands = ['ModeUSB','ModeLSB','ModeCW','ModeCWL','ModeAM','ModeFM','ModeDIGU','ModeDIGL','SetAfGain','DriveLevel','RfGain','MicGain','SquelchLevel','BandUp','BandDown','BandCycle','MuteOnOff','AgcNext','NrToggle','AnfToggle','ZoomSliderInc','ZoomIn','ZoomOut','AutoSet','CwSpeed']
     if (appCommands.includes(cmd)) {
       if (mapping.controlType === 'Wheel') {
         const center = mapping.centerValue ?? 64
@@ -318,6 +394,15 @@ class MidiEngine {
           body: JSON.stringify({ on: tuneOn }) }).catch(() => {})
         return
       }
+      // CwxKey — momentary: key down op note-on, key up op note-off (beide kanten nodig)
+      if (cmd === 'CwxKey') {
+        fetch('/api/cw/key', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ down: on }) }).catch(() => {})
+        return
+      }
+      // CwxDit / CwxDah — iambic paddle
+      if (cmd === 'CwxDit') { iambicKeyer.ditPress(on); return }
+      if (cmd === 'CwxDah') { iambicKeyer.dahPress(on); return }
       if (!on && !mapping.toggle) return  // momentary: alleen actie bij indrukken
       if (cmd === 'MuteOnOff') {
         fetch('/api/rx/mute', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -334,9 +419,21 @@ class MidiEngine {
       if (cmd === 'ModeFM')   { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'FM' }) }).catch(() => {}); return }
       if (cmd === 'ModeDIGU') { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'DIGU' }) }).catch(() => {}); return }
       if (cmd === 'ModeDIGL') { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'DIGL' }) }).catch(() => {}); return }
+      if (cmd === 'CwxStop') { iambicKeyer.stop(); fetch('/api/cw/key', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({down:false}) }).catch(()=>{}); fetch('/api/cw/abort', { method: 'POST' }).catch(() => {}); return }
+      if (cmd.startsWith('CwxMacro')) {
+        const on2 = value > 0
+        console.log('CwxMacro handler:', cmd, 'on:', on2, 'value:', value)
+        if (!on2) return
+        const slot = parseInt(cmd.replace('CwxMacro', '')) - 1
+        const macros: string[] = JSON.parse(localStorage.getItem('bolt-cw-macros') || '[]')
+        console.log('macro slot:', slot, 'text:', macros[slot])
+        const text = macros[slot]
+        if (text) fetch('/api/cw/send', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }) }).catch(() => {})
+        return
+      }
     }
   }
-
   private pendingVfo: number | null = null
   private vfoTimer: ReturnType<typeof setTimeout> | null = null
   private lastVfoHz = 0

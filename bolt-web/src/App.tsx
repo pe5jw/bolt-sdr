@@ -246,14 +246,17 @@ export default function App() {
   }
   const MODE_DEFAULTS: Record<string, [number, number]> = { USB: [200, 3200], LSB: [-3200, -200], CW: [-500, 500], CWL: [-500, 500], AM: [-5000, 5000], FM: [-8000, 8000], DIGU: [200, 3000], DIGL: [-3000, -200] }
   const sendMode = (mode: string) => {
-    const [low, high] = MODE_DEFAULTS[mode] ?? [200, 3200]
-    setRadioState(s => ({ ...s, mode, filterLow: low, filterHigh: high }))
-    send({ type: 'set_mode', mode })
-    fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) })
-    fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
-    saveBandState(radioState.vfoHz, mode, low, high)
-  }
+    const cwSettings = JSON.parse(localStorage.getItem('bolt-cw-settings') || '{"sidetoneHz":600,"filterBw":400}')
+    const sidetone = cwSettings.sidetoneHz ?? 600
+    const filterBw = cwSettings.filterBw ?? 400
+    const isCw = mode === "CW" || mode === "CWL"
+    const [low, high] = isCw ? (mode === "CW" ? [sidetone - filterBw/2, sidetone + filterBw/2] : [-(sidetone + filterBw/2), -(sidetone - filterBw/2)]) : (MODE_DEFAULTS[mode] ?? [200, 3200])
+    const serverMode = mode === "CW" ? "CWU" : mode
+    send({ type: "set_mode", mode: serverMode })
+    fetch("/api/mode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: serverMode }) })
+    fetch("/api/filter", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
 
+  }
   return (
     <div className="bolt-app">
       {guardMsg && <div style={{ position: 'fixed', top: 40, left: '50%', transform: 'translateX(-50%)', background: 'var(--tx)', color: 'var(--bg)', padding: '6px 16px', borderRadius: 4, fontSize: 11, fontFamily: 'var(--font-data)', zIndex: 9999 }}>âš  {guardMsg}</div>}
@@ -326,6 +329,8 @@ export default function App() {
               fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
               saveBandState(radioState.vfoHz, radioState.mode, low, high)
             }}
+            onBand={(hz) => sendVfo(hz, true)}
+            onMode={sendMode}
           />
         </section>
         <MobileTuneBar vfoHz={radioState.vfoHz} tuneStep={tuneStep} onTune={sendVfo} />

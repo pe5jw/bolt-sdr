@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import pkg from '../../package.json'
 import { MidiSettingsPanel } from './MidiSettingsPanel'
 import { DvkSettingsPanel } from './DvkSettingsPanel'
+import { CwSettingsPanel } from './CwSettingsPanel'
 import { THEMES, SPECTRUM_COLORS } from '../themes'
 import { useTheme } from '../ThemeContext'
 
@@ -32,7 +33,7 @@ export function SettingsModal({ onClose }: Props) {
       body: JSON.stringify({ enabled: catEnabled, bindAddress: catBind, port: catPort, autoReport: true })
     }).then(r=>r.json()).then(s => setCatStatus(s.error ?? (s.requiresRestart ? 'Opgeslagen — herstart vereist' : s.currentlyEnabled ? 'Actief op poort '+s.currentPort : 'Uitgeschakeld'))).catch(()=>{})
   }
-  const [tab, setTab] = useState<'general' | 'midi' | 'cat' | 'dvk' | 'cfc' | 'ps' | 'info'>('general')
+  const [tab, setTab] = useState<'general' | 'midi' | 'cat' | 'dvk' | 'cfc' | 'ps' | 'cw' | 'info'>('general')
   const [psEnabled, setPsEnabled] = useState(false)
   const [psStatus, setPsStatus] = useState('')
   const [displayRate, setDisplayRate] = useState(30)
@@ -73,7 +74,7 @@ export function SettingsModal({ onClose }: Props) {
   }, [])
   const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }
   const lbl: React.CSSProperties = { fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 80 }
-  const tabBtn = (t: 'general' | 'midi' | 'cat' | 'dvk' | 'cfc' | 'ps' | 'info'): React.CSSProperties => ({
+  const tabBtn = (t: 'general' | 'midi' | 'cat' | 'dvk' | 'cfc' | 'ps' | 'cw' | 'info'): React.CSSProperties => ({
     fontSize: 10, padding: '3px 12px', borderRadius: 3, cursor: 'pointer',
     fontFamily: 'var(--font-data)', letterSpacing: 2,
     background: tab === t ? 'var(--accent)' : 'var(--bg-control)',
@@ -114,6 +115,7 @@ export function SettingsModal({ onClose }: Props) {
           <button style={tabBtn('midi')} onClick={() => setTab('midi')}>MIDI</button>
           <button style={tabBtn('cat')} onClick={() => setTab('cat')}>CAT</button>
           <button style={tabBtn('dvk')} onClick={() => setTab('dvk')}>DVK</button>
+          <button style={tabBtn('cw')} onClick={() => setTab('cw')}>CW</button>
           <button style={tabBtn('ps')} onClick={() => setTab('ps')}>PURE SIGNAL</button>
           <button style={tabBtn('info')} onClick={() => setTab('info')}>INFO</button>
         </div>
@@ -273,6 +275,7 @@ export function SettingsModal({ onClose }: Props) {
         )}
         {tab === 'dvk' && <DvkSettingsPanel />}
         {/* MIDI tab */}
+        {tab === 'cw' && <CwSettingsPanel />}
         {tab === 'midi' && <MidiSettingsPanel onClose={onClose} />}
 
         {/* General tab */}

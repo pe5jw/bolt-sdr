@@ -131,7 +131,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
         const floor = sorted[Math.floor(sorted.length * 0.5)]
         // TOP zodat sterkste signaal op 80% staat
         const peak = sorted[sorted.length - 1]
-        const top = peak
+        const top = floor + (peak - floor) / 0.8
         const newMin = Math.floor(floor)
         const newMax = Math.ceil(top)
         dbMaxRef.current = newMax; setDbMax(newMax)
@@ -496,7 +496,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
             )}
             {openPanel === 'filter' && (
               <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
-                {((): [number,number][] => { const m = mode || 'USB'; const p: Record<string,[number,number][]> = { USB: [[200,3200],[200,2800],[200,2400],[200,2100],[200,1800],[200,1400],[200,1000]], LSB: [[-3200,-200],[-2800,-200],[-2400,-200],[-2100,-200],[-1800,-200],[-1400,-200],[-1000,-200]], CW: [[-500,500],[-400,400],[-250,250],[-150,150],[-100,100],[-50,50]], CWL: [[-500,500],[-400,400],[-250,250],[-150,150],[-100,100],[-50,50]], AM: [[-5000,5000],[-4000,4000],[-3000,3000],[-2000,2000]], FM: [[-8000,8000],[-5000,5000],[-3000,3000]], DIGU: [[200,3000],[200,2400],[200,1800]], DIGL: [[-3000,-200],[-2400,-200],[-1800,-200]] }; return p[m] ?? p.USB })().map(([lo,hi]) => (
+                {((): [number,number][] => { const m = mode || 'USB'; const p: Record<string,[number,number][]> = { USB: [[200,3200],[200,2800],[200,2400],[200,2100],[200,1800],[200,1400],[200,1000]], LSB: [[-3200,-200],[-2800,-200],[-2400,-200],[-2100,-200],[-1800,-200],[-1400,-200],[-1000,-200]], CW: [[400,800],[350,850],[300,900],[450,750],[500,700],[550,650]], CWL: [[-800,-400],[-850,-350],[-900,-300],[-750,-450],[-700,-500],[-650,-550]], AM: [[-5000,5000],[-4000,4000],[-3000,3000],[-2000,2000]], FM: [[-8000,8000],[-5000,5000],[-3000,3000]], DIGU: [[200,3000],[200,2400],[200,1800]], DIGL: [[-3000,-200],[-2400,-200],[-1800,-200]] }; return p[m] ?? p.USB })().map(([lo,hi]) => (
                   <button key={lo + ',' + hi} onClick={() => { onFilter && onFilter(lo, hi); setOpenPanel(null) }}
                     style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
                       background: filterLowHz === lo && filterHighHz === hi ? 'var(--accent)' : 'var(--bg-control)',
