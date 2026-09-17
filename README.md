@@ -87,6 +87,69 @@ Compact overlay with all controls accessible via popup buttons directly on the s
 - `/dsp-diagnostics.html` — DSP diagnostics overview
 - `/api/station/dsp-diagnostics` — full DSP scene JSON
 
+
+## CW Keying
+
+Bolt SDR supports CW keying via three methods:
+
+### 1. MIDI Paddle/Key (direct, no logger needed)
+Map MIDI controls in Settings → MIDI → CW group:
+- **CwxKey** — Straight key (momentary: note-on = key down, note-off = key up)
+- **CwxDit** — Paddle dit contact
+- **CwxDah** — Paddle dah contact (software iambic Mode A keyer)
+- **CwxMacro1–6** — Send CW macro text
+- **CwxStop** — Abort current send
+- **CwSpeed** — Adjust WPM via encoder
+
+Configure CW settings in Settings → CW:
+- Speed (WPM), Sidetone frequency and gain, Filter bandwidth
+- 6 macro slots with export/import
+
+### 2. N1MM+ via Bolt CAT (CW only, no tci-bridge needed)
+
+Configure N1MM+:
+
+Config → Configure Ports
+Port: TCP | Radio: TS-2000 | IP: 192.168.8.141:19090
+
+
+N1MM+ sends CW via `KY <text>;` CAT command directly to bolt.
+PTT is handled via `TX;` / `RX;` CAT commands.
+
+No tci-bridge required. DVK not available in this mode.
+
+### 3. N1MM+ via tci-bridge (CW + DVK + RTTY)
+
+Full-featured integration using the tci-bridge Python app:
+
+Config → Configure Ports
+Port 1: TCP | Radio: TS-2000 | IP: 192.168.8.141:4532 ← CAT + DVK
+
+Config → Winkey
+Network WinKey | IP: 192.168.8.141:5599 ← CW + RTTY
+
+
+tci-bridge provides:
+- **DVK** — WAV playback via N1MM+ F-keys (`{CAT1ASC FH01;}` through `{CAT1ASC FH08;}`)
+- **CW** — via Winkey emulation (iambic, adjustable WPM)
+- **RTTY** — via Winkey mode register (bit 4)
+- **PTT** — via TCI trx command
+
+Start tci-bridge before N1MM+:
+
+python tci_bridge.py
+
+
+tci-bridge connects to bolt TCI server on port 40001.
+
+## N1MM+ Quick Reference
+
+| Feature | Port | Protocol |
+|---------|------|----------|
+| CAT (frequency/mode) | 19090 | TCP TS-2000 |
+| CW via CAT (KY) | 19090 | TCP TS-2000 |
+| tci-bridge CAT + DVK | 4532 | TCP TS-2000 |
+| tci-bridge Winkey CW | 5597 | TCP WinKey |
 ## Based on Zeus / Station-Engine
 
 Bolt SDR uses station-engine, which is a fork of OpenHPSDR Zeus (https://github.com/kb2uka/zeus) by Douglas J. Cerrato (KB2UKA) and contributors.

@@ -250,8 +250,9 @@ export default function App() {
     const sidetone = cwSettings.sidetoneHz ?? 600
     const filterBw = cwSettings.filterBw ?? 400
     const isCw = mode === "CW" || mode === "CWL"
-    const [low, high] = isCw ? (mode === "CW" ? [sidetone - filterBw/2, sidetone + filterBw/2] : [-(sidetone + filterBw/2), -(sidetone - filterBw/2)]) : (MODE_DEFAULTS[mode] ?? [200, 3200])
+    const [low, high] = isCw ? (mode === "CW" ? [Math.max(0, sidetone - filterBw/2), sidetone + filterBw/2] : [-(sidetone + filterBw/2), Math.min(0, -(sidetone - filterBw/2))]) : (MODE_DEFAULTS[mode] ?? [200, 3200])
     const serverMode = mode === "CW" ? "CWU" : mode
+    setRadioState(s => ({ ...s, mode, filterLow: low, filterHigh: high }))
     send({ type: "set_mode", mode: serverMode })
     fetch("/api/mode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: serverMode }) })
     fetch("/api/filter", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
@@ -350,6 +351,7 @@ export default function App() {
               mode={radioState.mode}
               filterLow={radioState.filterLow}
               filterHigh={radioState.filterHigh}
+              sidetoneHz={JSON.parse(localStorage.getItem('bolt-cw-settings') || '{"sidetoneHz":600}').sidetoneHz ?? 600}
               onMode={sendMode}
               onFilter={(low, high) => {
                 setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))

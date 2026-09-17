@@ -233,7 +233,7 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
         setRadioState(s => ({
           ...s,
           vfoHz: state.vfoHz ?? s.vfoHz,
-          mode: state.mode ?? s.mode,
+          mode: (state.mode === "CWU" ? "CW" : state.mode) ?? s.mode,
           filterLow: state.filterLowHz ?? s.filterLow,
           rxAfGainDb: state.rxAfGainDb ?? s.rxAfGainDb,
           agcTopDb: state.agcTopDb ?? s.agcTopDb,

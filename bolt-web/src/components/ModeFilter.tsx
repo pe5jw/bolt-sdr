@@ -6,6 +6,7 @@ interface Props {
   filterHigh: number
   onMode: (mode: string) => void
   onFilter: (low: number, high: number) => void
+  sidetoneHz?: number
 }
 
 const MODES = ['LSB', 'USB', 'CW', 'CWL', 'AM', 'FM', 'DIGU', 'DIGL']
@@ -13,8 +14,8 @@ const MODES = ['LSB', 'USB', 'CW', 'CWL', 'AM', 'FM', 'DIGU', 'DIGL']
 const PRESETS: Record<string, [number, number][]> = {
   USB:  [[200, 3200], [200, 2800], [200, 2400], [200, 2100], [200, 1800], [200, 1400], [200, 1000]],
   LSB:  [[-3200, -200], [-2800, -200], [-2400, -200], [-2100, -200], [-1800, -200], [-1400, -200], [-1000, -200]],
-  CW:   [[-500, 500], [-400, 400], [-250, 250], [-150, 150], [-100, 100], [-50, 50]],
-  CWL:  [[-500, 500], [-400, 400], [-250, 250], [-150, 150], [-100, 100], [-50, 50]],
+  CW:   [[400, 800], [350, 850], [300, 900], [450, 750], [500, 700], [550, 650]],
+  CWL:  [[-800, -400], [-850, -350], [-900, -300], [-750, -450], [-700, -500], [-650, -550]],
   AM:   [[-5000, 5000], [-4000, 4000], [-3000, 3000], [-2000, 2000]],
   FM:   [[-8000, 8000], [-5000, 5000], [-3000, 3000]],
   DIGU: [[200, 3000], [200, 2400], [200, 1800]],
@@ -26,7 +27,7 @@ function bwLabel(low: number, high: number): string {
   return bw >= 1000 ? `${(bw / 1000).toFixed(1)}k` : `${bw}`
 }
 
-export function ModeFilter({ mode, filterLow, filterHigh, onMode, onFilter }: Props) {
+export function ModeFilter({ mode, filterLow, filterHigh, onMode, onFilter, sidetoneHz = 600 }: Props) {
   const [showAdv, setShowAdv] = useState(false)
   const [customBw, setCustomBw] = useState('')
   const bw = Math.abs(filterHigh - filterLow)
@@ -44,7 +45,7 @@ export function ModeFilter({ mode, filterLow, filterHigh, onMode, onFilter }: Pr
     <div className="mode-wrap">
       <div className="mode-row">
         {MODES.map(m => (
-          <button key={m} className={`mode-btn ${m === mode ? 'active' : ''}`}
+          <button key={m} className={`mode-btn ${(m === mode || (m === "CW" && mode === "CWU")) ? "active" : ""}`}
             onClick={() => { onMode(m); const p = PRESETS[m]?.[0]; if (p) onFilter(p[0], p[1]) }}>
             {m}
           </button>
@@ -71,7 +72,7 @@ export function ModeFilter({ mode, filterLow, filterHigh, onMode, onFilter }: Pr
         <span>BW</span>
         <span className="filter-val">{bwLabel(filterLow, filterHigh)} Hz</span>
         <span style={{ marginLeft: 8, fontSize: 10, color: 'var(--text-dim)' }}>
-          {filterLow} / +{filterHigh}
+          {filterLow} / +{filterHigh} | ⬡ {sidetoneHz} Hz
         </span>
       </div>
 
@@ -86,7 +87,7 @@ export function ModeFilter({ mode, filterLow, filterHigh, onMode, onFilter }: Pr
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', minWidth: 28 }}>HIGH</span>
-            <input type="range" min={0} max={8000} step={50} value={filterHigh}
+            <input type="range" min={-8000} max={8000} step={50} value={filterHigh}
               onChange={e => onFilter(filterLow, parseInt(e.target.value))}
               style={{ flex: 1, accentColor: 'var(--rx)' }} />
             <span style={{ fontSize: 10, color: 'var(--rx)', fontFamily: 'var(--font-data)', minWidth: 40, textAlign: 'right' }}>{filterHigh}</span>

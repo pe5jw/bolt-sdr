@@ -323,7 +323,6 @@ class MidiEngine {
 
   private execute(mapping: MidiMapping, value: number, delta: number): void {
     const cmd = mapping.command
-    console.log('MIDI execute:', cmd, 'type:', mapping.controlType, 'value:', value)
     // Commando's die de app afhandelt via onCommand (behalve VFO/MOX/Tune met eigen callbacks)
     const appCommands = ['ModeUSB','ModeLSB','ModeCW','ModeCWL','ModeAM','ModeFM','ModeDIGU','ModeDIGL','SetAfGain','DriveLevel','RfGain','MicGain','SquelchLevel','BandUp','BandDown','BandCycle','MuteOnOff','AgcNext','NrToggle','AnfToggle','ZoomSliderInc','ZoomIn','ZoomOut','AutoSet','CwSpeed']
     if (appCommands.includes(cmd)) {
@@ -422,11 +421,9 @@ class MidiEngine {
       if (cmd === 'CwxStop') { iambicKeyer.stop(); fetch('/api/cw/key', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({down:false}) }).catch(()=>{}); fetch('/api/cw/abort', { method: 'POST' }).catch(() => {}); return }
       if (cmd.startsWith('CwxMacro')) {
         const on2 = value > 0
-        console.log('CwxMacro handler:', cmd, 'on:', on2, 'value:', value)
         if (!on2) return
         const slot = parseInt(cmd.replace('CwxMacro', '')) - 1
         const macros: string[] = JSON.parse(localStorage.getItem('bolt-cw-macros') || '[]')
-        console.log('macro slot:', slot, 'text:', macros[slot])
         const text = macros[slot]
         if (text) fetch('/api/cw/send', { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text }) }).catch(() => {})
@@ -471,7 +468,6 @@ class MidiEngine {
       }
     }
     const step = Math.round(this.tuneStepHz * (stepFactor / 1000) * multiplier * dir * reverse)
-    console.log('[nudgeVfo] value=' + delta + ' center=' + ((mapping as any).centerValue??64) + ' d=' + (delta-((mapping as any).centerValue??64)) + ' dir=' + dir + ' step=' + step)
     this.pendingVfo = (this.pendingVfo ?? 0) + step
     if (this.vfoTimer) clearTimeout(this.vfoTimer)
     this.vfoTimer = setTimeout(() => {

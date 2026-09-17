@@ -1,0 +1,1280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TCI Remote Compactor — Remote SDR over 4G/5G, made easy</title>
+<meta name="description" content="TCI Remote Compactor compresses your Thetis SDR traffic by 95%, adds zero-config tunneling, multi-user access, and secure password protection. Work your radio from anywhere.">
+<style>
+:root {
+  --bg:      #0d1117;
+  --surface: #161b22;
+  --surf2:   #1c2128;
+  --border:  #30363d;
+  --text:    #c9d1d9;
+  --muted:   #8b949e;
+  --green:   #3fb950;
+  --blue:    #58a6ff;
+  --yellow:  #e3b341;
+  --red:     #f85149;
+  --purple:  #bc8cff;
+  --orange:  #ffa657;
+  --green-dark: #238636;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+/* ── Scroll reveal ── */
+.reveal { opacity:0; transform:translateY(28px); transition: opacity .7s ease, transform .7s ease; }
+.reveal.visible { opacity:1; transform:none; }
+.reveal-left  { opacity:0; transform:translateX(-36px); transition: opacity .7s ease, transform .7s ease; }
+.reveal-right { opacity:0; transform:translateX(36px);  transition: opacity .7s ease, transform .7s ease; }
+.reveal-left.visible,.reveal-right.visible { opacity:1; transform:none; }
+
+/* ── Nav ── */
+nav {
+  position: fixed; top:0; left:0; right:0; z-index:100;
+  background: rgba(13,17,23,.88);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items:center; justify-content:space-between;
+  padding: 0 24px; height:56px;
+}
+.nav-logo { font-weight:700; font-size:15px; color:#fff; letter-spacing:-.2px; }
+.nav-logo span { color: var(--green); }
+.nav-buy {
+  background: var(--green-dark); color:#fff;
+  padding: 7px 18px; border-radius:6px;
+  text-decoration:none; font-weight:600; font-size:14px;
+  transition: background .2s, transform .15s;
+}
+.nav-buy:hover { background:#2ea043; transform:translateY(-1px); }
+
+/* ── Hero ── */
+#hero {
+  min-height: 100vh;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  text-align:center; padding: 100px 24px 60px;
+  background: radial-gradient(ellipse at 50% -10%, #112211 0%, var(--bg) 65%);
+  position:relative; overflow:hidden;
+}
+#hero::before {
+  content:'';
+  position:absolute; inset:0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 39px, rgba(48,54,61,.18) 39px, rgba(48,54,61,.18) 40px),
+              repeating-linear-gradient(90deg, transparent, transparent 39px, rgba(48,54,61,.18) 39px, rgba(48,54,61,.18) 40px);
+  pointer-events:none;
+}
+.badge {
+  display:inline-block;
+  background: rgba(63,185,80,.12); border:1px solid rgba(63,185,80,.35);
+  color: var(--green); font-size:12px; font-weight:600; letter-spacing:.5px;
+  padding: 4px 14px; border-radius:20px; margin-bottom:20px; text-transform:uppercase;
+}
+#hero h1 {
+  font-size: clamp(2.2rem, 6vw, 4rem);
+  font-weight:800; color:#fff; line-height:1.1;
+  margin-bottom:20px; max-width:800px;
+}
+#hero h1 em { font-style:normal; color: var(--green); }
+.hero-sub {
+  font-size: clamp(1rem, 2.5vw, 1.25rem);
+  color: var(--muted); max-width:580px; margin:0 auto 36px;
+}
+
+/* compression arrow row */
+.compression-row {
+  display:flex; align-items:center; justify-content:center;
+  gap:16px; flex-wrap:wrap; margin-bottom:40px;
+}
+.comp-box {
+  background: var(--surface); border:1px solid var(--border);
+  border-radius:10px; padding:18px 28px; text-align:center;
+}
+.comp-box.highlight { border-color: var(--green); background: rgba(63,185,80,.06); }
+.comp-val { font-size:1.9rem; font-weight:700; }
+.comp-lbl { font-size:12px; color:var(--muted); margin-top:2px; }
+.comp-arrow { font-size:2rem; color:var(--muted); }
+
+.btn-buy-hero {
+  display:inline-block;
+  background: var(--green-dark); color:#fff;
+  padding:16px 36px; border-radius:8px;
+  text-decoration:none; font-weight:700; font-size:1.15rem;
+  transition: background .2s, transform .15s, box-shadow .2s;
+  box-shadow: 0 0 32px rgba(63,185,80,.2);
+  position:relative;
+}
+.btn-buy-hero:hover { background:#2ea043; transform:translateY(-2px); box-shadow:0 0 48px rgba(63,185,80,.35); }
+.btn-buy-hero small { display:block; font-size:11px; font-weight:400; opacity:.75; margin-top:3px; }
+
+/* ── Section layout ── */
+section.wrap {
+  max-width:1060px; margin:0 auto; padding:80px 24px;
+}
+.section-full {
+  background: var(--surface);
+  border-top:1px solid var(--border); border-bottom:1px solid var(--border);
+  padding:80px 24px;
+}
+.section-inner { max-width:1060px; margin:0 auto; }
+
+.tag {
+  font-size:11px; font-family:'SF Mono',monospace;
+  letter-spacing:2px; color:var(--muted);
+  text-transform:uppercase; margin-bottom:10px;
+}
+h2 {
+  font-size: clamp(1.6rem,4vw,2.3rem);
+  color:#fff; font-weight:700; margin-bottom:14px; line-height:1.2;
+}
+h3 { font-size:1.05rem; color:#fff; margin-bottom:8px; font-weight:600; }
+p.lead { color:var(--muted); font-size:16px; max-width:620px; }
+
+/* ── Problem strip ── */
+.problem-strip {
+  display:grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr));
+  gap:1px; background:var(--border);
+  border:1px solid var(--border); border-radius:10px; overflow:hidden;
+  margin-top:40px;
+}
+.problem-item {
+  background:var(--surface); padding:28px 24px;
+}
+.problem-item .icon { font-size:1.6rem; margin-bottom:10px; }
+.problem-item h3 { color:var(--red); margin-bottom:6px; }
+.problem-item p { color:var(--muted); font-size:14px; max-width:none; }
+
+/* ── Tunnel highlight ── */
+.tunnel-block {
+  display:grid; grid-template-columns:1fr 1fr; gap:48px; align-items:center;
+  margin-top:40px;
+}
+@media(max-width:680px){ .tunnel-block { grid-template-columns:1fr; } }
+.tunnel-visual {
+  background:var(--surf2); border:1px solid var(--border); border-radius:12px;
+  padding:28px 24px; font-family:'SF Mono',monospace; font-size:13px; line-height:1.8;
+}
+.tunnel-visual .c-green { color:var(--green); }
+.tunnel-visual .c-blue  { color:var(--blue); }
+.tunnel-visual .c-muted { color:var(--muted); }
+.tunnel-visual .c-yellow{ color:var(--yellow); }
+
+/* ── Feature grid ── */
+.features-grid {
+  display:grid; grid-template-columns: repeat(auto-fit,minmax(300px,1fr));
+  gap:1px; background:var(--border);
+  border:1px solid var(--border); border-radius:10px; overflow:hidden;
+  margin-top:40px;
+}
+.feat {
+  background:var(--surface); padding:28px 24px;
+  transition: background .2s;
+}
+.feat:hover { background:var(--surf2); }
+.feat-icon { font-size:1.5rem; margin-bottom:12px; }
+.feat p { color:var(--muted); font-size:14px; max-width:none; margin-top:6px; }
+
+/* ── Steps ── */
+.steps {
+  display:grid; grid-template-columns: repeat(auto-fit,minmax(280px,1fr));
+  gap:24px; margin-top:40px;
+}
+.step {
+  background:var(--surface); border:1px solid var(--border); border-radius:10px;
+  padding:28px 24px; position:relative;
+}
+.step-num {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:36px; height:36px; border-radius:50%;
+  background: rgba(63,185,80,.15); border:1px solid rgba(63,185,80,.4);
+  color:var(--green); font-weight:700; font-size:14px;
+  margin-bottom:14px;
+}
+.step p { color:var(--muted); font-size:14px; max-width:none; margin-top:6px; }
+
+/* ── Use-cases ── */
+.cases {
+  display:grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr));
+  gap:20px; margin-top:40px;
+}
+.case {
+  background:var(--surface); border:1px solid var(--border); border-radius:10px;
+  padding:24px;
+}
+.case-icon { font-size:2rem; margin-bottom:12px; }
+.case p { color:var(--muted); font-size:14px; max-width:none; margin-top:6px; }
+
+/* ── Buy section ── */
+#buy {
+  text-align:center; padding:80px 24px;
+  background: radial-gradient(ellipse at 50% 100%, #112211 0%, var(--bg) 60%);
+}
+.price-card {
+  display:inline-block;
+  background:var(--surface); border:1px solid var(--green);
+  border-radius:14px; padding:40px 48px; margin:32px auto;
+  box-shadow:0 0 48px rgba(63,185,80,.12);
+}
+.price-tag { font-size:3rem; font-weight:800; color:#fff; }
+.price-tag sub { font-size:1.2rem; color:var(--muted); vertical-align:baseline; }
+.price-note { color:var(--muted); font-size:13px; margin-top:6px; }
+.checklist { list-style:none; text-align:left; margin:24px 0 28px; }
+.checklist li { padding:5px 0; font-size:15px; color:var(--text); }
+.checklist li::before { content:'✓  '; color:var(--green); font-weight:700; }
+.btn-buy-big {
+  display:inline-block; background:var(--green-dark); color:#fff;
+  padding:16px 44px; border-radius:8px; text-decoration:none;
+  font-weight:700; font-size:1.2rem;
+  transition: background .2s, transform .15s, box-shadow .2s;
+  box-shadow:0 0 32px rgba(63,185,80,.2);
+}
+.btn-buy-big:hover { background:#2ea043; transform:translateY(-2px); box-shadow:0 0 48px rgba(63,185,80,.35); }
+
+/* ── Specs ── */
+.specs-grid {
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+  gap:16px; margin-top:32px;
+}
+.spec-item {
+  background:var(--surface); border:1px solid var(--border); border-radius:8px;
+  padding:16px 18px;
+}
+.spec-item dt { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.8px; margin-bottom:4px; }
+.spec-item dd { font-size:15px; color:#fff; font-weight:500; }
+
+/* ── Footer ── */
+footer {
+  text-align:center; padding:32px 24px;
+  border-top:1px solid var(--border);
+  color:var(--muted); font-size:13px;
+}
+footer a { color:var(--blue); text-decoration:none; }
+footer a:hover { text-decoration:underline; }
+.footer-links { display:flex; justify-content:center; gap:24px; margin-bottom:10px; flex-wrap:wrap; }
+
+/* ── Pulse animation for buy button ── */
+@keyframes pulse-green {
+  0%,100% { box-shadow:0 0 32px rgba(63,185,80,.2); }
+  50%      { box-shadow:0 0 56px rgba(63,185,80,.45); }
+}
+.btn-buy-hero { animation: pulse-green 3s ease-in-out infinite; }
+
+/* ── Download button (blue) ── */
+.btn-dl-hero {
+  display:inline-block;
+  background: #1f6feb; color:#fff;
+  padding:16px 36px; border-radius:8px;
+  text-decoration:none; font-weight:700; font-size:1.15rem;
+  transition: background .2s, transform .15s, box-shadow .2s;
+  box-shadow: 0 0 32px rgba(31,111,235,.2);
+}
+.btn-dl-hero:hover { background:#388bfd; transform:translateY(-2px); box-shadow:0 0 48px rgba(31,111,235,.35); }
+.btn-dl-hero small { display:block; font-size:11px; font-weight:400; opacity:.75; margin-top:3px; }
+.hero-cta-wrap { display:flex; gap:20px; flex-wrap:wrap; justify-content:center; align-items:flex-start; }
+.hero-cta-col  { text-align:center; }
+.dl-count-label { font-size:12px; color:var(--muted); margin-top:10px; min-height:18px; }
+
+/* ── Bandwidth bar ── */
+.bw-bars { margin-top:28px; }
+.bw-row { display:flex; align-items:center; gap:16px; margin-bottom:12px; }
+.bw-label { width:130px; font-size:13px; color:var(--muted); text-align:right; flex-shrink:0; }
+.bw-track { flex:1; background:var(--surf2); border-radius:4px; height:22px; overflow:hidden; position:relative; }
+.bw-fill { height:100%; border-radius:4px; display:flex; align-items:center; padding-left:10px;
+           font-size:12px; font-weight:600; color:#fff; white-space:nowrap; }
+.bw-fill.raw  { width:100%; background:linear-gradient(90deg,#f85149,#e3b341); }
+.bw-fill.comp { background:linear-gradient(90deg,#238636,#3fb950); transition: width 1.4s cubic-bezier(.4,0,.2,1); }
+
+/* ── Permission table ── */
+.perm-table { width:100%; border-collapse:collapse; margin-top:28px; font-size:14px; }
+.perm-table th { background:var(--surf2); color:var(--muted); font-weight:600;
+                 padding:10px 14px; border-bottom:1px solid var(--border); text-align:left; }
+.perm-table td { padding:10px 14px; border-bottom:1px solid rgba(48,54,61,.5); }
+.perm-table tr:last-child td { border-bottom:none; }
+.perm-table .yes { color:var(--green); font-weight:600; }
+.perm-table .no  { color:var(--muted); }
+.perm-table .role { color:#fff; font-weight:600; }
+</style>
+</head>
+<body>
+
+<!-- ── Sticky Nav ── -->
+<nav>
+  <div class="nav-logo">TCI Remote <span>Compactor</span> <span style="color:var(--muted);font-size:12px;font-weight:400;">v1.3.4.3</span></div>
+  <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+    <a href="#features"  style="color:var(--muted);font-size:13px;font-weight:500;text-decoration:none;transition:color .2s;" onmouseover="this.style.color='#c9d1d9'" onmouseout="this.style.color='#8b949e'">Features</a>
+    <a href="#changelog" style="color:var(--muted);font-size:13px;font-weight:500;text-decoration:none;transition:color .2s;" onmouseover="this.style.color='#c9d1d9'" onmouseout="this.style.color='#8b949e'">Changelog</a>
+      <a href="#security" style="color:var(--muted);font-size:13px;font-weight:500;text-decoration:none;transition:color .2s;" onmouseover="this.style.color=\'#c9d1d9\'" onmouseout="this.style.color=\'#8b949e\'">Security</a>
+    <a href="TCI_Remote_compactor_v1.3.4_help.html" target="_blank" rel="noopener" style="color:var(--muted);font-size:13px;font-weight:500;text-decoration:none;transition:color .2s;" onmouseover="this.style.color='#c9d1d9'" onmouseout="this.style.color='#8b949e'">User Manual</a>
+    <a href="#developers" style="color:var(--muted);font-size:13px;font-weight:500;text-decoration:none;transition:color .2s;" onmouseover="this.style.color='#c9d1d9'" onmouseout="this.style.color='#8b949e'">Dev Docs</a>
+    <a href="https://kvlaminck.gumroad.com/l/tci-remote-compactor" target="_blank" rel="noopener" class="nav-buy">Buy License</a>
+    <a href="download_counter.php" class="nav-buy" style="background:#1f6feb;">⬇ Download</a>
+  </div>
+</nav>
+
+<!-- ── Hero ── -->
+<section id="hero">
+  <div class="badge">Now available — v1.3.4.3 with Wide Area Diversity</div>
+  <h1>Work your SDR radio<br>from <em>anywhere in the world</em></h1>
+  <p class="hero-sub">TCI Remote Compactor bridges your Thetis SDR to the <a href="https://pure-editions.com/on7off/TCI-Remote/" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none;font-weight:600;">TCI Remote app</a> over any internet connection — 4G, 5G, hotel WiFi — with zero port-forwarding and military-grade compression.</p>
+
+  <div class="compression-row">
+    <div class="comp-box">
+      <div class="comp-val" style="color:var(--red);">~2 Mbps</div>
+      <div class="comp-lbl">Raw TCI stream</div>
+    </div>
+    <div class="comp-arrow">⟶</div>
+    <div class="comp-box highlight">
+      <div class="comp-val" style="color:var(--green);">&lt; 100 kbps</div>
+      <div class="comp-lbl">After Compactor</div>
+    </div>
+    <div class="comp-arrow" style="color:var(--green-dark);">=</div>
+    <div class="comp-box highlight">
+      <div class="comp-val" style="color:var(--green);">95%+</div>
+      <div class="comp-lbl">Bandwidth saved</div>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;margin-bottom:36px;padding:10px 22px;background:rgba(248,81,73,.08);border:1px solid rgba(248,81,73,.22);border-radius:8px;font-size:14px;max-width:700px;">
+    <span style="color:var(--red);">🛑</span>
+    <span style="color:var(--text);">Internet drops mid-TX?</span>
+    <span style="color:var(--muted);">→</span>
+    <span style="color:#fff;font-weight:600;">PTT released in&nbsp;15 s</span>
+    <span style="color:var(--muted);">·</span>
+    <span style="color:#fff;font-weight:600;">TUN / ATU stopped in&nbsp;5 s</span>
+    <span style="color:var(--muted);">·</span>
+    <span style="color:var(--green);font-weight:600;">Radio gear protected automatically</span>
+  </div>
+
+  <div class="hero-cta-wrap">
+    <div class="hero-cta-col">
+      <a href="download_counter.php" class="btn-dl-hero">
+        ⬇ Download v1.3.4.3
+        <small>Free trial &amp; licensed users — same file · Windows 10/11 · ~41 MB</small>
+      </a>
+      <div class="dl-count-label" id="hero-dl-count"></div>
+    </div>
+    <div class="hero-cta-col">
+      <a href="https://kvlaminck.gumroad.com/l/tci-remote-compactor" class="btn-buy-hero" target="_blank" rel="noopener">
+        Get License Key →
+        <small>One-time purchase · No subscription</small>
+      </a>
+      <div class="dl-count-label" style="color:var(--green);opacity:.8;">Remove the 25-min trial limit</div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Two-component system banner ── -->
+<div style="background:rgba(31,111,235,.07);border-top:1px solid rgba(31,111,235,.2);border-bottom:1px solid rgba(31,111,235,.2);padding:22px 24px;">
+  <div style="max-width:860px;margin:0 auto;">
+    <div style="text-align:center;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:16px;">This is a two-component system — both are needed</div>
+    <div style="display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;">
+
+      <div style="display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid rgba(63,185,80,.4);border-radius:8px;padding:14px 20px;min-width:240px;">
+        <span style="font-size:1.8rem;">🖥️</span>
+        <div>
+          <div style="color:#fff;font-weight:700;font-size:15px;">TCI Remote Compactor</div>
+          <div style="font-size:12px;color:var(--green);margin-top:2px;">← This product &nbsp;·&nbsp; Windows PC</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:3px;">Runs on your shack PC next to Thetis</div>
+        </div>
+      </div>
+
+      <div style="font-size:1.4rem;color:var(--muted);">+</div>
+
+      <a href="https://pure-editions.com/on7off/TCI-Remote/" target="_blank" rel="noopener"
+         style="display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid rgba(88,166,255,.5);border-radius:8px;padding:14px 20px;text-decoration:none;min-width:240px;transition:border-color .2s,background .2s;"
+         onmouseover="this.style.borderColor='#58a6ff';this.style.background='#1c2128'"
+         onmouseout="this.style.borderColor='rgba(88,166,255,.5)';this.style.background='#161b22'">
+        <span style="font-size:1.8rem;">📱</span>
+        <div>
+          <div style="color:#fff;font-weight:700;font-size:15px;">TCI Remote App</div>
+          <div style="font-size:12px;color:var(--blue);margin-top:2px;">Free download &nbsp;·&nbsp; Android</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:3px;">The app you use on your phone in the field →</div>
+        </div>
+      </a>
+
+    </div>
+  </div>
+</div>
+
+<!-- ── Video ── -->
+<div class="section-full" id="video-section">
+  <div class="section-inner" style="text-align:center;">
+    <div class="tag reveal" style="display:inline-block;">See it in action</div>
+    <h2 class="reveal" style="margin-bottom:8px;">Watch the full tutorial</h2>
+    <p class="lead reveal" style="margin:0 auto 32px;text-align:center;">Everything from installation to your first remote connection — in one video.</p>
+    <div class="reveal" style="position:relative;padding-bottom:56.25%;height:0;max-width:860px;margin:0 auto;border-radius:12px;overflow:hidden;border:1px solid var(--border);box-shadow:0 0 48px rgba(0,0,0,.5);">
+      <iframe
+        src="https://www.youtube.com/embed/vNzrKW2yNJs"
+        title="TCI Remote Compactor — Tutorial"
+        frameborder="0"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        allowfullscreen
+        style="position:absolute;top:0;left:0;width:100%;height:100%;">
+      </iframe>
+    </div>
+  </div>
+</div>
+
+<!-- ── The Problem ── -->
+<section class="wrap">
+  <div class="tag reveal">The problem</div>
+  <h2 class="reveal">Raw TCI traffic is brutally hungry on bandwidth</h2>
+  <p class="lead reveal">Thetis outputs uncompressed audio and a full waterfall stream — easily 2 Mbps or more. That is fine on a gigabit LAN, but completely unusable over a mobile data connection. Without a solution, remote operation simply does not work.</p>
+
+  <div class="problem-strip reveal">
+    <div class="problem-item">
+      <div class="icon">📡</div>
+      <h3>4G/5G drops constantly</h3>
+      <p>Raw TCI saturates a typical mobile data plan within minutes. Audio breaks up, the waterfall freezes, the app disconnects.</p>
+    </div>
+    <div class="problem-item">
+      <div class="icon">🔌</div>
+      <h3>Port forwarding is a nightmare</h3>
+      <p>Most routers, ISPs, and 5G home gateways block incoming connections. Even when it works, your home IP changes without warning.</p>
+    </div>
+    <div class="problem-item">
+      <div class="icon">🔓</div>
+      <h3>No access control in Thetis</h3>
+      <p>Opening Thetis to the internet means anyone who finds your IP can connect. There is no built-in password system.</p>
+    </div>
+    <div class="problem-item">
+      <div class="icon">👤</div>
+      <h3>Only one user at a time</h3>
+      <p>You cannot share your radio with a fellow operator or monitor it from two devices simultaneously without dropping connections.</p>
+    </div>
+    <div class="problem-item">
+      <div class="icon">🔥</div>
+      <h3>Stuck transmitter — no recovery</h3>
+      <p>TCI has no built-in disconnect handling. A dropped remote connection leaves PTT active and the tuner running — indefinitely. Burned finals, a seized ATU motor, and a destroyed PA are the result.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── Zero-Config Tunnel ── -->
+<div class="section-full">
+  <div class="section-inner">
+    <div class="tag reveal">Zero-config tunneling</div>
+    <div class="tunnel-block">
+      <div class="reveal-left">
+        <h2>No port forwarding.<br>No static IP.<br>Just connect.</h2>
+        <p class="lead" style="margin-bottom:20px;">TCI Remote Compactor includes a built-in secured tunnel engine. At startup it creates a secure, encrypted HTTPS tunnel to your radio — no router configuration, no IT knowledge, no dynamic DNS service required.</p>
+        <p class="lead">Your TCI Remote app receives a live URL like <span style="color:var(--blue);font-family:monospace;font-size:13px;">https://abc123.tciremote.com</span> that works from any network, anywhere on earth. One click and you are on the air.</p>
+      </div>
+      <div class="tunnel-visual reveal-right">
+        <div class="c-muted"># What happens when Compactor starts</div>
+        <br>
+        <div><span class="c-green">✓</span> Compactor starts on your shack PC</div>
+        <div><span class="c-green">✓</span> Secured tunnel engine connects</div>
+        <div><span class="c-blue">↳</span> <span class="c-yellow">https://abc123.tciremote.com</span></div>
+        <br>
+        <div class="c-muted"># On your phone, anywhere in the world</div>
+        <br>
+        <div><span class="c-green">✓</span> Open TCI Remote app</div>
+        <div><span class="c-green">✓</span> Enter the tunnel URL</div>
+        <div><span class="c-green">✓</span> Enter your password</div>
+        <div><span class="c-blue">↳</span> <span class="c-green">Radio is live. Start operating.</span></div>
+        <br>
+        <div class="c-muted"># No router settings touched.</div>
+        <div class="c-muted"># No firewall rules needed.</div>
+        <div class="c-muted"># No dynamic DNS subscription.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Compression detail ── -->
+<section class="wrap">
+  <div class="tag reveal">Opus compression engine</div>
+  <h2 class="reveal">95% bandwidth reduction — crystal-clear audio</h2>
+  <p class="lead reveal">The Compactor intercepts the raw Thetis audio stream and re-encodes it in real time using the Opus codec — the same algorithm used by Discord, Teams, and WhatsApp. You choose the bitrate: from a razor-thin 8 kbps on a weak connection up to 320 kbps for studio-quality monitoring.</p>
+
+  <div class="bw-bars reveal" id="bwBars">
+    <div class="bw-row">
+      <div class="bw-label">Raw TCI audio</div>
+      <div class="bw-track"><div class="bw-fill raw">~1,920 kbps</div></div>
+    </div>
+    <div class="bw-row">
+      <div class="bw-label">320 kbps Opus</div>
+      <div class="bw-track"><div class="bw-fill comp" id="bar320" style="width:0%">320 kbps</div></div>
+    </div>
+    <div class="bw-row">
+      <div class="bw-label">64 kbps Opus</div>
+      <div class="bw-track"><div class="bw-fill comp" id="bar64" style="width:0%">64 kbps</div></div>
+    </div>
+    <div class="bw-row">
+      <div class="bw-label">24 kbps Opus</div>
+      <div class="bw-track"><div class="bw-fill comp" id="bar24" style="width:0%">24 kbps — 4G/5G sweet spot</div></div>
+    </div>
+    <div class="bw-row">
+      <div class="bw-label">8 kbps Opus</div>
+      <div class="bw-track"><div class="bw-fill comp" id="bar8" style="width:0%">8 kbps — weak signal mode</div></div>
+    </div>
+  </div>
+  <p style="color:var(--muted);font-size:13px;margin-top:16px;">* Waterfall / spectrum data is compressed separately and further reduced by priority queuing to protect audio quality.</p>
+</section>
+
+<!-- ── Safety Watchdog ── -->
+<div class="section-full" style="background:rgba(248,81,73,.03);">
+  <div class="section-inner">
+    <div class="tag reveal" style="color:var(--red);">Equipment protection</div>
+    <h2 class="reveal">One dropped connection can destroy your radio gear</h2>
+    <p class="lead reveal">The TCI protocol has no built-in disconnect handling. Thetis cannot tell the difference between a deliberate stop and a crashed connection. If you drop off mid-transmission — dead zone, crashed app, sudden network loss — Thetis keeps transmitting, keeps tuning, keeps running the ATU. Indefinitely. Without a watchdog, this is how finals burn and ATU relays get destroyed.</p>
+
+    <div class="reveal" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;margin-top:36px;">
+
+      <div style="background:rgba(248,81,73,.07);border:1px solid rgba(248,81,73,.3);border-radius:10px;padding:28px 24px;">
+        <div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--red);margin-bottom:18px;font-weight:600;">❌ Without a watchdog</div>
+        <div style="display:flex;flex-direction:column;gap:14px;">
+          <div style="display:flex;gap:14px;align-items:flex-start;">
+            <div style="font-size:11px;font-family:'SF Mono',monospace;color:var(--muted);flex-shrink:0;min-width:44px;padding-top:2px;">T + 0 s</div>
+            <div style="font-size:14px;color:var(--text);">Remote connection drops — dead zone, crash, network loss</div>
+          </div>
+          <div style="display:flex;gap:14px;align-items:flex-start;">
+            <div style="font-size:11px;font-family:'SF Mono',monospace;color:var(--red);flex-shrink:0;min-width:44px;padding-top:2px;font-weight:700;">T + ∞</div>
+            <div style="font-size:14px;color:var(--text);">Thetis receives no notification — keeps transmitting, tuning, running</div>
+          </div>
+        </div>
+        <div style="margin-top:18px;padding:13px 16px;background:rgba(248,81,73,.12);border-radius:6px;font-size:13px;font-weight:600;color:var(--red);line-height:1.6;">
+          🔥 PA overheats &nbsp;·&nbsp; Finals burned &nbsp;·&nbsp; ATU motor seized
+        </div>
+      </div>
+
+      <div style="background:rgba(63,185,80,.06);border:1px solid rgba(63,185,80,.3);border-radius:10px;padding:28px 24px;">
+        <div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--green);margin-bottom:18px;font-weight:600;">✓ With Compactor Safety Watchdog</div>
+        <div style="display:flex;flex-direction:column;gap:14px;">
+          <div style="display:flex;gap:14px;align-items:flex-start;">
+            <div style="font-size:11px;font-family:'SF Mono',monospace;color:var(--muted);flex-shrink:0;min-width:44px;padding-top:2px;">T + 0 s</div>
+            <div style="font-size:14px;color:var(--text);">Connection drop detected by the Compactor</div>
+          </div>
+          <div style="display:flex;gap:14px;align-items:flex-start;">
+            <div style="font-size:11px;font-family:'SF Mono',monospace;color:var(--orange);flex-shrink:0;min-width:44px;padding-top:2px;font-weight:700;">T + 5 s</div>
+            <div style="font-size:14px;color:var(--text);">TUN &amp; ATU stop commands sent to Thetis — safe state</div>
+          </div>
+          <div style="display:flex;gap:14px;align-items:flex-start;">
+            <div style="font-size:11px;font-family:'SF Mono',monospace;color:var(--green);flex-shrink:0;min-width:44px;padding-top:2px;font-weight:700;">T + 15 s</div>
+            <div style="font-size:14px;color:var(--text);">PTT released — transmission stops, radio returns to safe state</div>
+          </div>
+        </div>
+        <div style="margin-top:18px;padding:13px 16px;background:rgba(63,185,80,.12);border-radius:6px;font-size:13px;font-weight:600;color:var(--green);line-height:1.6;">
+          ✓ Radio gear protected automatically — every time
+        </div>
+      </div>
+
+    </div>
+    <p style="color:var(--muted);font-size:13px;margin-top:18px;">Watchdog runs server-side in the Compactor — independent of the mobile connection quality. Even if the app freezes or the phone loses signal completely, your radio is safe.</p>
+  </div>
+</div>
+
+<!-- ── Feature grid ── -->
+<div class="section-full" id="features">
+  <div class="section-inner">
+    <div class="tag reveal">All features</div>
+    <h2 class="reveal">Everything you need for serious remote operation</h2>
+
+    <div class="features-grid reveal">
+
+      <div class="feat" style="background:rgba(88,166,255,.05);box-shadow:inset 3px 0 0 rgba(88,166,255,.5);">
+        <div class="feat-icon">🛰</div>
+        <h3>Wide Area Diversity <span style="font-size:11px;font-weight:600;color:var(--blue);background:rgba(88,166,255,.12);border:1px solid rgba(88,166,255,.25);padding:1px 8px;border-radius:20px;vertical-align:middle;">New</span></h3>
+        <p>Listen to your frequency on up to eight public uberSDR receivers at the same time. The Compactor measures which one hears the station best and hands you that audio — your own radio included. Receive only; transmitting stays on your radio.</p>
+      </div>
+
+      <div class="feat">
+        <div class="feat-icon">👥</div>
+        <h3>Multi-User Support</h3>
+        <p>Connect multiple operators simultaneously — each on their own device. A club can share one radio, with each member independently controlling frequency, mode, and audio.</p>
+      </div>
+
+      <div class="feat">
+        <div class="feat-icon">🔒</div>
+        <h3>Three Permission Levels</h3>
+        <p>Guest (RX-only), Operator (RX/TX), and Master (full admin). Set separate passwords for each level. Never worry about a guest accidentally transmitting.</p>
+      </div>
+
+      <div class="feat">
+        <div class="feat-icon">🎙️</div>
+        <h3>Built-in Intercom</h3>
+        <p>All connected operators can talk to each other in real time through a full-duplex voice intercom — without leaving the app or picking up a phone.</p>
+      </div>
+
+      <div class="feat">
+        <div class="feat-icon">⚡</div>
+        <h3>TCP Lag Killer</h3>
+        <p>Server-side priority queuing instantly drops heavy waterfall packets when your link is congested, guaranteeing uninterrupted audio. You hear the radio, always.</p>
+      </div>
+
+      <div class="feat">
+        <div class="feat-icon">🔄</div>
+        <h3>Multi-Server Failover</h3>
+        <p>Configure a Main, Secondary, and Tertiary Thetis server. If your primary shack PC goes offline, the Compactor automatically switches — then switches back when it returns.</p>
+      </div>
+
+      <div class="feat">
+        <div class="feat-icon">🌐</div>
+        <h3>Remote Web Shortcuts</h3>
+        <p>Five configurable one-tap shortcuts that proxy your radio's web interfaces (antenna tuner, rotator, cluster, SDR Console) securely through the tunnel — no VPN needed.</p>
+      </div>
+
+      <div class="feat">
+        <div class="feat-icon">📊</div>
+        <h3>Live QoS Monitoring</h3>
+        <p>A built-in quality panel shows round-trip time, jitter, and packet loss for your connection. Includes an internet ping tool to diagnose 4G/5G instability on the spot.</p>
+      </div>
+
+      <div class="feat">
+        <div class="feat-icon">🖥️</div>
+        <h3>System Tray Operation</h3>
+        <p>Runs silently in the background. Start it with Windows so your remote setup is ready the moment your shack PC boots — no action required on your part.</p>
+      </div>
+
+      <div class="feat">
+        <div class="feat-icon">📈</div>
+        <h3>Live Bandwidth Stats</h3>
+        <p>The console shows real-time compression ratios, connected clients, audio bitrate, and byte savings — so you always know exactly what is happening on the wire.</p>
+      </div>
+
+      <div class="feat">
+        <div class="feat-icon">🔑</div>
+        <h3>License Key Activation</h3>
+        <p>One-time purchase, tied to your email address. No subscription, no annual renewal. Buy once, use indefinitely — including all future v1.x updates.</p>
+      </div>
+
+      <div class="feat">
+        <div class="feat-icon">🛡️</div>
+        <h3>End-to-End Encryption</h3>
+        <p>All traffic through the tunnel is TLS-encrypted end-to-end. Your radio traffic never travels the open internet unprotected.</p>
+      </div>
+
+      <div class="feat">
+        <div class="feat-icon">⏱️</div>
+        <h3>Tunnel Uptime & Restart</h3>
+        <p>See exactly how long each tunnel has been active. One-click restart button lets you cycle a stuck tunnel without touching the shack PC remotely.</p>
+      </div>
+
+      <div class="feat" style="background:rgba(248,81,73,.05);box-shadow:inset 3px 0 0 rgba(248,81,73,.5);">
+        <div class="feat-icon">🛑</div>
+        <h3>Automatic Safety Watchdog</h3>
+        <p>If the remote client drops unexpectedly — dead zone, app crash, network loss — PTT is released within <strong style="color:#fff;">15 seconds</strong> and the tuner (TUN) and ATU are stopped within <strong style="color:#fff;">5 seconds</strong>. No stuck transmitters. No equipment damage.</p>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ── Permission levels detail ── -->
+<section class="wrap">
+  <div class="tag reveal">Access control</div>
+  <h2 class="reveal">The right permissions for every situation</h2>
+  <p class="lead reveal">Whether you are sharing with a trusted fellow ham, a club member, or just want a receive-only feed for yourself on a second device — you control exactly who can do what.</p>
+
+  <table class="perm-table reveal">
+    <thead>
+      <tr>
+        <th>Permission</th>
+        <th>🎧 Guest (RX only)</th>
+        <th>📻 Operator (RX/TX)</th>
+        <th>👑 Master</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>Receive audio &amp; waterfall</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+      <tr><td>Tune frequency &amp; change mode</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+      <tr><td>Transmit (PTT)</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+      <tr><td>Use intercom</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+      <tr><td>Access web shortcuts</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+      <tr><td>Manage server settings</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ── How it works ── -->
+<div class="section-full">
+  <div class="section-inner">
+    <div class="tag reveal">Setup in minutes</div>
+    <h2 class="reveal">Three steps to remote operation</h2>
+
+    <div class="steps">
+      <div class="step reveal">
+        <div class="step-num">1</div>
+        <h3>Install on your shack PC</h3>
+        <p>Run the Windows installer, enter your license key and the IP address of your Thetis server. The Compactor starts automatically and creates your tunnel URL.</p>
+      </div>
+      <div class="step reveal">
+        <div class="step-num">2</div>
+        <h3>Open <a href="https://pure-editions.com/on7off/TCI-Remote/" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none;">TCI Remote</a> on your phone</h3>
+        <p>Download the free <a href="https://pure-editions.com/on7off/TCI-Remote/" target="_blank" rel="noopener" style="color:var(--blue);">TCI Remote Android app</a>, enter the tunnel URL shown in the Compactor window, choose your password level (Guest / Operator / Master), and tap Connect.</p>
+      </div>
+      <div class="step reveal">
+        <div class="step-num">3</div>
+        <h3>Operate from anywhere</h3>
+        <p>Full waterfall, audio, and PTT — over 4G, 5G, or any internet connection. The Compactor handles compression, tunneling, and stability automatically.</p>
+      </div>
+    </div>
+
+    <div style="text-align:center;margin-top:36px;">
+      <a href="TCI_Remote_compactor_v1.3.4_help.html" target="_blank" rel="noopener"
+         style="display:inline-flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 24px;text-decoration:none;color:#fff;font-weight:600;font-size:15px;transition:border-color .2s,background .2s;"
+         onmouseover="this.style.borderColor='#3fb950';this.style.background='#1c2128'"
+         onmouseout="this.style.borderColor='#30363d';this.style.background='#161b22'">
+        <span style="font-size:1.5rem;">📖</span>
+        <span>
+          <span style="display:block;font-size:11px;color:var(--muted);font-weight:400;margin-bottom:1px;">Need more detail?</span>
+          Read the full User Manual →
+        </span>
+      </a>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Use cases ── -->
+<section class="wrap">
+  <div class="tag reveal">Who uses it</div>
+  <h2 class="reveal">Built for real-world amateur radio situations</h2>
+
+  <div class="cases">
+    <div class="case reveal">
+      <div class="case-icon">🏕️</div>
+      <h3>Remote shack</h3>
+      <p>Your radio is at a hilltop QTH with great RF but no gigabit internet. The Compactor makes 4G or a rural broadband link work perfectly.</p>
+    </div>
+    <div class="case reveal">
+      <div class="case-icon">✈️</div>
+      <h3>Travel operation</h3>
+      <p>You are in a hotel room on the other side of the world. Connect to your home station with a single tap, without any advance preparation.</p>
+    </div>
+    <div class="case reveal">
+      <div class="case-icon">🏛️</div>
+      <h3>Ham radio club</h3>
+      <p>Share one club SDR with multiple members. Assign each person an Operator password. Guests can listen; licensed members can transmit.</p>
+    </div>
+    <div class="case reveal">
+      <div class="case-icon">📡</div>
+      <h3>DXpedition monitoring</h3>
+      <p>Let a second operator back home monitor the band conditions on your behalf and relay information via the built-in intercom — all through one secure connection.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── Works with TCI Remote ── -->
+<div class="section-full">
+  <div class="section-inner" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center;">
+    <div class="reveal-left">
+      <div class="tag">Companion app</div>
+      <h2>Designed for the<br>TCI Remote Android app</h2>
+      <p class="lead" style="margin-bottom:18px;">TCI Remote Compactor is the server-side engine that powers the <strong style="color:#fff;">TCI Remote</strong> smartphone app. Install the Compactor on your shack PC, open TCI Remote on your phone, and you are on the air — anywhere in the world.</p>
+      <p class="lead" style="margin-bottom:28px;">The app is free to download. The Compactor license unlocks the full remote experience: compression, tunneling, multi-user, and intercom.</p>
+      <a href="https://pure-editions.com/on7off/TCI-Remote/" target="_blank" rel="noopener"
+         style="display:inline-flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 22px;text-decoration:none;color:#fff;font-weight:600;font-size:15px;transition:border-color .2s,background .2s;"
+         onmouseover="this.style.borderColor='#58a6ff';this.style.background='#1c2128'"
+         onmouseout="this.style.borderColor='#30363d';this.style.background='#161b22'">
+        <span style="font-size:1.6rem;">📱</span>
+        <span>
+          <span style="display:block;font-size:11px;color:var(--muted);font-weight:400;margin-bottom:1px;">Free download</span>
+          Get TCI Remote for Android
+        </span>
+        <span style="margin-left:auto;color:var(--blue);">→</span>
+      </a>
+    </div>
+    <div class="reveal-right" style="background:var(--surf2);border:1px solid var(--border);border-radius:12px;padding:32px 28px;">
+      <div style="font-size:11px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;margin-bottom:18px;">How they work together</div>
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div style="display:flex;gap:14px;align-items:flex-start;">
+          <div style="width:36px;height:36px;border-radius:50%;background:rgba(63,185,80,.15);border:1px solid rgba(63,185,80,.3);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px;">🖥️</div>
+          <div><div style="color:#fff;font-weight:600;margin-bottom:2px;">Shack PC — Compactor</div><div style="font-size:13px;color:var(--muted);">Runs on Windows next to Thetis. Compresses, tunnels, and manages access.</div></div>
+        </div>
+        <div style="width:1px;height:20px;background:var(--border);margin-left:18px;"></div>
+        <div style="display:flex;gap:14px;align-items:flex-start;">
+          <div style="width:36px;height:36px;border-radius:50%;background:rgba(88,166,255,.15);border:1px solid rgba(88,166,255,.3);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px;">🌐</div>
+          <div><div style="color:#fff;font-weight:600;margin-bottom:2px;">Internet — secured tunnel</div><div style="font-size:13px;color:var(--muted);">Encrypted HTTPS tunnel. Works over any 4G/5G/WiFi connection worldwide.</div></div>
+        </div>
+        <div style="width:1px;height:20px;background:var(--border);margin-left:18px;"></div>
+        <div style="display:flex;gap:14px;align-items:flex-start;">
+          <div style="width:36px;height:36px;border-radius:50%;background:rgba(188,140,255,.15);border:1px solid rgba(188,140,255,.3);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px;">📱</div>
+          <div><div style="color:#fff;font-weight:600;margin-bottom:2px;">Your phone — TCI Remote</div><div style="font-size:13px;color:var(--muted);">Free Android app. Full waterfall, audio, PTT, intercom, and QoS monitoring.</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Buy section ── -->
+<section id="buy">
+  <div class="tag" style="color:var(--green);border:none;">Ready to operate remotely?</div>
+  <h2 style="max-width:600px;margin:12px auto 0;">Get TCI Remote Compactor v1.3.4.3</h2>
+  <p style="color:var(--muted);margin:12px auto 0;max-width:480px;">One-time purchase. No subscriptions. All v1.x updates included. Works with Thetis and the free <a href="https://pure-editions.com/on7off/TCI-Remote/" target="_blank" rel="noopener" style="color:var(--blue);">TCI Remote Android app</a>.</p>
+
+  <div style="display:flex;flex-wrap:wrap;gap:24px;justify-content:center;margin:32px 0 8px;">
+
+    <!-- Step 1: Download -->
+    <div class="price-card" style="flex:1;min-width:280px;max-width:380px;">
+      <div style="font-size:11px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;margin-bottom:12px;">Step 1 — Free download</div>
+      <div style="font-size:1.6rem;font-weight:800;color:#fff;margin-bottom:4px;">Try it free</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:20px;">25-minute trial · No credit card needed</div>
+      <ul class="checklist" style="margin-bottom:24px;">
+        <li>Windows 10 / 11 installer</li>
+        <li>All features active during trial</li>
+        <li>~41 MB download</li>
+        <li>Version 1.3.4.3 — stable release</li>
+      </ul>
+      <a href="download_counter.php" class="btn-buy-big" style="background:#1f6feb;box-shadow:0 0 32px rgba(31,111,235,.2);">
+        ⬇ Download Installer
+      </a>
+      <div class="price-note" style="margin-top:10px;" id="buy-dl-count"></div>
+      <div class="price-note" style="margin-top:4px;">Windows 64-bit · v1.3.4.3</div>
+    </div>
+
+    <!-- Step 2: License -->
+    <div class="price-card" style="flex:1;min-width:280px;max-width:380px;">
+      <div style="font-size:11px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;margin-bottom:12px;">Step 2 — Unlock full version</div>
+      <div style="font-size:1.6rem;font-weight:800;color:#fff;margin-bottom:4px;">Buy a license key</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:20px;">One-time purchase · No subscription</div>
+      <ul class="checklist" style="margin-bottom:24px;">
+        <li>Remove the 25-minute limit</li>
+        <li>All v1.x updates included</li>
+        <li>Instant key delivery by email</li>
+        <li>Secure checkout via Gumroad</li>
+      </ul>
+      <a href="https://kvlaminck.gumroad.com/l/tci-remote-compactor" class="btn-buy-big" target="_blank" rel="noopener">
+        Buy on Gumroad →
+      </a>
+      <div class="price-note" style="margin-top:12px;">Enter key in the app's License tab</div>
+    </div>
+
+  </div>
+
+  <p style="color:var(--muted);font-size:13px;margin-top:16px;">The Compactor is the server-side engine that works together with the free <a href="https://pure-editions.com/on7off/TCI-Remote/" target="_blank" rel="noopener" style="color:var(--blue);">TCI Remote Android app</a> — install one on your shack PC, the other on your phone, and you are on the air. Also requires a Thetis SDR installation.</p>
+</section>
+
+<!-- ── System requirements ── -->
+<section class="wrap" style="padding-top:0;">
+  <div class="tag reveal">System requirements</div>
+  <h2 class="reveal">What you need</h2>
+
+  <div class="specs-grid reveal">
+    <dl class="spec-item">
+      <dt>Operating System</dt>
+      <dd>Windows 10 / 11 (64-bit)</dd>
+    </dl>
+    <dl class="spec-item">
+      <dt>SDR Software</dt>
+      <dd>Thetis (PowerSDR-UI)</dd>
+    </dl>
+    <dl class="spec-item">
+      <dt>Mobile App</dt>
+      <dd><a href="https://pure-editions.com/on7off/TCI-Remote/" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none;">TCI Remote (Android) →</a></dd>
+    </dl>
+    <dl class="spec-item">
+      <dt>Internet (shack)</dt>
+      <dd>Any upload — 1 Mbps+ recommended</dd>
+    </dl>
+    <dl class="spec-item">
+      <dt>Internet (remote)</dt>
+      <dd>4G / 5G / WiFi — 50 kbps minimum</dd>
+    </dl>
+    <dl class="spec-item">
+      <dt>License</dt>
+      <dd>One-time purchase, email-bound</dd>
+    </dl>
+  </div>
+</section>
+
+<!-- ── Changelog ── -->
+<div class="section-full" id="changelog">
+  <div class="section-inner">
+    <div class="tag reveal">Changelog</div>
+    <h2 class="reveal">What's new in v1.3.4.3 — WAD off the leash, and the right sideband</h2>
+    <p class="lead reveal">Two things about WAD, and both of them are things that were in your way. You no longer have to lock the VFO before you can use it, and on the lower bands the receivers now really listen in LSB. Everything from v1.3.4.2 is included — installing this over your current version is all you have to do.</p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:36px;">
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--green);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">🔓</div>
+        <h3 style="margin-bottom:6px;">WAD Without the Lock Button</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">WAD used to demand that you switch the VFO lock on first, because it had no way of keeping up with a frequency that moved under it. It follows the VFO now instead: turn the knob and the receivers are retuned once you stop, each one staying out of the audio until it has confirmed the new frequency itself. So you tune the way you always tune, and the lock button goes back to being yours.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--green);background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.25);padding:2px 10px;border-radius:20px;">New in v1.3.4.3</span>
+      </div>
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--red);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">📻</div>
+        <h3 style="margin-bottom:6px;">LSB on the WAD Receivers</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">On 160, 80 and 40 your radio is in LSB, but the WAD receivers kept listening in USB — the wrong sideband, so voices came back unintelligible and whatever sat on the other side of the carrier came through with them. The Compactor did send the mode; what it did not send was a passband with the sign that belongs to it, and an uberSDR applies the passband literally. It now sends the passband your radio actually has, sign and all, and AM, FM and CW get a symmetrical window instead of a single-sideband one. Measured on real receivers before and after, on both sides of the carrier.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--red);background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.25);padding:2px 10px;border-radius:20px;">Fixed in v1.3.4.3</span>
+      </div>
+
+    </div>
+
+    <h3 class="reveal" style="margin-top:52px;font-size:1.1rem;color:var(--muted);font-weight:600;">Previously — v1.3.4.2</h3>
+
+    <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--blue);border-radius:8px;padding:26px 28px;margin-top:20px;">
+      <div style="font-size:1.6rem;margin-bottom:10px;">🛰</div>
+      <h3 style="margin-bottom:10px;">WAD — Wide Area Diversity</h3>
+      <p style="color:var(--muted);font-size:14px;line-height:1.7;">You know the situation: a station is working everyone and you hear nothing but noise. That is not your radio being bad, it is where your antenna happens to stand. A receiver 800 km away sits on a different hop and may hear that station perfectly.</p>
+      <p style="color:var(--muted);font-size:14px;line-height:1.7;margin-top:12px;">Switch WAD on and the Compactor connects to a number of public uberSDR receivers on your frequency, next to your own radio. It measures the signal-to-noise on each of them twice a second and hands you the one that is hearing best — your own radio included, and it goes back to your own radio the moment that is the better one. The changeover is a short crossfade, so you hear a change of background noise rather than a click.</p>
+      <p style="color:var(--muted);font-size:14px;line-height:1.7;margin-top:12px;">In the app you say how far away a receiver may be (a lower and an upper limit, up to 10 000 km) and how many to use at once, from three up to eight. Leave it on AUTO and it picks for you; switch to MANUAL and you tap the receiver you want to stay on, while all the others keep measuring so you can see what you are choosing between. USB, LSB, CW, AM, FM and the digital modes all follow the mode of your radio.</p>
+      <p style="color:var(--muted);font-size:14px;line-height:1.7;margin-top:12px;"><strong style="color:#c9d1d9;">What it is not.</strong> WAD is receive only — you still transmit with your own radio, and WAD steps aside for as long as you are transmitting. The receivers follow your VFO, so after a band change you hear your own radio for about a second while they catch up. It needs an internet connection at the Compactor, and it depends on public receivers being online and having a free slot: every receiver you use occupies a place at somebody else's station that nobody else can use while you have it. That is exactly why the ceiling is eight and not more. The waterfall stays your own radio's — WAD is audio.</p>
+      <p style="color:var(--muted);font-size:14px;line-height:1.7;margin-top:12px;">Available to the master user and to guests with TX rights. You need the TCI Remote app version that has the 🛰 button; hold it for two seconds to open the settings.</p>
+      <span style="display:inline-block;margin-top:14px;font-size:11px;font-weight:600;color:var(--blue);background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.25);padding:2px 10px;border-radius:20px;">New in v1.3.4.2</span>
+    </div>
+
+    <h3 class="reveal" style="margin-top:52px;font-size:1.1rem;color:var(--muted);font-weight:600;">Previously — v1.3.4.1</h3>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:20px;">
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--red);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">🚀</div>
+        <h3 style="margin-bottom:6px;">Auto Start Actually Works</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">"Auto start when Windows starts" did nothing at all — the startup entry pointed at a file that is not part of the installation, so Windows launched nothing. It repairs itself the first time you run this version; you do not have to do anything.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--red);background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.25);padding:2px 10px;border-radius:20px;">Fixed in v1.3.4.1</span>
+      </div>
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--red);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">🔽</div>
+        <h3 style="margin-bottom:6px;">Starts in the Tray</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">The full window opened on every start. It is a tray application, so it now starts in the system tray and tells you so. The window still opens right after installing.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--red);background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.25);padding:2px 10px;border-radius:20px;">Fixed in v1.3.4.1</span>
+      </div>
+
+    </div>
+
+    <h3 class="reveal" style="margin-top:52px;font-size:1.1rem;color:var(--muted);font-weight:600;">Previously — v1.3.4</h3>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:20px;">
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--green);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">💾</div>
+        <h3 style="margin-bottom:6px;">Memory Channels</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">Store your favourite frequencies and recall them in one click — your net, your repeater, your beacon watch, always where you left them.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--green);background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.25);padding:2px 10px;border-radius:20px;">New in v1.3.4</span>
+      </div>
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--blue);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">🎚️</div>
+        <h3 style="margin-bottom:6px;">TX Profile Switching</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">Switch between your Thetis TX profiles from the Compactor for local use — no need to walk back to the shack PC to change your audio chain.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--blue);background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.25);padding:2px 10px;border-radius:20px;">New in v1.3.4</span>
+      </div>
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--purple);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">🔎</div>
+        <h3 style="margin-bottom:6px;">Radio Network Filtering</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">Find the station you are looking for in the Radio Network list instead of scrolling past all of them.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--purple);background:rgba(188,140,255,.1);border:1px solid rgba(188,140,255,.25);padding:2px 10px;border-radius:20px;">New in v1.3.4</span>
+      </div>
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--orange);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">🎨</div>
+        <h3 style="margin-bottom:6px;">Availability at a Glance</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">A colour scheme on the Radio Network list shows which stations are free, busy or on the air — before you connect.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--orange);background:rgba(255,166,87,.1);border:1px solid rgba(255,166,87,.25);padding:2px 10px;border-radius:20px;">New in v1.3.4</span>
+      </div>
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--yellow);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">📡</div>
+        <h3 style="margin-bottom:6px;">Band Limits for TX Users</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">Decide per guest which bands they may transmit on. Useful when your visitor's licence class differs from yours, or when you simply want to keep one band to yourself.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--yellow);background:rgba(227,179,65,.1);border:1px solid rgba(227,179,65,.25);padding:2px 10px;border-radius:20px;">New in v1.3.4</span>
+      </div>
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--muted);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">🛠️</div>
+        <h3 style="margin-bottom:6px;">Bug Fixes &amp; Stability</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">Plus the usual round of under-the-hood fixes to keep the Compactor running for weeks on end without attention.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--muted);background:rgba(139,148,158,.1);border:1px solid rgba(139,148,158,.25);padding:2px 10px;border-radius:20px;">Improved in v1.3.4</span>
+      </div>
+
+    </div>
+
+    <h3 class="reveal" style="margin-top:52px;font-size:1.1rem;color:var(--muted);font-weight:600;">Previously — v1.3.2</h3>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:16px;">
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--green);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">📻</div>
+        <h3 style="margin-bottom:6px;">Radio State Snapshot &amp; Restore</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">Now restores the current state of your Thetis after the last station has disconnected from the compactor (RN user, TX user, Master User).</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--green);background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.25);padding:2px 10px;border-radius:20px;">New in v1.3.2</span>
+      </div>
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--blue);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">🔄</div>
+        <h3 style="margin-bottom:6px;">Seamless Tunnel Rotation</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">Main tunnel is now renegotiated every 72 hours automatically to enhance the Make-Before-Break system, as the tunnel provider automatically disables tunnels up more than 96 hours.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--blue);background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.25);padding:2px 10px;border-radius:20px;">Improved in v1.3.2</span>
+      </div>
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--red);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">🔑</div>
+        <h3 style="margin-bottom:6px;">License Transfer Fix</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">Fixed a license issue when moving the TCI Remote compactor from one machine to another, including updates to the abuse tracker and hash tracking.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--red);background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.25);padding:2px 10px;border-radius:20px;">Fixed in v1.3.2</span>
+      </div>
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--purple);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">👥</div>
+        <h3 style="margin-bottom:6px;">Radio Network Station List</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">Radio Network users will now see if the TX or Master user is online from the Radio Network station list.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--purple);background:rgba(188,140,255,.1);border:1px solid rgba(188,140,255,.25);padding:2px 10px;border-radius:20px;">Fixed in v1.3.2</span>
+      </div>
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--orange);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">🔗</div>
+        <h3 style="margin-bottom:6px;">Tunnel Self-Test</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">Added tunnel self-test functionality for the secure web shortcuts.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--orange);background:rgba(255,166,87,.1);border:1px solid rgba(255,166,87,.25);padding:2px 10px;border-radius:20px;">New in v1.3.2</span>
+      </div>
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--yellow);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">✅</div>
+        <h3 style="margin-bottom:6px;">Who is Connected Fix</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">Resolved an issue with the Who is Connected feature.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--yellow);background:rgba(227,179,65,.1);border:1px solid rgba(227,179,65,.25);padding:2px 10px;border-radius:20px;">Fixed in v1.3.2</span>
+      </div>
+
+      <div class="reveal" style="background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--muted);border-radius:8px;padding:22px 24px;">
+        <div style="font-size:1.4rem;margin-bottom:10px;">🛠️</div>
+        <h3 style="margin-bottom:6px;">General Stability</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.6;">Many under-the-hood bug fixes to make the compactor even more stable and reliable.</p>
+        <span style="display:inline-block;margin-top:12px;font-size:11px;font-weight:600;color:var(--muted);background:rgba(139,148,158,.1);border:1px solid rgba(139,148,158,.25);padding:2px 10px;border-radius:20px;">Improved in v1.3.2</span>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ── Documentation ── -->
+
+<div class="section-full" id="security">
+  <div class="section-inner">
+    <div class="tag reveal">Virus &amp; Malware</div>
+    <h2 class="reveal">100% Clean &amp; Safe</h2>
+    <p class="lead reveal">We take security seriously. Because TCI Remote Compactor is compiled with Nuitka, some aggressive antivirus engines may occasionally throw a "heuristic" false positive. Rest assured, the software is completely safe and actively verified by major security vendors.</p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:20px;margin-top:36px;">
+
+      <!-- VirusTotal Card -->
+      <div class="reveal" style="background:var(--surf2);border:1px solid var(--border);border-radius:12px;padding:28px;">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;">
+          <div style="width:44px;height:44px;border-radius:10px;background:rgba(63,185,80,.12);border:1px solid rgba(63,185,80,.3);display:flex;align-items:center;justify-content:center;font-size:1.4rem;flex-shrink:0;">&#x1F6E1;&#xFE0F;</div>
+          <div>
+            <div style="color:#fff;font-weight:700;font-size:16px;">VirusTotal Verified</div>
+            <div style="font-size:12px;color:var(--green);margin-top:2px;">Scanned by 70+ engines</div>
+          </div>
+        </div>
+        <p style="color:var(--muted);font-size:14px;line-height:1.65;margin-bottom:18px;">v1.3.4.3 is on VirusTotal, scanned by around 70 engines. Expect a handful of them to flag it, and expect none of those to name an actual virus — what they report is packed Python (ESET calls it "Python/Packed.Nuitka"), which is exactly what the Compactor is. Read the report yourself rather than take our word for it; it is filed under the same SHA-256 hash shown below, so you can confirm it is the exact file you downloaded.</p>
+        <a href="https://www.virustotal.com/gui/file/17c63c13c470eb6ee6f5fd8fe5ad56e8568ae18a6a714928e3e07d94f2eb2afc" target="_blank" rel="noopener" style="display:inline-block;color:var(--blue);text-decoration:none;font-weight:600;font-size:14px;">View VirusTotal Report (v1.3.4.3) &#x2192;</a>
+      </div>
+
+      <!-- Microsoft Card -->
+      <div class="reveal" style="background:var(--surf2);border:1px solid var(--border);border-radius:12px;padding:28px;">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;">
+          <div style="width:44px;height:44px;border-radius:10px;background:rgba(88,166,255,.12);border:1px solid rgba(88,166,255,.3);display:flex;align-items:center;justify-content:center;font-size:1.4rem;flex-shrink:0;">&#x1F4BB;</div>
+          <div>
+            <div style="color:#fff;font-weight:700;font-size:16px;">Microsoft Defender</div>
+            <div style="font-size:12px;color:var(--blue);margin-top:2px;">Analyst approved</div>
+          </div>
+        </div>
+        <p style="color:var(--muted);font-size:14px;line-height:1.65;margin-bottom:18px;">We actively submit our executables to Microsoft's Security Intelligence team for deep-analysis to ensure SmartScreen and Defender don't block the installation.</p>
+        <a href="https://www.microsoft.com/en-us/wdsi/submission/649fcb3b-f247-4e5b-b1c7-1bbc0396e08f" target="_blank" rel="noopener" style="display:inline-block;color:var(--blue);text-decoration:none;font-weight:600;font-size:14px;">View Microsoft Report (v1.3.4.3) &#x2192;</a>
+      </div>
+      
+      <!-- False Positive Card -->
+      <div class="reveal" style="background:var(--surf2);border:1px solid var(--border);border-radius:12px;padding:28px;">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;">
+          <div style="width:44px;height:44px;border-radius:10px;background:rgba(227,179,65,.12);border:1px solid rgba(227,179,65,.3);display:flex;align-items:center;justify-content:center;font-size:1.4rem;flex-shrink:0;">&#x26A0;&#xFE0F;</div>
+          <div>
+            <div style="color:#fff;font-weight:700;font-size:16px;">False Positives</div>
+            <div style="font-size:12px;color:var(--yellow);margin-top:2px;">How to handle them</div>
+          </div>
+        </div>
+        <p style="color:var(--muted);font-size:14px;line-height:1.65;margin-bottom:18px;">If your antivirus blocks the app (like Windows Defender displaying "Wacatac" or "Sabsik"), it's a known "false positive" common with compiled Python apps. <strong>v1.3.4.3 has been submitted to Microsoft Security Intelligence for analysis.</strong> If a vendor flags it, you can add an exception or whitelist the installation folder in your antivirus settings — and if you would rather not, that is a fair call to make; the hash below lets you check the file first.</p>
+        <div style="margin-top:12px;">
+          <span style="font-size:12px;color:#8b949e;display:block;margin-bottom:4px;">Official v1.3.4.3 SHA-256 Hash:</span>
+          <code style="display:block;background:#0d1117;padding:6px 10px;border-radius:6px;font-family:'SF Mono',monospace;font-size:10px;color:var(--green);word-break:break-all;border:1px solid var(--border);">17c63c13c470eb6ee6f5fd8fe5ad56e8568ae18a6a714928e3e07d94f2eb2afc</code>
+          <span style="font-size:11px;color:#8b949e;display:block;margin-top:8px;line-height:1.5;">Check it yourself &#x2014; open a Command Prompt in your Downloads folder and run:<br><code style="font-family:'SF Mono',monospace;font-size:10px;color:var(--muted);">certutil -hashfile TCI_Remote_Compactor_v1.3.4.3_Simplified_Setup.exe SHA256</code></span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="section-full" id="developers">
+  <div class="section-inner">
+    <div class="tag reveal">Documentation</div>
+    <h2 class="reveal">Manuals &amp; documentation</h2>
+    <p class="lead reveal">Everything you need to get the most out of TCI Remote Compactor — a complete user manual covering every feature, setting, and troubleshooting scenario, plus an open protocol reference for developers building TCI-compatible SDR software.</p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:20px;margin-top:36px;">
+
+      <!-- User Manual card -->
+      <a href="TCI_Remote_compactor_v1.3.4_help.html" target="_blank" rel="noopener"
+         class="reveal"
+         style="display:block;background:var(--surf2);border:1px solid var(--border);border-radius:12px;padding:28px;text-decoration:none;transition:border-color .2s,background .2s;"
+         onmouseover="this.style.borderColor='#3fb950';this.style.background='#1c2128'"
+         onmouseout="this.style.borderColor='#30363d';this.style.background='var(--surf2)'">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;">
+          <div style="width:44px;height:44px;border-radius:10px;background:rgba(63,185,80,.12);border:1px solid rgba(63,185,80,.3);display:flex;align-items:center;justify-content:center;font-size:1.4rem;flex-shrink:0;">📖</div>
+          <div>
+            <div style="color:#fff;font-weight:700;font-size:16px;">User Manual v1.3.4</div>
+            <div style="font-size:12px;color:var(--green);margin-top:2px;">Complete guide for users →</div>
+          </div>
+        </div>
+        <p style="color:var(--muted);font-size:14px;line-height:1.65;margin-bottom:18px;">Everything from first-time installation to advanced configuration — all settings explained, trial and licensing, every feature tab described in detail, and a full troubleshooting section for common issues.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:7px;">
+          <span style="background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.25);color:var(--green);font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;font-family:'SF Mono',monospace;">Getting started</span>
+          <span style="background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.25);color:var(--green);font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;font-family:'SF Mono',monospace;">Configuration</span>
+          <span style="background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.25);color:var(--green);font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;font-family:'SF Mono',monospace;">Feature reference</span>
+          <span style="background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.25);color:var(--green);font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;font-family:'SF Mono',monospace;">Troubleshooting</span>
+        </div>
+      </a>
+
+      <!-- Protocol Reference card -->
+      <a href="TCI_Protocol_Reference.html" target="_blank" rel="noopener"
+         class="reveal"
+         style="display:block;background:var(--surf2);border:1px solid var(--border);border-radius:12px;padding:28px;text-decoration:none;transition:border-color .2s,background .2s;"
+         onmouseover="this.style.borderColor='#58a6ff';this.style.background='#1c2128'"
+         onmouseout="this.style.borderColor='#30363d';this.style.background='var(--surf2)'">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;">
+          <div style="width:44px;height:44px;border-radius:10px;background:rgba(88,166,255,.12);border:1px solid rgba(88,166,255,.3);display:flex;align-items:center;justify-content:center;font-size:1.4rem;flex-shrink:0;">📡</div>
+          <div>
+            <div style="color:#fff;font-weight:700;font-size:16px;">TCI Protocol Reference</div>
+            <div style="font-size:12px;color:var(--blue);margin-top:2px;">Open reference document →</div>
+          </div>
+        </div>
+        <p style="color:var(--muted);font-size:14px;line-height:1.65;margin-bottom:18px;">Complete command reference for the TCI WebSocket protocol — server handshake sequence, all commands with parameter descriptions and direction, IQ and audio binary frame formats, a full annotated connection example, and a compatibility checklist.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:7px;">
+          <span style="background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.25);color:var(--blue);font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;font-family:'SF Mono',monospace;">WebSocket</span>
+          <span style="background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.25);color:var(--blue);font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;font-family:'SF Mono',monospace;">TCI commands</span>
+          <span style="background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.25);color:var(--blue);font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;font-family:'SF Mono',monospace;">IQ &amp; audio frames</span>
+          <span style="background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.25);color:var(--blue);font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;font-family:'SF Mono',monospace;">Compatibility checklist</span>
+        </div>
+      </a>
+
+      <!-- Quick summary panel -->
+      <div class="reveal" style="background:var(--surf2);border:1px solid var(--border);border-radius:12px;padding:28px;">
+        <div style="font-size:11px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;margin-bottom:18px;">TCI compatibility — quick summary</div>
+        <div style="display:flex;flex-direction:column;gap:13px;">
+          <div style="display:flex;gap:12px;align-items:flex-start;">
+            <span style="color:var(--green);font-weight:700;flex-shrink:0;margin-top:1px;">✓</span>
+            <span style="color:var(--muted);font-size:14px;">Run a <strong style="color:var(--text);">WebSocket server</strong> on any port — default is 50001</span>
+          </div>
+          <div style="display:flex;gap:12px;align-items:flex-start;">
+            <span style="color:var(--green);font-weight:700;flex-shrink:0;margin-top:1px;">✓</span>
+            <span style="color:var(--muted);font-size:14px;">Send the <strong style="color:var(--text);">TCI init block</strong> on connect, ending with <code style="font-size:12px;background:#0d1117;padding:1px 6px;border-radius:3px;border:1px solid #30363d;">ready</code></span>
+          </div>
+          <div style="display:flex;gap:12px;align-items:flex-start;">
+            <span style="color:var(--green);font-weight:700;flex-shrink:0;margin-top:1px;">✓</span>
+            <span style="color:var(--muted);font-size:14px;">Stream <strong style="color:var(--text);">IQ data</strong> at ≥ 96,000 Hz and <strong style="color:var(--text);">audio</strong> at 48,000 Hz as binary frames</span>
+          </div>
+          <div style="display:flex;gap:12px;align-items:flex-start;">
+            <span style="color:var(--green);font-weight:700;flex-shrink:0;margin-top:1px;">✓</span>
+            <span style="color:var(--muted);font-size:14px;"><strong style="color:var(--text);">Echo all state changes</strong> — frequency, mode, PTT — to every connected client</span>
+          </div>
+          <div style="display:flex;gap:12px;align-items:flex-start;">
+            <span style="color:var(--green);font-weight:700;flex-shrink:0;margin-top:1px;">✓</span>
+            <span style="color:var(--muted);font-size:14px;">The <strong style="color:var(--text);">Compactor connects as a standard TCI client</strong> — no special integration needed on your server side</span>
+          </div>
+          <div style="display:flex;gap:12px;align-items:flex-start;">
+            <span style="color:var(--green);font-weight:700;flex-shrink:0;margin-top:1px;">✓</span>
+            <span style="color:var(--muted);font-size:14px;">Implement a <strong style="color:var(--text);">server-side TX watchdog</strong> timer — release PTT automatically if the client connection drops</span>
+          </div>
+        </div>
+        <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
+          <a href="TCI_Protocol_Reference.html" target="_blank" rel="noopener"
+             style="display:inline-flex;align-items:center;gap:8px;color:var(--blue);font-size:13px;font-weight:600;text-decoration:none;"
+             onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">
+            Read the full reference document →
+          </a>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Compatible with note -->
+    <p style="color:var(--muted);font-size:13px;margin-top:24px;text-align:center;">
+      Protocol reference covers TCI as implemented by <strong style="color:var(--text);">Expert Electronics ExpertSDR2</strong> and <strong style="color:var(--text);">OpenHPSDR Thetis</strong> — the two primary reference implementations.
+    </p>
+  </div>
+</div>
+
+<!-- ── Footer ── -->
+<footer>
+  <div class="footer-links">
+    <a href="https://pure-editions.com/on7off/TCI-Remote/" target="_blank" rel="noopener">TCI Remote App</a>
+    <a href="download_counter.php">⬇ Download v1.3.4.3</a>
+    <a href="https://kvlaminck.gumroad.com/l/tci-remote-compactor" target="_blank" rel="noopener">Buy on Gumroad</a>
+    <a href="TCI_Remote_compactor_v1.3.4_help.html" target="_blank" rel="noopener">User Manual</a>
+    <a href="TCI_Remote_Compactor_Installation_Guide.html" target="_blank" rel="noopener">Installation Guide</a>
+    <a href="TCI_Remote_Compactor_EULA.html" target="_blank" rel="noopener">EULA</a>
+    <a href="TCI_Protocol_Reference.html" target="_blank" rel="noopener">Developer Docs</a>
+  </div>
+  <div>Created by ON7OFF &copy; 2026 &nbsp;·&nbsp; All rights reserved</div>
+</footer>
+
+<script>
+// Scroll reveal
+(function(){
+  var els = document.querySelectorAll('.reveal,.reveal-left,.reveal-right');
+  var obs = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){ e.target.classList.add('visible'); obs.unobserve(e.target); }
+    });
+  },{ threshold:0.12 });
+  els.forEach(function(el){ obs.observe(el); });
+})();
+
+// Download counter — fetch current count and populate both labels
+(function(){
+  fetch('download_counter.php?action=count')
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      var n = parseInt(d.count, 10) || 0;
+      if(n < 1) return;
+      var label = '⬇ Downloaded ' + n.toLocaleString() + ' time' + (n === 1 ? '' : 's');
+      var hero = document.getElementById('hero-dl-count');
+      var buy  = document.getElementById('buy-dl-count');
+      if(hero) hero.textContent = label;
+      if(buy)  buy.textContent  = label;
+    })
+    .catch(function(){});
+})();
+
+// Animate bandwidth bars when visible
+(function(){
+  var bars = [
+    {id:'bar320', pct: 16.7},
+    {id:'bar64',  pct: 3.3},
+    {id:'bar24',  pct: 1.25},
+    {id:'bar8',   pct: 0.42}
+  ];
+  var done = false;
+  var section = document.getElementById('bwBars');
+  if(!section) return;
+  var obs = new IntersectionObserver(function(entries){
+    if(done) return;
+    if(entries[0].isIntersecting){
+      done = true;
+      bars.forEach(function(b, i){
+        setTimeout(function(){
+          var el = document.getElementById(b.id);
+          if(el) el.style.width = Math.max(b.pct, 4) + '%';
+        }, i * 200);
+      });
+      obs.disconnect();
+    }
+  },{ threshold:0.3 });
+  obs.observe(section);
+})();
+</script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a304b39fdcd2a94a',t:'MTc4NzU5OTA5Mw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

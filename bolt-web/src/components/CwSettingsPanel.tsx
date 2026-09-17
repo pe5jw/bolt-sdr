@@ -32,7 +32,7 @@ export function CwSettingsPanel() {
 
   useEffect(() => {
     fetch('/api/cw/settings').then(r => r.json()).then((d: any) => {
-      const merged = { ...DEFAULTS, ...d, macros: d.macros?.length ? d.macros : DEFAULTS.macros }
+      const local = load(); const merged = { ...DEFAULTS, ...d, filterBw: local.filterBw, macros: d.macros?.length ? d.macros : DEFAULTS.macros }
       setSettings(merged)
       save(merged)
     }).catch(() => {})
