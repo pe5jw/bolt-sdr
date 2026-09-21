@@ -50,6 +50,9 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
   const { theme, showLogo, logoBrightness, wfPalette } = useTheme()
   const [zoom, setZoom] = useState(() => { const v = localStorage.getItem('bolt-zoom'); return v ? parseInt(v) : (window.innerWidth <= 700 ? 4 : 1) })
   const [dbMax, setDbMax] = useState(() => parseInt(localStorage.getItem('bolt-top') || '-40'))
+  const [panPct, setPanPct] = useState(() => parseFloat(localStorage.getItem('bolt-pan-pct') || '50'))
+  const [wfPct, setWfPct] = useState(() => parseFloat(localStorage.getItem('bolt-wf-pct') || '35'))
+  useEffect(() => { const h = () => { setPanPct(parseFloat(localStorage.getItem('bolt-pan-pct') || '50')); setWfPct(parseFloat(localStorage.getItem('bolt-wf-pct') || '35')) }; window.addEventListener('bolt-layout-changed', h); return () => window.removeEventListener('bolt-layout-changed', h) }, [])
   useEffect(() => {
     const h = () => { const v = localStorage.getItem('bolt-zoom'); if (v) setZoom(parseInt(v)) }
     window.addEventListener('bolt-zoom-changed', h)
@@ -265,11 +268,14 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
     const ro = new ResizeObserver(() => {
       const dpr = window.devicePixelRatio || 1
       const cssW = canvas.parentElement?.offsetWidth ?? 800
+      const containerH = canvas.parentElement?.parentElement?.offsetHeight ?? 400
       const W = Math.round(cssW * dpr)
-      canvas.width = W; canvas.height = Math.round(200 * dpr)
-      canvas.style.width = cssW + "px"; canvas.style.height = "200px"
-      wf.width = W; wf.height = Math.round(120 * dpr)
-      wf.style.width = cssW + "px"; wf.style.height = "120px"
+      const ph = Math.round(containerH * panPct / 100)
+      const wh = Math.round(containerH * wfPct / 100)
+      canvas.width = W; canvas.height = Math.round(ph * dpr)
+      canvas.style.width = cssW + "px"; canvas.style.height = ph + "px"
+      wf.width = W; wf.height = Math.round(wh * dpr)
+      wf.style.width = cssW + "px"; wf.style.height = wh + "px"
       draw(); drawWf()
     })
     ro.observe(canvas.parentElement ?? canvas)
@@ -327,6 +333,17 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
 
   const onMouseUp = () => { dragRef.current = null; filterDragRef.current = null }
 
+  const onTouchStartCanvas = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    dragRef.current = { startX: e.touches[0].clientX, startHz: centerHz, moved: false }
+  }
+  const onTouchMoveCanvas = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (!dragRef.current || !display) return
+    const dx = e.touches[0].clientX - dragRef.current.startX
+    if (Math.abs(dx) > 2) dragRef.current.moved = true
+    const dhz = Math.round(-dx * display.hzPerPixel / 50) * 50
+    if (dhz !== 0) onTune(dragRef.current.startHz + dhz)
+  }
+  const onTouchEndCanvas = () => { dragRef.current = null }
   const onClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (dragRef.current?.moved) { dragRef.current = null; return }
     if (!display) return
@@ -438,15 +455,57 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
         onClick={onClick} onWheel={onWheel}
         onMouseDown={onMouseDown} onMouseMove={onMouseMove}
         onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
-        onContextMenu={e => e.preventDefault()} />
-      {/* VFO overlay links boven */}
+        onContextMenu={e => e.preventDefault()}
+        onTouchStart={onTouchStartCanvas} onTouchMove={onTouchMoveCanvas} onTouchEnd={onTouchEndCanvas} />
+      <div
+        style={{ height: 4, cursor: 'ns-resize', background: 'var(--border)', opacity: 0.5 }}
+        onMouseDown={e => {
+          e.preventDefault()
+          const startY = e.clientY
+          const containerH = (e.currentTarget as HTMLElement).parentElement?.offsetHeight ?? 400
+          const startPanPct = panPct
+          const startWfPct = wfPct
+          const onMove = (ev: MouseEvent) => {
+            const dy = ev.clientY - startY
+            const dpct = dy / containerH * 100
+            const newPan = Math.max(10, Math.min(80, startPanPct + dpct))
+            const newWf = Math.max(10, Math.min(80, startWfPct - dpct))
+            setPanPct(newPan)
+            setWfPct(newWf)
+            localStorage.setItem('bolt-pan-pct', String(newPan))
+            localStorage.setItem('bolt-wf-pct', String(newWf))
+            window.dispatchEvent(new Event('bolt-layout-changed'))
+          }
+          const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+          window.addEventListener('mousemove', onMove)
+          window.addEventListener('mouseup', onUp)
+        }}
+        onTouchStart={e => {
+          const startY = e.touches[0].clientY
+          const containerH = (e.currentTarget as HTMLElement).parentElement?.offsetHeight ?? 400
+          const startPanPct = panPct; const startWfPct = wfPct
+          const onMove = (ev: TouchEvent) => {
+            const dy = ev.touches[0].clientY - startY
+            const dpct = dy / containerH * 100
+            const newPan = Math.max(10, Math.min(80, startPanPct + dpct))
+            const newWf = Math.max(10, Math.min(80, startWfPct - dpct))
+            setPanPct(newPan); setWfPct(newWf)
+            localStorage.setItem('bolt-pan-pct', String(newPan))
+            localStorage.setItem('bolt-wf-pct', String(newWf))
+            window.dispatchEvent(new Event('bolt-layout-changed'))
+          }
+          const onUp = () => { window.removeEventListener('touchmove', onMove); window.removeEventListener('touchend', onUp) }
+          window.addEventListener('touchmove', onMove, { passive: true })
+          window.addEventListener('touchend', onUp)
+        }}
+      />
       </div>
       <div style={{ position: 'relative' }}>
         {tuneStepOverlay && onStepChange && (
           <div style={{ position: 'absolute', bottom: 6, left: 8, zIndex: 10, display: 'flex', gap: 3 }}>
             {[100000,10000,1000,250,100,10,1].map((s, i) => (
               <button key={s} onClick={() => onStepChange(s)}
-                style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer',
+                style={{ fontSize: 11, padding: '3px 7px', borderRadius: 3, cursor: 'pointer',
                   fontFamily: 'var(--font-data)', letterSpacing: 1,
                   background: tuneStep === s ? 'var(--accent)' : 'rgba(0,0,0,0.6)',
                   border: '1px solid ' + (tuneStep === s ? 'var(--accent)' : 'var(--border)'),
@@ -461,7 +520,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
         onMouseDown={onWfMouseDown} onMouseMove={onWfMouseMove}
         onMouseUp={onWfMouseUp} onMouseLeave={onWfMouseUp} />
         {showLogo && <img src="/bolt-logo.svg" alt="" style={{ position: "absolute", bottom: "10%", right: "2%", width: "10%", maxWidth: 80, opacity: logoBrightness, pointerEvents: "none", zIndex: 1, userSelect: "none" }} />}
-        {showLogo && <img src="/bolt-logo.svg" alt="" style={{ position: "absolute", bottom: "10%", right: "2%", width: "10%", maxWidth: 80, opacity: logoBrightness, pointerEvents: "none", zIndex: 1, userSelect: "none" }} />}
+
 
         {/* Controls overlay rechtsonder in waterfall */}
         {controlsOverlay && (
@@ -472,7 +531,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
               <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
                 {[[160,1900000],[80,3700000],[60,5357000],[40,7100000],[30,10125000],[20,14200000],[17,18100000],[15,21200000],[12,24940000],[10,28500000]].map(([b,f]) => (
                   <button key={b} onClick={() => { onBand && onBand(f as number); setOpenPanel(null) }}
-                    style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                    style={{ fontSize: 11, padding: '3px 7px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
                       background: vfoHz && Math.abs(vfoHz - (f as number)) < 200000 ? 'var(--accent)' : 'var(--bg-control)',
                       border: '1px solid var(--border)',
                       color: vfoHz && Math.abs(vfoHz - (f as number)) < 200000 ? 'var(--bg)' : 'var(--text-dim)' }}>
@@ -485,7 +544,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
               <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
                 {['LSB','USB','CW','CWL','AM','FM','DIGU','DIGL'].map(m => (
                   <button key={m} onClick={() => { onMode && onMode(m); setOpenPanel(null) }}
-                    style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                    style={{ fontSize: 11, padding: '3px 7px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
                       background: mode === m ? 'var(--accent)' : 'var(--bg-control)',
                       border: '1px solid ' + (mode === m ? 'var(--accent)' : 'var(--border)'),
                       color: mode === m ? 'var(--bg)' : 'var(--text-dim)' }}>
@@ -498,7 +557,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
               <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
                 {((): [number,number][] => { const m = mode || 'USB'; const p: Record<string,[number,number][]> = { USB: [[200,3200],[200,2800],[200,2400],[200,2100],[200,1800],[200,1400],[200,1000]], LSB: [[-3200,-200],[-2800,-200],[-2400,-200],[-2100,-200],[-1800,-200],[-1400,-200],[-1000,-200]], CW: [[400,800],[350,850],[300,900],[450,750],[500,700],[550,650]], CWL: [[-800,-400],[-850,-350],[-900,-300],[-750,-450],[-700,-500],[-650,-550]], AM: [[-5000,5000],[-4000,4000],[-3000,3000],[-2000,2000]], FM: [[-8000,8000],[-5000,5000],[-3000,3000]], DIGU: [[200,3000],[200,2400],[200,1800]], DIGL: [[-3000,-200],[-2400,-200],[-1800,-200]] }; return p[m] ?? p.USB })().map(([lo,hi]) => (
                   <button key={lo + ',' + hi} onClick={() => { onFilter && onFilter(lo, hi); setOpenPanel(null) }}
-                    style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                    style={{ fontSize: 11, padding: '3px 7px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
                       background: filterLowHz === lo && filterHighHz === hi ? 'var(--accent)' : 'var(--bg-control)',
                       border: '1px solid var(--border)',
                       color: filterLowHz === lo && filterHighHz === hi ? 'var(--bg)' : 'var(--text-dim)' }}>
@@ -506,7 +565,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
                   </button>
                 ))}
                 <button onClick={() => setOpenPanel('custom' as any)}
-                  style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                  style={{ fontSize: 11, padding: '3px 7px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
                     background: 'var(--bg-control)', border: '1px solid var(--accent)', color: 'var(--accent)' }}>
                   CUS
                 </button>
@@ -516,7 +575,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
               <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
                 {[100000,10000,1000,250,100,10,1].map((s,i) => (
                   <button key={s} onClick={() => { onStepChange && onStepChange(s); setOpenPanel(null) }}
-                    style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                    style={{ fontSize: 11, padding: '3px 7px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
                       background: tuneStep === s ? 'var(--accent)' : 'var(--bg-control)',
                       border: '1px solid ' + (tuneStep === s ? 'var(--accent)' : 'var(--border)'),
                       color: tuneStep === s ? 'var(--bg)' : 'var(--text-dim)' }}>
@@ -529,7 +588,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
               <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
                 {[{v:'Off',l:'Off'},{v:'Anr',l:'NR1'},{v:'Emnr',l:'NR2'},{v:'Sbnr',l:'NR3'},{v:'Rnnr',l:'NR4'}].map(m => (
                   <button key={m.v} onClick={() => { onNrMode && onNrMode(m.v); setOpenPanel(null) }}
-                    style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
+                    style={{ fontSize: 11, padding: '3px 7px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
                       background: nrMode === m.v ? 'var(--accent)' : 'var(--bg-control)',
                       border: '1px solid var(--border)',
                       color: nrMode === m.v ? 'var(--bg)' : 'var(--text-dim)' }}>{m.l}</button>
@@ -571,7 +630,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
                   <span style={{ fontSize: 9, color: 'var(--text-dim)', minWidth: 28 }}>AGC</span>
                   {['Long','Slow','Med','Fast','Hang'].map(m => (
                     <button key={m} onClick={() => onAgc && onAgc(m)}
-                      style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, cursor: 'pointer',
+                      style={{ fontSize: 11, padding: '3px 7px', borderRadius: 3, cursor: 'pointer',
                         background: agcMode === m ? 'var(--accent)' : 'var(--bg-control)',
                         border: '1px solid var(--border)',
                         color: agcMode === m ? 'var(--bg)' : 'var(--text-dim)' }}>{m}</button>
@@ -663,6 +722,45 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
             </div>
           </div>
         )}
+      </div>
+      <div
+        style={{ height: 4, cursor: 'ns-resize', background: 'var(--border)', opacity: 0.5, flexShrink: 0 }}
+        onMouseDown={e => {
+          e.preventDefault()
+          const startY = e.clientY
+          const containerH = (e.currentTarget as HTMLElement).parentElement?.offsetHeight ?? 400
+          const startWfPct = wfPct
+          const onMove = (ev: MouseEvent) => {
+            const dy = ev.clientY - startY
+            const dpct = dy / containerH * 100
+            const newWf = Math.max(10, Math.min(80, startWfPct + dpct))
+            setWfPct(newWf)
+            localStorage.setItem('bolt-wf-pct', String(newWf))
+            window.dispatchEvent(new Event('bolt-layout-changed'))
+          }
+          const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+          window.addEventListener('mousemove', onMove)
+          window.addEventListener('mouseup', onUp)
+        }}
+        onTouchStart={e => {
+          const startY = e.touches[0].clientY
+          const containerH = (e.currentTarget as HTMLElement).parentElement?.offsetHeight ?? 400
+          const startWfPct = wfPct
+          const onMove = (ev: TouchEvent) => {
+            const dy = ev.touches[0].clientY - startY
+            const dpct = dy / containerH * 100
+            const newWf = Math.max(10, Math.min(80, startWfPct + dpct))
+            setWfPct(newWf)
+            localStorage.setItem('bolt-wf-pct', String(newWf))
+            window.dispatchEvent(new Event('bolt-layout-changed'))
+          }
+          const onUp = () => { window.removeEventListener('touchmove', onMove); window.removeEventListener('touchend', onUp) }
+          window.addEventListener('touchmove', onMove, { passive: true })
+          window.addEventListener('touchend', onUp)
+        }}
+      />
+      <div style={{ flex: 1, minHeight: 0, background: 'var(--bg-panel)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <span style={{ fontSize: 11, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>DECODER</span>
       </div>
     </div>
   )

@@ -3,7 +3,7 @@
   "short_name": "Bolt SDR",
   "description": "Web SDR frontend for OpenHPSDR hardware",
   "start_url": "/",
-  "display": "standalone",
+  "display": "fullscreen",
   "background_color": "#0d1117",
   "theme_color": "#0d1117",
   "icons": [
