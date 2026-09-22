@@ -367,6 +367,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
     if (wfDragRef.current?.moved) { wfDragRef.current = null; return }
     if (!display) return
     const rect = e.currentTarget.getBoundingClientRect()
+    if (e.clientY - rect.top > rect.height - 50) return  // bescherm overlay knoppen zone
     const freqStart = centerHz - (display.width / 2) * display.hzPerPixel
     onTune(Math.round((freqStart + (e.clientX - rect.left) / rect.width * display.width * display.hzPerPixel) / tuneStep) * tuneStep)
   }
@@ -458,7 +459,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
         onContextMenu={e => e.preventDefault()}
         onTouchStart={onTouchStartCanvas} onTouchMove={onTouchMoveCanvas} onTouchEnd={onTouchEndCanvas} />
       <div
-        style={{ height: 4, cursor: 'ns-resize', background: 'var(--border)', opacity: 0.5 }}
+        style={{ height: 4, cursor: 'ns-resize', background: 'var(--border)', opacity: 0.5, touchAction: 'none', padding: '8px 0', margin: '-8px 0', zIndex: 10, position: 'relative' }}
         onMouseDown={e => {
           e.preventDefault()
           const startY = e.clientY
@@ -495,7 +496,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
             window.dispatchEvent(new Event('bolt-layout-changed'))
           }
           const onUp = () => { window.removeEventListener('touchmove', onMove); window.removeEventListener('touchend', onUp) }
-          window.addEventListener('touchmove', onMove, { passive: true })
+          window.addEventListener('touchmove', onMove)
           window.addEventListener('touchend', onUp)
         }}
       />
@@ -724,7 +725,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
         )}
       </div>
       <div
-        style={{ height: 4, cursor: 'ns-resize', background: 'var(--border)', opacity: 0.5, flexShrink: 0 }}
+        style={{ height: 4, cursor: 'ns-resize', background: 'var(--border)', opacity: 0.5, flexShrink: 0, touchAction: 'none', padding: '8px 0', margin: '-8px 0', zIndex: 10, position: 'relative' }}
         onMouseDown={e => {
           e.preventDefault()
           const startY = e.clientY
@@ -755,7 +756,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
             window.dispatchEvent(new Event('bolt-layout-changed'))
           }
           const onUp = () => { window.removeEventListener('touchmove', onMove); window.removeEventListener('touchend', onUp) }
-          window.addEventListener('touchmove', onMove, { passive: true })
+          window.addEventListener('touchmove', onMove)
           window.addEventListener('touchend', onUp)
         }}
       />
