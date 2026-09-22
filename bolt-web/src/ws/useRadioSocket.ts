@@ -94,6 +94,7 @@ const MSG_RX_METER_V2          = 0x19
 const MSG_AUDIO_STREAM_REQUEST = 0x21
 const MSG_DISPLAY_STREAM_REQUEST = 0x22
 const MSG_MIDI_LEARN = 0x3B
+const MSG_FLDIGI_TEXT = 0x31
 const HEADER_SIZE = 16
 
 function parseDisplayFrame(buf: ArrayBuffer): DisplayFrame | null {
@@ -289,8 +290,14 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
           } catch (e) {
             console.error('[useRadioSocket] Failed to parse MIDI learn frame:', e)
           }
+        } else if (msgType === MSG_FLDIGI_TEXT && buf.byteLength >= 14) {
+          try {
+            const dv = new DataView(buf)
+            const textLen = dv.getUint16(12, true)
+            const text = new TextDecoder().decode(new Uint8Array(buf, 13, textLen))
+            window.dispatchEvent(new CustomEvent('bolt-fldigi-text', { detail: { text } }))
+          } catch (e) {}
         }
-        return
       }
       try {
         const msg = JSON.parse(ev.data as string)

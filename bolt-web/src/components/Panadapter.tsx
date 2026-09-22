@@ -52,6 +52,8 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
   const [dbMax, setDbMax] = useState(() => parseInt(localStorage.getItem('bolt-top') || '-40'))
   const [panPct, setPanPct] = useState(() => parseFloat(localStorage.getItem('bolt-pan-pct') || '50'))
   const [wfPct, setWfPct] = useState(() => parseFloat(localStorage.getItem('bolt-wf-pct') || '35'))
+  const [decoderText, setDecoderText] = useState('')
+  useEffect(() => { const h = (e: Event) => { const ev = e as CustomEvent; setDecoderText(t => (t + ev.detail.text).slice(-2000)) }; window.addEventListener('bolt-fldigi-text', h); return () => window.removeEventListener('bolt-fldigi-text', h) }, [])
   useEffect(() => { const h = () => { setPanPct(parseFloat(localStorage.getItem('bolt-pan-pct') || '50')); setWfPct(parseFloat(localStorage.getItem('bolt-wf-pct') || '35')) }; window.addEventListener('bolt-layout-changed', h); return () => window.removeEventListener('bolt-layout-changed', h) }, [])
   useEffect(() => {
     const h = () => { const v = localStorage.getItem('bolt-zoom'); if (v) setZoom(parseInt(v)) }
@@ -760,8 +762,8 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
           window.addEventListener('touchend', onUp)
         }}
       />
-      <div style={{ flex: 1, minHeight: 0, background: 'var(--bg-panel)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <span style={{ fontSize: 11, color: 'var(--text-dim)', fontFamily: 'var(--font-data)' }}>DECODER</span>
+      <div style={{ flex: 1, minHeight: 0, background: 'var(--bg-panel)', overflow: 'hidden', padding: '4px 8px', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+        <pre style={{ margin: 0, fontSize: 12, color: 'var(--accent)', fontFamily: 'var(--font-data)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', overflowY: 'auto' }}>{decoderText || <span style={{ color: 'var(--text-dim)' }}>DECODER — wacht op fldigi...</span>}</pre>
       </div>
     </div>
   )
