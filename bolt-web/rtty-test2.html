@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>RTTY Decoder Test v2</title>
+<style>
+body { background: #1a1a2e; color: #00ff88; font-family: monospace; padding: 20px; }
+button { background: #16213e; color: #00ff88; border: 1px solid #00ff88; padding: 8px 16px; cursor: pointer; margin: 4px; }
+#output { background: #0f0f1a; padding: 10px; margin-top: 10px; min-height: 100px; white-space: pre-wrap; font-size: 12px; }
+input[type=text] { background:#0f0f1a; color:#00ff88; border:1px solid #00ff88; padding:4px; width:200px; }
+</style>
+</head>
+<body>
+<h2>RTTY Decoder Test v2 — Per-blok Goertzel</h2>
+<div><label>Text: <input type="text" id="testText" value="CQ CQ DE PE5JW"></label></div>
+<br>
+<button onclick="runTest()">Test Decode</button>
+<button onclick="runTest(true)">Test Reverse</button>
+<div id="output">Klik Test Decode...</div>
+
+<script>
+const LETTERS = ['\0','E','\n','A',' ','S','I','U','\r','D','R','J','N','F','C','K','T','Z','L','W','H','Y','P','Q','O','B','G','\0','M','X','V','\0'];
+const FIGURES = ['\0','3','\n','-',' ',"'",'8','7','\r','\0','4','\0',',','!',':','(','5','"',')','2','#','6','0','1','9','?','&','\0','.','/',';','\0'];
+
+function generateRTTY(text, sampleRate=48000, markHz=2125, spaceHz=2295, baud=45.45) {
+  const spb = Math.round(sampleRate / baud); // samples per bit
+  const bits = [];
+  function encode(code) {
+    bits.push(false); // start
+    for (let i=0;i<5;i++) bits.push(!!(code&(1<<i)));
+    bits.push(true); // stop
+    bits.push(true); // 1.5 stop
+  }
+  encode(27); // LTRS
+  for (const c of text.toUpperCase()) {
+    const idx = LETTERS.indexOf(c);
+    if (idx>=0) encode(idx);
+  }
+  for (let i=0;i<10;i++) bits.push(true);
+
+  const samples = new Float32Array(bits.length * spb);
+  let phase = 0;
+  for (let i=0;i<bits.length;i++) {
+    const freq = bits[i] ? markHz : spaceHz;
+    for (let j=0;j<spb;j++) {
+      samples[i*spb+j] = Math.sin(phase);
+      phase += 2*Math.PI*freq/sampleRate;
+    }
+  }
+  return { samples, bits, spb };
+}
+
+// Per-blok Goertzel — reset elke spb samples
+function goertzel(samples, offset, len, freq, sampleRate) {
+  const w = 2*Math.PI*freq/sampleRate;
+  const coeff = 2*Math.cos(w);
+  let s1=0, s2=0;
+  for (let i=0;i<len;i++) {
+    const s0 = samples[offset+i] + coeff*s1 - s2;
+    s2=s1; s1=s0;
+  }
+  return s1*s1 + s2*s2 - coeff*s1*s2;
+}
+
+function decode(samples, spb, markHz, spaceHz, sampleRate=48000, reverse=false) {
+  const nBits = Math.floor(samples.length / spb);
+  const rawBits = [];
+  
+  // Per-blok Goertzel — precies 1 bit per blok
+  for (let i=0;i<nBits;i++) {
+    const mPwr = goertzel(samples, i*spb, spb, markHz, sampleRate);
+    const sPwr = goertzel(samples, i*spb, spb, spaceHz, sampleRate);
+    rawBits.push(reverse ? sPwr>mPwr : mPwr>sPwr);
+  }
+  
+  // Frame decoder
+  const decoded=[], codes=[];
+  let i=0;
+  while (i < rawBits.length) {
+    // Zoek start bit (space = false)
+    if (rawBits[i] !== false) { i++; continue; }
+    // Start bit gevonden op positie i
+    if (i+7 > rawBits.length) break;
+    // Lees 5 data bits
+    let code=0;
+    for (let b=0;b<5;b++) code |= (rawBits[i+1+b] ? 1:0) << b;
+    // Stop bit moet mark zijn
+    if (rawBits[i+6] !== true) { i++; continue; }
+    // Geldige frame
+    codes.push(code);
+    i += 7; // 1 start + 5 data + 1 stop (skip 0.5 extra)
+    
+    if (code===27) continue; // LTRS
+    if (code===31) continue; // FIGS
+    if (code===0) continue;
+    const c = LETTERS[code];
+    if (c && c!=='\r') decoded.push(c);
+  }
+  return { decoded, codes, rawBits };
+}
+
+function runTest(reverse=false) {
+  const text = document.getElementById('testText').value;
+  const { samples, bits, spb } = generateRTTY(text);
+  const result = decode(samples, spb, 2125, 2295, 48000, reverse);
+  
+  const encStr = bits.map(b=>b?'1':'0').join('');
+  const decStr = result.rawBits.map(b=>b?'1':'0').join('');
+  
+  let out = `Text: "${text}" | reverse=${reverse} | spb=${spb}\n`;
+  out += `Encoded (${bits.length}): ${encStr}\n`;
+  out += `Decoded (${result.rawBits.length}): ${decStr}\n\n`;
+  out += `Match: ${encStr.startsWith(decStr.substring(0,bits.length)) ? '✅ JA' : '❌ NEE'}\n\n`;
+  out += `Result: "${result.decoded.join('')}"\n`;
+  out += `Codes:  [${result.codes.join(', ')}]\n`;
+  
+  // Per frame
+  out += `\nPer frame:\n`;
+  for (let i=0;i<Math.min(result.codes.length,20);i++) {
+    const code = result.codes[i];
+    const c = code===27?'LTRS':code===31?'FIGS':(LETTERS[code]||'?');
+    out += `  code=${code} char='${c}'\n`;
+  }
+  document.getElementById('output').textContent = out;
+}
+</script>
+</body>
+</html>

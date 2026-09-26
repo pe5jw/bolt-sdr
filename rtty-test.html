@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>RTTY Decoder Test</title>
+<style>
+body { background: #1a1a2e; color: #00ff88; font-family: monospace; padding: 20px; }
+button { background: #16213e; color: #00ff88; border: 1px solid #00ff88; padding: 8px 16px; cursor: pointer; margin: 4px; }
+#output { background: #0f0f1a; padding: 10px; margin-top: 10px; min-height: 100px; white-space: pre-wrap; font-size: 12px; }
+input[type=range] { width: 200px; }
+label { color: #88ff88; }
+</style>
+</head>
+<body>
+<h2>RTTY Decoder Test</h2>
+<div>
+  <label>IIR alpha: <span id="alphaVal">0.5</span></label>
+  <input type="range" id="alpha" min="0.01" max="0.99" step="0.01" value="0.5" oninput="document.getElementById('alphaVal').textContent=this.value">
+</div>
+<div>
+  <label>Text: <input type="text" id="testText" value="CQ CQ DE PE5JW" style="background:#0f0f1a;color:#00ff88;border:1px solid #00ff88;padding:4px;width:200px"></label>
+</div>
+<br>
+<button onclick="runTest(false)">Test Decode (Normal)</button>
+<button onclick="runTest(true)">Test Reverse</button>
+<button onclick="runCompare()">Compare Bits</button>
+<div id="output">Klik Test Decode...</div>
+
+<script>
+const LETTERS = ['\0','E','\n','A',' ','S','I','U','\r','D','R','J','N','F','C','K','T','Z','L','W','H','Y','P','Q','O','B','G','\0','M','X','V','\0'];
+const FIGURES = ['\0','3','\n','-',' ',"'",'8','7','\r','\0','4','\0',',','!',':','(','5','"',')','2','#','6','0','1','9','?','&','\0','.','/',';','\0'];
+
+function generateRTTY(text, sampleRate=48000, markHz=2125, spaceHz=2295, baud=45.45) {
+  const samplesPerBit = Math.round(sampleRate / baud);
+  const bits = [];
+  function encodeBaudot(code) {
+    bits.push(false);
+    for (let i = 0; i < 5; i++) bits.push(!!(code & (1 << i)));
+    bits.push(true);
+    bits.push(true); // 1.5 stop
+  }
+  encodeBaudot(27); // LTRS
+  for (const c of text.toUpperCase()) {
+    const idx = LETTERS.indexOf(c);
+    if (idx >= 0) encodeBaudot(idx);
+  }
+  for (let i = 0; i < 10; i++) bits.push(true);
+
+  const samples = new Float32Array(bits.length * samplesPerBit);
+  let phase = 0;
+  for (let i = 0; i < bits.length; i++) {
+    const freq = bits[i] ? markHz : spaceHz;
+    for (let j = 0; j < samplesPerBit; j++) {
+      samples[i * samplesPerBit + j] = Math.sin(phase);
+      phase += 2 * Math.PI * freq / sampleRate;
+    }
+  }
+  return { samples, bits, samplesPerBit };
+}
+
+function decode(samples, sampleRate=48000, markHz=2125, spaceHz=2295, baud=45.45, reverse=false, alpha=0.5) {
+  const samplesPerBit = Math.round(sampleRate / baud);
+  const markCoeff  = 2 * Math.cos(2 * Math.PI * markHz  / sampleRate);
+  const spaceCoeff = 2 * Math.cos(2 * Math.PI * spaceHz / sampleRate);
+  let mS1=0, mS2=0, sS1=0, sS2=0;
+  let mPwr=0, sPwr=0;
+  let blockPos = 0;
+  let inFrame=false, bitCount=0, shiftReg=0, figurMode=false, skipHalf=false;
+  const decoded=[], codes=[], decodedBits=[];
+
+  function processBit(mark) {
+    if (skipHalf) { skipHalf=false; return; }
+    if (!inFrame) { if (!mark) { inFrame=true; bitCount=0; shiftReg=0; } return; }
+    if (bitCount < 5) { shiftReg |= (mark?1:0) << bitCount; bitCount++; return; }
+    inFrame=false; skipHalf=true;
+    if (!mark) return;
+    const code = shiftReg & 0x1F;
+    if (code===27) { figurMode=false; return; }
+    if (code===31) { figurMode=true; return; }
+    if (code===0) return;
+    codes.push(code);
+    const c = figurMode ? FIGURES[code] : LETTERS[code];
+    if (c && c!=='\r') decoded.push(c);
+  }
+
+  for (const s of samples) {
+    const ms0 = s + markCoeff*mS1 - mS2; mS2=mS1; mS1=ms0;
+    const ss0 = s + spaceCoeff*sS1 - sS2; sS2=sS1; sS1=ss0;
+    mPwr = (1-alpha)*mPwr + alpha*(mS1*mS1+mS2*mS2);
+    sPwr = (1-alpha)*sPwr + alpha*(sS1*sS1+sS2*sS2);
+    const bit = reverse ? sPwr>mPwr : mPwr>sPwr;
+    blockPos++;
+    if (blockPos >= samplesPerBit) {
+      blockPos=0;
+      decodedBits.push(bit);
+      processBit(bit);
+    }
+  }
+  return { decoded, codes, decodedBits };
+}
+
+function runTest(reverse) {
+  const text = document.getElementById('testText').value;
+  const alpha = parseFloat(document.getElementById('alpha').value);
+  const { samples, bits, samplesPerBit } = generateRTTY(text);
+  const result = decode(samples, 48000, 2125, 2295, 45.45, reverse, alpha);
+  
+  let out = `Text: "${text}" | alpha=${alpha} | reverse=${reverse}\n`;
+  out += `Samples: ${samples.length} | Bits encoded: ${bits.length} | samplesPerBit: ${samplesPerBit}\n`;
+  out += `Encoded: ${bits.map(b=>b?'1':'0').join('')}\n`;
+  out += `Decoded: ${result.decodedBits.map(b=>b?'1':'0').join('')}\n\n`;
+  out += `Result: "${result.decoded.join('')}"\n`;
+  out += `Codes: [${result.codes.join(', ')}]\n`;
+  document.getElementById('output').textContent = out;
+}
+
+function runCompare() {
+  const text = document.getElementById('testText').value;
+  const alpha = parseFloat(document.getElementById('alpha').value);
+  const { samples, bits, samplesPerBit } = generateRTTY(text);
+  const result = decode(samples, 48000, 2125, 2295, 45.45, false, alpha);
+  
+  const enc = bits.map(b=>b?'1':'0');
+  const dec = result.decodedBits.map(b=>b?'1':'0');
+  
+  let out = `Encoded (${enc.length} bits): ${enc.join('')}\n`;
+  out += `Decoded (${dec.length} bits): ${dec.join('')}\n\n`;
+  
+  // Compare per character frame (7.5 bits: 1 start + 5 data + 1.5 stop)
+  out += `Per-frame analysis:\n`;
+  let encIdx = 0;
+  let frame = 0;
+  while (encIdx < enc.length - 7) {
+    const encFrame = enc.slice(encIdx, encIdx+7).join('');
+    const decFrame = dec.slice(encIdx, encIdx+7) ? dec.slice(encIdx, encIdx+7).join('') : '???????';
+    const match = encFrame === decFrame ? '✓' : '✗';
+    out += `Frame ${frame}: enc=${encFrame} dec=${decFrame} ${match}\n`;
+    encIdx += 7; // 1 start + 5 data + 1 stop (skip half stop)
+    frame++;
+    if (frame > 20) break;
+  }
+  document.getElementById('output').textContent = out;
+}
+</script>
+</body>
+</html>
