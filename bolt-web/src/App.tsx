@@ -244,19 +244,24 @@ export default function App() {
     if (hz >= 28000000 && hz <= 29700000) return '10'
     return null
   }
-  const MODE_DEFAULTS: Record<string, [number, number]> = { USB: [200, 3200], LSB: [-3200, -200], CW: [-500, 500], CWL: [-500, 500], AM: [-5000, 5000], FM: [-8000, 8000], DIGU: [200, 3000], DIGL: [-3000, -200] }
+  const MODE_DEFAULTS: Record<string, [number, number]> = { USB: [200, 3200], LSB: [-3200, -200], CW: [-500, 500], CWL: [-500, 500], AM: [-5000, 5000], FM: [-8000, 8000], DIGU: [200, 3000], DIGL: [-3000, -200], RTTYU: [1400, 1800], RTTYL: [-1800, -1400] }
   const sendMode = (mode: string) => {
     const cwSettings = JSON.parse(localStorage.getItem('bolt-cw-settings') || '{"sidetoneHz":600,"filterBw":400}')
     const sidetone = cwSettings.sidetoneHz ?? 600
     const filterBw = cwSettings.filterBw ?? 400
     const isCw = mode === "CW" || mode === "CWL"
+    // RTTYU/RTTYL worden vertaald naar USB/LSB via serverMode
     const [low, high] = isCw ? (mode === "CW" ? [Math.max(0, sidetone - filterBw/2), sidetone + filterBw/2] : [-(sidetone + filterBw/2), Math.min(0, -(sidetone - filterBw/2))]) : (MODE_DEFAULTS[mode] ?? [200, 3200])
-    const serverMode = mode === "CW" ? "CWU" : mode
-    setRadioState(s => ({ ...s, mode, filterLow: low, filterHigh: high }))
+    const serverMode = mode === "CW" ? "CWU" : mode === "RTTYU" ? "USB" : mode === "RTTYL" ? "LSB" : mode
     send({ type: "set_mode", mode: serverMode })
     fetch("/api/mode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: serverMode }) })
     fetch("/api/filter", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
-
+    setRadioState(s => ({ ...s, mode: mode, filterLow: low, filterHigh: high }))
+    // VFO tune offset: CW op sidetone, RTTY op 1600 Hz centrum
+    const tuneOffsetHz = (mode === "CW" || mode === "CWL") ? sidetone : (mode === "RTTYU" || mode === "RTTYL") ? 1600 : null
+    if (tuneOffsetHz !== null) {
+      fetch("/api/tune-offset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ offsetHz: tuneOffsetHz }) }).catch(() => {})
+    }
   }
   return (
     <div className="bolt-app">

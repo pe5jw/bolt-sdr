@@ -545,12 +545,9 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
             )}
             {openPanel === 'mode' && (
               <div style={{ display: 'flex', gap: 3, background: 'rgba(0,0,0,0.7)', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--accent)' }}>
-                {['LSB','USB','CW','CWL','AM','FM','DIGU','DIGL'].map(m => (
-                  <button key={m} onClick={() => { onMode && onMode(m); setOpenPanel(null) }}
-                    style={{ fontSize: 11, padding: '3px 7px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)',
-                      background: mode === m ? 'var(--accent)' : 'var(--bg-control)',
-                      border: '1px solid ' + (mode === m ? 'var(--accent)' : 'var(--border)'),
-                      color: mode === m ? 'var(--bg)' : 'var(--text-dim)' }}>
+                {['SSB','CW','AM','FM','DIGI','RTTY'].map(m => (
+                  <button key={m} onClick={() => { if (!onMode) return; const mt = m==="SSB"?(mode==="USB"?"LSB":"USB"):m==="CW"?(mode==="CW"?"CWL":"CW"):m==="DIGI"?(mode==="DIGU"?"DIGL":"DIGU"):m==="RTTY"?(mode==="RTTYU"?"RTTYL":"RTTYU"):m; onMode(mt); setOpenPanel(null) }}
+                    className={`mode-btn ${((m==="SSB"&&(mode==="USB"||mode==="LSB"))||m===mode||(m==="CW"&&(mode==="CW"||mode==="CWU"||mode==="CWL"))||(m==="DIGI"&&(mode==="DIGU"||mode==="DIGL"))||(m==="RTTY"&&(mode==="RTTYU"||mode==="RTTYL")))?"active":""}`}>
                     {m}
                   </button>
                 ))}
@@ -675,7 +672,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
                     background: openPanel === 'mode' ? 'var(--accent)' : 'rgba(0,0,0,0.6)',
                     border: '1px solid ' + (openPanel === 'mode' ? 'var(--accent)' : 'var(--border)'),
                     color: openPanel === 'mode' ? 'var(--bg)' : 'var(--text)' }}>
-                  {mode || 'MODE'}
+                  {mode==="RTTYU"?"RTTY-U":mode==="RTTYL"?"RTTY-L":mode==="DIGU"?"DIGI-U":mode==="DIGL"?"DIGI-L":mode==="CWU"?"CW":mode || "MODE"}
                 </button>
               )}
               {onFilterPreset && (

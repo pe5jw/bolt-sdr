@@ -9,7 +9,7 @@ interface Props {
   sidetoneHz?: number
 }
 
-const MODES = ['LSB', 'USB', 'CW', 'CWL', 'AM', 'FM', 'DIGU', 'DIGL']
+const MODES = ['SSB', 'CW', 'AM', 'FM', 'DIGI', 'RTTY']
 
 const PRESETS: Record<string, [number, number][]> = {
   USB:  [[200, 3200], [200, 2800], [200, 2400], [200, 2100], [200, 1800], [200, 1400], [200, 1000]],
@@ -45,8 +45,8 @@ export function ModeFilter({ mode, filterLow, filterHigh, onMode, onFilter, side
     <div className="mode-wrap">
       <div className="mode-row">
         {MODES.map(m => (
-          <button key={m} className={`mode-btn ${(m === mode || (m === "CW" && mode === "CWU")) ? "active" : ""}`}
-            onClick={() => { onMode(m); const p = PRESETS[m]?.[0]; if (p) onFilter(p[0], p[1]) }}>
+          <button key={m} className={`mode-btn ${((m === "SSB" && (mode === "USB" || mode === "LSB")) || m === mode || (m === "CW" && mode === "CWU") || (m === "DIGI" && (mode === "DIGU" || mode === "DIGL")) || (m === "RTTY" && (mode === "RTTYU" || mode === "RTTYL"))) ? "active" : ""}`}
+            onClick={() => { const modeToSend = m==="SSB" ? (mode==="USB"?"LSB":"USB") : m==="CW" ? (mode==="CW"?"CWL":"CW") : m==="DIGI" ? (mode==="DIGU"?"DIGL":"DIGU") : m==="RTTY"?(mode==="RTTYU"?"RTTYL":"RTTYU") : m; onMode(modeToSend); const p = PRESETS[modeToSend]?.[0] ?? PRESETS[m]?.[0]; if (p) onFilter(p[0], p[1]) }}>
             {m}
           </button>
         ))}
