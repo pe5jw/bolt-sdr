@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 interface Props {
   mox: boolean
   tune: boolean
@@ -14,8 +15,39 @@ interface Props {
   onTune: (on: boolean) => void
   onAfGain: (db: number) => void
   onMicGain: (db: number) => void
+  onAutoSet?: () => void; onAutoSetPlus?: () => void
 }
-export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, adcAv, adcPk, onMox, onTune, onAfGain, onMicGain, micPeak = 0, pttMode = false }: Props) {
+export function TxPanel({ mox, tune, afGainDb, micGainDb, alc, swr, power, adcAv, adcPk, onMox, onTune, onAfGain, onMicGain, micPeak = 0, pttMode = false, mobile = false, onAutoSet, onAutoSetPlus }: Props & { mobile?: boolean; onAutoSet?: () => void; onAutoSetPlus?: () => void }) {
+  const lastTapRef = useRef(0)
+  if (mobile) return (
+    <div className="tx-wrap tx-wrap-mobile">
+      <div className="tx-btn-row">
+        <button className={`tx-btn mox-btn ${mox ? "active" : ""}`}
+          onClick={pttMode ? undefined : () => onMox(!mox)}
+          onMouseDown={pttMode ? () => onMox(true) : undefined}
+          onMouseUp={pttMode ? () => onMox(false) : undefined}
+          onMouseLeave={pttMode ? () => onMox(false) : undefined}>
+          {mox ? "● TX" : pttMode ? "PTT" : "MOX"}
+        </button>
+        <button className={`tx-btn tune-btn ${tune ? "active" : ""}`} onClick={() => onTune(!tune)}>TUNE</button>
+        {onAutoSet && <button className="tx-btn" onClick={() => {
+          const now = Date.now()
+          if (now - lastTapRef.current < 400) { onAutoSetPlus?.() } else { onAutoSet?.() }
+          lastTapRef.current = now
+        }}>SET</button>}
+      </div>
+      <div className="tx-slider-row">
+        <div className="tx-slider-group">
+          <div className="tx-slider-label"><span>AF</span><span className="tx-slider-val">{afGainDb} dB</span></div>
+          <input type="range" min={-50} max={20} step={1} value={afGainDb} onChange={e => onAfGain(Number(e.target.value))} style={{ accentColor: "var(--green)", width: "100%" }} />
+        </div>
+        <div className="tx-slider-group">
+          <div className="tx-slider-label"><span>MIC</span><span className="tx-slider-val">{micGainDb} dB</span></div>
+          <input type="range" min={-40} max={20} value={micGainDb} onChange={e => onMicGain(Number(e.target.value))} style={{ width: "100%" }} />
+        </div>
+      </div>
+    </div>
+  )
   return (
     <div className="tx-wrap">
       <button className={`tx-btn mox-btn ${mox ? 'active' : ''}`}

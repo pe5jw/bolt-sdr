@@ -385,3 +385,38 @@ html, body, #root {
     min-height: 120px;
   }
 }
+
+/* Mobile TxPanel - 3 rijen onder elkaar */
+.tx-wrap-mobile {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 4px 8px;
+}
+.tx-wrap-mobile .tx-slider-group {
+  width: 100%;
+}
+.tx-wrap-mobile .tx-btn {
+  flex: 1;
+}
+.tx-wrap-mobile .tx-meters {
+  display: none;
+}
+
+/* Mobile TxPanel rijen */
+.tx-wrap-mobile .tx-btn-row {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+}
+.tx-wrap-mobile .tx-btn-row .tx-btn {
+  flex: 1;
+}
+.tx-wrap-mobile .tx-slider-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.tx-wrap-mobile .tx-slider-row .tx-slider-group {
+  flex: 1;
+}

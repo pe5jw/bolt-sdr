@@ -22,6 +22,7 @@ interface Props {
   onStepChange?: (step: number) => void
   nrMode?: string
   onNrMode?: (mode: string) => void
+  showDecoder?: boolean
   controlsOverlay?: boolean
   onBand?: (hz: number) => void
   onMode?: (mode: string) => void
@@ -44,7 +45,7 @@ interface Props {
   onDriveMax?: (v: number) => void
 }
 
-export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange, controlsOverlay, onBand, onMode, onFilterPreset, filterLowHz, filterHighHz, nrMode, onNrMode, mox, onControlPanel, agcMode, onAgc, attenDb, onAtten, autoRfGain, onAutoRfGain, driveDb, onDrive, tunePct, onTune2, driveMaxPct, onDriveMax }: Props) {
+export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange, controlsOverlay, onBand, onMode, onFilterPreset, filterLowHz, filterHighHz, nrMode, onNrMode, mox, onControlPanel, agcMode, onAgc, attenDb, onAtten, autoRfGain, onAutoRfGain, driveDb, onDrive, tunePct, onTune2, driveMaxPct, showDecoder = true, onDriveMax }: Props) {
   const [openPanel, setOpenPanel] = useState<'band'|'mode'|'filter'|'step'|'nr'|'zoom'|'size'|null>(null)
   const togglePanel = (p: 'band'|'mode'|'filter'|'step') => setOpenPanel(prev => prev === p ? null : p)
   const { theme, showLogo, logoBrightness, wfPalette } = useTheme()
@@ -273,7 +274,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
       const containerH = canvas.parentElement?.parentElement?.offsetHeight ?? 400
       const W = Math.round(cssW * dpr)
       const ph = Math.round(containerH * panPct / 100)
-      const wh = Math.round(containerH * wfPct / 100)
+      const wh = showDecoder ? Math.round(containerH * wfPct / 100) : (containerH - ph)
       canvas.width = W; canvas.height = Math.round(ph * dpr)
       canvas.style.width = cssW + "px"; canvas.style.height = ph + "px"
       wf.width = W; wf.height = Math.round(wh * dpr)
@@ -282,7 +283,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
     })
     ro.observe(canvas.parentElement ?? canvas)
     return () => ro.disconnect()
-  }, [draw, drawWf])
+  }, [draw, drawWf, showDecoder, panPct, wfPct])
 
   useEffect(() => { draw() }, [draw])
   useEffect(() => { drawWf() }, [drawWf])
@@ -759,30 +760,9 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
           window.addEventListener('touchend', onUp)
         }}
       />
-      <div style={{ flex: 1, minHeight: 0, background: 'var(--bg-panel)', overflow: 'hidden', padding: '4px 8px', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+      {showDecoder !== false && <div style={{ flex: 1, minHeight: 0, background: "var(--bg-panel)", overflow: "hidden", padding: "4px 8px", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
         <pre style={{ margin: 0, fontSize: 12, color: 'var(--accent)', fontFamily: 'var(--font-data)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', overflowY: 'auto' }}>{decoderText || <span style={{ color: 'var(--text-dim)' }}>DECODER — wacht op fldigi...</span>}</pre>
-      </div>
+        </div>}
     </div>
   )
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

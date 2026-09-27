@@ -168,8 +168,12 @@ export default function App() {
 
   const [vfoOverlay, setVfoOverlay] = useState(() => localStorage.getItem('bolt-vfo-overlay') !== 'false')
   const [controlsOverlay, setControlsOverlay] = useState(() => localStorage.getItem('bolt-controls-overlay') === 'true')
-  const setControlPanel = useState<null | 'rx' | 'tx'>(null)[1]
+  useState<null | "rx" | "tx">(null) // setControlPanel unused
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 600)
+  useEffect(() => { const h = () => setIsMobile(window.innerWidth < 600); window.addEventListener('resize', h); return () => window.removeEventListener('resize', h) }, [])
   const [smeterOverlay, setSmeterOverlay] = useState(() => localStorage.getItem('bolt-smeter-overlay') !== 'false')
+  const [showDecoder, setShowDecoder] = useState(() => localStorage.getItem('bolt-show-decoder') !== 'false')
+  useEffect(() => { const h = () => setShowDecoder(localStorage.getItem('bolt-show-decoder') !== 'false'); window.addEventListener('bolt-decoder-changed', h); return () => window.removeEventListener('bolt-decoder-changed', h) }, [])
   const [connectedIp, setConnectedIp] = useState("")
   const [_mox, setMox] = useState(false)
   const [guardMsg, setGuardMsg] = useState<string | null>(null)
@@ -263,6 +267,21 @@ export default function App() {
       fetch("/api/tune-offset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ offsetHz: tuneOffsetHz }) }).catch(() => {})
     }
   }
+  useEffect(() => {
+    const onWheel = (e: WheelEvent) => {
+      const el = e.target as HTMLInputElement
+      if (el.type !== "range") return
+      e.preventDefault()
+      const step = parseFloat(el.step) || 1
+      const delta = e.deltaY < 0 ? step : -step
+      const newVal = Math.min(parseFloat(el.max), Math.max(parseFloat(el.min), parseFloat(el.value) + delta))
+      el.value = String(newVal)
+      el.dispatchEvent(new Event("input", { bubbles: true }))
+      el.dispatchEvent(new Event("change", { bubbles: true }))
+    }
+    window.addEventListener("wheel", onWheel, { passive: false })
+    return () => window.removeEventListener("wheel", onWheel)
+  }, [])
   return (
     <div className="bolt-app">
       {guardMsg && <div style={{ position: 'fixed', top: 40, left: '50%', transform: 'translateX(-50%)', background: 'var(--tx)', color: 'var(--bg)', padding: '6px 16px', borderRadius: 4, fontSize: 11, fontFamily: 'var(--font-data)', zIndex: 9999 }}>âš  {guardMsg}</div>}
@@ -301,7 +320,7 @@ export default function App() {
             tuneStepOverlay={!controlsOverlay && vfoOverlay}
             onStepChange={setTuneStep}
             controlsOverlay={controlsOverlay}
-            onControlPanel={setControlPanel}
+            showDecoder={showDecoder}
             agcMode={radioState.agcMode ?? 'Med'}
             onAgc={mode => { setRadioState(s => ({ ...s, agcMode: mode })); fetch('/api/rx/agc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agc: { mode: mode === 'Hang' ? 'Slow' : mode, slope: null, decayMs: null, hangMs: mode === 'Hang' ? 2000 : null, hangThreshold: mode === 'Hang' ? -130 : null, fixedGainDb: null } }) }).catch(() => {}) }}
             attenDb={radioState.attDb}
@@ -412,7 +431,7 @@ export default function App() {
         </section>
         </>)}
         <section className="bolt-tx">
-          <TxPanel
+          <TxPanel mobile={isMobile} onAutoSet={() => window.dispatchEvent(new Event("bolt-autoset-trigger"))} onAutoSetPlus={() => { window.dispatchEvent(new Event("bolt-autoset-trigger")); setTimeout(() => window.dispatchEvent(new Event("bolt-autoset-trigger")), 300) }}
             mox={radioState.mox}
             alc={meters.alc}
             tune={radioState.tune}

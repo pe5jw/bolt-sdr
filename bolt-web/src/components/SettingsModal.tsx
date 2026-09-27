@@ -286,6 +286,11 @@ export function SettingsModal({ onClose }: Props) {
             <input type="checkbox" defaultChecked={localStorage.getItem('bolt-controls-overlay') === 'true'}
               onChange={e => { localStorage.setItem('bolt-controls-overlay', String(e.target.checked)); window.dispatchEvent(new Event('bolt-overlay-changed')) }} />
           </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+              <input type="checkbox" defaultChecked={localStorage.getItem('bolt-show-decoder') !== 'false'}
+                onChange={e => { localStorage.setItem('bolt-show-decoder', String(e.target.checked)); window.dispatchEvent(new Event('bolt-decoder-changed')) }} />
+              Decoder balk
+            </label>
           <div style={row}>
             <span style={lbl}>VFO OVERLAY</span>
             <input type="checkbox" defaultChecked={localStorage.getItem('bolt-vfo-overlay') !== 'false'}
