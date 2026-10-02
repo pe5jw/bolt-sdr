@@ -310,13 +310,13 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
       const vfoX = rect.width / 2
       const flX = vfoX + filterLowRef.current / display.hzPerPixel
       const fhX = vfoX + filterHighRef.current / display.hzPerPixel
-      const side = Math.abs(clickX - flX) < Math.abs(clickX - fhX) ? 'low' : 'high'
+      const side = Math.abs(clickX - flX) < Math.abs(clickX - fhX) ? "low" : "high"
       filterDragRef.current = { side }
     } else {
       dragRef.current = { startX: e.clientX, startHz: centerHz, moved: false }
+      dragRef.current = { startX: e.clientX, startHz: centerHz, moved: false }
     }
   }
-
   const onMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (filterDragRef.current && display) {
       const rect = e.currentTarget.getBoundingClientRect()
