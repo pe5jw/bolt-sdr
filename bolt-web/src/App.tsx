@@ -317,10 +317,11 @@ export default function App() {
             vfoHz={radioState.vfoHz}
             mode={radioState.mode}
             dbm={meters.sMeter}
-            tuneStepOverlay={!controlsOverlay && vfoOverlay}
+            tuneStepOverlay={!controlsOverlay}
             onStepChange={setTuneStep}
             controlsOverlay={controlsOverlay}
             showDecoder={showDecoder}
+            onControlPanel={() => {}}
             agcMode={radioState.agcMode ?? 'Med'}
             onAgc={mode => { setRadioState(s => ({ ...s, agcMode: mode })); fetch('/api/rx/agc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agc: { mode: mode === 'Hang' ? 'Slow' : mode, slope: null, decayMs: null, hangMs: mode === 'Hang' ? 2000 : null, hangThreshold: mode === 'Hang' ? -130 : null, fixedGainDb: null } }) }).catch(() => {}) }}
             attenDb={radioState.attDb}
