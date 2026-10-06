@@ -275,9 +275,8 @@ export default function App() {
       const step = parseFloat(el.step) || 1
       const delta = e.deltaY < 0 ? step : -step
       const newVal = Math.min(parseFloat(el.max), Math.max(parseFloat(el.min), parseFloat(el.value) + delta))
-      el.value = String(newVal)
-      el.dispatchEvent(new Event("input", { bubbles: true }))
-      el.dispatchEvent(new Event("change", { bubbles: true }))
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set
+      if (nativeInputValueSetter) { nativeInputValueSetter.call(el, String(newVal)); el.dispatchEvent(new Event("input", { bubbles: true })) }
     }
     window.addEventListener("wheel", onWheel, { passive: false })
     return () => window.removeEventListener("wheel", onWheel)

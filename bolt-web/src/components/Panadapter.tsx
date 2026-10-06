@@ -314,7 +314,6 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
       filterDragRef.current = { side }
     } else {
       dragRef.current = { startX: e.clientX, startHz: centerHz, moved: false }
-      dragRef.current = { startX: e.clientX, startHz: centerHz, moved: false }
     }
   }
   const onMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
