@@ -194,6 +194,32 @@ if ($node) {
         Write-Host "  -> Fix: winget install OpenJS.NodeJS.LTS" -ForegroundColor Yellow
     }
 }
+
+# 11. Python (voor tci-bridge)
+Write-Host "[11] Python..." -NoNewline
+$py = Get-Command python -ErrorAction SilentlyContinue
+if ($py -and $py.Source -notmatch 'WindowsApps') {
+    $pyVer = python --version 2>&1
+    Write-Host " OK ($pyVer)" -ForegroundColor Green
+    # Check venv
+    $venvPy = Join-Path $env:LOCALAPPDATA 'Bolt\tci-venv\Scripts\python.exe'
+    if (-not (Test-Path $venvPy)) {
+        Write-Host "  -> tci-bridge venv mist" -ForegroundColor Yellow
+        $warnings += "tci-bridge Python venv niet aangemaakt"
+        if ($Fix) {
+            python -m venv (Join-Path $env:LOCALAPPDATA 'Bolt\tci-venv')
+            Write-Host "  -> venv aangemaakt" -ForegroundColor Green
+        }
+    }
+} else {
+    Write-Host " MISSING" -ForegroundColor Red
+    $errors += "Python niet gevonden (nodig voor tci-bridge)"
+    if ($Fix) {
+        winget install Python.Python.3.12 --accept-source-agreements --accept-package-agreements
+    } else {
+        Write-Host "  -> Fix: winget install Python.Python.3.12" -ForegroundColor Yellow
+    }
+}
 # Samenvatting
 Write-Host "`n=== Resultaat ===" -ForegroundColor Cyan
 if ($errors.Count -eq 0 -and $warnings.Count -eq 0) {
