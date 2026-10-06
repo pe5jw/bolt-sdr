@@ -1,4 +1,4 @@
-# setup-bolt.ps1 — BoltSDR server installatie en verificatie
+# setup-bolt.ps1 - BoltSDR server installatie en verificatie
 # Draai als Administrator op de doelserver
 
 param(
@@ -164,7 +164,7 @@ if (Test-Path $indexHtml) {
     Write-Host " OK" -ForegroundColor Green
 } else {
     Write-Host " MISSING" -ForegroundColor Red
-    $errors += "wwwroot/index.html niet gevonden — frontend niet gedeployed"
+    $errors += "wwwroot/index.html niet gevonden - frontend niet gedeployed"
 }
 
 # 9. Deploy script
