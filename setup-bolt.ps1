@@ -177,6 +177,23 @@ if (Test-Path $deployCmd) {
     $warnings += "deploy-server.cmd niet gevonden"
 }
 
+
+# 10. Node.js (voor tci-bridge)
+Write-Host "[10] Node.js..." -NoNewline
+$node = Get-Command node -ErrorAction SilentlyContinue
+if ($node) {
+    $nodeVer = node --version 2>$null
+    Write-Host " OK ($nodeVer)" -ForegroundColor Green
+} else {
+    Write-Host " MISSING" -ForegroundColor Red
+    $errors += "Node.js niet gevonden (nodig voor tci-bridge)"
+    if ($Fix) {
+        Write-Host "  -> Installeren..." -ForegroundColor Yellow
+        winget install OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements
+    } else {
+        Write-Host "  -> Fix: winget install OpenJS.NodeJS.LTS" -ForegroundColor Yellow
+    }
+}
 # Samenvatting
 Write-Host "`n=== Resultaat ===" -ForegroundColor Cyan
 if ($errors.Count -eq 0 -and $warnings.Count -eq 0) {
