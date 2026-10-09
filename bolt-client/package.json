@@ -16,10 +16,6 @@
       "target": "portable",
       "icon": "icon.ico"
     },
-    "linux": {
-      "target": "AppImage",
-      "icon": "icon.png"
-    },
     "files": [
       "main.js",
       "index.html",
