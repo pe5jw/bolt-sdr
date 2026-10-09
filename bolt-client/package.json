@@ -20,7 +20,11 @@
       "main.js",
       "index.html",
       "package.json"
-    ]
+    ],
+    "linux": {
+      "target": "tar.gz",
+      "category": "Utility"
+    }
   },
   "devDependencies": {
     "electron": "^36.4.0",
