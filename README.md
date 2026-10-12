@@ -150,11 +150,14 @@ tci-bridge connects to bolt TCI server on port 40001.
 | CW via CAT (KY) | 19090 | TCP TS-2000 |
 | tci-bridge CAT + DVK | 4532 | TCP TS-2000 |
 | tci-bridge Winkey CW | 5597 | TCP WinKey |
-## Based on Zeus / Station-Engine
+## Based on AnanCore / OpenHPSDR Zeus
 
-Bolt SDR uses station-engine, which is a fork of OpenHPSDR Zeus (https://github.com/kb2uka/zeus) by Douglas J. Cerrato (KB2UKA) and contributors.
+The C# backend originates from **AnanCore** (`abhishekprakash22/zeus`), a standalone
+fork of OpenHPSDR Zeus that removes all `openhpsdrzeus.com` infrastructure dependencies.
+The full provenance chain and per-component attributions are in
+[`BOLT-ATTRIBUTIONS.md`](BOLT-ATTRIBUTIONS.md).
 
-Zeus is a .NET reimplementation of the OpenHPSDR Protocol-1/2 stack, informed by:
+OpenHPSDR Zeus is a .NET reimplementation of the OpenHPSDR Protocol-1/2 stack, informed by:
 - Thetis (https://github.com/ramdor/Thetis)
 - piHPSDR (https://github.com/dl1ycf/pihpsdr) by Christoph Wullen (DL1YCF)
 - deskHPSDR (https://github.com/dl1bz/deskhpsdr) by Heiko (DL1BZ)
