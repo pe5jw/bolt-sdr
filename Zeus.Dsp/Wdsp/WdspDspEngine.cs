@@ -169,15 +169,6 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
     private static bool? _setPsPtolAvailable;
     private static bool SetPsPtolAvailable =>
         _setPsPtolAvailable ??= WdspNativeLoader.TryProbeExport(nameof(NativeMethods.SetPSPtol));
-    private static bool? _setPsPinModeAvailable;
-    private static bool SetPsPinModeAvailable =>
-        _setPsPinModeAvailable ??= WdspNativeLoader.TryProbeExport(nameof(NativeMethods.SetPSPinMode));
-    private static bool? _setPsMapModeAvailable;
-    private static bool SetPsMapModeAvailable =>
-        _setPsMapModeAvailable ??= WdspNativeLoader.TryProbeExport(nameof(NativeMethods.SetPSMapMode));
-    private static bool? _setPsStabilizeAvailable;
-    private static bool SetPsStabilizeAvailable =>
-        _setPsStabilizeAvailable ??= WdspNativeLoader.TryProbeExport(nameof(NativeMethods.SetPSStabilize));
 
     private static double FiniteOrZero(double value) =>
         double.IsFinite(value) ? value : 0.0;
@@ -2029,8 +2020,8 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
                 // pihpsdr/Thetis defaults: PinMode=1, MapMode=1 (transmitter.c:
                 // 1041-1042 ps_map=1 / ps_pin=1; PSForm.designer.cs chkPSPin /
                 // chkPSMap = Checked = true).
-                if (SetPsPinModeAvailable) NativeMethods.SetPSPinMode(id, 1);
-                if (SetPsMapModeAvailable) NativeMethods.SetPSMapMode(id, 1);
+                NativeMethods.SetPSPinMode(id, 1);
+                NativeMethods.SetPSMapMode(id, 1);
                 // calcc rx_scale + coefficient IIR smoothing (alpha 0.9). ON for the
                 // P2 profile so continuous automode converges to a STEADY correction
                 // instead of applying each raw pass-to-pass fit — the latter makes
@@ -2039,7 +2030,7 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
                 // this on for SATURN/new-protocol. OFF on P1/HL2 to keep the
                 // mi0bot-matched behaviour. _txaCfirRun is the existing P2-profile
                 // discriminator (CFIR runs only on P2; see above).
-                if (SetPsStabilizeAvailable) NativeMethods.SetPSStabilize(id, _txaCfirRun ? 1 : 0);
+                NativeMethods.SetPSStabilize(id, _txaCfirRun ? 1 : 0);
                 NativeMethods.SetPSIntsAndSpi(id, _psInts, _psSpi);
                 NativeMethods.SetPSMoxDelay(id, _psMoxDelaySec);
                 NativeMethods.SetPSLoopDelay(id, _psLoopDelaySec);
