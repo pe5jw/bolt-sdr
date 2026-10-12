@@ -1,6 +1,6 @@
 # dev.ps1 — bolt-sdr development stack met virtuele radio
 #
-# Start 3 processen in aparte vensters:
+# Start 3 processen elk in een eigen PowerShell venster:
 #   1. zeus-vradio   — virtuele HPSDR radio op 127.0.0.1
 #   2. StationEngine — bolt-sdr backend op poort 6061
 #   3. bolt-web      — Vite dev server op poort 5173
@@ -49,33 +49,32 @@ Start-Sleep -Seconds 1
 
 $pids = @()
 
+# Hulpfunctie: start commando in nieuw PowerShell venster dat open blijft
+function Start-Window {
+    param([string]$Title, [string]$Command)
+    $proc = Start-Process "powershell.exe" -ArgumentList "-NoExit", "-Command", `
+        "`$host.UI.RawUI.WindowTitle = '$Title'; Set-Location '$ScriptDir'; $Command" `
+        -PassThru
+    return $proc
+}
+
 # 1. Virtuele radio
 Write-Host "-> virtuele radio starten (zeus-vradio op 127.0.0.1)..."
-$vradio = Start-Process -FilePath "dotnet" -ArgumentList @(
-    "run", "--project", "Zeus.VirtualRadio.Host", "--",
-    "--board", "HermesLite2",
-    "--protocol", "P1",
-    "--bind", "127.0.0.1",
-    "--rate", "48",
-    "--tone", "14074000:-73",
-    "--tone", "14200000:-80",
-    "--tone", "7074000:-90",
-    "--noise", "-110"
-) -PassThru -WindowStyle Normal
+$vradio = Start-Window -Title "vradio" -Command @"
+dotnet run --project Zeus.VirtualRadio.Host -- --board HermesLite2 --protocol P1 --bind 127.0.0.1 --rate 48 --tone 14074000:-73 --tone 14200000:-80 --tone 7074000:-90 --noise -110
+"@
 $pids += $vradio.Id
 
 # 2. bolt-web Vite dev server
 Write-Host "-> bolt-web Vite dev server starten op poort 5173..."
-$vite = Start-Process -FilePath "cmd" -ArgumentList "/c npm --prefix bolt-web run dev" `
-    -PassThru -WindowStyle Normal
+$vite = Start-Window -Title "bolt-web" -Command "npm --prefix bolt-web run dev"
 $pids += $vite.Id
 
 # 3. StationEngine (als aanwezig)
 if (Test-Path "$ScriptDir\StationEngine.exe") {
     Write-Host "-> StationEngine backend starten op poort 6061..."
-    $backend = Start-Process -FilePath "$ScriptDir\StationEngine.exe" `
-        -ArgumentList "--port 6061 --bind lan --lan-https-port 6443 --product-lan-https-port 6444 --webroot ./web" `
-        -PassThru -WindowStyle Normal
+    $backend = Start-Window -Title "StationEngine" -Command `
+        ".\StationEngine.exe --port 6061 --bind lan --lan-https-port 6443 --product-lan-https-port 6444 --webroot ./web"
     $pids += $backend.Id
 } else {
     Write-Host "⚠  StationEngine.exe niet gevonden — alleen virtuele radio + Vite gestart."
@@ -84,8 +83,7 @@ if (Test-Path "$ScriptDir\StationEngine.exe") {
 # PIDs opslaan voor stop commando
 $pids | Set-Content $PidFile
 
-# Wacht even
-Start-Sleep -Seconds 3
+Start-Sleep -Seconds 2
 
 Write-Host ""
 Write-Host "╔══════════════════════════════════════════════════════╗"
