@@ -7,12 +7,32 @@ $PidFile = Join-Path $ScriptDir ".dev\pids.txt"
 New-Item -ItemType Directory -Force -Path (Join-Path $ScriptDir ".dev") | Out-Null
 
 function Stop-All {
+    # Stop op basis van venstertitel (betrouwbaarder dan PID-tracking)
+    @('vradio', 'bolt-web', 'StationEngine') | ForEach-Object {
+        $title = $_
+        Get-Process powershell -ErrorAction SilentlyContinue | Where-Object {
+            try { $_.MainWindowTitle -like "*$title*" } catch { $false }
+        } | ForEach-Object {
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            Write-Host "  gestopt: $title (PID $($_.Id))"
+        }
+    }
+    # Stop ook directe processen via PID-file als fallback
     if (Test-Path $PidFile) {
         Get-Content $PidFile | ForEach-Object {
             $p = [int]$_
-            try { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue; Write-Host "  gestopt PID $p" } catch {}
+            try { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue } catch {}
         }
         Remove-Item $PidFile -Force
+    }
+    # Stop dotnet (vradio) en StationEngine direct
+    Get-Process -Name 'dotnet' -ErrorAction SilentlyContinue | ForEach-Object {
+        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        Write-Host "  gestopt: dotnet (PID $($_.Id))"
+    }
+    Get-Process -Name 'StationEngine' -ErrorAction SilentlyContinue | ForEach-Object {
+        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        Write-Host "  gestopt: StationEngine (PID $($_.Id))"
     }
     Write-Host "klaar."
 }
