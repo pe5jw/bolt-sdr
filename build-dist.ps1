@@ -1,7 +1,7 @@
 # Bolt SDR — Build & Distribute
 # Gebruik: .\build-dist.ps1
-# Output: C:\dev\BoltSDRv2\distro\{win-x64, win-arm64, linux-x64, linux-arm64}\
-# Deploy: kopieert win-arm64 als zip naar X:\BoltSDR\ (TX2 = Windows on ARM64)
+# Output: C:\dev\BoltSDRv2\distro\{win-x64, linux-x64, linux-arm64}\
+# Deploy: kopieert win-x64 als zip naar X:\BoltSDR\ (TX2)
 
 param(
     [string]$RepoRoot  = "",
@@ -14,7 +14,7 @@ if (-not $DistRoot)  { $DistRoot  = "C:\dev\BoltSDRv2\distro" }
 if (-not $DeployDst) { $DeployDst = "X:\BoltSDR" }
 
 $ErrorActionPreference = "Stop"
-$targets = @("win-x64", "win-arm64", "linux-x64", "linux-arm64")
+$targets = @("win-x64", "linux-x64", "linux-arm64")
 
 Write-Host "=== Bolt SDR Build ===" -ForegroundColor Yellow
 
@@ -44,22 +44,19 @@ foreach ($rid in $targets) {
     Copy-Item (Join-Path $RepoRoot "tci-bridge\*") $tciBridge -Recurse -Force
 }
 
-# --- Kopieer scripts naar win-x64 en win-arm64 ---
-Write-Host "`nKopieer scripts naar win builds..." -ForegroundColor Cyan
-foreach ($winRid in @("win-x64", "win-arm64")) {
-    $winDir = Join-Path $DistRoot $winRid
-    Copy-Item (Join-Path $RepoRoot "start-bolt.cmd")    $winDir -Force
-    Copy-Item (Join-Path $RepoRoot "deploy-server.cmd") $winDir -Force
-    Copy-Item (Join-Path $RepoRoot "setup-bolt.cmd")    $winDir -Force
-}
+# --- Kopieer scripts naar win-x64 ---
+Write-Host "`nKopieer scripts naar win-x64..." -ForegroundColor Cyan
+$winOut = Join-Path $DistRoot "win-x64"
+Copy-Item (Join-Path $RepoRoot "start-bolt.cmd")    $winOut -Force
+Copy-Item (Join-Path $RepoRoot "deploy-server.cmd") $winOut -Force
+Copy-Item (Join-Path $RepoRoot "setup-bolt.cmd")    $winOut -Force
 
-# --- Zip win-arm64 en kopieer naar TX2 (Windows on ARM64) ---
-Write-Host "`nZippen voor TX2 deploy (win-arm64)..." -ForegroundColor Cyan
+# --- Zip win-x64 en kopieer naar TX2 ---
+Write-Host "`nZippen voor TX2 deploy..." -ForegroundColor Cyan
 $zipName = "bolt-sdr-dist.zip"
-$tx2Out  = Join-Path $DistRoot "win-arm64"
 $zip     = Join-Path $DistRoot $zipName
 if (Test-Path $zip) { Remove-Item $zip -Force }
-Compress-Archive -Path (Join-Path $tx2Out "*") -DestinationPath $zip
+Compress-Archive -Path (Join-Path $winOut "*") -DestinationPath $zip
 
 Write-Host ("Kopieren naar " + $DeployDst + "...") -ForegroundColor Cyan
 if (-not (Test-Path $DeployDst)) {
@@ -71,7 +68,6 @@ if (-not (Test-Path $DeployDst)) {
 
 Write-Host "`n=== Klaar ===" -ForegroundColor Green
 Write-Host ("  win-x64    : " + (Join-Path $DistRoot "win-x64"))
-Write-Host ("  win-arm64  : " + (Join-Path $DistRoot "win-arm64"))
 Write-Host ("  linux-x64  : " + (Join-Path $DistRoot "linux-x64"))
 Write-Host ("  linux-arm64: " + (Join-Path $DistRoot "linux-arm64"))
 Write-Host ("  TX2 zip    : " + (Join-Path $DeployDst $zipName))
