@@ -1,4 +1,8 @@
 @echo off
+echo Stopping StationEngine before build...
+taskkill /IM StationEngine.exe /F >nul 2>&1
+timeout /t 2 /nobreak >nul
+
 echo Building BoltServer (StationEngine) for distribution...
 cd /d C:\dev\bolt-sdr
 dotnet publish BoltServer/BoltServer.csproj ^
