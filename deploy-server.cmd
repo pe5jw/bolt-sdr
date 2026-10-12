@@ -21,7 +21,6 @@ if not exist "%INSTALL_DIR%\bolt-sdr-dist.zip" (
 powershell -Command "Expand-Archive '%INSTALL_DIR%\bolt-sdr-dist.zip' '%INSTALL_DIR%-new\' -Force"
 xcopy /E /Y /Q "%INSTALL_DIR%-new\*" "%INSTALL_DIR%\" > nul
 rmdir /S /Q "%INSTALL_DIR%-new"
-del /Q "%INSTALL_DIR%\bolt-sdr-dist.zip" > nul 2>&1
 
 echo.
 echo Deploy klaar - Bolt SDR starten...
