@@ -3,6 +3,15 @@ title Bolt SDR Setup
 echo === Bolt SDR Setup ===
 echo.
 
+echo Verwijderen oude WDSP wisdom cache (forced rebuild)...
+if exist "%LOCALAPPDATA%\Zeus\wdspWisdom00" (
+    del /Q "%LOCALAPPDATA%\Zeus\wdspWisdom00"
+    echo Wisdom cache verwijderd.
+) else (
+    echo Geen bestaande wisdom cache gevonden.
+)
+echo.
+
 echo Aanmaken TCI bridge Python omgeving...
 C:\msys64\mingw64\bin\python.exe -m venv "%LOCALAPPDATA%\Bolt\tci-venv"
 "%LOCALAPPDATA%\Bolt\tci-venv\bin\python.exe" -m pip install -q websockets
