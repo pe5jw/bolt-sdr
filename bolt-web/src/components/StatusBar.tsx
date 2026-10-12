@@ -33,6 +33,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
   const [manualIp, setManualIp] = useState('')
   const [activeEndpoint, setActiveEndpoint] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [preferredMac, setPreferredMac] = useState<string>('')
 
   const labels: Record<ConnectionStatus, string> = {
     disconnected: 'Disconnected',
@@ -50,16 +51,21 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
     setShowPicker(true)
     setRadios(loadR())
     try {
-      const state = await fetch('/api/state').then(r => r.json()).catch(() => null)
+      const state = await fetch('/api/radio/state').then(r => r.json()).catch(() => null)
       if (state?.endpoint) { setActiveEndpoint(state.endpoint); localStorage.setItem('bolt-sdr-last-ip', state.endpoint) }
       else if (state?.status !== 'Connected') setActiveEndpoint(null)
+      // Load preferred MAC from autoconnect settings
+      try {
+        const ac = await fetch('/api/radio/autoconnect').then(r => r.json()).catch(() => null)
+        if (ac?.preferredMac) setPreferredMac(ac.preferredMac)
+      } catch {}
     } catch {}
   }
 
   const scan = async () => {
     setScanning(true)
     try {
-      const res = await fetch('/api/radios').then(r => r.json())
+      const res = await fetch('/api/radio/discover').then(r => r.json())
       const scanned: DiscoveredRadio[] = res.map((r: any) => ({ ip: r.ipAddress ?? r.ip, mac: r.macAddress ?? r.mac, board: r.boardId ?? r.board, firmware: r.firmwareVersion ?? r.firmware, busy: r.busy ?? false }))
       let saved = loadR()
       scanned.forEach(r => { saved = mergeR(saved, r) })
@@ -72,20 +78,29 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
   const addManualIp = async () => {
     if (!manualIp) return
     try {
-      const probeRes = await fetch('/api/radios/probe?ip=' + manualIp)
+      // Try direct probe first; fall back to adding as unknown
       let radio: DiscoveredRadio
-      if (probeRes.ok) {
-        const data = await probeRes.json()
-        radio = { ip: data.ipAddress ?? manualIp, mac: data.macAddress ?? '', board: data.boardId ?? 'HermesLite 2', firmware: data.firmwareVersion ?? '', busy: data.busy ?? false }
-      } else {
-        radio = { ip: manualIp, mac: '', board: 'HermesLite 2', firmware: '', busy: false }
+      try {
+        const probeRes = await fetch('/api/radio/discover/direct', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ip: manualIp }),
+        })
+        if (probeRes.ok) {
+          const data = await probeRes.json()
+          radio = { ip: data.ipAddress ?? manualIp, mac: data.macAddress ?? '', board: data.boardId ?? data.board ?? 'Unknown', firmware: data.firmwareVersion ?? data.firmware ?? '', busy: data.busy ?? false }
+        } else {
+          radio = { ip: manualIp, mac: '', board: 'Unknown', firmware: '', busy: false }
+        }
+      } catch {
+        radio = { ip: manualIp, mac: '', board: 'Unknown', firmware: '', busy: false }
       }
       const saved = mergeR(loadR(), radio)
       saveR(saved)
       setRadios(saved)
       setManualIp('')
     } catch {
-      alert('Could not reach ' + manualIp)
+      alert('Could not add ' + manualIp)
     }
   }
 
@@ -99,7 +114,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
   }
 
   const disconnect = async () => {
-    await fetch('/api/disconnect', { method: 'POST' })
+    await fetch('/api/radio/disconnect', { method: 'POST' })
     onDisconnect()
   }
 
@@ -164,7 +179,7 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
                   onClick={async () => {
                     if (r.busy) return
                     if (status === 'connected') {
-                      await fetch('/api/disconnect', { method: 'POST' })
+                      await fetch('/api/radio/disconnect', { method: 'POST' })
                       setActiveEndpoint(null)
                       onDisconnect()
                       await new Promise(res => setTimeout(res, 1000))
@@ -187,7 +202,16 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{r.ip}{r.mac && r.mac !== '—' ? ' — ' + r.mac : ''}{r.firmware && r.firmware !== '—' ? ' — fw ' + r.firmware : ''}</div>
                   </div>
-                  <button onClick={e => { e.stopPropagation(); removeRadio(r.ip) }} style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', fontSize: 14, padding: '0 4px', alignSelf: 'flex-start' }}>✕</button>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-end' }}>
+                    {r.mac && r.mac !== '—' && <button onClick={async e => {
+                      e.stopPropagation()
+                      const mac = r.mac.replace(/:/g, '').toUpperCase()
+                      const newMac = preferredMac === mac ? '' : mac
+                      await fetch('/api/radio/autoconnect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Enabled: true, PreferredMac: newMac }) })
+                      setPreferredMac(newMac)
+                    }} title={preferredMac === r.mac.replace(/:/g,'').toUpperCase() ? 'Clear preferred' : 'Set as preferred for autoconnect'} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, padding: '0 2px', color: preferredMac === r.mac.replace(/:/g,'').toUpperCase() ? 'var(--accent)' : 'var(--text-dim)' }}>★</button>}
+                    <button onClick={e => { e.stopPropagation(); removeRadio(r.ip) }} style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', fontSize: 14, padding: '0 4px' }}>✕</button>
+                  </div>
                 </div>
               </div>
             )
@@ -199,6 +223,17 @@ export function StatusBar({ status, radioName, connectedIp, onConnect, onDisconn
               <button onClick={disconnect} style={{ width: '100%', fontSize: 10, padding: '4px 8px', background: 'transparent', border: '1px solid var(--tx)', color: 'var(--tx)', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)' }}>
                 DISCONNECT
               </button>
+            </div>
+          )}
+
+          {/* Preferred MAC */}
+          {preferredMac && (
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-data)' }}>★ {preferredMac}</span>
+              <button onClick={async () => {
+                await fetch('/api/radio/autoconnect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Enabled: true, PreferredMac: '' }) })
+                setPreferredMac('')
+              }} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: 10, cursor: 'pointer', fontFamily: 'var(--font-data)' }}>clear</button>
             </div>
           )}
 
