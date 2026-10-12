@@ -63,7 +63,7 @@ if (-not (Test-Path $DeployDst)) {
 }
 
 Write-Host "`n=== Klaar ===" -ForegroundColor Green
-Write-Host "  win-x64   : $DistRoot\win-x64"
-Write-Host "  linux-x64 : $DistRoot\linux-x64"
-Write-Host "  linux-arm64: $DistRoot\linux-arm64"
-Write-Host "  TX2 zip   : $DeployDst\bolt-sdr-dist.zip"
+Write-Host ("  win-x64    : " + $DistRoot + "\win-x64")
+Write-Host ("  linux-x64  : " + $DistRoot + "\linux-x64")
+Write-Host ("  linux-arm64: " + $DistRoot + "\linux-arm64")
+Write-Host ("  TX2 zip    : " + $DeployDst + "\bolt-sdr-dist.zip")
