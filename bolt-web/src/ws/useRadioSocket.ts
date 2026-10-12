@@ -236,7 +236,7 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
       if (audioEnabledRef.current) {
         ws.send(new Uint8Array([MSG_AUDIO_STREAM_REQUEST, 1]))
       }
-      fetch('/api/state').then(r => r.json()).then(state => {
+      fetch('/api/radio/state').then(r => r.json()).then(state => {
         setRadioState(s => ({
           ...s,
           vfoHz: state.vfoHz ?? s.vfoHz,
