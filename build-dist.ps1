@@ -4,10 +4,14 @@
 # Deploy: kopieert win-x64 als zip naar X:\BoltSDR\
 
 param(
-    [string]$RepoRoot  = "C:\dev\BoltSDRv2",
-    [string]$DistRoot  = "C:\dev\BoltSDRv2\distro",
-    [string]$DeployDst = "X:\BoltSDR"
+    [string]$RepoRoot  = "",
+    [string]$DistRoot  = "",
+    [string]$DeployDst = ""
 )
+
+if (-not $RepoRoot)  { $RepoRoot  = "C:\dev\BoltSDRv2" }
+if (-not $DistRoot)  { $DistRoot  = "C:\dev\BoltSDRv2\distro" }
+if (-not $DeployDst) { $DeployDst = "X:\BoltSDR" }
 
 $ErrorActionPreference = "Stop"
 $targets = @("win-x64", "linux-x64", "linux-arm64")
