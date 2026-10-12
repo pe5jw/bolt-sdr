@@ -163,6 +163,13 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
 
     public static bool Nr3RnnrAvailable => AllNativeExportsAvailable(Nr3RnnrRequiredExports);
 
+    // SetPSPtol was added to WDSP after the initial bundled DLL build.
+    // Guard every call site so older wdsp.dll versions (without this export)
+    // degrade gracefully: FFTW tolerance stays at the WDSP default (~0.8).
+    private static bool? _setPsPtolAvailable;
+    private static bool SetPsPtolAvailable =>
+        _setPsPtolAvailable ??= WdspNativeLoader.TryProbeExport(nameof(NativeMethods.SetPSPtol));
+
     private static double FiniteOrZero(double value) =>
         double.IsFinite(value) ? value : 0.0;
 
@@ -2009,7 +2016,7 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
                 // pihpsdr semantic (transmitter.c:2517): ps_ptol=0 (default) → 0.8
                 // strict; ps_ptol=1 → 0.4 relaxed. Same convention in Thetis
                 // PSForm.designer.cs.
-                NativeMethods.SetPSPtol(id, _psPtol ? 0.4 : 0.8);
+                if (SetPsPtolAvailable) NativeMethods.SetPSPtol(id, _psPtol ? 0.4 : 0.8);
                 // pihpsdr/Thetis defaults: PinMode=1, MapMode=1 (transmitter.c:
                 // 1041-1042 ps_map=1 / ps_pin=1; PSForm.designer.cs chkPSPin /
                 // chkPSMap = Checked = true).
@@ -2817,7 +2824,7 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
                 _psPtol = ptol;
                 // ptol=true → relax 0.4; ptol=false → strict 0.8
                 // (pihpsdr transmitter.c:2517 / Thetis PSForm.cs).
-                if (id >= 0) NativeMethods.SetPSPtol(id, ptol ? 0.4 : 0.8);
+                if (id >= 0 && SetPsPtolAvailable) NativeMethods.SetPSPtol(id, ptol ? 0.4 : 0.8);
             }
             if (moxDelaySec != _psMoxDelaySec)
             {
