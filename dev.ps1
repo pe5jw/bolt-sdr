@@ -1,100 +1,58 @@
-# dev.ps1 — bolt-sdr development stack met virtuele radio
-#
-# Start 3 processen elk in een eigen PowerShell venster:
-#   1. zeus-vradio   — virtuele HPSDR radio op 127.0.0.1
-#   2. StationEngine — bolt-sdr backend op poort 6061
-#   3. bolt-web      — Vite dev server op poort 5173
-#
-# Gebruik:
-#   .\dev.ps1          # start alles
-#   .\dev.ps1 stop     # stop alles
-#
-# Browser: http://localhost:5173
-# Discover → 127.0.0.1 → verbind met virtuele radio
-
-param(
-    [string]$Action = "start"
-)
+param([string]$Action = "start")
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ScriptDir
 
-$PidFile = "$ScriptDir\.dev\pids.txt"
-New-Item -ItemType Directory -Force -Path "$ScriptDir\.dev" | Out-Null
+$PidFile = Join-Path $ScriptDir ".dev\pids.txt"
+New-Item -ItemType Directory -Force -Path (Join-Path $ScriptDir ".dev") | Out-Null
 
 function Stop-All {
     if (Test-Path $PidFile) {
         Get-Content $PidFile | ForEach-Object {
-            $pid = [int]$_
-            try {
-                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
-                Write-Host "  gestopt PID $pid"
-            } catch {}
+            $p = [int]$_
+            try { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue; Write-Host "  gestopt PID $p" } catch {}
         }
         Remove-Item $PidFile -Force
     }
     Write-Host "klaar."
 }
 
-if ($Action -eq "stop") {
-    Write-Host "-> stoppen..."
-    Stop-All
-    exit 0
+function Start-Window([string]$Title, [string]$Cmd) {
+    $args = "-NoExit -Command `"`$host.UI.RawUI.WindowTitle = '$Title'; Set-Location '$ScriptDir'; $Cmd`""
+    return Start-Process "powershell.exe" -ArgumentList $args -PassThru
 }
 
-# Bestaande processen opruimen
+if ($Action -eq "stop") { Write-Host "-> stoppen..."; Stop-All; exit 0 }
+
 Write-Host "-> bestaande processen stoppen..."
 Stop-All 2>$null
 Start-Sleep -Seconds 1
 
 $pids = @()
 
-# Hulpfunctie: start commando in nieuw PowerShell venster dat open blijft
-function Start-Window {
-    param([string]$Title, [string]$Command)
-    $proc = Start-Process "powershell.exe" -ArgumentList "-NoExit", "-Command", `
-        "`$host.UI.RawUI.WindowTitle = '$Title'; Set-Location '$ScriptDir'; $Command" `
-        -PassThru
-    return $proc
-}
-
-# 1. Virtuele radio
 Write-Host "-> virtuele radio starten (zeus-vradio op 127.0.0.1)..."
 $vradioCmd = "dotnet run --project Zeus.VirtualRadio.Host -- --board HermesLite2 --protocol P1 --bind 127.0.0.1 --rate 48 --tone 14074000:-73 --tone 14200000:-80 --tone 7074000:-90 --noise -110"
-$vradio = Start-Window -Title "vradio" -Command $vradioCmd
-$pids += $vradio.Id
+$p1 = Start-Window -Title "vradio" -Cmd $vradioCmd
+$pids += $p1.Id
 
-# 2. bolt-web Vite dev server
 Write-Host "-> bolt-web Vite dev server starten op poort 5173..."
-$vite = Start-Window -Title "bolt-web" -Command "npm --prefix bolt-web run dev"
-$pids += $vite.Id
+$p2 = Start-Window -Title "bolt-web" -Cmd "npm --prefix bolt-web run dev"
+$pids += $p2.Id
 
-# 3. StationEngine (als aanwezig)
-if (Test-Path "$ScriptDir\StationEngine.exe") {
+if (Test-Path (Join-Path $ScriptDir "StationEngine.exe")) {
     Write-Host "-> StationEngine backend starten op poort 6061..."
-    $backend = Start-Window -Title "StationEngine" -Command `
-        ".\StationEngine.exe --port 6061 --bind lan --lan-https-port 6443 --product-lan-https-port 6444 --webroot ./web"
-    $pids += $backend.Id
+    $seCmd = ".\StationEngine.exe --port 6061 --bind lan --lan-https-port 6443 --product-lan-https-port 6444 --webroot .\web"
+    $p3 = Start-Window -Title "StationEngine" -Cmd $seCmd
+    $pids += $p3.Id
 } else {
-    Write-Host "⚠  StationEngine.exe niet gevonden — alleen virtuele radio + Vite gestart."
+    Write-Host "StationEngine.exe niet gevonden - alleen virtuele radio + Vite gestart."
 }
 
-# PIDs opslaan voor stop commando
 $pids | Set-Content $PidFile
-
 Start-Sleep -Seconds 2
 
 Write-Host ""
-Write-Host "╔══════════════════════════════════════════════════════╗"
-Write-Host "║  bolt-sdr dev stack actief                          ║"
-Write-Host "╠══════════════════════════════════════════════════════╣"
-Write-Host "║  Browser:   http://localhost:5173                   ║"
-Write-Host "║  Discover → 127.0.0.1 → verbind met virtuele radio ║"
-Write-Host "╠══════════════════════════════════════════════════════╣"
-Write-Host "║  Tonen in panadapter:                               ║"
-Write-Host "║    14.074 MHz  (FT8, S9)                            ║"
-Write-Host "║    14.200 MHz  (SSB, S7)                            ║"
-Write-Host "║     7.074 MHz  (40m FT8, S5)                        ║"
-Write-Host "╠══════════════════════════════════════════════════════╣"
-Write-Host "║  Stop:   .\dev.ps1 stop                             ║"
-Write-Host "╚══════════════════════════════════════════════════════╝"
+Write-Host "bolt-sdr dev stack actief"
+Write-Host "  Browser:   http://localhost:5173"
+Write-Host "  Discover naar 127.0.0.1 voor virtuele radio"
+Write-Host "  Stop:  .\dev.ps1 stop"
