@@ -43,7 +43,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-using System.Runtime.InteropServices;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Contracts;
@@ -54,14 +54,16 @@ namespace Zeus.Dsp.Wdsp;
 /// Owns the one-shot WDSPwisdom FFTW plan-cache initialisation. Singleton —
 /// the WDSP wisdom file at $LOCALAPPDATA/Zeus/wdspWisdom00 is process-global
 /// state, so there's nothing to parallelise.
+///
+/// WDSPwisdom is run in an isolated child process (bolt-sdr.exe
+/// --wisdom-worker &lt;dir&gt;) so that FFTW heap corruption — known to occur
+/// on some Windows configurations — cannot crash the main server. If the
+/// child exits with a non-zero code (or the executable cannot be found),
+/// the main process continues without a wisdom cache; FFTW falls back to
+/// planning inline when channels open.
 /// </summary>
 public sealed class WdspWisdomInitializer
 {
-    // 250 ms is fast enough that the splash text never feels stale, slow enough
-    // that we're not P/Invoking 40×/s into wisdom_get_status() while FFTW is
-    // doing real work on a background thread.
-    private static readonly TimeSpan StatusPollInterval = TimeSpan.FromMilliseconds(250);
-
     private readonly ILogger _log;
     private readonly object _gate = new();
     private Task? _task;
@@ -76,23 +78,36 @@ public sealed class WdspWisdomInitializer
     public WisdomPhase Phase => (WisdomPhase)Volatile.Read(ref _phase);
 
     /// <summary>
-    /// Live WDSP wisdom status text (e.g. "Planning COMPLEX FORWARD FFT size
-    /// 1024"), updated at <see cref="StatusPollInterval"/> while
-    /// <see cref="Phase"/> is <see cref="WisdomPhase.Building"/>. Empty until
-    /// the first poll lands.
+    /// Live WDSP wisdom status text, updated while
+    /// <see cref="Phase"/> is <see cref="WisdomPhase.Building"/>.
+    /// Empty once the phase transitions to Ready.
     /// </summary>
     public string Status => Volatile.Read(ref _status) ?? string.Empty;
 
     public event Action<WisdomPhase>? PhaseChanged;
 
-    /// <summary>Fires when the WDSP status string changes during a build,
-    /// so the UI can stream sub-step progress without polling.</summary>
+    /// <summary>Fires when the WDSP status string changes during a build.</summary>
     public event Action<string>? StatusChanged;
 
     /// <summary>
-    /// Idempotent. First call kicks off the WDSPwisdom P/Invoke on a worker
-    /// thread and returns a Task tracking it. Subsequent calls (including
-    /// re-entrance from WdspDspEngine) return the same Task.
+    /// Runs WDSPwisdom directly in the current process. Call this only from the
+    /// <c>--wisdom-worker</c> child-process entry point in Program.cs — never
+    /// from the main server path, because FFTW can heap-corrupt and kill the process.
+    /// </summary>
+    public static int RunWorker(string dir)
+    {
+        WdspNativeLoader.EnsureResolverRegistered();
+        var dirForNative = dir.EndsWith(Path.DirectorySeparatorChar)
+            ? dir
+            : dir + Path.DirectorySeparatorChar;
+        int result = NativeMethods.WDSPwisdom(dirForNative);
+        Console.WriteLine($"wdsp.wisdom result={result}");
+        return 0;
+    }
+
+    /// <summary>
+    /// Idempotent. First call kicks off WDSPwisdom in a child process and
+    /// returns a Task tracking it. Subsequent calls return the same Task.
     /// </summary>
     public Task EnsureInitializedAsync()
     {
@@ -100,72 +115,136 @@ public sealed class WdspWisdomInitializer
         {
             if (_task is not null) return _task;
             SetPhase(WisdomPhase.Building);
-            WdspNativeLoader.EnsureResolverRegistered();
-            _ = Task.Run(PollStatusUntilReady);
-            _task = Task.Run(RunWisdom);
+            _task = Task.Run(RunWisdomInChildProcess);
             return _task;
         }
     }
 
-    private void RunWisdom()
+    private async Task RunWisdomInChildProcess()
     {
-        try
-        {
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Zeus");
-            Directory.CreateDirectory(dir);
+        var dir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Zeus");
+        Directory.CreateDirectory(dir);
 
-            // WDSP's wisdom.c does a plain strcat of "wdspWisdom00" onto the
-            // directory without inserting a path separator (see native/wdsp/
-            // wisdom.c:49-50). Pass the directory with a trailing separator so
-            // the native side produces a valid "<dir>/wdspWisdom00" path
-            // instead of "<dir>wdspWisdom00" which lands the wisdom file one
-            // level up.
-            var dirForNative = dir + Path.DirectorySeparatorChar;
+        _log.LogInformation("wdsp.wisdom: launching child worker for dir={Dir}", dir);
+        PublishStatus("Starting FFTW wisdom worker...");
 
-            _log.LogInformation("wdsp.wisdom initialising dir={Dir}", dirForNative);
-            int result = NativeMethods.WDSPwisdom(dirForNative);
-            var status = Marshal.PtrToStringUTF8(NativeMethods.wisdom_get_status()) ?? string.Empty;
-            _log.LogInformation(
-                "wdsp.wisdom ready result={Result} ({Source}) status={Status}",
-                result, result == 0 ? "loaded" : "built", status);
-        }
-        catch (Exception ex)
+        // Find the host executable — the same binary that is currently running.
+        var exePath = ResolveHostExecutable();
+        if (exePath is null)
         {
-            _log.LogError(ex, "wdsp.wisdom failed — subsequent FFT planning will take the slow path");
-        }
-        finally
-        {
+            _log.LogWarning(
+                "wdsp.wisdom: cannot locate host executable — skipping wisdom; " +
+                "FFTW will plan inline on first channel open");
+            PublishStatus(string.Empty);
             SetPhase(WisdomPhase.Ready);
+            return;
         }
-    }
 
-    // Polls the native status buffer on a separate thread. When WDSPwisdom
-    // loaded a cached file the whole call finishes before we ever poll —
-    // that's fine: we exit on the Ready transition with no status update,
-    // which is the right behaviour (no build happened, nothing to narrate).
-    private void PollStatusUntilReady()
-    {
+        var psi = new ProcessStartInfo
+        {
+            FileName               = exePath,
+            Arguments              = $"--wisdom-worker \"{dir}\"",
+            UseShellExecute        = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            CreateNoWindow         = true,
+        };
+
+        Process? child = null;
         try
         {
-            while (Phase == WisdomPhase.Building)
+            child = Process.Start(psi);
+            if (child is null)
             {
-                var s = Marshal.PtrToStringUTF8(NativeMethods.wisdom_get_status()) ?? string.Empty;
-                s = s.TrimEnd('\r', '\n', ' ', '\t');
-                if (!string.Equals(s, Volatile.Read(ref _status), StringComparison.Ordinal))
-                {
-                    Volatile.Write(ref _status, s);
-                    try { StatusChanged?.Invoke(s); }
-                    catch (Exception ex) { _log.LogDebug(ex, "wdsp.wisdom StatusChanged subscriber threw"); }
-                }
-                Thread.Sleep(StatusPollInterval);
+                _log.LogWarning("wdsp.wisdom: Process.Start returned null — skipping wisdom");
+                PublishStatus(string.Empty);
+                SetPhase(WisdomPhase.Ready);
+                return;
+            }
+
+            // Stream stdout lines as status updates so the UI can narrate planning.
+            _ = Task.Run(() => RelayOutput(child));
+
+            await child.WaitForExitAsync().ConfigureAwait(false);
+
+            if (child.ExitCode == 0)
+            {
+                _log.LogInformation("wdsp.wisdom: worker completed successfully");
+            }
+            else
+            {
+                // Non-zero exit may mean FFTW heap-corrupted and ntdll killed the
+                // child (0xC0000374 / -1073740940), or a normal failure path.
+                _log.LogWarning(
+                    "wdsp.wisdom: worker exited with code {Code} (0x{Code:X8}) — " +
+                    "proceeding without wisdom cache; FFTW will plan inline",
+                    child.ExitCode, (uint)child.ExitCode);
             }
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "wdsp.wisdom status poller exited unexpectedly");
+            _log.LogWarning(ex, "wdsp.wisdom: failed to launch or await worker — skipping wisdom");
         }
+        finally
+        {
+            child?.Dispose();
+            PublishStatus(string.Empty);
+            SetPhase(WisdomPhase.Ready);
+        }
+    }
+
+    private void RelayOutput(Process child)
+    {
+        try
+        {
+            string? line;
+            while ((line = child.StandardOutput.ReadLine()) is not null)
+            {
+                line = line.TrimEnd('\r', '\n', ' ', '\t');
+                if (string.IsNullOrEmpty(line)) continue;
+                PublishStatus(line);
+                _log.LogDebug("wdsp.wisdom worker: {Line}", line);
+            }
+        }
+        catch { /* child may exit mid-read */ }
+    }
+
+    private void PublishStatus(string s)
+    {
+        if (string.Equals(s, Volatile.Read(ref _status), StringComparison.Ordinal)) return;
+        Volatile.Write(ref _status, s);
+        try { StatusChanged?.Invoke(s); }
+        catch (Exception ex) { _log.LogDebug(ex, "wdsp.wisdom StatusChanged subscriber threw"); }
+    }
+
+    /// <summary>
+    /// Resolves the path to the host executable that should be re-launched as
+    /// the wisdom worker. Prefers the self-contained native binary (bolt-sdr.exe
+    /// on Windows, bolt-sdr on Linux); falls back to the .NET process image.
+    /// </summary>
+    private static string? ResolveHostExecutable()
+    {
+        // Self-contained publish: the running executable is bolt-sdr[.exe].
+        var processPath = Environment.ProcessPath;
+        if (!string.IsNullOrEmpty(processPath) && File.Exists(processPath))
+            return processPath;
+
+        // dotnet run / framework-dependent: look for bolt-sdr[.exe] next to the assembly.
+        var baseDir = AppContext.BaseDirectory;
+        foreach (var candidate in new[]
+        {
+            Path.Combine(baseDir, "bolt-sdr.exe"),
+            Path.Combine(baseDir, "bolt-sdr"),
+            Path.Combine(baseDir, "BoltServer.exe"),
+            Path.Combine(baseDir, "BoltServer"),
+        })
+        {
+            if (File.Exists(candidate)) return candidate;
+        }
+
+        return null;
     }
 
     private void SetPhase(WisdomPhase next)

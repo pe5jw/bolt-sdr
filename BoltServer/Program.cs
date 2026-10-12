@@ -1,4 +1,24 @@
+using Zeus.Dsp.Wdsp;
 using Zeus.Server;
+
+// --wisdom-worker <dir>  — internal: run WDSPwisdom in this isolated child process.
+// If FFTW corrupts the heap and ntdll kills us, only this child dies; the parent
+// catches the non-zero exit code and continues without a wisdom cache.
+var workerIdx = Array.IndexOf(args, "--wisdom-worker");
+if (workerIdx >= 0 && workerIdx + 1 < args.Length)
+{
+    var dir = args[workerIdx + 1];
+    try
+    {
+        return WdspWisdomInitializer.RunWorker(dir);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"wdsp.wisdom worker failed: {ex.Message}");
+        return 1;
+    }
+}
+
 var options = new BoltHostOptions
 {
     HttpPort = 6061,
