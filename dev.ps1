@@ -74,7 +74,7 @@ $pids += $vite.Id
 if (Test-Path "$ScriptDir\StationEngine.exe") {
     Write-Host "-> StationEngine backend starten op poort 6061..."
     $backend = Start-Process -FilePath "$ScriptDir\StationEngine.exe" `
-        -ArgumentList "--port 6060 --bind lan" `
+        -ArgumentList "--port 6061 --bind lan --lan-https-port 6443 --product-lan-https-port 6444 --webroot ./web" `
         -PassThru -WindowStyle Normal
     $pids += $backend.Id
 } else {
