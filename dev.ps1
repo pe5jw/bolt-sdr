@@ -39,13 +39,15 @@ Write-Host "-> bolt-web Vite dev server starten op poort 5173..."
 $p2 = Start-Window -Title "bolt-web" -Cmd "npm --prefix bolt-web run dev"
 $pids += $p2.Id
 
-if (Test-Path (Join-Path $ScriptDir "StationEngine.exe")) {
+$SeDir = "C:\dev\station-engine-dist"
+$SeExe = Join-Path $SeDir "StationEngine.exe"
+if (Test-Path $SeExe) {
     Write-Host "-> StationEngine backend starten op poort 6061..."
-    $seCmd = ".\StationEngine.exe --port 6061 --bind lan --lan-https-port 6443 --product-lan-https-port 6444 --webroot .\web"
+    $seCmd = "Set-Location '$SeDir'; .\StationEngine.exe --port 6061 --bind lan --lan-https-port 6443 --product-lan-https-port 6444 --webroot .\web"
     $p3 = Start-Window -Title "StationEngine" -Cmd $seCmd
     $pids += $p3.Id
 } else {
-    Write-Host "StationEngine.exe niet gevonden - alleen virtuele radio + Vite gestart."
+    Write-Host "StationEngine.exe niet gevonden in $SeDir - alleen virtuele radio + Vite gestart."
 }
 
 $pids | Set-Content $PidFile
