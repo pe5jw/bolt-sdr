@@ -60,9 +60,8 @@ function Start-Window {
 
 # 1. Virtuele radio
 Write-Host "-> virtuele radio starten (zeus-vradio op 127.0.0.1)..."
-$vradio = Start-Window -Title "vradio" -Command @"
-dotnet run --project Zeus.VirtualRadio.Host -- --board HermesLite2 --protocol P1 --bind 127.0.0.1 --rate 48 --tone 14074000:-73 --tone 14200000:-80 --tone 7074000:-90 --noise -110
-"@
+$vradioCmd = "dotnet run --project Zeus.VirtualRadio.Host -- --board HermesLite2 --protocol P1 --bind 127.0.0.1 --rate 48 --tone 14074000:-73 --tone 14200000:-80 --tone 7074000:-90 --noise -110"
+$vradio = Start-Window -Title "vradio" -Command $vradioCmd
 $pids += $vradio.Id
 
 # 2. bolt-web Vite dev server
