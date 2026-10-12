@@ -2,7 +2,7 @@
 
 # Bolt SDR
 
-Bolt SDR is a web SDR frontend built for the HermesLite 2, built on top of station-engine (a fork of OpenHPSDR Zeus). It probably works on other OpenHPSDR radios as well, but has not been tested beyond the HermesLite 2.
+Bolt SDR is a web SDR frontend built for the HermesLite 2 and other OpenHPSDR radios, built on top of **AnanCore** — a standalone fork of **OpenHPSDR Zeus** by Brian Keating (EI6LF).
 
 ## Modes
 
@@ -150,15 +150,24 @@ tci-bridge connects to bolt TCI server on port 40001.
 | CW via CAT (KY) | 19090 | TCP TS-2000 |
 | tci-bridge CAT + DVK | 4532 | TCP TS-2000 |
 | tci-bridge Winkey CW | 5597 | TCP WinKey |
-## Based on AnanCore / OpenHPSDR Zeus
+## Based on OpenHPSDR Zeus / AnanCore
 
-The C# backend originates from **AnanCore** (`abhishekprakash22/zeus`), a standalone
-fork of OpenHPSDR Zeus that removes all `openhpsdrzeus.com` infrastructure dependencies.
-The full provenance chain and per-component attributions are in
-[`BOLT-ATTRIBUTIONS.md`](BOLT-ATTRIBUTIONS.md).
+The C# backend provenance chain:
+
+```
+brianbruff/openhpsdr-zeus       ← OpenHPSDR Zeus by Brian Keating (EI6LF), GPL-2.0-or-later
+    └── abhishekprakash22/zeus  ← AnanCore: standalone fork, openhpsdrzeus.com deps removed
+            └── pe5jw/AnanCore  ← PE5JW fork, branch freedv-in-core
+                    └── pe5jw/bolt-sdr (this repository)
+```
+
+Bolt SDR further strips AnanCore to the transceiver core only: no plugins, no remote access,
+no cloud infrastructure, no DX cluster, no logbook, no VST, no support agent.
+
+Full provenance and per-component attributions: [`BOLT-ATTRIBUTIONS.md`](BOLT-ATTRIBUTIONS.md).
 
 OpenHPSDR Zeus is a .NET reimplementation of the OpenHPSDR Protocol-1/2 stack, informed by:
-- Thetis (https://github.com/ramdor/Thetis)
+- Thetis (https://github.com/ramdor/Thetis) by MW0LGE
 - piHPSDR (https://github.com/dl1ycf/pihpsdr) by Christoph Wullen (DL1YCF)
 - deskHPSDR (https://github.com/dl1bz/deskhpsdr) by Heiko (DL1BZ)
 

@@ -40,9 +40,9 @@ The C# backend projects in this repository originate from
 The lineage is:
 
 ```
-brianbruff/openhpsdr-zeus   ← Zeus origin (GPL-2.0-or-later)
-    └── abhishekprakash22/zeus  (AnanCore — standalone fork, GPL-2.0-or-later)
-            └── pe5jw/AnanCore  (PE5JW fork of AnanCore, branch freedv-in-core)
+brianbruff/openhpsdr-zeus       ← OpenHPSDR Zeus by Brian Keating (EI6LF), GPL-2.0-or-later
+    └── abhishekprakash22/zeus  ← AnanCore: standalone fork, openhpsdrzeus.com deps removed
+            └── pe5jw/AnanCore  ← PE5JW fork, branch freedv-in-core
                     └── pe5jw/bolt-sdr  ← this repository
 ```
 
