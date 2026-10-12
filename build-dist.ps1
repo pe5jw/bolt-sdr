@@ -20,7 +20,7 @@ Write-Host "=== Bolt SDR Build ===" -ForegroundColor Yellow
 
 # --- Frontend ---
 Write-Host "`nBuilding bolt-web..." -ForegroundColor Cyan
-Push-Location "$RepoRoot\bolt-web"
+Push-Location (Join-Path $RepoRoot "bolt-web")
 npm run build 2>&1 | Select-Object -Last 5
 if ($LASTEXITCODE -ne 0) { throw "npm build failed" }
 Pop-Location
@@ -28,46 +28,46 @@ Pop-Location
 # --- Backend: drie targets ---
 foreach ($rid in $targets) {
     Write-Host "`nPublishing BoltServer [$rid]..." -ForegroundColor Cyan
-    $out = "$DistRoot\$rid"
-    dotnet publish "$RepoRoot\BoltServer\BoltServer.csproj" `
-        -c Release -r $rid --self-contained true `
-        -o $out 2>&1 | Select-Object -Last 5
+    $out = Join-Path $DistRoot $rid
+    $csproj = Join-Path $RepoRoot "BoltServer\BoltServer.csproj"
+    dotnet publish $csproj -c Release -r $rid --self-contained true -o $out 2>&1 | Select-Object -Last 5
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for $rid" }
 
     # Web assets
-    $webDst = "$out\web"
+    $webDst = Join-Path $out "web"
     New-Item -ItemType Directory -Path $webDst -Force | Out-Null
-    Copy-Item "$RepoRoot\bolt-web\dist\*" $webDst -Recurse -Force
+    Copy-Item (Join-Path $RepoRoot "bolt-web\dist\*") $webDst -Recurse -Force
 
     # tci-bridge
-    $tciBridge = "$out\tci-bridge"
+    $tciBridge = Join-Path $out "tci-bridge"
     New-Item -ItemType Directory -Path $tciBridge -Force | Out-Null
-    Copy-Item "$RepoRoot\tci-bridge\*" $tciBridge -Recurse -Force
+    Copy-Item (Join-Path $RepoRoot "tci-bridge\*") $tciBridge -Recurse -Force
 }
 
 # --- Kopieer scripts naar win-x64 ---
 Write-Host "`nKopieer scripts naar win-x64..." -ForegroundColor Cyan
-$winOut = "$DistRoot\win-x64"
-Copy-Item "$RepoRoot\start-bolt.cmd"    $winOut -Force
-Copy-Item "$RepoRoot\deploy-server.cmd" $winOut -Force
-Copy-Item "$RepoRoot\setup-bolt.cmd"    $winOut -Force
+$winOut = Join-Path $DistRoot "win-x64"
+Copy-Item (Join-Path $RepoRoot "start-bolt.cmd")    $winOut -Force
+Copy-Item (Join-Path $RepoRoot "deploy-server.cmd") $winOut -Force
+Copy-Item (Join-Path $RepoRoot "setup-bolt.cmd")    $winOut -Force
 
 # --- Zip win-x64 en kopieer naar TX2 ---
 Write-Host "`nZippen voor TX2 deploy..." -ForegroundColor Cyan
-$zip = "$DistRoot\bolt-sdr-dist.zip"
+$zipName = "bolt-sdr-dist.zip"
+$zip     = Join-Path $DistRoot $zipName
 if (Test-Path $zip) { Remove-Item $zip -Force }
-Compress-Archive -Path "$winOut\*" -DestinationPath $zip
+Compress-Archive -Path (Join-Path $winOut "*") -DestinationPath $zip
 
-Write-Host "Kopieren naar $DeployDst..." -ForegroundColor Cyan
+Write-Host ("Kopieren naar " + $DeployDst + "...") -ForegroundColor Cyan
 if (-not (Test-Path $DeployDst)) {
-    Write-Host "WAARSCHUWING: $DeployDst niet bereikbaar — sla TX2 deploy over." -ForegroundColor Yellow
+    Write-Host ("WAARSCHUWING: " + $DeployDst + " niet bereikbaar - sla TX2 deploy over.") -ForegroundColor Yellow
 } else {
-    Copy-Item $zip "$DeployDst\bolt-sdr-dist.zip" -Force
+    Copy-Item $zip (Join-Path $DeployDst $zipName) -Force
     Write-Host "bolt-sdr-dist.zip gekopieerd naar TX2." -ForegroundColor Green
 }
 
 Write-Host "`n=== Klaar ===" -ForegroundColor Green
-Write-Host ("  win-x64    : " + $DistRoot + "\win-x64")
-Write-Host ("  linux-x64  : " + $DistRoot + "\linux-x64")
-Write-Host ("  linux-arm64: " + $DistRoot + "\linux-arm64")
-Write-Host ("  TX2 zip    : " + $DeployDst + "\bolt-sdr-dist.zip")
+Write-Host ("  win-x64    : " + (Join-Path $DistRoot "win-x64"))
+Write-Host ("  linux-x64  : " + (Join-Path $DistRoot "linux-x64"))
+Write-Host ("  linux-arm64: " + (Join-Path $DistRoot "linux-arm64"))
+Write-Host ("  TX2 zip    : " + (Join-Path $DeployDst $zipName))
