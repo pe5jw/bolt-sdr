@@ -92,6 +92,12 @@ public static class BoltEndpoints
             return Results.Ok();
         });
 
+        app.MapPost("/api/radio/tx-filter", (FilterRequest req, RadioService radio) =>
+        {
+            radio.SetTxFilter(req.Low, req.High);
+            return Results.Ok();
+        });
+
                 // MOX
         app.MapPost("/api/radio/mox", (MoxRequest req, TxService tx) =>
         {

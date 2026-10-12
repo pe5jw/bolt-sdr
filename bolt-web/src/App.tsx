@@ -375,12 +375,38 @@ export default function App() {
               mode={radioState.mode}
               filterLow={radioState.filterLow}
               filterHigh={radioState.filterHigh}
+              txFilterLow={radioState.txFilterLow}
+              txFilterHigh={radioState.txFilterHigh}
+              txFilterLocked={radioState.txFilterLocked}
               sidetoneHz={JSON.parse(localStorage.getItem('bolt-cw-settings') || '{"sidetoneHz":600}').sidetoneHz ?? 600}
               onMode={sendMode}
               onFilter={(low, high) => {
-                setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
+                setRadioState(s => {
+                  const newState = { ...s, filterLow: low, filterHigh: high }
+                  if (s.txFilterLocked) {
+                    newState.txFilterLow = low
+                    newState.txFilterHigh = high
+                    fetch('/api/radio/tx-filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ low, high }) }).catch(() => {})
+                  }
+                  return newState
+                })
                 send({ type: 'set_filter', low, high })
-                fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
+                fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) }).catch(() => {})
+              }}
+              onTxFilter={(low, high) => {
+                setRadioState(s => ({ ...s, txFilterLow: low, txFilterHigh: high }))
+                fetch('/api/radio/tx-filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ low, high }) }).catch(() => {})
+              }}
+              onTxFilterLock={(locked) => {
+                setRadioState(s => {
+                  const newState = { ...s, txFilterLocked: locked }
+                  if (locked) {
+                    newState.txFilterLow = s.filterLow
+                    newState.txFilterHigh = s.filterHigh
+                    fetch('/api/radio/tx-filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ low: s.filterLow, high: s.filterHigh }) }).catch(() => {})
+                  }
+                  return newState
+                })
               }}
             />
           </div>

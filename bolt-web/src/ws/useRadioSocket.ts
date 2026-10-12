@@ -8,6 +8,9 @@ export interface RadioState {
   mode: string
   filterLow: number
   filterHigh: number
+  txFilterLow: number
+  txFilterHigh: number
+  txFilterLocked: boolean
   mox: boolean
   tune: boolean
   agcMode: string
@@ -65,6 +68,9 @@ const DEFAULT_STATE: RadioState = {
   mode: 'USB',
   filterLow: -3000,
   filterHigh: 200,
+  txFilterLow: 150,
+  txFilterHigh: 2850,
+  txFilterLocked: true,
   mox: false,
   tune: false,
   agcMode: 'MEDIUM',
@@ -236,6 +242,8 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
           vfoHz: state.vfoHz ?? s.vfoHz,
           mode: s.mode?.startsWith("RTTY") ? s.mode : (state.mode === "CWU" ? "CW" : state.mode) ?? s.mode,
           filterLow: state.filterLowHz ?? s.filterLow,
+          txFilterLow: state.txFilterLowHz ?? s.txFilterLow,
+          txFilterHigh: state.txFilterHighHz ?? s.txFilterHigh,
           rxAfGainDb: state.rxAfGainDb ?? s.rxAfGainDb,
           agcTopDb: state.agcTopDb ?? s.agcTopDb,
           attDb: state.attenDb ?? s.attDb,

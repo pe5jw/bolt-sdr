@@ -4,8 +4,13 @@ interface Props {
   mode: string
   filterLow: number
   filterHigh: number
+  txFilterLow: number
+  txFilterHigh: number
+  txFilterLocked: boolean
   onMode: (mode: string) => void
   onFilter: (low: number, high: number) => void
+  onTxFilter: (low: number, high: number) => void
+  onTxFilterLock: (locked: boolean) => void
   sidetoneHz?: number
 }
 
@@ -27,10 +32,13 @@ function bwLabel(low: number, high: number): string {
   return bw >= 1000 ? `${(bw / 1000).toFixed(1)}k` : `${bw}`
 }
 
-export function ModeFilter({ mode, filterLow, filterHigh, onMode, onFilter, sidetoneHz = 600 }: Props) {
+export function ModeFilter({ mode, filterLow, filterHigh, txFilterLow, txFilterHigh, txFilterLocked, onMode, onFilter, onTxFilter, onTxFilterLock, sidetoneHz = 600 }: Props) {
   const [showAdv, setShowAdv] = useState(false)
   const [customBw, setCustomBw] = useState('')
+  const [showTxAdv, setShowTxAdv] = useState(false)
+  const [customTxBw, setCustomTxBw] = useState('')
   const bw = Math.abs(filterHigh - filterLow)
+  const txBw = Math.abs(txFilterHigh - txFilterLow)
   const presets = PRESETS[mode] ?? [[-3000, 200]]
 
   const applyCustomBw = () => {
@@ -39,6 +47,14 @@ export function ModeFilter({ mode, filterLow, filterHigh, onMode, onFilter, side
     const mid = (filterLow + filterHigh) / 2
     onFilter(Math.round(mid - hz / 2), Math.round(mid + hz / 2))
     setCustomBw('')
+  }
+
+  const applyCustomTxBw = () => {
+    const hz = parseInt(customTxBw)
+    if (isNaN(hz) || hz < 10) return
+    const mid = (txFilterLow + txFilterHigh) / 2
+    onTxFilter(Math.round(mid - hz / 2), Math.round(mid + hz / 2))
+    setCustomTxBw('')
   }
 
   return (
@@ -69,12 +85,66 @@ export function ModeFilter({ mode, filterLow, filterHigh, onMode, onFilter, side
       </div>
 
       <div className="filter-row">
-        <span>BW</span>
+        <span>RX</span>
         <span className="filter-val">{bwLabel(filterLow, filterHigh)} Hz</span>
         <span style={{ marginLeft: 8, fontSize: 10, color: 'var(--text-dim)' }}>
           {filterLow} / +{filterHigh} | ⬡ {sidetoneHz} Hz
         </span>
       </div>
+
+      <div className="filter-row" style={{ marginTop: 2 }}>
+        <span style={{ color: txFilterLocked ? 'var(--text-dim)' : 'var(--tx)' }}>TX</span>
+        <span className="filter-val" style={{ color: txFilterLocked ? 'var(--text-dim)' : 'var(--tx)' }}>
+          {txFilterLocked ? `= RX` : `${bwLabel(txFilterLow, txFilterHigh)} Hz`}
+        </span>
+        {!txFilterLocked && (
+          <span style={{ marginLeft: 8, fontSize: 10, color: 'var(--text-dim)' }}>
+            {txFilterLow} / +{txFilterHigh}
+          </span>
+        )}
+        <button
+          onClick={() => { onTxFilterLock(!txFilterLocked); if (!txFilterLocked) setShowTxAdv(false) }}
+          title={txFilterLocked ? 'TX filter linked to RX — click to unlock' : 'TX filter independent — click to link'}
+          style={{ marginLeft: 'auto', fontSize: 12, padding: '0 4px', background: 'none', border: '1px solid var(--border)', color: txFilterLocked ? 'var(--text-dim)' : 'var(--tx)', borderRadius: 3, cursor: 'pointer', lineHeight: '16px' }}>
+          {txFilterLocked ? '🔗' : '🔓'}
+        </button>
+        {!txFilterLocked && (
+          <button className="mode-btn" onClick={() => setShowTxAdv(v => !v)}
+            style={{ fontSize: 10, marginLeft: 4, opacity: 0.7 }}>
+            {showTxAdv ? '▲' : '▼'}
+          </button>
+        )}
+      </div>
+
+      {!txFilterLocked && showTxAdv && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4, paddingLeft: 8, borderLeft: '2px solid var(--tx)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', minWidth: 28 }}>LOW</span>
+            <input type="range" min={-8000} max={8000} step={50} value={txFilterLow}
+              onChange={e => onTxFilter(parseInt(e.target.value), txFilterHigh)}
+              style={{ flex: 1, accentColor: 'var(--tx)' }} />
+            <span style={{ fontSize: 10, color: 'var(--tx)', fontFamily: 'var(--font-data)', minWidth: 40, textAlign: 'right' }}>{txFilterLow}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', minWidth: 28 }}>HIGH</span>
+            <input type="range" min={-8000} max={8000} step={50} value={txFilterHigh}
+              onChange={e => onTxFilter(txFilterLow, parseInt(e.target.value))}
+              style={{ flex: 1, accentColor: 'var(--tx)' }} />
+            <span style={{ fontSize: 10, color: 'var(--tx)', fontFamily: 'var(--font-data)', minWidth: 40, textAlign: 'right' }}>{txFilterHigh}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', minWidth: 28 }}>BW</span>
+            <input type="number" value={customTxBw} onChange={e => setCustomTxBw(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && applyCustomTxBw()}
+              placeholder={String(txBw)}
+              style={{ flex: 1, fontSize: 10, padding: '2px 6px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 3, fontFamily: 'var(--font-data)' }} />
+            <button onClick={applyCustomTxBw}
+              style={{ fontSize: 10, padding: '2px 8px', background: 'var(--bg-control)', border: '1px solid var(--border)', color: 'var(--text-dim)', borderRadius: 3, cursor: 'pointer' }}>
+              SET
+            </button>
+          </div>
+        </div>
+      )}
 
       {showAdv && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
