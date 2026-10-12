@@ -90,7 +90,7 @@ disown $! 2>/dev/null || true
 if [ -f "./StationEngine" ]; then
   echo "→ StationEngine backend starten op poort 6061..."
   : > "$BACKEND_LOG"
-  nohup ./StationEngine --port 6061 --bind lan \
+  nohup ./StationEngine --port 6060 --bind lan \
     > "$BACKEND_LOG" 2>&1 &
   echo $! > "$BACKEND_PID_FILE"
   disown $! 2>/dev/null || true
