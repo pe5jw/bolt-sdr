@@ -95,7 +95,7 @@ public static class BoltHost
             new RingBufferLoggerProvider(diagnosticLogBuffer, diagnosticLogFileSink));
 
         var tciSection = builder.Configuration.GetSection("Tci");
-        var tciEnabled = tciSection.GetValue<bool>("Enabled");
+        var tciEnabled = tciSection.GetValue<bool?>("Enabled") ?? true;
         var tciBindAddress = tciSection.GetValue<string?>("BindAddress") ?? "127.0.0.1";
         var tciPort = tciSection.GetValue<int?>("Port") ?? 40001;
 

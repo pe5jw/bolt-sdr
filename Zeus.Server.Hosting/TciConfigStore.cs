@@ -98,7 +98,7 @@ public sealed class TciConfigStore : IDisposable
 public sealed class TciConfigEntry
 {
     public int Id { get; set; }
-    public bool Enabled { get; set; }
+    public bool Enabled { get; set; } = true;
     public string BindAddress { get; set; } = "127.0.0.1";
     public int Port { get; set; } = 40001;
     public DateTime UpdatedUtc { get; set; }
