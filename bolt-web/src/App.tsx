@@ -45,7 +45,7 @@ export default function App() {
     fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).catch(() => {})
   }
   midiEngine.onVfoChange = (hz) => {
-    setRadioState(s => ({ ...s, vfoHz: hz }))
+    sendVfo(hz)
   }
   midiEngine.onTune = (on) => {
     setRadioState(s => ({ ...s, tune: on }))
