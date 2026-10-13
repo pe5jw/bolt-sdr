@@ -57,7 +57,7 @@ public sealed class TciOptions
     /// Enable the TCI server. Defaults to false for security — TCI has no
     /// authentication; localhost binding is the security boundary.
     /// </summary>
-    public bool Enabled { get; set; }
+    public bool Enabled { get; set; } = true;
 
     /// <summary>
     /// Bind address for the TCI WebSocket server. Defaults to 127.0.0.1
