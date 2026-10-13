@@ -45,24 +45,29 @@ interface Props {
   onDriveMax?: (v: number) => void
 }
 
-// Grayline map paneel — ververst elke 5 minuten
+// Propagatie paneel: grayline (links) + MUF kaart (rechts), beide verversten elke 5 min
 function GraylinePanel() {
   const [refreshKey, setRefreshKey] = useState(0)
   useEffect(() => {
     const id = setInterval(() => setRefreshKey(k => k + 1), 5 * 60 * 1000)
     return () => clearInterval(id)
   }, [])
-  const url = `https://dx.qsl.net/cgi-bin/dogreyline.cgi?${refreshKey}`
+  const graylineUrl = `https://dx.qsl.net/cgi-bin/dogreyline.cgi?t=${refreshKey}`
+  const mufUrl = `https://prop.kc2g.com/renders/current/mufd-normal-now.svg?t=${refreshKey}`
+  const mapStyle = { flex: 1, minWidth: 0, minHeight: 0, background: '#000', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' } as const
+  const imgStyle = { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', display: 'block' } as const
+  const labelStyle = { position: 'absolute', bottom: 4, right: 6, fontSize: 9, color: 'rgba(255,255,255,0.3)', fontFamily: 'var(--font-data)' } as const
   return (
-    <div style={{ flex: 1, minHeight: 0, background: '#000', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-      <img
-        key={refreshKey}
-        src={url}
-        alt="Grayline map"
-        style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', display: 'block' }}
-        onError={e => { (e.target as HTMLImageElement).src = 'https://dx.qsl.net/images/greyline-9617.jpg' }}
-      />
-      <span style={{ position: 'absolute', bottom: 4, right: 8, fontSize: 9, color: 'rgba(255,255,255,0.3)', fontFamily: 'var(--font-data)' }}>dx.qsl.net · ververst elke 5 min</span>
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'row', gap: 1 }}>
+      <div style={mapStyle}>
+        <img key={`gl-${refreshKey}`} src={graylineUrl} alt="Grayline" style={imgStyle}
+          onError={e => { (e.target as HTMLImageElement).src = 'https://dx.qsl.net/images/greyline-9617.jpg' }} />
+        <span style={labelStyle}>Grayline · dx.qsl.net</span>
+      </div>
+      <div style={mapStyle}>
+        <img key={`muf-${refreshKey}`} src={mufUrl} alt="MUF 3000km" style={imgStyle} />
+        <span style={labelStyle}>MUF 3000km · prop.kc2g.com</span>
+      </div>
     </div>
   )
 }
