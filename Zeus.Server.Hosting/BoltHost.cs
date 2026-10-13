@@ -108,7 +108,12 @@ public static class BoltHost
         catch (Exception ex) { Console.Error.WriteLine($"tci bootstrap: {ex.Message}"); }
         if (persistedTci is not null)
         {
-            tciEnabled = persistedTci.Enabled;
+            // Persist overrides the default, but only when appsettings explicitly disables TCI.
+            // A persisted Enabled=false from a pre-default-on install is treated as a legacy
+            // unset value — TCI stays on unless the operator explicitly sets Enabled: false in
+            // appsettings (tciSection), which takes precedence over any persisted value.
+            var tciEnabledOverride = tciSection.GetValue<bool?>("Enabled");
+            tciEnabled = tciEnabledOverride ?? true;
             tciBindAddress = persistedTci.BindAddress;
             tciPort = persistedTci.Port;
         }
