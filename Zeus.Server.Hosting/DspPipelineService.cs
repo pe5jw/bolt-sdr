@@ -2012,7 +2012,8 @@ public class DspPipelineService : BackgroundService,
         if (_radio.ActiveClient is IProtocol1Client catchUpClient)
         {
             _log.LogInformation("dsp.pipeline ExecuteAsync catch-up: radio connected during startup, calling OnRadioConnected");
-            OnRadioConnected(catchUpClient);
+            try { OnRadioConnected(catchUpClient); }
+            catch (Exception ex) { _log.LogError(ex, "dsp.pipeline catch-up OnRadioConnected failed"); }
         }
 
         using var timer = new PeriodicTimer(TickPeriod);
@@ -3937,8 +3938,16 @@ public class DspPipelineService : BackgroundService,
         ApplyP1PsFeedbackRateOverride(_radio.ConnectedBoardKind, rate, wdsp.SetPsFeedbackRateHz);
         // P1 DAC runs at 48 kHz; keep TXA at the 48/48/48 profile Hermes is
         // calibrated against.
-        wdsp.OpenTxChannel(outputRateHz: 48_000);
-        ApplyStateToNewChannel(wdsp, channelId);
+        try { wdsp.OpenTxChannel(outputRateHz: 48_000); }
+        catch (EntryPointNotFoundException ex)
+        {
+            _log.LogWarning(ex, "dsp.pipeline p1 wdsp missing entry point during OpenTxChannel — TXA unavailable");
+        }
+        try { ApplyStateToNewChannel(wdsp, channelId); }
+        catch (EntryPointNotFoundException ex)
+        {
+            _log.LogWarning(ex, "dsp.pipeline p1 wdsp missing entry point — partial config applied");
+        }
 
         IDspEngine? old;
         int oldChannel;

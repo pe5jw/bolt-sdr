@@ -66,8 +66,8 @@ export type RadioCommand =
 const DEFAULT_STATE: RadioState = {
   vfoHz: 14200000,
   mode: 'USB',
-  filterLow: -3000,
-  filterHigh: 200,
+  filterLow: 100,
+  filterHigh: 2850,
   txFilterLow: 150,
   txFilterHigh: 2850,
   txFilterLocked: true,
