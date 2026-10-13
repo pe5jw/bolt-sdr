@@ -45,6 +45,28 @@ interface Props {
   onDriveMax?: (v: number) => void
 }
 
+// Grayline map paneel — ververst elke 5 minuten
+function GraylinePanel() {
+  const [refreshKey, setRefreshKey] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setRefreshKey(k => k + 1), 5 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [])
+  const url = `https://dx.qsl.net/cgi-bin/dogreyline.cgi?${refreshKey}`
+  return (
+    <div style={{ flex: 1, minHeight: 0, background: '#000', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+      <img
+        key={refreshKey}
+        src={url}
+        alt="Grayline map"
+        style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', display: 'block' }}
+        onError={e => { (e.target as HTMLImageElement).src = 'https://dx.qsl.net/images/greyline-9617.jpg' }}
+      />
+      <span style={{ position: 'absolute', bottom: 4, right: 8, fontSize: 9, color: 'rgba(255,255,255,0.3)', fontFamily: 'var(--font-data)' }}>dx.qsl.net · ververst elke 5 min</span>
+    </div>
+  )
+}
+
 export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, centerHz, onTune, tuneStep = 1000, filterLow = -3000, filterHigh = 200, onFilter, vfoOverlay, smeterOverlay, vfoHz, mode, dbm, tuneStepOverlay, onStepChange, controlsOverlay, onBand, onMode, onFilterPreset, filterLowHz, filterHighHz, nrMode, onNrMode, mox, onControlPanel, agcMode, onAgc, attenDb, onAtten, autoRfGain, onAutoRfGain, driveDb, onDrive, tunePct, onTune2, driveMaxPct, showDecoder = true, onDriveMax }: Props) {
   const [openPanel, setOpenPanel] = useState<'band'|'mode'|'filter'|'step'|'nr'|'zoom'|'size'|null>(null)
   const togglePanel = (p: 'band'|'mode'|'filter'|'step') => setOpenPanel(prev => prev === p ? null : p)
@@ -53,8 +75,6 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
   const [dbMax, setDbMax] = useState(() => parseInt(localStorage.getItem('bolt-top') || '-40'))
   const [panPct, setPanPct] = useState(() => parseFloat(localStorage.getItem('bolt-pan-pct') || '50'))
   const [wfPct, setWfPct] = useState(() => parseFloat(localStorage.getItem('bolt-wf-pct') || '35'))
-  const [decoderText, setDecoderText] = useState('')
-  useEffect(() => { const h = (e: Event) => { const ev = e as CustomEvent; setDecoderText(t => (t + ev.detail.text).slice(-2000)) }; window.addEventListener('bolt-fldigi-text', h); return () => window.removeEventListener('bolt-fldigi-text', h) }, [])
   useEffect(() => { const h = () => { setPanPct(parseFloat(localStorage.getItem('bolt-pan-pct') || '50')); setWfPct(parseFloat(localStorage.getItem('bolt-wf-pct') || '35')) }; window.addEventListener('bolt-layout-changed', h); return () => window.removeEventListener('bolt-layout-changed', h) }, [])
   useEffect(() => {
     const h = () => { const v = localStorage.getItem('bolt-zoom'); if (v) setZoom(parseInt(v)) }
@@ -759,9 +779,7 @@ export function Panadapter({ display, autoSetTrigger: _autoSetTrigger = 0, cente
           window.addEventListener('touchend', onUp)
         }}
       />
-      {showDecoder !== false && <div style={{ flex: 1, minHeight: 0, background: "var(--bg-panel)", overflow: "hidden", padding: "4px 8px", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
-        <pre style={{ margin: 0, fontSize: 12, color: 'var(--accent)', fontFamily: 'var(--font-data)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', overflowY: 'auto' }}>{decoderText || <span style={{ color: 'var(--text-dim)' }}>DECODER — wacht op fldigi...</span>}</pre>
-        </div>}
+      {showDecoder !== false && <GraylinePanel />}
     </div>
   )
 }
