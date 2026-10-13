@@ -75,7 +75,7 @@ public static class BoltEndpoints
         {
             if (!tx.TrySetTun(req.On, out var tunError))
                 return Results.BadRequest(new { error = tunError });
-            return Results.Ok();
+            return Results.Ok(new { tunOn = req.On });
         });
 
                 // Zoom
