@@ -49,6 +49,7 @@ export default function App() {
   }
   midiEngine.onTune = (on) => {
     setRadioState(s => ({ ...s, tune: on }))
+    setMoxActive(on)
     fetch('/api/radio/tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).catch(() => {})
   }
   midiEngine.onCommand = (cmd: string, value: number) => {
@@ -112,6 +113,7 @@ export default function App() {
     return () => window.removeEventListener('bolt-ptt-mode-changed', h as EventListener)
   }, [])
   const prevMoxRef = useRef(false)
+  const prevTuneRef = useRef(false)
   const moxPulseRef = useRef<ReturnType<typeof setInterval> | null>(null)
   if (prevMoxRef.current !== radioState.mox) {
     prevMoxRef.current = radioState.mox
@@ -121,9 +123,17 @@ export default function App() {
       setTimeout(() => window.dispatchEvent(new Event('bolt-autoset-trigger')), 100)
       moxPulseRef.current = setInterval(() => window.dispatchEvent(new Event('bolt-autoset-trigger')), 500)
     } else {
-      // RX: stop pulseren, doe één laatste auto SET
+      // RX: stop pulseren, doe autoset burst
       if (moxPulseRef.current) { clearInterval(moxPulseRef.current); moxPulseRef.current = null }
-      // Meerdere triggers bij RX herstel
+      setTimeout(() => window.dispatchEvent(new Event('bolt-autoset-trigger')), 100)
+      setTimeout(() => window.dispatchEvent(new Event('bolt-autoset-trigger')), 300)
+      setTimeout(() => window.dispatchEvent(new Event('bolt-autoset-trigger')), 600)
+    }
+  }
+  // Tune→RX herstel: ook autoset burst zodat waterfall terugkomt
+  if (prevTuneRef.current !== radioState.tune) {
+    prevTuneRef.current = radioState.tune
+    if (!radioState.tune) {
       setTimeout(() => window.dispatchEvent(new Event('bolt-autoset-trigger')), 100)
       setTimeout(() => window.dispatchEvent(new Event('bolt-autoset-trigger')), 300)
       setTimeout(() => window.dispatchEvent(new Event('bolt-autoset-trigger')), 600)
@@ -476,7 +486,8 @@ export default function App() {
             }}
             onTune={on => {
               setRadioState(s => ({ ...s, tune: on }))
-              fetch('/api/radio/tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).then(r => r.json()).then(d => { if (d.tunOn !== undefined) setRadioState(s => ({ ...s, tune: d.tunOn })) }).catch(() => setRadioState(s => ({ ...s, tune: false })))
+              setMoxActive(on)
+              fetch('/api/radio/tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).then(r => r.json()).then(d => { if (d.tunOn !== undefined) { setRadioState(s => ({ ...s, tune: d.tunOn })); if (!d.tunOn) setMoxActive(false) } }).catch(() => { setRadioState(s => ({ ...s, tune: false })); setMoxActive(false) })
             }}
             onAfGain={db => {
               setRadioState(s => ({ ...s, rxAfGainDb: db }))
