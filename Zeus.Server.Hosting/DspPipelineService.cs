@@ -1986,6 +1986,7 @@ public class DspPipelineService : BackgroundService,
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         OpenSynthetic();
+        _log.LogInformation("dsp.pipeline ExecuteAsync subscribed to radio events");
         _radio.Connected += OnRadioConnected;
         _radio.Disconnected += OnRadioDisconnected;
         _radio.StateChanged += OnRadioStateChanged;
@@ -3907,9 +3908,21 @@ public class DspPipelineService : BackgroundService,
     {
         var state = _radio.Snapshot();
         int rate = state.SampleRate;
+        _log.LogInformation("dsp.pipeline OnRadioConnected enter rate={Rate}", rate);
 
-        var wdsp = new WdspDspEngine(_loggerFactory.CreateLogger<WdspDspEngine>());
-        int channelId = wdsp.OpenChannel(rate, Width);
+        WdspDspEngine wdsp;
+        int channelId;
+        try
+        {
+            wdsp = new WdspDspEngine(_loggerFactory.CreateLogger<WdspDspEngine>());
+            channelId = wdsp.OpenChannel(rate, Width);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "dsp.pipeline OnRadioConnected OpenChannel failed rate={Rate}", rate);
+            throw;
+        }
+        _log.LogInformation("dsp.pipeline OnRadioConnected OpenChannel ok channel={Id}", channelId);
         // Seed the operator's persisted TX display config before TXA opens so
         // the analyzer comes up at their FFT/window/smoothing. Display-only.
         SeedTxDisplayConfig(wdsp);
@@ -3925,8 +3938,25 @@ public class DspPipelineService : BackgroundService,
         ApplyP1PsFeedbackRateOverride(_radio.ConnectedBoardKind, rate, wdsp.SetPsFeedbackRateHz);
         // P1 DAC runs at 48 kHz; keep TXA at the 48/48/48 profile Hermes is
         // calibrated against.
-        wdsp.OpenTxChannel(outputRateHz: 48_000);
-        ApplyStateToNewChannel(wdsp, channelId);
+        try
+        {
+            wdsp.OpenTxChannel(outputRateHz: 48_000);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "dsp.pipeline OnRadioConnected OpenTxChannel failed");
+            throw;
+        }
+        _log.LogInformation("dsp.pipeline OnRadioConnected OpenTxChannel ok");
+        try
+        {
+            ApplyStateToNewChannel(wdsp, channelId);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "dsp.pipeline OnRadioConnected ApplyStateToNewChannel failed channel={Id}", channelId);
+            throw;
+        }
 
         IDspEngine? old;
         int oldChannel;
