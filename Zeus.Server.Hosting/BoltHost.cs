@@ -114,8 +114,8 @@ public static class BoltHost
             // appsettings (tciSection), which takes precedence over any persisted value.
             var tciEnabledOverride = tciSection.GetValue<bool?>("Enabled");
             tciEnabled = tciEnabledOverride ?? true;
-            tciBindAddress = persistedTci.BindAddress;
-            tciPort = persistedTci.Port;
+            tciBindAddress = tciSection.GetValue<string?>("BindAddress") ?? persistedTci.BindAddress;
+            tciPort = tciSection.GetValue<int?>("Port") ?? persistedTci.Port;
         }
 
         CatRuntimeConfig? persistedCat = null;
