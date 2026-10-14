@@ -7,10 +7,13 @@ netsh advfirewall firewall show rule name="Bolt SDR TCI 40001" > nul 2>&1
 set TCI_EXISTS=%errorlevel%
 netsh advfirewall firewall show rule name="Bolt SDR HTTPS 6443" > nul 2>&1
 set HTTPS_EXISTS=%errorlevel%
+netsh advfirewall firewall show rule name="Bolt SDR HTTP 6061" > nul 2>&1
+set HTTP_EXISTS=%errorlevel%
 
 :: Alleen admin vragen als firewall regels ontbreken
 if %TCI_EXISTS%==1 goto NEED_ADMIN
 if %HTTPS_EXISTS%==1 goto NEED_ADMIN
+if %HTTP_EXISTS%==1 goto NEED_ADMIN
 goto START_ENGINE
 
 :NEED_ADMIN
@@ -27,6 +30,10 @@ if %TCI_EXISTS%==1 (
 if %HTTPS_EXISTS%==1 (
     echo Opening firewall port 6443 for HTTPS...
     netsh advfirewall firewall add rule name="Bolt SDR HTTPS 6443" dir=in action=allow protocol=TCP localport=6443
+)
+if %HTTP_EXISTS%==1 (
+    echo Opening firewall port 6061 for HTTP...
+    netsh advfirewall firewall add rule name="Bolt SDR HTTP 6061" dir=in action=allow protocol=TCP localport=6061
 )
 
 :START_ENGINE
@@ -46,17 +53,11 @@ start "Bolt SDR" "%SCRIPT_DIR%bolt-sdr.exe" ^
 echo Waiting for engine to start...
 timeout /t 8 /nobreak > nul
 
-echo Enabling TCI...
-curl -s -X POST http://localhost:6061/api/tci/config ^
-  -H "Content-Type: application/json" ^
-  -d "{\"enabled\": true, \"bindAddress\": \"0.0.0.0\", \"port\": 40001}"
-
-echo.
 echo Starting tci-bridge...
 start "TCI Bridge" "%SCRIPT_DIR%tci-bridge\start.bat"
 
 echo ================================
-echo Bolt SDR HTTP  : http://192.168.8.141:6061
-echo Bolt SDR HTTPS : https://192.168.8.141:6443
+echo Bolt SDR HTTP  : http://192.168.8.156:6061
+echo Bolt SDR HTTPS : https://192.168.8.156:6443
 echo TCI            : port 40001
-echo Open browser   : https://192.168.8.141:6443
+echo Open browser   : http://192.168.8.156:6061
