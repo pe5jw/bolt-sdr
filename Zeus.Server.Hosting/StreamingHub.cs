@@ -127,6 +127,7 @@ public sealed class StreamingHub
     private long _dropsDisplay;
     private long _dropsMeter;
     private long _dropsOther;
+    private long _audioFramesBroadcast;
     private long _micInboundFrames;
     private long _micInboundBytes;
     private long _lastMicInboundUnixMs;
@@ -217,6 +218,7 @@ public sealed class StreamingHub
         audioSubscribers = Volatile.Read(ref _audioStreamRequests),
         displaySubscribers = Volatile.Read(ref _displayStreamRequests),
         preferredDisplaySubscribers = Volatile.Read(ref _preferredDisplayStreamRequests),
+        audioFramesBroadcast = System.Threading.Interlocked.Read(ref _audioFramesBroadcast),
         drops = new
         {
             audio = System.Threading.Interlocked.Read(ref _dropsAudio),
@@ -521,6 +523,9 @@ public sealed class StreamingHub
         var payload = new byte[total];
         var writer = new FixedBufferWriter(payload, total);
         frame.Serialize(writer);
+        long n = System.Threading.Interlocked.Increment(ref _audioFramesBroadcast);
+        if (n <= 5 || n % 500 == 0)
+            _log.LogInformation("hub.audio.broadcast seq={Seq} clients={C} frames={N}", frame.Seq, _clients.Count, n);
         foreach (var client in _clients.Values)
         {
             if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsAudio);
@@ -941,6 +946,9 @@ public sealed class StreamingHub
             if (want == _wantsAudio) return;
             _wantsAudio = want;
             Interlocked.Add(ref _hub._audioStreamRequests, want ? 1 : -1);
+            _hub._log.LogInformation(
+                "ws.audio.request id={Id} want={Want} total={Total}",
+                Id, want, Volatile.Read(ref _hub._audioStreamRequests));
         }
 
         // Whether this client currently has any mounted display-frame consumer
