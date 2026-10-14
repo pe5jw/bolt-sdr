@@ -351,6 +351,27 @@ public static class BoltHost
         });
         app.UseRouting();
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
+
+        // TCI WebSocket handler — branch requests arriving on the TCI port
+        // to TciServer.AcceptAsync. All other ports fall through to the normal
+        // REST + SignalR pipeline. The port-branch is the cleanest way to
+        // multiplex TCI and the main HTTP API over a single Kestrel instance
+        // without path-based routing (TCI clients connect to "/" with no path).
+        if (tciEnabled)
+        {
+            app.MapWhen(
+                ctx => ctx.Connection.LocalPort == tciPort,
+                tciApp =>
+                {
+                    tciApp.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
+                    tciApp.Run(async ctx =>
+                    {
+                        var tci = ctx.RequestServices.GetRequiredService<TciServer>();
+                        await tci.AcceptAsync(ctx);
+                    });
+                });
+        }
+
         app.MapBoltEndpoints();
         app.MapFallbackToFile("index.html");
 
