@@ -30,7 +30,7 @@ foreach ($rid in $targets) {
     Write-Host "`nPublishing BoltServer [$rid]..." -ForegroundColor Cyan
     $out = Join-Path $DistRoot $rid
     $csproj = Join-Path $RepoRoot "BoltServer\BoltServer.csproj"
-    dotnet publish $csproj -c Release -r $rid --self-contained true -o $out 2>&1 | Select-Object -Last 5
+    dotnet publish $csproj -c Release -r $rid --self-contained true -p:PlatformTarget=AnyCPU -o $out 2>&1 | Select-Object -Last 5
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for $rid" }
 
     # Web assets
