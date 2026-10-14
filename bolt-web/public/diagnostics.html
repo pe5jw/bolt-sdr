@@ -22,12 +22,13 @@
   <script>
     async function load() {
       try {
-        const r = await fetch('/api/diagnostics/streaming')
+        const r = await fetch('/bolt-api/diagnostics')
         const d = await r.json()
         let h = ''
         h += '<h2>CLIENTS</h2><table>'
         h += '<tr><td>Verbonden</td><td class="val">' + d.connectedClients + '</td></tr>'
         h += '<tr><td>Audio streams</td><td class="val">' + d.audioSubscribers + '</td></tr>'
+        h += '<tr><td>Audio frames broadcast</td><td class="' + (d.audioFramesBroadcast > 0 ? 'val' : 'warn') + '">' + (d.audioFramesBroadcast || 0) + '</td></tr>'
         h += '<tr><td>Display streams</td><td class="val">' + d.displaySubscribers + '</td></tr>'
         h += '<tr><td>Preferred display</td><td class="val">' + d.preferredDisplaySubscribers + '</td></tr>'
         h += '</table>'
