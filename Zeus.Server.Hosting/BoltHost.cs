@@ -96,7 +96,7 @@ public static class BoltHost
 
         var tciSection = builder.Configuration.GetSection("Tci");
         var tciEnabled = tciSection.GetValue<bool?>("Enabled") ?? true;
-        var tciBindAddress = tciSection.GetValue<string?>("BindAddress") ?? "127.0.0.1";
+        var tciBindAddress = tciSection.GetValue<string?>("BindAddress") ?? "0.0.0.0";
         var tciPort = tciSection.GetValue<int?>("Port") ?? 40001;
 
         TciRuntimeConfig? persistedTci = null;
