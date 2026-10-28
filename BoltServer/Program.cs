@@ -30,8 +30,9 @@ var options = new BoltHostOptions
 // --radio-ip <ip>  — persist a unicast radio IP for autoconnect (cross-subnet / fixed HL2).
 //   Saved to the preferences database so it survives restarts even without the arg.
 var radioIpIdx = Array.IndexOf(args, "--radio-ip");
-if (radioIpIdx >= 0 && radioIpIdx + 1 < args.Length)
-    options = options with { RadioIp = args[radioIpIdx + 1] };
+string? radioIp = radioIpIdx >= 0 && radioIpIdx + 1 < args.Length
+    ? args[radioIpIdx + 1]
+    : null;
 
 Console.WriteLine("Bolt SDR starting on http://localhost:" + options.HttpPort);
-return await BoltHost.RunAsync(args, options);
+return await BoltHost.RunAsync(args, options, radioIp: radioIp);
