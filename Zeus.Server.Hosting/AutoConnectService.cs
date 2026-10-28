@@ -33,18 +33,39 @@ public sealed class AutoConnectService : BackgroundService
         _log.LogInformation("autoconnect: starting discovery...");
         try
         {
-            var radios = await _discovery.DiscoverAsync(TimeSpan.FromSeconds(3), ct);
-            if (radios.Count == 0)
+            // Broadcast discovery
+            var broadcastTask = _discovery.DiscoverAsync(TimeSpan.FromSeconds(3), ct);
+
+            // Unicast discovery for extra IPs (cross-subnet / Tailscale / fixed HL2)
+            var directTasks = prefs.ExtraIps
+                .Select(ip => System.Net.IPAddress.TryParse(ip, out var addr)
+                    ? _discovery.DiscoverDirectAsync(addr, ct)
+                    : Task.FromResult<DiscoveredRadio?>(null))
+                .ToList();
+
+            await Task.WhenAll(new Task[] { broadcastTask }.Concat(directTasks.Cast<Task>()));
+
+            var all = broadcastTask.Result.ToList();
+            foreach (var t in directTasks)
+            {
+                var r = t.Result;
+                if (r != null && !all.Any(x => x.Mac.Equals(r.Mac)))
+                    all.Add(r);
+            }
+
+            if (all.Count == 0)
             {
                 _log.LogInformation("autoconnect: no radios found");
                 return;
             }
+
             // Pick preferred by MAC if set, else first non-busy
-            var target = radios.FirstOrDefault(r =>
+            var target = all.FirstOrDefault(r =>
                 !string.IsNullOrEmpty(prefs.PreferredMac) &&
                 r.Mac.ToString().Equals(prefs.PreferredMac, StringComparison.OrdinalIgnoreCase))
-                ?? radios.FirstOrDefault(r => !r.Details.Busy)
-                ?? radios[0];
+                ?? all.FirstOrDefault(r => !r.Details.Busy)
+                ?? all[0];
+
             _log.LogInformation("autoconnect: connecting to {Board} at {Ip}...", target.Board, target.Ip);
             await _radio.ConnectAsync(target.Ip.ToString(), 192000, ct);
             _log.LogInformation("autoconnect: connected to {Board} at {Ip}", target.Board, target.Ip);

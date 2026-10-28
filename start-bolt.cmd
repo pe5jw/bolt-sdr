@@ -48,7 +48,8 @@ start "Bolt SDR" "%SCRIPT_DIR%bolt-sdr.exe" ^
     --port 6061 ^
     --bind lan ^
     --lan-https-port 6443 ^
-    --webroot "%SCRIPT_DIR%web"
+    --webroot "%SCRIPT_DIR%web" ^
+    --radio-ip 192.168.8.221
 
 echo Waiting for engine to start...
 timeout /t 8 /nobreak > nul

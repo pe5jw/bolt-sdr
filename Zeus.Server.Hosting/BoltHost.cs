@@ -31,6 +31,15 @@ public static class BoltHost
     {
         var app = Build(args, options);
         await InitializeAsync(app, cancellationToken);
+
+        // Seed a fixed radio IP into AutoConnect ExtraIps when --radio-ip is supplied.
+        // Persists to the database so the radio is found on subsequent restarts too.
+        if (!string.IsNullOrWhiteSpace(options.RadioIp))
+        {
+            var acStore = app.Services.GetRequiredService<AutoConnectSettingsStore>();
+            acStore.AddExtraIp(options.RadioIp);
+        }
+
         try
         {
             await app.RunAsync(cancellationToken);
@@ -416,6 +425,12 @@ public sealed class BoltHostOptions
     public int HttpsPort { get; init; } = 6443;
     public bool BindAllInterfaces { get; init; } = true;
     public bool UseHttps { get; init; } = true;
+    /// <summary>
+    /// Optional unicast radio IP to seed into AutoConnect ExtraIps on startup.
+    /// Useful for cross-subnet setups where UDP broadcast doesn't reach the radio.
+    /// Value is persisted to the database so subsequent restarts without the flag still work.
+    /// </summary>
+    public string? RadioIp { get; init; }
 }
 
 
