@@ -186,7 +186,7 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
     }).catch(e => console.error('rx-processor laden mislukt', e))
   }, [])
 
-  const scheduleAudio = useCallback((samples: Float32Array, sampleRate: number, channels: number) => {
+  const scheduleAudio = useCallback((samples: Float32Array, _sampleRate: number, channels: number) => {
     if (!audioEnabledRef.current) return
     const ctx = audioCtxRef.current
     if (!ctx) return // worklet nog niet klaar — frame overgeslagen, geen race meer mogelijk
