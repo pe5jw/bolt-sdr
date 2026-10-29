@@ -377,7 +377,7 @@ record MoxRequest(bool On);
 
 
 record NrRequest(string? NrMode, bool AnfEnabled, bool SnbEnabled, string? NbMode, double NbThreshold);
-record AgcRequest(string? Mode, double? Slope, double? DecayMs, double? HangMs, double? HangThreshold, double? FixedGainDb);
+record AgcRequest(string? Mode, int? Slope, int? DecayMs, int? HangMs, int? HangThreshold, double? FixedGainDb);
 record Nr2CoreRequest(int GainMethod, int NpeMethod);
 record Nr4Request(double ReductionAmount);
 record ExtraIpRequest(string Ip, bool Remove = false);

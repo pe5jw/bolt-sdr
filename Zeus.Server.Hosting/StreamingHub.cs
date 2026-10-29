@@ -503,11 +503,7 @@ public sealed class StreamingHub
                 if (root.TryGetProperty("db", out var attProp))
                 {
                     int db = attProp.GetInt32();
-                    var atten = db <= 0 ? Zeus.Contracts.HpsdrAtten.Att0dB
-                        : db <= 10 ? Zeus.Contracts.HpsdrAtten.Att10dB
-                        : db <= 20 ? Zeus.Contracts.HpsdrAtten.Att20dB
-                        : Zeus.Contracts.HpsdrAtten.Att30dB;
-                    _radio.SetAttenuator(atten);
+                    _radio.SetAttenuator(new Zeus.Protocol1.HpsdrAtten(Math.Clamp(db, 0, 31)));
                 }
                 break;
             case "set_mic_gain":
