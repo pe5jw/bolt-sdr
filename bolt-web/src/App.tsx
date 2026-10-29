@@ -300,7 +300,20 @@ export default function App() {
           setConnectedIp(ip)
           fetch('/api/radio/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: ip }) })
             .then(r => r.json())
-            .then(state => { if (state.vfoHz) setRadioState(s => ({ ...s, ...state })) })
+            .then(state => {
+              if (state.vfoHz) setRadioState(s => ({ ...s, ...state }))
+              // Herverbinding met HL2: stuur audio stream request opnieuw via WS
+              // zodat audio niet stilvalt na radio disconnect/reconnect
+              const ws = wsRef.current
+              if (ws?.readyState === WebSocket.OPEN && audioEnabled) {
+                ws.send(new Uint8Array([0x21, 1])) // MSG_AUDIO_STREAM_REQUEST = 0x21
+              }
+              // Filter opnieuw sturen — HL2 reset na verbinding
+              setRadioState(s => {
+                fetch('/api/radio/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ low: s.filterLow, high: s.filterHigh }) }).catch(() => {})
+                return s
+              })
+            })
             .catch(() => {})
         }}
         onDisconnect={() => {}}

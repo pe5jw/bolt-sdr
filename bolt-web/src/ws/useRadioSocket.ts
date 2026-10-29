@@ -136,6 +136,7 @@ function parseAudioFrame(buf: ArrayBuffer): { samples: Float32Array; sampleRate:
 }
 
 const DEFAULT_WS_URL = () => `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port || "6061"}/ws`
+
 export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (frame: import('../midi').MidiLearnFrame) => void) {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected')
   const [radioState, setRadioState] = useState<RadioState>(DEFAULT_STATE)
@@ -249,29 +250,42 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
         ws.send(new Uint8Array([MSG_AUDIO_STREAM_REQUEST, 1]))
       }
       fetch('/api/radio/state').then(r => r.json()).then(state => {
-        setRadioState(s => ({
-          ...s,
-          vfoHz: state.vfoHz ?? s.vfoHz,
-          mode: s.mode?.startsWith("RTTY") ? s.mode : (state.mode === "CWU" ? "CW" : state.mode) ?? s.mode,
-          filterLow: state.filterLowHz ?? s.filterLow,
-          txFilterLow: state.txFilterLowHz ?? s.txFilterLow,
-          txFilterHigh: state.txFilterHighHz ?? s.txFilterHigh,
-          rxAfGainDb: state.rxAfGainDb ?? s.rxAfGainDb,
-          agcTopDb: state.agcTopDb ?? s.agcTopDb,
-          attDb: state.attenDb ?? s.attDb,
-          preamp: state.preampOn ?? s.preamp,
-          squelchEnabled: state.squelch?.enabled ?? s.squelchEnabled,
-          squelchLevel: state.squelch?.level ?? s.squelchLevel,
-          driveDb: state.drivePct ?? s.driveDb,
-          driveMaxPct: state.driveMaxPct ?? s.driveMaxPct,
-          tunePct: state.tunePct ?? s.tunePct,
-          filterHigh: state.filterHighHz ?? s.filterHigh,
-          agcMode: state.agc?.mode ?? s.agcMode,
-          nrMode: state.nr?.nrMode ?? s.nrMode,
-          anfEnabled: state.nr?.anfEnabled ?? s.anfEnabled,
-          snbEnabled: state.nr?.snbEnabled ?? s.snbEnabled,
-          connected: true,
-        }))
+        setRadioState(s => {
+          // drive/tune: server geeft 0 terug na herstart (nog niet ingesteld).
+          // Gebruik de server-waarde alleen als die > 0 is; anders bewaar de
+          // lokale waarde (uit band-state) en push die zo meteen terug.
+          const driveDb = (state.drivePct != null && state.drivePct > 0) ? state.drivePct : s.driveDb
+          const tunePct  = (state.tunePct  != null && state.tunePct  > 0) ? state.tunePct  : s.tunePct
+          const driveMaxPct = (state.driveMaxPct != null && state.driveMaxPct > 0) ? state.driveMaxPct : s.driveMaxPct
+
+          // Stuur de lokale waarden terug naar de server als die 0 waren
+          if (!state.drivePct || state.drivePct === 0)
+            fetch('/api/radio/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: driveDb }) }).catch(() => {})
+          if (!state.tunePct || state.tunePct === 0)
+            fetch('/api/radio/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: tunePct }) }).catch(() => {})
+
+          return {
+            ...s,
+            vfoHz: state.vfoHz ?? s.vfoHz,
+            mode: s.mode?.startsWith("RTTY") ? s.mode : (state.mode === "CWU" ? "CW" : state.mode) ?? s.mode,
+            filterLow: state.filterLowHz ?? s.filterLow,
+            txFilterLow: state.txFilterLowHz ?? s.txFilterLow,
+            txFilterHigh: state.txFilterHighHz ?? s.txFilterHigh,
+            rxAfGainDb: state.rxAfGainDb ?? s.rxAfGainDb,
+            agcTopDb: state.agcTopDb ?? s.agcTopDb,
+            attDb: state.attenDb ?? s.attDb,
+            preamp: state.preampOn ?? s.preamp,
+            squelchEnabled: state.squelch?.enabled ?? s.squelchEnabled,
+            squelchLevel: state.squelch?.level ?? s.squelchLevel,
+            driveDb, driveMaxPct, tunePct,
+            filterHigh: state.filterHighHz ?? s.filterHigh,
+            agcMode: state.agc?.mode ?? s.agcMode,
+            nrMode: state.nr?.nrMode ?? s.nrMode,
+            anfEnabled: state.nr?.anfEnabled ?? s.anfEnabled,
+            snbEnabled: state.nr?.snbEnabled ?? s.snbEnabled,
+            connected: true,
+          }
+        })
       }).catch(() => {})
     }
 

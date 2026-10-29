@@ -88,13 +88,18 @@ public static class BoltEndpoints
                 // Filter
         app.MapPost("/api/radio/filter", (FilterRequest req, RadioService radio) =>
         {
-            radio.SetFilter(req.Low, req.High);
+            // Accept both {low,high} and {lowHz,highHz} from older frontend callers
+            int lo = req.Low != 0 ? req.Low : (req.LowHz ?? 0);
+            int hi = req.High != 0 ? req.High : (req.HighHz ?? 0);
+            if (hi != 0) radio.SetFilter(lo, hi);
             return Results.Ok();
         });
 
         app.MapPost("/api/radio/tx-filter", (FilterRequest req, RadioService radio) =>
         {
-            radio.SetTxFilter(req.Low, req.High);
+            int lo = req.Low != 0 ? req.Low : (req.LowHz ?? 0);
+            int hi = req.High != 0 ? req.High : (req.HighHz ?? 0);
+            if (hi != 0) radio.SetTxFilter(lo, hi);
             return Results.Ok();
         });
 
@@ -358,7 +363,7 @@ record RxAfGainRequest(double Db);
 record SquelchRequest(bool Enabled, int Level);
 record AgcTopRequest(double Db);
 record AttenRequest(int Db);
-record FilterRequest(int Low, int High);
+record FilterRequest(int Low, int High, int? LowHz = null, int? HighHz = null);
 record ZoomRequest(int Level);
 record VfoRequest(long Hz);
 record ModeRequest(string Mode);
