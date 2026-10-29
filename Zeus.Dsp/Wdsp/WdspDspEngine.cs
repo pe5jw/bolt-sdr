@@ -1052,6 +1052,7 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         {
             case NrMode.Anr:
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
+                TrySetEmnrPost2Run(channelId, 0); // stop post2 before ANR runs without its parent
                 TrySetSbnrRun(channelId, 0);
                 TrySetRnnrRun(channelId, 0);
                 NativeMethods.SetRXAANRVals(channelId, NrDefaults.AnrTaps, NrDefaults.AnrDelay, NrDefaults.AnrGain, NrDefaults.AnrLeakage);
