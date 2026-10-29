@@ -273,6 +273,13 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         // without a lock (worst case: one extra frame at the old setting on toggle).
         public volatile NbMode CurrentNbMode = NbMode.Off;
         public volatile NrMode CurrentNrMode = NrMode.Off;
+        // Set true the first time ApplyNr4Sbnr succeeds for this channel so
+        // TrySetSbnrRun guards against calling SetRXASBNRRun on a channel where
+        // SBNR was never created. Calling any SBNR setter before create_sbnr
+        // (which wdsp runs lazily on the first ApplyNr4Sbnr → SetRXASBNRRun=1)
+        // has run causes a memcpy stack buffer overrun in wdsp.dll, triggering
+        // FAST_FAIL_STACK_COOKIE_CHECK_FAILURE (c0000409) and crashing the process.
+        public volatile bool SbnrCreated;
         // Zoom level (1..32). Changing it re-calls SetAnalyzer with shifted
         // fscLin/fscHin; the worker's Spectrum0 and the pixel drain's GetPixels
         // take this lock so they never interleave with an in-flight reconfig.
@@ -1318,6 +1325,11 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
             NativeMethods.SetRXASBNRpostFilterThreshold(channelId, (float)(cfg.Nr4PostFilterThreshold ?? NrDefaults.Nr4PostFilterThreshold));
             NativeMethods.SetRXASBNRnoiseScalingType(channelId, cfg.Nr4NoiseScalingType ?? NrDefaults.Nr4NoiseScalingType);
             NativeMethods.SetRXASBNRRun(channelId, 1);
+            // Mark SBNR as created for this channel. create_sbnr runs lazily
+            // inside wdsp on the first SetRXASBNRRun(ch, 1) call (sbnr.c). Once
+            // created the SBNR struct is valid and TrySetSbnrRun is safe to call.
+            if (_channels.TryGetValue(channelId, out var chState))
+                chState.SbnrCreated = true;
         }
         catch (EntryPointNotFoundException ex)
         {
@@ -1329,6 +1341,12 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
 
     private void TrySetSbnrRun(int channelId, int run)
     {
+        // Guard: only call into wdsp SBNR if SBNR was previously created for
+        // this channel (via ApplyNr4Sbnr). Before create_sbnr has run, any SBNR
+        // setter dereferences an uninitialized struct and causes a memcpy stack
+        // buffer overrun (FAST_FAIL_STACK_COOKIE_CHECK_FAILURE, c0000409).
+        if (!_channels.TryGetValue(channelId, out var chState) || !chState.SbnrCreated)
+            return;
         try { NativeMethods.SetRXASBNRRun(channelId, run); }
         catch (EntryPointNotFoundException) { /* libwdsp pre-Phase-1; SBNR is a no-op */ }
     }
