@@ -301,6 +301,42 @@ public static class BoltEndpoints
         app.MapPost("/api/midi/learn/keepalive", (Zeus.Server.Midi.MidiService midi) =>
             Results.Ok(midi.KeepLearnAlive()));
 
+        // NR / ANF / SNB / NB
+        app.MapPost("/api/radio/nr", (NrRequest req, RadioService radio) =>
+        {
+            var nrMode = System.Enum.TryParse<Zeus.Contracts.NrMode>(req.NrMode ?? "Off", true, out var nm)
+                ? nm : Zeus.Contracts.NrMode.Off;
+            var nbMode = System.Enum.TryParse<Zeus.Contracts.NbMode>(req.NbMode ?? "Off", true, out var nb)
+                ? nb : Zeus.Contracts.NbMode.Off;
+            radio.SetNr(new Zeus.Contracts.NrConfig(nrMode, req.AnfEnabled, req.SnbEnabled,
+                false, nbMode, req.NbThreshold));
+            return Results.Ok();
+        });
+
+        // AGC mode
+        app.MapPost("/api/radio/agc", (AgcRequest req, RadioService radio) =>
+        {
+            if (!System.Enum.TryParse<Zeus.Contracts.AgcMode>(req.Mode ?? "Med", true, out var mode))
+                mode = Zeus.Contracts.AgcMode.Med;
+            radio.SetAgc(new Zeus.Contracts.AgcConfig(mode,
+                req.Slope, req.DecayMs, req.HangMs, req.HangThreshold, req.FixedGainDb));
+            return Results.Ok();
+        });
+
+        // NR2 core settings
+        app.MapPost("/api/rx/nr2/core", (Nr2CoreRequest req, RadioService radio) =>
+        {
+            radio.SetNr2Core(new Zeus.Contracts.Nr2CoreConfigSetRequest(req.GainMethod, req.NpeMethod));
+            return Results.Ok();
+        });
+
+        // NR4 reduction
+        app.MapPost("/api/rx/nr4", (Nr4Request req, RadioService radio) =>
+        {
+            radio.SetNr4(new Zeus.Contracts.Nr4ConfigSetRequest(req.ReductionAmount));
+            return Results.Ok();
+        });
+
         // Diagnostics
         app.MapGet("/bolt-api/diagnostics", (StreamingHub hub) =>
             Results.Ok(hub.DiagnosticsSnapshot()));
@@ -334,6 +370,10 @@ record MoxRequest(bool On);
 
 
 
+record NrRequest(string? NrMode, bool AnfEnabled, bool SnbEnabled, string? NbMode, double NbThreshold);
+record AgcRequest(string? Mode, double? Slope, double? DecayMs, double? HangMs, double? HangThreshold, double? FixedGainDb);
+record Nr2CoreRequest(int GainMethod, int NpeMethod);
+record Nr4Request(double ReductionAmount);
 record ExtraIpRequest(string Ip, bool Remove = false);
 record DirectDiscoverRequest(string Ip);
 record AutoConnectRequest(bool Enabled, string? PreferredMac);

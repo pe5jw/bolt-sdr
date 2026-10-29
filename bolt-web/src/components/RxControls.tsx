@@ -65,7 +65,7 @@ export function RxControls({ squelchEnabled, squelchLevel, attenDb, onSquelch, o
         <span style={labelStyle}>RF</span>
         <input type="range" min={-12} max={48} step={1} value={48 - attenDb}
           onChange={e => onAtten(48 - parseInt(e.target.value))}
-          style={{ flex: 1, accentColor: 'var(--text-dim)' }} />
+          style={{ flex: 1, accentColor: 'var(--accent)' }} />
         <span style={valStyle}>{48 - attenDb} dB</span>
         {onAutoRfGain && <button onClick={() => onAutoRfGain(!autoRfGain)} style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, cursor: 'pointer', background: autoRfGain ? 'var(--accent)' : 'var(--bg-control)', border: '1px solid var(--border)', color: autoRfGain ? 'var(--bg)' : 'var(--text-dim)', fontFamily: 'var(--font-data)', marginLeft: 4 }}>AUTO</button>}
       </div>

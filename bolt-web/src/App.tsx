@@ -76,12 +76,10 @@ export default function App() {
       case 'BandUp': { const bands = [1800000,3500000,7000000,10100000,14000000,18068000,21000000,24890000,28000000]; const next = bands.find(b => b > st.vfoHz + 100000); if (next) sendVfo(next, true); break }
       case 'BandDown': { const bands = [28000000,24890000,21000000,18068000,14000000,10100000,7000000,3500000,1800000]; const prev = bands.find(b => b < st.vfoHz - 100000); if (prev) sendVfo(prev, true); break }
       case 'BandCycle': { const bands = [1800000,3500000,7000000,10100000,14000000,18068000,21000000,24890000,28000000]; const next = bands.find(b => b > st.vfoHz + 100000) ?? bands[0]; sendVfo(next, true); break }
-      case 'AgcNext': { const modes = ['Long','Slow','Med','Fast']; const cur = modes.indexOf(st.agcMode ?? 'Med'); const nx = modes[(cur + 1) % modes.length]; setRadioState(s => ({ ...s, agcMode: nx })); post('/api/radio/agc-top', { agc: { mode: nx, slope: null, decayMs: null, hangMs: null, hangThreshold: null, fixedGainDb: null } }); break }
-      case 'NrToggle': { const nm = st.nrMode === 'Off' ? 'Emnr' : 'Off'; setRadioState(s => ({ ...s, nrMode: nm })); post('/api/radio/agc-top', { nr: { nrMode: nm, anfEnabled: st.anfEnabled, snbEnabled: st.snbEnabled, nbMode: 'Off', nbThreshold: 20, nbpNotchesEnabled: false } }); break }
+      case 'AgcNext': { const modes = ['Long','Slow','Med','Fast']; const cur = modes.indexOf(st.agcMode ?? 'Med'); const nx = modes[(cur + 1) % modes.length]; setRadioState(s => ({ ...s, agcMode: nx })); post('/api/radio/agc', { mode: nx, slope: null, decayMs: null, hangMs: null, hangThreshold: null, fixedGainDb: null }); break }
+      case 'NrToggle': { const nm = st.nrMode === 'Off' ? 'Emnr' : 'Off'; setRadioState(s => ({ ...s, nrMode: nm })); post('/api/radio/nr', { nrMode: nm, anfEnabled: st.anfEnabled, snbEnabled: st.snbEnabled, nbMode: 'Off', nbThreshold: 20 }); break }
       case 'AutoSet': { window.dispatchEvent(new Event('bolt-autoset-trigger')); break }
-      case 'AnfToggle': { const a = !st.anfEnabled; setRadioState(s => ({ ...s, anfEnabled: a })); post('/api/radio/agc-top', { nr: { nrMode: st.nrMode, anfEnabled: a, snbEnabled: st.snbEnabled, nbMode: 'Off', nbThreshold: 20, nbpNotchesEnabled: false } }); break }
-      case 'AutoSet': { window.dispatchEvent(new Event('bolt-autoset-trigger')); break }
-      case 'AnfToggle': { const a = !st.anfEnabled; setRadioState(s => ({ ...s, anfEnabled: a })); post('/api/radio/agc-top', { nr: { nrMode: st.nrMode, anfEnabled: a, snbEnabled: st.snbEnabled, nbMode: 'Off', nbThreshold: 20, nbpNotchesEnabled: false } }); break }
+      case 'AnfToggle': { const a = !st.anfEnabled; setRadioState(s => ({ ...s, anfEnabled: a })); post('/api/radio/nr', { nrMode: st.nrMode, anfEnabled: a, snbEnabled: st.snbEnabled, nbMode: 'Off', nbThreshold: 20 }); break }
       case 'ZoomIn': { const zl = [1,2,4,8,16,32]; const cur = zl.indexOf(zoomRef.current); const nx = zl[Math.min(zl.length-1, cur+1)]; zoomRef.current = nx; localStorage.setItem('bolt-zoom', String(nx)); post('/api/radio/zoom', { level: nx }); window.dispatchEvent(new Event('bolt-zoom-changed')); break }
       case 'ZoomOut': { const zl = [1,2,4,8,16,32]; const cur = zl.indexOf(zoomRef.current); const nx = zl[Math.max(0, cur-1)]; zoomRef.current = nx; localStorage.setItem('bolt-zoom', String(nx)); post('/api/radio/zoom', { level: nx }); window.dispatchEvent(new Event('bolt-zoom-changed')); break }
       case 'ZoomSliderInc': { const zl = [1,2,4,8,16,32]; const idx = Math.min(zl.length-1, Math.floor((value/127) * zl.length)); const nx = zl[idx]; zoomRef.current = nx; localStorage.setItem('bolt-zoom', String(nx)); post('/api/radio/zoom', { level: nx }); window.dispatchEvent(new Event('bolt-zoom-changed')); break }
@@ -332,7 +330,7 @@ export default function App() {
             showDecoder={showDecoder}
             onControlPanel={() => {}}
             agcMode={radioState.agcMode ?? 'Med'}
-            onAgc={mode => { setRadioState(s => ({ ...s, agcMode: mode })); fetch('/api/radio/agc-top', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agc: { mode: mode === 'Hang' ? 'Slow' : mode, slope: null, decayMs: null, hangMs: mode === 'Hang' ? 2000 : null, hangThreshold: mode === 'Hang' ? -130 : null, fixedGainDb: null } }) }).catch(() => {}) }}
+            onAgc={mode => { setRadioState(s => ({ ...s, agcMode: mode })); fetch('/api/radio/agc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: mode === 'Hang' ? 'Slow' : mode, slope: null, decayMs: null, hangMs: mode === 'Hang' ? 2000 : null, hangThreshold: mode === 'Hang' ? -130 : null, fixedGainDb: null }) }).catch(() => {}) }}
             attenDb={radioState.attDb}
             onAtten={db => { setRadioState(s => ({ ...s, attDb: db })); fetch('/api/radio/atten', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) }) }}
             autoRfGain={autoRfGain}
@@ -349,7 +347,7 @@ export default function App() {
               const newNr = { ...nrState, nrMode: mode }
               setNrState(newNr)
               setRadioState(s => ({ ...s, nrMode: mode }))
-              fetch('/api/radio/agc-top', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nr: { ...newNr, nbpNotchesEnabled: false } }) }).catch(() => {})
+              fetch('/api/radio/nr', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nrMode: newNr.nrMode, anfEnabled: newNr.anfEnabled, snbEnabled: newNr.snbEnabled, nbMode: newNr.nbMode ?? 'Off', nbThreshold: 20 }) }).catch(() => {})
             }}
             onFilterPreset={(bw) => {
               const low = (radioState.mode === "LSB" || radioState.mode === "CWL") ? -bw : 200
@@ -451,7 +449,7 @@ export default function App() {
             nbMode={radioState.nbMode ?? 'Off'}
             onNr={(nr) => {
               setRadioState(s => ({ ...s, nrMode: nr.nrMode, anfEnabled: nr.anfEnabled, snbEnabled: nr.snbEnabled, nbMode: nr.nbMode }))
-              fetch('/api/radio/agc-top', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nr: { ...nr, nbpNotchesEnabled: false } }) }).catch(() => {})
+              fetch('/api/radio/nr', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nrMode: nr.nrMode, anfEnabled: nr.anfEnabled, snbEnabled: nr.snbEnabled, nbMode: nr.nbMode ?? 'Off', nbThreshold: nr.nbThreshold ?? 20 }) }).catch(() => {})
             }}
             autoRfGain={autoRfGain}
             onAutoRfGain={setAutoRfGain}
@@ -462,7 +460,7 @@ export default function App() {
             agcMode={radioState.agcMode ?? 'Med'}
             onAgc={mode => {
               setRadioState(s => ({ ...s, agcMode: mode }))
-              fetch('/api/radio/agc-top', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agc: { mode: mode === 'Hang' ? 'Slow' : mode, slope: null, decayMs: null, hangMs: mode === 'Hang' ? 2000 : null, hangThreshold: mode === 'Hang' ? -130 : null, fixedGainDb: null } }) }).catch(() => {})
+              fetch('/api/radio/agc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: mode === 'Hang' ? 'Slow' : mode, slope: null, decayMs: null, hangMs: mode === 'Hang' ? 2000 : null, hangThreshold: mode === 'Hang' ? -130 : null, fixedGainDb: null }) }).catch(() => {})
             }}          />
         </section>
         </>)}
