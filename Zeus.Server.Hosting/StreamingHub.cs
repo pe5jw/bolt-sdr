@@ -174,9 +174,12 @@ public sealed class StreamingHub
 
     internal int PreferredDisplaySubscriberCount => Volatile.Read(ref _preferredDisplayStreamRequests);
 
-    public StreamingHub(ILogger<StreamingHub> log)
+    private readonly RadioService _radio;
+
+    public StreamingHub(ILogger<StreamingHub> log, RadioService radio)
     {
         _log = log;
+        _radio = radio;
         _dropLogTimer = new System.Threading.Timer(_ => LogDropsIfAny(), null, 1000, 1000);
     }
 
@@ -437,6 +440,82 @@ public sealed class StreamingHub
                 // Unknown uplink type — log once so a misaligned client is obvious,
                 // but don't tear down the connection.
                 _log.LogDebug("ws.inbound unknown type=0x{Type:X2} len={Len}", type, frame.Length);
+                break;
+        }
+    }
+
+    internal void DispatchTextCommand(string json)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        if (!root.TryGetProperty("type", out var typeProp)) return;
+        string? type = typeProp.GetString();
+        switch (type)
+        {
+            case "set_vfo":
+                if (root.TryGetProperty("hz", out var hzProp))
+                    _radio.SetVfo(hzProp.GetInt64());
+                break;
+            case "set_mode":
+                if (root.TryGetProperty("mode", out var modeProp))
+                {
+                    var modeStr = modeProp.GetString() ?? "";
+                    if (System.Enum.TryParse<Zeus.Contracts.RxMode>(modeStr, ignoreCase: true, out var rxMode))
+                        _radio.SetMode(rxMode);
+                }
+                break;
+            case "set_filter":
+                if (root.TryGetProperty("low", out var lowProp) &&
+                    root.TryGetProperty("high", out var highProp))
+                    _radio.SetFilter(lowProp.GetInt32(), highProp.GetInt32());
+                break;
+            case "set_drive":
+                if (root.TryGetProperty("pct", out var drivePctProp))
+                    _radio.SetDrive(System.Math.Clamp(drivePctProp.GetInt32(), 0, 100));
+                else if (root.TryGetProperty("db", out var driveDbProp))
+                    _radio.SetDrive(System.Math.Clamp(driveDbProp.GetInt32(), 0, 100));
+                break;
+            case "set_tune_drive":
+                if (root.TryGetProperty("pct", out var tunePctProp))
+                    _radio.SetTuneDrive(System.Math.Clamp(tunePctProp.GetInt32(), 0, 100));
+                break;
+            case "set_mox":
+                if (root.TryGetProperty("on", out var moxProp))
+                    _radio.SetMox(moxProp.GetBoolean());
+                break;
+            case "set_tune":
+                if (root.TryGetProperty("on", out var tuneProp))
+                    _radio.NotifyTunActive(tuneProp.GetBoolean());
+                break;
+            case "set_agc":
+                if (root.TryGetProperty("mode", out var agcModeProp))
+                {
+                    var agcStr = agcModeProp.GetString() ?? "";
+                    if (System.Enum.TryParse<Zeus.Contracts.AgcMode>(agcStr, ignoreCase: true, out var agcMode))
+                        _radio.SetAgc(new Zeus.Contracts.AgcConfig(agcMode));
+                }
+                break;
+            case "set_preamp":
+                if (root.TryGetProperty("on", out var preampProp))
+                    _radio.SetPreamp(preampProp.GetBoolean());
+                break;
+            case "set_att":
+                if (root.TryGetProperty("db", out var attProp))
+                {
+                    int db = attProp.GetInt32();
+                    var atten = db <= 0 ? Zeus.Contracts.HpsdrAtten.Att0dB
+                        : db <= 10 ? Zeus.Contracts.HpsdrAtten.Att10dB
+                        : db <= 20 ? Zeus.Contracts.HpsdrAtten.Att20dB
+                        : Zeus.Contracts.HpsdrAtten.Att30dB;
+                    _radio.SetAttenuator(atten);
+                }
+                break;
+            case "set_mic_gain":
+                if (root.TryGetProperty("db", out var micGainProp))
+                    _radio.SetTxMicGain(micGainProp.GetInt32());
+                break;
+            default:
+                _log.LogDebug("ws.text unknown command type={Type}", type);
                 break;
         }
     }
@@ -1049,9 +1128,29 @@ public sealed class StreamingHub
                         await _ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, ct);
                         return;
                     }
+                    if (result.MessageType == WebSocketMessageType.Text)
+                    {
+                        // JSON control channel: set_vfo, set_mode, set_filter, set_drive, etc.
+                        int textLen = result.Count;
+                        if (!result.EndOfMessage)
+                        {
+                            // Multi-fragment text — skip (control frames are always small)
+                            _log.LogDebug("ws.text multiframe ignored id={Id}", Id);
+                            continue;
+                        }
+                        try
+                        {
+                            var json = System.Text.Encoding.UTF8.GetString(buf, 0, textLen);
+                            _hub.DispatchTextCommand(json);
+                        }
+                        catch (Exception ex)
+                        {
+                            _log.LogDebug(ex, "ws.text dispatch error id={Id}", Id);
+                        }
+                        continue;
+                    }
                     if (result.MessageType != WebSocketMessageType.Binary)
                     {
-                        // Ignore text frames — no textual control channel in the MVP.
                         continue;
                     }
 

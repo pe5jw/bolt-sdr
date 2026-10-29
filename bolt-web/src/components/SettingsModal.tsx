@@ -5,6 +5,7 @@ import { DvkSettingsPanel } from './DvkSettingsPanel'
 import { CwSettingsPanel } from './CwSettingsPanel'
 import { THEMES, SPECTRUM_COLORS } from '../themes'
 import { useTheme } from '../ThemeContext'
+import { useInterface } from '../InterfaceContext'
 
 interface Props {
   onClose: () => void
@@ -15,6 +16,7 @@ const CFC_FREQS = [50, 100, 200, 500, 1000, 1500, 2000, 2500, 3000, 5000]
 
 export function SettingsModal({ onClose }: Props) {
   const { theme, setTheme, showLogo, setShowLogo, logoBrightness, setLogoBrightness, wfPalette, setWfPalette } = useTheme()
+  const { interfaceMode, setInterfaceMode } = useInterface()
   const [pos, setPos] = useState<{x: number, y: number} | null>(null)
   const dragRef = useRef<{ dx: number, dy: number } | null>(null)
   const [catEnabled, setCatEnabled] = useState(false)
@@ -280,6 +282,16 @@ export function SettingsModal({ onClose }: Props) {
 
         {/* General tab */}
         {tab === 'general' && <>
+
+          {/* INTERFACE MODE */}
+          <div style={row}>
+            <span style={lbl}>INTERFACE</span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button onClick={() => setInterfaceMode('desktop')} style={{ fontSize: 10, padding: '2px 10px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)', letterSpacing: 2, background: interfaceMode === 'desktop' ? 'var(--accent)' : 'var(--bg-control)', border: '1px solid var(--border)', color: interfaceMode === 'desktop' ? 'var(--bg)' : 'var(--text-dim)' }}>DESKTOP</button>
+              <button onClick={() => setInterfaceMode('mobile')} style={{ fontSize: 10, padding: '2px 10px', borderRadius: 3, cursor: 'pointer', fontFamily: 'var(--font-data)', letterSpacing: 2, background: interfaceMode === 'mobile' ? 'var(--accent)' : 'var(--bg-control)', border: '1px solid var(--border)', color: interfaceMode === 'mobile' ? 'var(--bg)' : 'var(--text-dim)' }}>MOBILE</button>
+            </div>
+          </div>
+
 
           <div style={row}>
             <span style={lbl}>CONTROLS OVERLAY</span>
