@@ -301,7 +301,12 @@ export default function App() {
           fetch('/api/radio/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: ip }) })
             .then(r => r.json())
             .then(state => {
-              if (state.vfoHz) setRadioState(s => ({ ...s, ...state }))
+              if (state.vfoHz) setRadioState(s => ({
+                ...s,
+                vfoHz: state.vfoHz ?? s.vfoHz,
+                radioName: state.radioName ?? s.radioName,
+                connected: true,
+              }))
               // Herverbinding met HL2: stuur audio stream request opnieuw via WS
               // zodat audio niet stilvalt na radio disconnect/reconnect
               const ws = wsRef.current
@@ -309,8 +314,10 @@ export default function App() {
                 ws.send(new Uint8Array([0x21, 1])) // MSG_AUDIO_STREAM_REQUEST = 0x21
               }
               // Filter opnieuw sturen — HL2 reset na verbinding
+              // Alleen als de waarden geldig zijn (high > 0)
               setRadioState(s => {
-                fetch('/api/radio/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ low: s.filterLow, high: s.filterHigh }) }).catch(() => {})
+                if (s.filterHigh && s.filterHigh !== 0)
+                  fetch('/api/radio/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ low: s.filterLow, high: s.filterHigh }) }).catch(() => {})
                 return s
               })
             })
@@ -366,7 +373,7 @@ export default function App() {
               const low = (radioState.mode === "LSB" || radioState.mode === "CWL") ? -bw : 200
               const high = (radioState.mode === "LSB" || radioState.mode === "CWL") ? -200 : bw
               setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
-              fetch("/api/filter", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
+              fetch('/api/radio/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) }).catch(() => {})
             }}
             filterLowHz={radioState.filterLow}
             filterHighHz={radioState.filterHigh}

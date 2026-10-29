@@ -166,9 +166,10 @@ public static class BoltEndpoints
                 // Connect radio
         app.MapPost("/api/radio/connect", async (ConnectRequest req, RadioService radio, HttpContext ctx) =>
         {
-            if (!System.Net.IPAddress.TryParse(req.Ip, out var ip))
+            var ipStr = req.ResolvedIp;
+            if (!System.Net.IPAddress.TryParse(ipStr, out _))
                 return Results.BadRequest(new { error = "Invalid IP" });
-            var result = await radio.ConnectAsync(req.Ip, req.SampleRate, ctx.RequestAborted);
+            var result = await radio.ConnectAsync(ipStr, req.SampleRate, ctx.RequestAborted);
             return Results.Ok(result);
         });
 
@@ -382,7 +383,10 @@ record Nr4Request(double ReductionAmount);
 record ExtraIpRequest(string Ip, bool Remove = false);
 record DirectDiscoverRequest(string Ip);
 record AutoConnectRequest(bool Enabled, string? PreferredMac);
-record ConnectRequest(string Ip, int SampleRate = 192000);
+record ConnectRequest(string? Ip, string? Endpoint = null, int SampleRate = 192000)
+{
+    public string ResolvedIp => Ip ?? Endpoint ?? "";
+};
 
 
 
