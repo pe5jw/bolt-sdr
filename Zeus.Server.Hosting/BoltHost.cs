@@ -41,14 +41,28 @@ public static class BoltHost
             acStore.AddExtraIp(radioIp);
         }
 
+        // Diagnostic: log when the host lifetime is stopping/stopped so we can
+        // see in the console what triggered a clean shutdown.
+        var lifetime = app.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>();
+        lifetime.ApplicationStopping.Register(() =>
+            Console.Error.WriteLine("[bolt-sdr] IHostApplicationLifetime.ApplicationStopping fired"));
+        lifetime.ApplicationStopped.Register(() =>
+            Console.Error.WriteLine("[bolt-sdr] IHostApplicationLifetime.ApplicationStopped fired"));
+
         try
         {
             await app.RunAsync(cancellationToken);
+            Console.WriteLine("[bolt-sdr] app.RunAsync() returned normally");
         }
         catch (Exception ex) when (IsBenignShutdownError(ex))
         {
             Console.Error.WriteLine(
                 $"shutdown: ignored benign dispose error: {ex.GetBaseException().Message}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[bolt-sdr] app.RunAsync() threw: {ex}");
+            throw;
         }
         return 0;
     }
