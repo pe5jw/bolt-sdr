@@ -1390,7 +1390,7 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         if (run != 0 && !_rnnrModelReady)
         {
             _log.LogWarning(
-                "wdsp.rnnr.skipped channel={Channel} reason="no RNNoise model loaded — RNNR kept off; install a model to enable NR3"",
+                "wdsp.rnnr.skipped channel={Channel} reason=\"no RNNoise model loaded -- RNNR kept off; install a model to enable NR3\"",
                 channelId);
             return;
         }
