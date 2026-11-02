@@ -542,6 +542,12 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
     private readonly object _monitorLock = new();
     private int? _monitorChannelId;
     private volatile bool _monitorRequested;
+    // Process-global guard: true once RNNRloadModel has successfully loaded a
+    // model. With USE_WEIGHTS_FILE builds of wdsp.dll there is no baked-in
+    // fallback model; calling SetRXARNNRRun(ch, 1) with a NULL rnnoise state
+    // causes a NULL-pointer dereference in xrnnr → __fastfail → process crash.
+    // We only enable RNNR channels when we know a model is loaded.
+    private volatile bool _rnnrModelReady;
     private RxaMode _monitorMode = RxaMode.USB;
     private int _monitorFilterLow = 150;
     private int _monitorFilterHigh = 2850;
@@ -1101,9 +1107,11 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
                 // RNNRloadModel at install/startup (LoadNr3Model), NOT here —
                 // a per-channel call would thrash the shared model. Guarded by
                 // TrySetRnnr* so a libwdsp without NR3 exports (WDSP_WITH_NR3
-                // OFF) leaves the channel NR-off instead of crashing. If no
-                // model is loaded, rnnr.c's create_rnnr left rnnoise_create
-                // NULL, so xrnnr passes audio through untouched — inert, safe.
+                // OFF) leaves the channel NR-off instead of crashing.
+                // TrySetRnnrRun also guards on _rnnrModelReady: in USE_WEIGHTS_FILE
+                // builds there is no baked-in fallback, so enabling RNNR without
+                // a loaded model causes a NULL-pointer crash in xrnnr. The channel
+                // stays NR-off until the model is installed.
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 TrySetEmnrPost2Run(channelId, 0);
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
@@ -1366,8 +1374,26 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
     // libwdsp built with WDSP_WITH_NR3=OFF (the stub) does not export RNNR
     // symbols, so every call is wrapped: NR3 then behaves as a no-op rather
     // than crashing the worker.
+    //
+    // IMPORTANT: Only call with run=1 when _rnnrModelReady is true. Builds of
+    // wdsp.dll that use USE_WEIGHTS_FILE (Zeus's release build) have no baked-
+    // in fallback model. If SetRXARNNRRun(ch,1) is called before a model is
+    // loaded, rnnr.c's create_rnnr calls rnnoise_create(NULL) which leaves
+    // st->model uninitialized; the first xrnnr invocation then dereferences
+    // the NULL model → __fastfail (FAST_FAIL_INVALID_ARG / access violation)
+    // → process crash with no managed exception.
     private void TrySetRnnrRun(int channelId, int run)
     {
+        // Enabling RNNR without a loaded model crashes xrnnr via NULL model
+        // dereference (USE_WEIGHTS_FILE build: no baked-in fallback).
+        // Keep the channel NR-off and log so the operator can install a model.
+        if (run != 0 && !_rnnrModelReady)
+        {
+            _log.LogWarning(
+                "wdsp.rnnr.skipped channel={Channel} reason="no RNNoise model loaded — RNNR kept off; install a model to enable NR3"",
+                channelId);
+            return;
+        }
         try { NativeMethods.SetRXARNNRRun(channelId, run); }
         catch (EntryPointNotFoundException) { /* libwdsp lacks NR3; nothing to toggle */ }
     }
@@ -1420,6 +1446,7 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
             return Nr3ModelLoadResult.LoadFailed;
         }
 
+        _rnnrModelReady = true;
         _log.LogInformation("wdsp.rnnr.loadModel path=\"{Path}\" verified={Verified}",
             modelFilePath, loaded.HasValue);
         return Nr3ModelLoadResult.Loaded;
