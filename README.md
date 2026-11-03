@@ -2,7 +2,7 @@
 
 # Bolt SDR
 
-Bolt SDR is a web SDR frontend built for the HermesLite 2, built on top of station-engine (a fork of OpenHPSDR Zeus). It probably works on other OpenHPSDR radios as well, but has not been tested beyond the HermesLite 2.
+Bolt SDR is a web SDR frontend built for the HermesLite 2 and other OpenHPSDR radios, built on top of **AnanCore** — a standalone fork of **OpenHPSDR Zeus** by Brian Keating (EI6LF).
 
 ## Modes
 
@@ -150,12 +150,24 @@ tci-bridge connects to bolt TCI server on port 40001.
 | CW via CAT (KY) | 19090 | TCP TS-2000 |
 | tci-bridge CAT + DVK | 4532 | TCP TS-2000 |
 | tci-bridge Winkey CW | 5597 | TCP WinKey |
-## Based on Zeus / Station-Engine
+## Based on OpenHPSDR Zeus / AnanCore
 
-Bolt SDR uses station-engine, which is a fork of OpenHPSDR Zeus (https://github.com/kb2uka/zeus) by Douglas J. Cerrato (KB2UKA) and contributors.
+The C# backend provenance chain:
 
-Zeus is a .NET reimplementation of the OpenHPSDR Protocol-1/2 stack, informed by:
-- Thetis (https://github.com/ramdor/Thetis)
+```
+brianbruff/openhpsdr-zeus       ← OpenHPSDR Zeus by Brian Keating (EI6LF), GPL-2.0-or-later
+    └── abhishekprakash22/zeus  ← AnanCore: standalone fork, openhpsdrzeus.com deps removed
+            └── pe5jw/AnanCore  ← PE5JW fork, branch freedv-in-core
+                    └── pe5jw/bolt-sdr (this repository)
+```
+
+Bolt SDR further strips AnanCore to the transceiver core only: no plugins, no remote access,
+no cloud infrastructure, no DX cluster, no logbook, no VST, no support agent.
+
+Full provenance and per-component attributions: [`BOLT-ATTRIBUTIONS.md`](BOLT-ATTRIBUTIONS.md).
+
+OpenHPSDR Zeus is a .NET reimplementation of the OpenHPSDR Protocol-1/2 stack, informed by:
+- Thetis (https://github.com/ramdor/Thetis) by MW0LGE
 - piHPSDR (https://github.com/dl1ycf/pihpsdr) by Christoph Wullen (DL1YCF)
 - deskHPSDR (https://github.com/dl1bz/deskhpsdr) by Heiko (DL1BZ)
 
@@ -181,3 +193,9 @@ WDSP DSP engine is Copyright (C) Warren Pratt (NR0V), GPL-2.0-or-later.
 - **40001** — TCI server
 - **19090** — CAT TCP (optional, enable in Settings)
 - **4532** — tci-bridge CAT (for DVK/N1MM+)
+
+## Donaties
+
+Bolt SDR is gratis en open source. Vind je het nuttig? Elke koffie helpt! ☕
+
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Doneer-FF5E5B?logo=ko-fi)](https://ko-fi.com/contestpusher)
