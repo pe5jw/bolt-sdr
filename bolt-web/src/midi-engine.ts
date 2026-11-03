@@ -365,7 +365,7 @@ class MidiEngine {
         return
       }
       if (cmd === 'DriveLevel') {
-        fetch('/api/tx/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        fetch('/api/radio/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ pct: Math.round(value * 100 / 127) }) }).catch(() => {})
         return
       }
@@ -380,7 +380,7 @@ class MidiEngine {
         if (mapping.toggle && !on) return
         this.moxState = moxOn
         this.onMox?.(moxOn)
-        fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ on: moxOn }) }).catch(() => {})
         return
       }
@@ -389,7 +389,7 @@ class MidiEngine {
         const tuneOn = mapping.toggle ? !this.tuneState : on
         this.tuneState = tuneOn
         this.onTune?.(tuneOn)
-        fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        fetch('/api/radio/tune', { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ on: tuneOn }) }).catch(() => {})
         return
       }
@@ -408,16 +408,16 @@ class MidiEngine {
           body: JSON.stringify({ muted: on }) }).catch(() => {})
         return
       }
-      if (cmd === 'ModeUSB') { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'USB' }) }).catch(() => {}); return }
-      if (cmd === 'ModeLSB') { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'LSB' }) }).catch(() => {}); return }
-      if (cmd === 'ModeCW')  { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'CW' }) }).catch(() => {}); return }
+      if (cmd === 'ModeUSB') { fetch('/api/radio/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'USB' }) }).catch(() => {}); return }
+      if (cmd === 'ModeLSB') { fetch('/api/radio/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'LSB' }) }).catch(() => {}); return }
+      if (cmd === 'ModeCW')  { fetch('/api/radio/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'CW' }) }).catch(() => {}); return }
       if (cmd === 'BandUp')   { fetch('/api/band/up',   { method: 'POST' }).catch(() => {}); return }
       if (cmd === 'BandDown') { fetch('/api/band/down', { method: 'POST' }).catch(() => {}); return }
-      if (cmd === 'ModeCWL')  { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'CWL' }) }).catch(() => {}); return }
-      if (cmd === 'ModeAM')   { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'AM' }) }).catch(() => {}); return }
-      if (cmd === 'ModeFM')   { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'FM' }) }).catch(() => {}); return }
-      if (cmd === 'ModeDIGU') { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'DIGU' }) }).catch(() => {}); return }
-      if (cmd === 'ModeDIGL') { fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'DIGL' }) }).catch(() => {}); return }
+      if (cmd === 'ModeCWL')  { fetch('/api/radio/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'CWL' }) }).catch(() => {}); return }
+      if (cmd === 'ModeAM')   { fetch('/api/radio/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'AM' }) }).catch(() => {}); return }
+      if (cmd === 'ModeFM')   { fetch('/api/radio/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'FM' }) }).catch(() => {}); return }
+      if (cmd === 'ModeDIGU') { fetch('/api/radio/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'DIGU' }) }).catch(() => {}); return }
+      if (cmd === 'ModeDIGL') { fetch('/api/radio/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'DIGL' }) }).catch(() => {}); return }
       if (cmd === 'CwxStop') { iambicKeyer.stop(); fetch('/api/cw/key', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({down:false}) }).catch(()=>{}); fetch('/api/cw/abort', { method: 'POST' }).catch(() => {}); return }
       if (cmd.startsWith('CwxMacro')) {
         const on2 = value > 0
@@ -477,7 +477,7 @@ class MidiEngine {
       const newHz = Math.round(this.lastVfoHz + d)
       this.lastVfoHz = newHz
       this.onVfoChange?.(this.lastVfoHz)
-      fetch('/api/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      fetch('/api/radio/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ receiver: 0, hz: newHz }) }).catch(() => {})
     }, 30)
   }

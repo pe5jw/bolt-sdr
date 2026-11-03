@@ -1,36 +1,29 @@
 // API endpoints configuratie
-// Schakel tussen BoltServer en Station Engine backends
-
 
 export const API = {
   // Radio state
-  STATE:          '/api/state',
+  STATE:          '/api/radio/state',
 
   // VFO / Tuning
-  VFO:            '/api/vfo',
-  MODE:           '/api/mode',
-  FILTER:         '/api/filter',
-  ZOOM:           '/api/rx/zoom',
+  VFO:            '/api/radio/vfo',
+  MODE:           '/api/radio/mode',
+  FILTER:         '/api/radio/filter',
+  ZOOM:           '/api/radio/zoom',
 
   // TX
-  MOX:            '/api/tx/mox',
-  TUNE:           '/api/tx/tun',
-  DRIVE:          '/api/tx/drive',
-  MIC_GAIN:       '/api/mic-gain',
+  MOX:            '/api/radio/mox',
+  TUNE:           '/api/radio/tune',
+  DRIVE:          '/api/radio/drive',
+  MIC_GAIN:       '/api/radio/mic-gain',
 
   // RX
-  RX_AF_GAIN:     '/api/rx/afGain',
-  AGC_TOP:        '/api/agcGain',
-  ATTEN:          '/api/attenuator',
-  SQUELCH:        '/api/rx/squelch',
+  RX_AF_GAIN:     '/api/radio/rx-af-gain',
+  AGC_TOP:        '/api/radio/agc-top',
+  ATTEN:          '/api/radio/atten',
+  SQUELCH:        '/api/radio/squelch',
 
   // Verbinding
-  CONNECT:        '/api/connect',
-  DISCONNECT:     '/api/disconnect',
-  DISCOVER:       '/api/radios',
-
-  // Display
-
-  // Freq cal
-
+  CONNECT:        '/api/radio/connect',
+  DISCONNECT:     '/api/radio/disconnect',
+  DISCOVER:       '/api/radio/discover',
 }

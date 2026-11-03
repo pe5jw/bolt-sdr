@@ -42,14 +42,14 @@ export default function App() {
   midiEngine.onMox = (on) => {
     setRadioState(s => ({ ...s, mox: on }))
     setMoxActive(on)
-    fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).catch(() => {})
+    fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).catch(() => {})
   }
   midiEngine.onVfoChange = (hz) => {
     setRadioState(s => ({ ...s, vfoHz: hz }))
   }
   midiEngine.onTune = (on) => {
     setRadioState(s => ({ ...s, tune: on }))
-    fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).catch(() => {})
+    fetch('/api/radio/tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).catch(() => {})
   }
   midiEngine.onCommand = (cmd: string, value: number) => {
     const post = (url: string, body: any) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {})
@@ -62,14 +62,14 @@ export default function App() {
         const [low, high] = MD[m] ?? [200, 3200]
         setRadioState(s => ({ ...s, mode: m, filterLow: low, filterHigh: high }))
         send({ type: 'set_mode', mode: m })
-        post('/api/mode', { mode: m })
-        post('/api/filter', { lowHz: low, highHz: high, receiver: 0 })
+        post('/api/radio/mode', { mode: m })
+        post('/api/radio/filter', { lowHz: low, highHz: high, receiver: 0 })
         break
       }
       case 'SetAfGain': { const db = mv(-50, 20); setRadioState(s => ({ ...s, rxAfGainDb: db })); post('/api/rx/afGain', { db }); break }
-      case 'DriveLevel': { const pct = mv(0, 100); setRadioState(s => ({ ...s, driveDb: pct })); post('/api/tx/drive', { percent: pct }); break }
+      case 'DriveLevel': { const pct = mv(0, 100); setRadioState(s => ({ ...s, driveDb: pct })); post('/api/radio/drive', { percent: pct }); break }
       case 'RfGain': { const rfDb = mv(-12, 48); const att = 48 - rfDb; setRadioState(s => ({ ...s, attDb: att })); post('/api/attenuator', { db: att }); break }
-      case 'MicGain': { const db = mv(-20, 20); setRadioState(s => ({ ...s, micGainDb: db })); post('/api/mic-gain', { db }); break }
+      case 'MicGain': { const db = mv(-20, 20); setRadioState(s => ({ ...s, micGainDb: db })); post('/api/radio/mic-gain', { db }); break }
       case 'SquelchLevel': { const lvl = mv(0, 100); setRadioState(s => ({ ...s, squelchEnabled: true, squelchLevel: lvl })); post('/api/rx/squelch', { enabled: true, level: lvl }); break }
       case 'MuteOnOff': { const nm = !mutedRef.current; mutedRef.current = nm; setMuted(nm); post('/api/receivers/0/mute', { muted: nm }); break }
       case 'BandUp': { const bands = [1800000,3500000,7000000,10100000,14000000,18068000,21000000,24890000,28000000]; const next = bands.find(b => b > st.vfoHz + 100000); if (next) sendVfo(next, true); break }
@@ -187,11 +187,11 @@ export default function App() {
         if (e.type === 'keydown' && !e.repeat) {
           setMox(true)
           setMoxActive(true, false, msg => { setMox(false); setGuardMsg(msg); setTimeout(() => setGuardMsg(null), 4000) })
-          fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: true }) })
+          fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: true }) })
         } else if (e.type === 'keyup') {
           setMox(false)
           setMoxActive(false)
-          fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: false }) })
+          fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: false }) })
         }
       }
     }
@@ -213,18 +213,18 @@ export default function App() {
       const saved = band ? loadBandState(band) : null
         if (saved) {
           setRadioState(s => ({ ...s, vfoHz: saved.hz, mode: saved.mode, filterLow: saved.filterLow, filterHigh: saved.filterHigh, driveDb: saved.driveDb ?? s.driveDb, tunePct: saved.tunePct ?? s.tunePct }))
-          fetch('/api/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: saved.hz }) })
-          fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: saved.mode }) })
-          fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: saved.filterLow, highHz: saved.filterHigh, receiver: 0 }) })
-          if (saved.driveMaxPct) { fetch('/api/tx/drive-max', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: saved.driveMaxPct }) }); setRadioState(s => ({ ...s, driveMaxPct: saved.driveMaxPct })) }
-          if (saved.driveDb !== undefined) fetch('/api/tx/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: saved.driveDb }) })
-          if (saved.tunePct !== undefined) fetch('/api/tx/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: saved.tunePct }) })
+          fetch('/api/radio/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: saved.hz }) })
+          fetch('/api/radio/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: saved.mode }) })
+          fetch('/api/radio/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: saved.filterLow, highHz: saved.filterHigh, receiver: 0 }) })
+          if (saved.driveMaxPct) { fetch('/api/radio/drive-max', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: saved.driveMaxPct }) }); setRadioState(s => ({ ...s, driveMaxPct: saved.driveMaxPct })) }
+          if (saved.driveDb !== undefined) fetch('/api/radio/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: saved.driveDb }) })
+          if (saved.tunePct !== undefined) fetch('/api/radio/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: saved.tunePct }) })
           return
         }
       }
     saveBandState(snapped, radioState.mode, radioState.filterLow, radioState.filterHigh)
     setRadioState(s => ({ ...s, vfoHz: snapped }))
-    fetch('/api/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: snapped }) })
+    fetch('/api/radio/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: snapped }) })
   }
 
   // Band memory
@@ -258,8 +258,8 @@ export default function App() {
     const [low, high] = isCw ? (mode === "CW" ? [Math.max(0, sidetone - filterBw/2), sidetone + filterBw/2] : [-(sidetone + filterBw/2), Math.min(0, -(sidetone - filterBw/2))]) : (MODE_DEFAULTS[mode] ?? [200, 3200])
     const serverMode = mode === "CW" ? "CWU" : mode === "RTTYU" ? "USB" : mode === "RTTYL" ? "LSB" : mode
     send({ type: "set_mode", mode: serverMode })
-    fetch("/api/mode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: serverMode }) })
-    fetch("/api/filter", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
+    fetch('/api/radio/mode', { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: serverMode }) })
+    fetch('/api/radio/filter', { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
     setRadioState(s => ({ ...s, mode: mode, filterLow: low, filterHigh: high }))
     // VFO tune offset: CW op sidetone, RTTY op 1600 Hz centrum
     const tuneOffsetHz = (mode === "CW" || mode === "CWL") ? sidetone : (mode === "RTTYU" || mode === "RTTYL") ? 1600 : null
@@ -328,11 +328,11 @@ export default function App() {
             autoRfGain={autoRfGain}
             onAutoRfGain={setAutoRfGain}
             driveDb={radioState.driveDb}
-            onDrive={v => { setRadioState(s => ({ ...s, driveDb: v })); fetch('/api/tx/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: v }) }); saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh) }}
+            onDrive={v => { setRadioState(s => ({ ...s, driveDb: v })); fetch('/api/radio/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: v }) }); saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh) }}
             tunePct={radioState.tunePct}
-            onTune2={v => { setRadioState(s => ({ ...s, tunePct: v })); fetch('/api/tx/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: v }) }); saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh) }}
+            onTune2={v => { setRadioState(s => ({ ...s, tunePct: v })); fetch('/api/radio/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: v }) }); saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh) }}
             driveMaxPct={radioState.driveMaxPct}
-            onDriveMax={v => { setRadioState(s => ({ ...s, driveMaxPct: v })); fetch('/api/tx/drive-max', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: v }) }); saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh, v) }}
+            onDriveMax={v => { setRadioState(s => ({ ...s, driveMaxPct: v })); fetch('/api/radio/drive-max', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: v }) }); saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh, v) }}
             mox={radioState.mox}
             nrMode={radioState.nrMode}
             onNrMode={(mode) => {
@@ -345,13 +345,13 @@ export default function App() {
               const low = (radioState.mode === "LSB" || radioState.mode === "CWL") ? -bw : 200
               const high = (radioState.mode === "LSB" || radioState.mode === "CWL") ? -200 : bw
               setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
-              fetch("/api/filter", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
+              fetch('/api/radio/filter', { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
             }}
             filterLowHz={radioState.filterLow}
             filterHighHz={radioState.filterHigh}
             onFilter={(low, high) => {
               setRadioState(s => ({ ...s, filterLow: low, filterHigh: high }))
-              fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
+              fetch('/api/radio/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
               saveBandState(radioState.vfoHz, radioState.mode, low, high)
             }}
             onBand={(hz) => sendVfo(hz, true)}
@@ -391,7 +391,7 @@ export default function App() {
                   return newState
                 })
                 send({ type: 'set_filter', low, high })
-                fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) }).catch(() => {})
+                fetch('/api/radio/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) }).catch(() => {})
               }}
               onTxFilter={(low, high) => {
                 setRadioState(s => ({ ...s, txFilterLow: low, txFilterHigh: high }))
@@ -413,17 +413,17 @@ export default function App() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 12px', background: 'var(--bg-panel)', minWidth: 120 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 36 }}>DRIVE</span>
-              <input type="range" min={0} max={100} value={radioState.driveDb} onChange={e => { const v=Number(e.target.value); setRadioState(s=>({...s,driveDb:v})); fetch('/api/tx/drive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({percent:v})}); saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh) }} style={{ flex: 1, accentColor: 'var(--tx)' }} />
+              <input type="range" min={0} max={100} value={radioState.driveDb} onChange={e => { const v=Number(e.target.value); setRadioState(s=>({...s,driveDb:v})); fetch('/api/radio/drive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({percent:v})}); saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh) }} style={{ flex: 1, accentColor: 'var(--tx)' }} />
               <span style={{ fontSize: 10, color: 'var(--tx)', fontFamily: 'var(--font-data)', minWidth: 32 }}>{radioState.driveDb}%</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 36 }}>TUNE</span>
-              <input type="range" min={0} max={100} value={radioState.tunePct} onChange={e => { const v=Number(e.target.value); setRadioState(s=>({...s,tunePct:v})); fetch('/api/tx/tune-drive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({percent:v})}); saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh) }} style={{ flex: 1, accentColor: 'var(--tx)' }} />
+              <input type="range" min={0} max={100} value={radioState.tunePct} onChange={e => { const v=Number(e.target.value); setRadioState(s=>({...s,tunePct:v})); fetch('/api/radio/tune-drive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({percent:v})}); saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh) }} style={{ flex: 1, accentColor: 'var(--tx)' }} />
               <span style={{ fontSize: 10, color: 'var(--tx)', fontFamily: 'var(--font-data)', minWidth: 32 }}>{radioState.tunePct}%</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--font-data)', letterSpacing: 2, minWidth: 36 }}>MAX</span>
-              <input type="range" min={0} max={100} value={radioState.driveMaxPct} onChange={e => { const v=Number(e.target.value); setRadioState(s=>({...s,driveMaxPct:v})); fetch('/api/tx/drive-max',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({percent:v})}) ; saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh, v) }} style={{ flex: 1, accentColor: 'var(--accent)' }} />
+              <input type="range" min={0} max={100} value={radioState.driveMaxPct} onChange={e => { const v=Number(e.target.value); setRadioState(s=>({...s,driveMaxPct:v})); fetch('/api/radio/drive-max',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({percent:v})}) ; saveBandState(radioState.vfoHz, radioState.mode, radioState.filterLow, radioState.filterHigh, v) }} style={{ flex: 1, accentColor: 'var(--accent)' }} />
               <span style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-data)', minWidth: 32 }}>{radioState.driveMaxPct}%</span>
             </div>
           </div>
@@ -472,12 +472,12 @@ export default function App() {
             onMox={on => {
               setRadioState(s => ({ ...s, mox: on }))
               setMoxActive(on, false, msg => { setRadioState(s => ({ ...s, mox: false })); setGuardMsg(msg); setTimeout(() => setGuardMsg(null), 4000) })
-              fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).then(async r => { if (!r.ok && on) { const d = await r.json(); setMoxActive(false); setRadioState(s => ({...s, mox: false})); setGuardMsg(d.error ?? 'TX geblokkeerd'); setTimeout(() => setGuardMsg(null), 4000) } })
+              fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).then(async r => { if (!r.ok && on) { const d = await r.json(); setMoxActive(false); setRadioState(s => ({...s, mox: false})); setGuardMsg(d.error ?? 'TX geblokkeerd'); setTimeout(() => setGuardMsg(null), 4000) } })
             }}
             onTune={on => {
               setRadioState(s => ({ ...s, tune: on }))
               setMoxActive(on, true)
-              fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).then(async r => { if (!r.ok && on) { const d = await r.json(); setMoxActive(false); setRadioState(s => ({ ...s, tune: false })); setGuardMsg(d.error ?? 'Tune geblokkeerd'); setTimeout(() => setGuardMsg(null), 4000) } else { const d = await r.json(); if (d.tunOn !== undefined) { setRadioState(s => ({ ...s, tune: d.tunOn })); if (!d.tunOn) setMoxActive(false) } } }).catch(() => { setRadioState(s => ({ ...s, tune: false })); setMoxActive(false) })
+              fetch('/api/radio/tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).then(async r => { if (!r.ok && on) { const d = await r.json(); setMoxActive(false); setRadioState(s => ({ ...s, tune: false })); setGuardMsg(d.error ?? 'Tune geblokkeerd'); setTimeout(() => setGuardMsg(null), 4000) } else { const d = await r.json(); if (d.tunOn !== undefined) { setRadioState(s => ({ ...s, tune: d.tunOn })); if (!d.tunOn) setMoxActive(false) } } }).catch(() => { setRadioState(s => ({ ...s, tune: false })); setMoxActive(false) })
             }}
             onAfGain={db => {
               setRadioState(s => ({ ...s, rxAfGainDb: db }))
@@ -485,7 +485,7 @@ export default function App() {
             }}
             onMicGain={db => {
               setRadioState(s => ({ ...s, micGainDb: db }))
-              fetch('/api/mic-gain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
+              fetch('/api/radio/mic-gain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db }) })
             }}
           />
         </section>
