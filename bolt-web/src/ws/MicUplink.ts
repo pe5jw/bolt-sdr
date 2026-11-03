@@ -15,6 +15,9 @@ export class MicUplink {
 
   async start(ws: WebSocket): Promise<void> {
     if (this.active) return
+    if (!window.isSecureContext) {
+      throw new Error('MicUplink vereist HTTPS (of localhost). Gebruik https:// om te verbinden.')
+    }
     this.ws = ws
     const deviceId = localStorage.getItem('bolt-tx-device')
     this.stream = await navigator.mediaDevices.getUserMedia({

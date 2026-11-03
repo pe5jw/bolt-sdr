@@ -186,7 +186,7 @@ export default function App() {
         e.preventDefault()
         if (e.type === 'keydown' && !e.repeat) {
           setMox(true)
-          setMoxActive(true)
+          setMoxActive(true, false, msg => { setMox(false); setGuardMsg(msg); setTimeout(() => setGuardMsg(null), 4000) })
           fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: true }) })
         } else if (e.type === 'keyup') {
           setMox(false)
@@ -471,12 +471,13 @@ export default function App() {
             adcPk={meters.adcPk}
             onMox={on => {
               setRadioState(s => ({ ...s, mox: on }))
-              setMoxActive(on)
+              setMoxActive(on, false, msg => { setRadioState(s => ({ ...s, mox: false })); setGuardMsg(msg); setTimeout(() => setGuardMsg(null), 4000) })
               fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).then(async r => { if (!r.ok && on) { const d = await r.json(); setMoxActive(false); setRadioState(s => ({...s, mox: false})); setGuardMsg(d.error ?? 'TX geblokkeerd'); setTimeout(() => setGuardMsg(null), 4000) } })
             }}
             onTune={on => {
               setRadioState(s => ({ ...s, tune: on }))
-              fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).then(r => r.json()).then(d => { if (d.tunOn !== undefined) setRadioState(s => ({ ...s, tune: d.tunOn })) }).catch(() => setRadioState(s => ({ ...s, tune: false })))
+              setMoxActive(on, true)
+              fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).then(async r => { if (!r.ok && on) { const d = await r.json(); setMoxActive(false); setRadioState(s => ({ ...s, tune: false })); setGuardMsg(d.error ?? 'Tune geblokkeerd'); setTimeout(() => setGuardMsg(null), 4000) } else { const d = await r.json(); if (d.tunOn !== undefined) { setRadioState(s => ({ ...s, tune: d.tunOn })); if (!d.tunOn) setMoxActive(false) } } }).catch(() => { setRadioState(s => ({ ...s, tune: false })); setMoxActive(false) })
             }}
             onAfGain={db => {
               setRadioState(s => ({ ...s, rxAfGainDb: db }))

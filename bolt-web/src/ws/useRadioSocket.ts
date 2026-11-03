@@ -332,9 +332,22 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
     }
   }, [connect])
 
-  const setMoxActive = useCallback((active: boolean) => {
+  const setMoxActive = useCallback((active: boolean, isTune = false, onError?: (msg: string) => void) => {
     moxActiveRef.current = active
-    if (active) { micUplinkRef.current.onPeak = setMicPeak; micUplinkRef.current.start(wsRef.current!).catch(console.error) } else { micUplinkRef.current.stop(); setMicPeak(0) }
+    if (active && !isTune) {
+      micUplinkRef.current.onPeak = setMicPeak
+      micUplinkRef.current.start(wsRef.current!).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : 'Mic kon niet starten'
+        console.error('[MicUplink] start failed:', err)
+        moxActiveRef.current = false
+        micUplinkRef.current.stop()
+        setMicPeak(0)
+        onError?.(msg)
+      })
+    } else if (!active) {
+      micUplinkRef.current.stop()
+      setMicPeak(0)
+    }
     if (!active) {
       // Flush audio buffer on TX->RX
       nextPlayTimeRef.current = 0
