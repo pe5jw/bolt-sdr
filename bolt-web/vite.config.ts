@@ -16,5 +16,10 @@ export default defineConfig({
         changeOrigin: true,
       },
     }
+  },
+  build: {
+    // Output naar wwwroot — wordt door build-dist.ps1 opgepakt als BoltCore wwwroot
+    outDir: '../distro/win-x64/wwwroot',
+    emptyOutDir: true,
   }
 })

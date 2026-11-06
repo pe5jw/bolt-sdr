@@ -1,29 +1,35 @@
-// API endpoints configuratie
+// API endpoints — gemapped op AnanCore's werkelijke paden
+//
+// bolt-web gebruikt intern deze constanten; de mapping hieronder zorgt dat
+// alle calls terechtkomen bij AnanCore's endpoints.
 
 export const API = {
-  // Radio state
-  STATE:          '/api/radio/state',
+  // Radio state  →  GET /api/state
+  STATE:          '/api/state',
 
   // VFO / Tuning
-  VFO:            '/api/radio/vfo',
-  MODE:           '/api/radio/mode',
-  FILTER:         '/api/radio/filter',
-  ZOOM:           '/api/radio/zoom',
+  VFO:            '/api/vfo',          // POST { Hz, Receiver? }
+  MODE:           '/api/mode',         // POST { Mode, Receiver? }
+  FILTER:         '/api/filter',       // POST { LowHz, HighHz, Receiver? }
+  ZOOM:           '/api/rx/zoom',      // POST { Level, Rx? }
 
   // TX
-  MOX:            '/api/radio/mox',
-  TUNE:           '/api/radio/tune',
-  DRIVE:          '/api/radio/drive',
-  MIC_GAIN:       '/api/radio/mic-gain',
+  MOX:            '/api/tx/mox',       // POST { On }
+  TUNE:           '/api/tx/tun',       // POST { On }
+  DRIVE:          '/api/tx/drive',     // POST { Percent }
+  MIC_GAIN:       '/api/mic-gain',     // POST { Db }
 
   // RX
-  RX_AF_GAIN:     '/api/radio/rx-af-gain',
-  AGC_TOP:        '/api/radio/agc-top',
-  ATTEN:          '/api/radio/atten',
-  SQUELCH:        '/api/radio/squelch',
+  RX_AF_GAIN:     '/api/rx/afGain',    // POST { Db }
+  AGC_TOP:        '/api/agcGain',      // POST { TopDb }
+  ATTEN:          '/api/attenuator',   // POST { Db }
+  SQUELCH:        '/api/rx/squelch',   // POST { Squelch: { Enabled, Level } }
 
   // Verbinding
-  CONNECT:        '/api/radio/connect',
-  DISCONNECT:     '/api/radio/disconnect',
-  DISCOVER:       '/api/radio/discover',
+  CONNECT:        '/api/connect',      // POST ConnectRequest
+  DISCONNECT:     '/api/disconnect',   // POST {}
+  DISCOVER:       '/api/radios',       // GET  → array van radio-objecten
+
+  // Tune drive (aparte endpoint voor CW/tune %)
+  TUNE_DRIVE:     '/api/tx/tune-drive', // POST { Percent }
 }

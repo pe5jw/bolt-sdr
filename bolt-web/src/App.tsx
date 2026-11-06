@@ -18,7 +18,8 @@ export default function App() {
   // Auto-reconnect bij startup â€” alleen als niet bewust disconnect
   useEffect(() => {
     fetch('/api/state').then(r => r.json()).then(state => {
-      if (state.status === 'Connected' && state.endpoint) {
+      // AnanCore's StateDto heeft connectionStatus (enum string), niet status
+      if ((state.connectionStatus === 'Connected' || state.status === 'Connected') && state.endpoint) {
         setConnectedIp(state.endpoint)
         localStorage.setItem('bolt-sdr-last-ip', state.endpoint)
       } else {
@@ -42,14 +43,14 @@ export default function App() {
   midiEngine.onMox = (on) => {
     setRadioState(s => ({ ...s, mox: on }))
     setMoxActive(on)
-    fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).catch(() => {})
+    fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).catch(() => {})
   }
   midiEngine.onVfoChange = (hz) => {
     setRadioState(s => ({ ...s, vfoHz: hz }))
   }
   midiEngine.onTune = (on) => {
     setRadioState(s => ({ ...s, tune: on }))
-    fetch('/api/radio/tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).catch(() => {})
+    fetch('/api/tx/tun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: on }) }).catch(() => {})
   }
   midiEngine.onCommand = (cmd: string, value: number) => {
     const post = (url: string, body: any) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {})
@@ -62,15 +63,15 @@ export default function App() {
         const [low, high] = MD[m] ?? [200, 3200]
         setRadioState(s => ({ ...s, mode: m, filterLow: low, filterHigh: high }))
         send({ type: 'set_mode', mode: m })
-        post('/api/radio/mode', { mode: m })
-        post('/api/radio/filter', { lowHz: low, highHz: high, receiver: 0 })
+        post('/api/mode', { Mode: m })
+        post('/api/filter', { LowHz: low, HighHz: high, Receiver: 0 })
         break
       }
       case 'SetAfGain': { const db = mv(-50, 20); setRadioState(s => ({ ...s, rxAfGainDb: db })); post('/api/rx/afGain', { db }); break }
-      case 'DriveLevel': { const pct = mv(0, 100); setRadioState(s => ({ ...s, driveDb: pct })); post('/api/radio/drive', { percent: pct }); break }
+      case 'DriveLevel': { const pct = mv(0, 100); setRadioState(s => ({ ...s, driveDb: pct })); post('/api/tx/drive', { Percent: pct }); break }
       case 'RfGain': { const rfDb = mv(-12, 48); const att = 48 - rfDb; setRadioState(s => ({ ...s, attDb: att })); post('/api/attenuator', { db: att }); break }
-      case 'MicGain': { const db = mv(-20, 20); setRadioState(s => ({ ...s, micGainDb: db })); post('/api/radio/mic-gain', { db }); break }
-      case 'SquelchLevel': { const lvl = mv(0, 100); setRadioState(s => ({ ...s, squelchEnabled: true, squelchLevel: lvl })); post('/api/rx/squelch', { enabled: true, level: lvl }); break }
+      case 'MicGain': { const db = mv(-20, 20); setRadioState(s => ({ ...s, micGainDb: db })); post('/api/mic-gain', { Db: db }); break }
+      case 'SquelchLevel': { const lvl = mv(0, 100); setRadioState(s => ({ ...s, squelchEnabled: true, squelchLevel: lvl })); post('/api/rx/squelch', { Squelch: { Enabled: true, Level: lvl } }); break }
       case 'MuteOnOff': { const nm = !mutedRef.current; mutedRef.current = nm; setMuted(nm); post('/api/receivers/0/mute', { muted: nm }); break }
       case 'BandUp': { const bands = [1800000,3500000,7000000,10100000,14000000,18068000,21000000,24890000,28000000]; const next = bands.find(b => b > st.vfoHz + 100000); if (next) sendVfo(next, true); break }
       case 'BandDown': { const bands = [28000000,24890000,21000000,18068000,14000000,10100000,7000000,3500000,1800000]; const prev = bands.find(b => b < st.vfoHz - 100000); if (prev) sendVfo(prev, true); break }
@@ -81,9 +82,9 @@ export default function App() {
       case 'AnfToggle': { const a = !st.anfEnabled; setRadioState(s => ({ ...s, anfEnabled: a })); post('/api/rx/nr', { nr: { nrMode: st.nrMode, anfEnabled: a, snbEnabled: st.snbEnabled, nbMode: 'Off', nbThreshold: 20, nbpNotchesEnabled: false } }); break }
       case 'AutoSet': { window.dispatchEvent(new Event('bolt-autoset-trigger')); break }
       case 'AnfToggle': { const a = !st.anfEnabled; setRadioState(s => ({ ...s, anfEnabled: a })); post('/api/rx/nr', { nr: { nrMode: st.nrMode, anfEnabled: a, snbEnabled: st.snbEnabled, nbMode: 'Off', nbThreshold: 20, nbpNotchesEnabled: false } }); break }
-      case 'ZoomIn': { const zl = [1,2,4,8,16,32]; const cur = zl.indexOf(zoomRef.current); const nx = zl[Math.min(zl.length-1, cur+1)]; zoomRef.current = nx; localStorage.setItem('bolt-zoom', String(nx)); post('/api/rx/zoom', { level: nx }); window.dispatchEvent(new Event('bolt-zoom-changed')); break }
-      case 'ZoomOut': { const zl = [1,2,4,8,16,32]; const cur = zl.indexOf(zoomRef.current); const nx = zl[Math.max(0, cur-1)]; zoomRef.current = nx; localStorage.setItem('bolt-zoom', String(nx)); post('/api/rx/zoom', { level: nx }); window.dispatchEvent(new Event('bolt-zoom-changed')); break }
-      case 'ZoomSliderInc': { const zl = [1,2,4,8,16,32]; const idx = Math.min(zl.length-1, Math.floor((value/127) * zl.length)); const nx = zl[idx]; zoomRef.current = nx; localStorage.setItem('bolt-zoom', String(nx)); post('/api/rx/zoom', { level: nx }); window.dispatchEvent(new Event('bolt-zoom-changed')); break }
+      case 'ZoomIn': { const zl = [1,2,4,8,16,32]; const cur = zl.indexOf(zoomRef.current); const nx = zl[Math.min(zl.length-1, cur+1)]; zoomRef.current = nx; localStorage.setItem('bolt-zoom', String(nx)); post('/api/rx/zoom', { Level: nx }); window.dispatchEvent(new Event('bolt-zoom-changed')); break }
+      case 'ZoomOut': { const zl = [1,2,4,8,16,32]; const cur = zl.indexOf(zoomRef.current); const nx = zl[Math.max(0, cur-1)]; zoomRef.current = nx; localStorage.setItem('bolt-zoom', String(nx)); post('/api/rx/zoom', { Level: nx }); window.dispatchEvent(new Event('bolt-zoom-changed')); break }
+      case 'ZoomSliderInc': { const zl = [1,2,4,8,16,32]; const idx = Math.min(zl.length-1, Math.floor((value/127) * zl.length)); const nx = zl[idx]; zoomRef.current = nx; localStorage.setItem('bolt-zoom', String(nx)); post('/api/rx/zoom', { Level: nx }); window.dispatchEvent(new Event('bolt-zoom-changed')); break }
     }
   }
 
@@ -146,11 +147,11 @@ export default function App() {
       if (adcAv > -50 && currentAttDb < 48) {
         const newAtt = Math.min(48, currentAttDb + 1)
         setRadioState(s => ({ ...s, attDb: newAtt }))
-        fetch('/api/attenuator', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db: newAtt }) })
+        fetch('/api/attenuator', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Db: newAtt }) })
       } else if (adcAv < -75 && currentAttDb > 0) {
         const newAtt = Math.max(0, currentAttDb - 1)
         setRadioState(s => ({ ...s, attDb: newAtt }))
-        fetch('/api/attenuator', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ db: newAtt }) })
+        fetch('/api/attenuator', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Db: newAtt }) })
       }
     }, 500)
     return () => clearInterval(interval)
@@ -162,7 +163,7 @@ export default function App() {
       if (state.nr) setNrState({ nrMode: state.nr.nrMode ?? 'Off', anfEnabled: state.nr.anfEnabled ?? false, snbEnabled: state.nr.snbEnabled ?? false, nbMode: state.nr.nbMode ?? 'Off' })
       if (state.agc?.mode) setRadioState(s => ({ ...s, agcMode: state.agc.mode }))
       const savedZoom = parseInt(localStorage.getItem('bolt-zoom') || '1')
-      if (savedZoom > 1) fetch('/api/rx/zoom', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: savedZoom }) })
+      if (savedZoom > 1) fetch('/api/rx/zoom', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Level: savedZoom }) })
     }).catch(() => {})
   }, [radioState.connected])
 
@@ -187,11 +188,11 @@ export default function App() {
         if (e.type === 'keydown' && !e.repeat) {
           setMox(true)
           setMoxActive(true, false, msg => { setMox(false); setGuardMsg(msg); setTimeout(() => setGuardMsg(null), 4000) })
-          fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: true }) })
+          fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: true }) })
         } else if (e.type === 'keyup') {
           setMox(false)
           setMoxActive(false)
-          fetch('/api/radio/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: false }) })
+          fetch('/api/tx/mox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ On: false }) })
         }
       }
     }
@@ -213,18 +214,17 @@ export default function App() {
       const saved = band ? loadBandState(band) : null
         if (saved) {
           setRadioState(s => ({ ...s, vfoHz: saved.hz, mode: saved.mode, filterLow: saved.filterLow, filterHigh: saved.filterHigh, driveDb: saved.driveDb ?? s.driveDb, tunePct: saved.tunePct ?? s.tunePct }))
-          fetch('/api/radio/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: saved.hz }) })
-          fetch('/api/radio/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: saved.mode }) })
-          fetch('/api/radio/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lowHz: saved.filterLow, highHz: saved.filterHigh, receiver: 0 }) })
-          if (saved.driveMaxPct) { fetch('/api/radio/drive-max', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: saved.driveMaxPct }) }); setRadioState(s => ({ ...s, driveMaxPct: saved.driveMaxPct })) }
-          if (saved.driveDb !== undefined) fetch('/api/radio/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: saved.driveDb }) })
-          if (saved.tunePct !== undefined) fetch('/api/radio/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ percent: saved.tunePct }) })
+          fetch('/api/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Hz: saved.hz }) })
+          fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Mode: saved.mode }) })
+          fetch('/api/filter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ LowHz: saved.filterLow, HighHz: saved.filterHigh, Receiver: 0 }) })
+          if (saved.driveDb !== undefined) fetch('/api/tx/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Percent: saved.driveDb }) })
+          if (saved.tunePct !== undefined) fetch('/api/tx/tune-drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Percent: saved.tunePct }) })
           return
         }
       }
     saveBandState(snapped, radioState.mode, radioState.filterLow, radioState.filterHigh)
     setRadioState(s => ({ ...s, vfoHz: snapped }))
-    fetch('/api/radio/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hz: snapped }) })
+    fetch('/api/vfo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Hz: snapped }) })
   }
 
   // Band memory
@@ -258,8 +258,8 @@ export default function App() {
     const [low, high] = isCw ? (mode === "CW" ? [Math.max(0, sidetone - filterBw/2), sidetone + filterBw/2] : [-(sidetone + filterBw/2), Math.min(0, -(sidetone - filterBw/2))]) : (MODE_DEFAULTS[mode] ?? [200, 3200])
     const serverMode = mode === "CW" ? "CWU" : mode === "RTTYU" ? "USB" : mode === "RTTYL" ? "LSB" : mode
     send({ type: "set_mode", mode: serverMode })
-    fetch('/api/radio/mode', { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: serverMode }) })
-    fetch('/api/radio/filter', { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lowHz: low, highHz: high, receiver: 0 }) })
+    fetch('/api/mode', { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ Mode: serverMode }) })
+    fetch('/api/filter', { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ LowHz: low, HighHz: high, Receiver: 0 }) })
     setRadioState(s => ({ ...s, mode: mode, filterLow: low, filterHigh: high }))
     // VFO tune offset: CW op sidetone, RTTY op 1600 Hz centrum
     const tuneOffsetHz = (mode === "CW" || mode === "CWL") ? sidetone : (mode === "RTTYU" || mode === "RTTYL") ? 1600 : null
@@ -433,7 +433,7 @@ export default function App() {
             attenDb={radioState.attDb}
             onSquelch={(enabled, level) => {
               setRadioState(s => ({ ...s, squelchEnabled: enabled, squelchLevel: level }))
-              fetch('/api/rx/squelch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, level }) })
+              fetch('/api/rx/squelch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Squelch: { Enabled: enabled, Level: level } }) })
             }}
             nrMode={radioState.nrMode}
             anfEnabled={radioState.anfEnabled}

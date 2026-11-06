@@ -92,15 +92,20 @@ const DEFAULT_STATE: RadioState = {
   radioName: '',
 }
 
-const MSG_DISPLAY_FRAME        = 0x01
-const MSG_AUDIO_PCM            = 0x02
-const MSG_RX_METER             = 0x14
-const MSG_TX_METER             = 0x16
-const MSG_RX_METER_V2          = 0x19
-const MSG_AUDIO_STREAM_REQUEST = 0x21
+// AnanCore /ws frame types (Zeus.Contracts/MsgType.cs)
+const MSG_DISPLAY_FRAME          = 0x01
+const MSG_AUDIO_PCM              = 0x02
+const MSG_TX_METER               = 0x11  // TxMeters v1
+const MSG_RX_METER               = 0x14  // RxMeter (5-byte: type + f32 dBm)
+const MSG_TX_METER_V2            = 0x16  // TxMetersV2
+const MSG_RX_METER_V2            = 0x19  // RxMetersV2 (bare-payload)
+const MSG_MOX_STATE              = 0x1C  // MoxStateFrame: [type][mox:u8][tun:u8]
+const MSG_AUDIO_STREAM_REQUEST   = 0x21
 const MSG_DISPLAY_STREAM_REQUEST = 0x22
-const MSG_MIDI_LEARN = 0x3B
-const MSG_FLDIGI_TEXT = 0x31
+const MSG_CW_DECODED_TEXT        = 0x31  // (was FLDIGI in bolt-sdr)
+const MSG_VFO_STATE              = 0x3B  // VfoStateFrame: [type][vfoA:i64][vfoB:i64]
+const MSG_STATE_PUSH             = 0x3C  // StatePushFrame: [type][StateDto JSON]
+const MSG_MIDI_LEARN             = 0x3B  // shares byte (MidiLearn only in learn-mode)
 const HEADER_SIZE = 16
 
 function parseDisplayFrame(buf: ArrayBuffer): DisplayFrame | null {
@@ -135,7 +140,20 @@ function parseAudioFrame(buf: ArrayBuffer): { samples: Float32Array; sampleRate:
   } catch { return null }
 }
 
-const DEFAULT_WS_URL = () => `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port || "6061"}/ws`
+// Normaliseert AnanCore's RxMode enum strings naar bolt-web's format.
+// AnanCore levert: "Usb", "Lsb", "Am", "Fm", "CwU", "CwL", "Dsb", "Sam", ...
+// bolt-web verwacht: "USB", "LSB", "AM", "FM", "CW", ...
+function normalizeMode(mode: string | undefined | null): string | undefined {
+  if (!mode) return undefined
+  const map: Record<string, string> = {
+    Usb: 'USB', Lsb: 'LSB', Am: 'AM', Fm: 'FM',
+    CwU: 'CW', CwL: 'CWL', Dsb: 'DSB', Sam: 'SAM',
+    Spec: 'SPEC', Digu: 'DIGU', Digl: 'DIGL',
+  }
+  return map[mode] ?? mode.toUpperCase()
+}
+
+const DEFAULT_WS_URL = () => `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port || "6060"}/ws`
 export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (frame: import('../midi').MidiLearnFrame) => void) {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected')
   const [radioState, setRadioState] = useState<RadioState>(DEFAULT_STATE)
@@ -223,6 +241,52 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
     }
   }, [])
 
+  // Mapt AnanCore's StateDto (camelCase JSON) naar bolt-web's RadioState.
+  // Veld-mapping (AnanCore → bolt-web):
+  //   vfoHz              → vfoHz
+  //   mode               → mode  (RxMode enum string)
+  //   filterLowHz        → filterLow
+  //   filterHighHz       → filterHigh
+  //   txFilterLowHz      → txFilterLow
+  //   txFilterHighHz     → txFilterHigh
+  //   agcTopDb           → agcTopDb
+  //   attenDb            → attDb
+  //   rxAfGainDb         → rxAfGainDb
+  //   drivePct           → driveDb  (AnanCore stuurt % als integer)
+  //   driveMaxPct        → driveMaxPct
+  //   tunePct            → tunePct
+  //   micGainDb          → micGainDb
+  //   agc.mode           → agcMode
+  //   squelch.enabled    → squelchEnabled
+  //   squelch.level      → squelchLevel
+  //   connectionStatus   → connected (wanneer "Connected")
+  //   endpoint           → radioName
+  const applyStateDto = useCallback((state: Record<string, unknown>) => {
+    setRadioState(s => ({
+      ...s,
+      vfoHz:          (state.vfoHz as number)                 ?? s.vfoHz,
+      // AnanCore levert mode als RxMode enum ("Usb", "Lsb", "Am", "Fm", "CwU", "CwL", ...)
+      // Normaliseer naar bolt-web's uppercase strings
+      mode:           normalizeMode(state.mode as string)     ?? s.mode,
+      filterLow:      (state.filterLowHz as number)           ?? s.filterLow,
+      filterHigh:     (state.filterHighHz as number)          ?? s.filterHigh,
+      txFilterLow:    (state.txFilterLowHz as number)         ?? s.txFilterLow,
+      txFilterHigh:   (state.txFilterHighHz as number)        ?? s.txFilterHigh,
+      agcTopDb:       (state.agcTopDb as number)              ?? s.agcTopDb,
+      attDb:          (state.attenDb as number)               ?? s.attDb,
+      rxAfGainDb:     (state.rxAfGainDb as number)            ?? s.rxAfGainDb,
+      driveDb:        (state.drivePct as number)              ?? s.driveDb,
+      driveMaxPct:    (state.driveMaxPct as number)           ?? s.driveMaxPct,
+      tunePct:        (state.tunePct as number)               ?? s.tunePct,
+      micGainDb:      (state.micGainDb as number)             ?? s.micGainDb,
+      agcMode:        ((state.agc as Record<string, unknown>)?.mode as string) ?? s.agcMode,
+      squelchEnabled: ((state.squelch as Record<string, unknown>)?.enabled as boolean) ?? s.squelchEnabled,
+      squelchLevel:   ((state.squelch as Record<string, unknown>)?.level as number) ?? s.squelchLevel,
+      connected:      (state.connectionStatus as string) === 'Connected',
+      radioName:      (state.endpoint as string)              ?? s.radioName,
+    }))
+  }, [])
+
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
     setStatus('connecting')
@@ -236,31 +300,8 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
       if (audioEnabledRef.current) {
         ws.send(new Uint8Array([MSG_AUDIO_STREAM_REQUEST, 1]))
       }
-      fetch('/api/state').then(r => r.json()).then(state => {
-        setRadioState(s => ({
-          ...s,
-          vfoHz: state.vfoHz ?? s.vfoHz,
-          mode: s.mode?.startsWith("RTTY") ? s.mode : (state.mode === "CWU" ? "CW" : state.mode) ?? s.mode,
-          filterLow: state.filterLowHz ?? s.filterLow,
-          txFilterLow: state.txFilterLowHz ?? s.txFilterLow,
-          txFilterHigh: state.txFilterHighHz ?? s.txFilterHigh,
-          rxAfGainDb: state.rxAfGainDb ?? s.rxAfGainDb,
-          agcTopDb: state.agcTopDb ?? s.agcTopDb,
-          attDb: state.attenDb ?? s.attDb,
-          preamp: state.preampOn ?? s.preamp,
-          squelchEnabled: state.squelch?.enabled ?? s.squelchEnabled,
-          squelchLevel: state.squelch?.level ?? s.squelchLevel,
-          driveDb: state.drivePct ?? s.driveDb,
-          driveMaxPct: state.driveMaxPct ?? s.driveMaxPct,
-          tunePct: state.tunePct ?? s.tunePct,
-          filterHigh: state.filterHighHz ?? s.filterHigh,
-          agcMode: state.agc?.mode ?? s.agcMode,
-          nrMode: state.nr?.nrMode ?? s.nrMode,
-          anfEnabled: state.nr?.anfEnabled ?? s.anfEnabled,
-          snbEnabled: state.nr?.snbEnabled ?? s.snbEnabled,
-          connected: true,
-        }))
-      }).catch(() => {})
+      // Haal initiële state op via AnanCore's GET /api/state endpoint
+      fetch('/api/state').then(r => r.json()).then(applyStateDto).catch(() => {})
     }
 
     ws.onmessage = (ev) => {
@@ -268,52 +309,91 @@ export function useRadioSocket(serverUrl = DEFAULT_WS_URL(), onMidiLearn?: (fram
         const buf = ev.data as ArrayBuffer
         const view = new DataView(buf)
         const msgType = view.getUint8(0)
-        // debug logging disabled, buf.byteLength)
+
         if (msgType === MSG_DISPLAY_FRAME) {
           const frame = parseDisplayFrame(buf)
           if (frame) setDisplay(frame)
+
         } else if (msgType === MSG_AUDIO_PCM) {
-        if (moxActiveRef.current) return // suppress RX audio during TX
+          if (moxActiveRef.current) return // suppress RX audio during TX
           const audio = parseAudioFrame(buf)
           if (audio) scheduleAudio(audio.samples, audio.sampleRate, audio.channels)
+
         } else if (msgType === MSG_RX_METER && buf.byteLength >= 5) {
+          // 0x14: [type:1][signalDbm:f32 LE] = 5 bytes
           const dbm = view.getFloat32(1, true)
           setMeters(m => ({ ...m, sMeter: dbm }))
+
         } else if (msgType === MSG_RX_METER_V2 && buf.byteLength >= 29) {
+          // 0x19: bare-payload [signalPk:f32][signalAv:f32][adcPk:f32][adcAv:f32]...
           const signalAv = view.getFloat32(5, true)
           const adcAv = view.getFloat32(13, true)
           const adcPk = view.getFloat32(9, true)
           setMeters(m => ({ ...m, sMeter: signalAv, adcAv, adcPk }))
+
         } else if (msgType === MSG_TX_METER && buf.byteLength >= 81) {
+          // 0x11: TX meters v1
           const fwdW = view.getFloat32(1, true)
           const swr = view.getFloat32(9, true)
           const alcPk = view.getFloat32(61, true)
           setMeters(m => ({ ...m, power: fwdW, swr, alc: alcPk }))
-        } else if (msgType === MSG_MIDI_LEARN) {
+
+        } else if (msgType === MSG_TX_METER_V2) {
+          // 0x16: TxMetersV2 — zelfde structuur als v1, additive extension
+          if (buf.byteLength >= 81) {
+            const fwdW = view.getFloat32(1, true)
+            const swr = view.getFloat32(9, true)
+            const alcPk = view.getFloat32(61, true)
+            setMeters(m => ({ ...m, power: fwdW, swr, alc: alcPk }))
+          }
+
+        } else if (msgType === MSG_MOX_STATE && buf.byteLength >= 3) {
+          // 0x1C: [type:1][mox:u8][tun:u8] — MOX/TUN state edge van AnanCore
+          const moxOn = view.getUint8(1) !== 0
+          const tunOn = view.getUint8(2) !== 0
+          moxActiveRef.current = moxOn
+          setRadioState(s => ({ ...s, mox: moxOn, tune: tunOn }))
+
+        } else if (msgType === MSG_VFO_STATE && buf.byteLength >= 17) {
+          // 0x3B: [type:1][vfoA:i64 LE][vfoB:i64 LE] — snelle VFO push (~30 Hz)
+          // Let op: MSG_VFO_STATE en MSG_MIDI_LEARN delen byte 0x3B.
+          // VfoStateFrame is altijd precies 17 bytes; MidiLearn is altijd groter (JSON).
+          // Onderscheid op byteLength.
+          try {
+            const vfoHz = Number(view.getBigInt64(1, true))
+            setRadioState(s => ({ ...s, vfoHz }))
+          } catch { /* BigInt64 niet ondersteund in oudere browsers */ }
+
+        } else if (msgType === MSG_STATE_PUSH) {
+          // 0x3C: [type:1][StateDto JSON UTF-8] — volledige state push (~10 Hz)
+          try {
+            const json = new TextDecoder().decode(new Uint8Array(buf, 1))
+            const state = JSON.parse(json)
+            applyStateDto(state)
+          } catch (e) {
+            console.error('[useRadioSocket] StatePush parse fout:', e)
+          }
+
+        } else if (buf.byteLength > 17 && msgType === MSG_MIDI_LEARN) {
+          // 0x3B met grote payload = MIDI learn frame (JSON)
           try {
             const json = new TextDecoder().decode(new Uint8Array(buf, 1))
             const frame = JSON.parse(json)
-            console.log('[useRadioSocket] MIDI learn frame parsed:', frame)
             onMidiLearn?.(frame)
           } catch (e) {
-            console.error('[useRadioSocket] Failed to parse MIDI learn frame:', e)
+            console.error('[useRadioSocket] MIDI learn parse fout:', e)
           }
-        } else if (msgType === MSG_FLDIGI_TEXT && buf.byteLength >= 14) {
+
+        } else if (msgType === MSG_CW_DECODED_TEXT && buf.byteLength >= 14) {
+          // 0x31: CW decoder tekst — forward als event (was fldigi in bolt-sdr)
           try {
             const dv = new DataView(buf)
             const textLen = dv.getUint16(12, true)
             const text = new TextDecoder().decode(new Uint8Array(buf, 13, textLen))
             window.dispatchEvent(new CustomEvent('bolt-fldigi-text', { detail: { text } }))
-          } catch (e) {}
+          } catch {}
         }
       }
-      try {
-        const msg = JSON.parse(ev.data as string)
-        switch (msg.type) {
-          case 'state': setRadioState(s => ({ ...s, ...msg.payload })); break
-          case 'meters': setMeters(msg.payload); break
-        }
-      } catch { }
     }
 
     ws.onerror = () => setStatus('error')
