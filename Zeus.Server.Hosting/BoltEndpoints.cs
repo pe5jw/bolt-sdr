@@ -5,6 +5,7 @@
 using Zeus.Server;
 using Zeus.Server.Tci;
 using Zeus.Server.Cat;
+using Zeus.Contracts;
 
 namespace Zeus.Server;
 
@@ -281,6 +282,17 @@ public static class BoltEndpoints
         {
             bandPlan.SetTxGuardIgnore(req.Ignore);
             return Results.Ok();
+        });
+
+        // Band memory — per-band last-used (hz, mode, drive, filter)
+        app.MapGet("/api/bands/memory", (BandMemoryStore store) =>
+            Results.Ok(store.GetAll()));
+
+        app.MapPut("/api/bands/memory/{band}", (string band, BandMemorySetRequest req, BandMemoryStore store) =>
+        {
+            store.Upsert(band, req.Hz, req.Mode, req.DrivePct, req.TuneDrivePct, req.FilterLowHz, req.FilterHighHz);
+            var saved = store.Get(band);
+            return saved is null ? Results.NotFound() : Results.Ok(saved);
         });
 
         app.MapGet("/api/health", () => Results.Ok(new { status = "ok", app = "bolt-sdr" }));

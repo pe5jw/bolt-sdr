@@ -107,21 +107,26 @@ public sealed class BandMemoryStore : IDisposable
         }
     }
 
+    private static BandMemoryDto ToDto(BandMemoryEntry e) =>
+        new(e.Band, e.Hz, e.Mode, e.DrivePct, e.TuneDrivePct, e.FilterLowHz, e.FilterHighHz);
+
     public IReadOnlyList<BandMemoryDto> GetAll()
     {
         return _entries
             .FindAll()
-            .Select(e => new BandMemoryDto(e.Band, e.Hz, e.Mode))
+            .Select(ToDto)
             .ToArray();
     }
 
     public BandMemoryDto? Get(string band)
     {
         var e = _entries.FindOne(x => x.Band == band);
-        return e is null ? null : new BandMemoryDto(e.Band, e.Hz, e.Mode);
+        return e is null ? null : ToDto(e);
     }
 
-    public void Upsert(string band, long hz, RxMode mode)
+    public void Upsert(string band, long hz, RxMode mode,
+        int? drivePct = null, int? tuneDrivePct = null,
+        int? filterLowHz = null, int? filterHighHz = null)
     {
         var existing = _entries.FindOne(x => x.Band == band);
         if (existing is null)
@@ -137,6 +142,10 @@ public sealed class BandMemoryStore : IDisposable
                     Band = band,
                     Hz = hz,
                     Mode = mode,
+                    DrivePct = drivePct,
+                    TuneDrivePct = tuneDrivePct,
+                    FilterLowHz = filterLowHz,
+                    FilterHighHz = filterHighHz,
                     UpdatedUtc = DateTime.UtcNow,
                 });
                 return;
@@ -150,6 +159,10 @@ public sealed class BandMemoryStore : IDisposable
 
         existing.Hz = hz;
         existing.Mode = mode;
+        if (drivePct.HasValue) existing.DrivePct = drivePct;
+        if (tuneDrivePct.HasValue) existing.TuneDrivePct = tuneDrivePct;
+        if (filterLowHz.HasValue) existing.FilterLowHz = filterLowHz;
+        if (filterHighHz.HasValue) existing.FilterHighHz = filterHighHz;
         existing.UpdatedUtc = DateTime.UtcNow;
         _entries.Update(existing);
     }
@@ -164,5 +177,9 @@ public sealed class BandMemoryEntry
     public string Band { get; set; } = string.Empty;
     public long Hz { get; set; }
     public RxMode Mode { get; set; }
+    public int? DrivePct { get; set; }
+    public int? TuneDrivePct { get; set; }
+    public int? FilterLowHz { get; set; }
+    public int? FilterHighHz { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

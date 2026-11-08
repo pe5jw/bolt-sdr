@@ -1935,9 +1935,22 @@ public sealed record LevelerMaxGainSetRequest(double Gain);
 // survive restarts and follow the backend (not the browser). Band buttons
 // read the full map on mount and write on every tune/mode change
 // (debounced on the web).
-public sealed record BandMemoryDto(string Band, long Hz, RxMode Mode);
+public sealed record BandMemoryDto(
+    string Band,
+    long Hz,
+    RxMode Mode,
+    int? DrivePct = null,
+    int? TuneDrivePct = null,
+    int? FilterLowHz = null,
+    int? FilterHighHz = null);
 
-public sealed record BandMemorySetRequest(long Hz, RxMode Mode);
+public sealed record BandMemorySetRequest(
+    long Hz,
+    RxMode Mode,
+    int? DrivePct = null,
+    int? TuneDrivePct = null,
+    int? FilterLowHz = null,
+    int? FilterHighHz = null);
 
 // "Reset & Uninstall Zeus" confirm. Token is the one-shot nonce from the
 // uninstall preview; RemoveBinary requests a full uninstall (app binary too).

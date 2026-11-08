@@ -193,3 +193,9 @@ WDSP DSP engine is Copyright (C) Warren Pratt (NR0V), GPL-2.0-or-later.
 - **40001** — TCI server
 - **19090** — CAT TCP (optional, enable in Settings)
 - **4532** — tci-bridge CAT (for DVK/N1MM+)
+
+## Donaties
+
+Bolt SDR is gratis en open source. Vind je het nuttig? Elke koffie helpt! ☕
+
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Doneer-FF5E5B?logo=ko-fi)](https://ko-fi.com/contestpusher)
